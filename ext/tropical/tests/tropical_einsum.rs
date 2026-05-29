@@ -83,6 +83,90 @@ fn ties_keep_first_winner_through_einsum() {
 }
 
 #[test]
+fn batched_maxplus_matmul_supports_natural_batch_first_subscripts() {
+    let a = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f64, 2.0, 4.0, 0.0, 5.0, 1.0, 0.0, 7.0],
+    );
+    let b = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![0.0_f64, 3.0, 2.0, 5.0, 10.0, 4.0, 1.0, 0.0],
+    );
+
+    let result =
+        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "bij,bjk->bik")
+            .unwrap();
+
+    assert_eq!(result.output.shape(), &[2, 2, 2]);
+    assert_eq!(
+        result.output.as_slice::<f64>().unwrap(),
+        &[7.0, 6.0, 4.0, 12.0, 11.0, 6.0, 14.0, 7.0]
+    );
+    assert_eq!(result.argmax[0].indices(), &[1, 1, 0, 1, 0, 0, 0, 1]);
+    assert_eq!(result.argmax[0].contracted_subscripts(), &[b'j' as u32]);
+    assert_eq!(result.argmax[0].contracted_shape(), &[2]);
+}
+
+#[test]
+fn target_order_batched_maxplus_matmul_applies_requested_output_permutation() {
+    let a = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f64, 4.0, 5.0, 0.0, 2.0, 0.0, 1.0, 7.0],
+    );
+    let b = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![0.0_f64, 2.0, 10.0, 1.0, 3.0, 5.0, 4.0, 0.0],
+    );
+
+    let result =
+        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ijb,jkb->bik")
+            .unwrap();
+
+    assert_eq!(result.output.shape(), &[2, 2, 2]);
+    assert_eq!(
+        result.output.as_slice::<f64>().unwrap(),
+        &[7.0, 6.0, 4.0, 12.0, 11.0, 6.0, 14.0, 7.0]
+    );
+    assert_eq!(result.argmax[0].indices(), &[1, 1, 0, 1, 0, 0, 0, 1]);
+}
+
+#[test]
+fn fallback_handles_input_permutation_and_records_argmax() {
+    let transposed_left = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 5.0, 4.0, 0.0]);
+    let right = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 10.0, 1.0]);
+
+    let result = tropical_einsum_with_argmax(
+        TropicalEinsumKind::MaxPlus,
+        &[&transposed_left, &right],
+        "ji,jk->ik",
+    )
+    .unwrap();
+
+    assert_eq!(result.output.shape(), &[2, 2]);
+    assert_eq!(
+        result.output.as_slice::<f64>().unwrap(),
+        &[7.0, 4.0, 11.0, 14.0]
+    );
+    assert_eq!(result.argmax[0].indices(), &[1, 0, 0, 0]);
+}
+
+#[test]
+fn fallback_ties_keep_first_contracted_winner() {
+    let transposed_left = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 1.0]);
+    let right = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f32, 2.0]);
+
+    let result = tropical_einsum_with_argmax(
+        TropicalEinsumKind::MaxPlus,
+        &[&transposed_left, &right],
+        "ji,jk->ik",
+    )
+    .unwrap();
+
+    assert_eq!(result.output.as_slice::<f32>().unwrap(), &[3.0]);
+    assert_eq!(result.argmax[0].indices(), &[0]);
+}
+
+#[test]
 fn multi_contracted_modes_expose_fused_winner_coordinates() {
     let a = Tensor::from_vec_col_major(vec![1, 2, 2], vec![0.0_f64, 5.0, 3.0, 1.0]);
     let b = Tensor::from_vec_col_major(vec![2, 2, 1], vec![0.0_f64, 0.0, 0.0, 0.0]);
@@ -121,9 +205,8 @@ fn unsupported_cases_return_invalid_config() {
         ("three inputs", vec![&a, &b, &a], "ij,jk,kl->il"),
         ("diagonal", vec![&a, &b], "ii,jk->ik"),
         ("pre-reduction", vec![&a, &b], "ij,jk->k"),
-        ("batch modes", vec![&a, &b], "ij,ij->ij"),
-        ("input permutation", vec![&a, &b], "ji,jk->ik"),
         ("outer product", vec![&a, &b], "ij,kl->ikjl"),
+        ("repeated output", vec![&a, &b], "ij,jk->ii"),
     ];
 
     for (case, inputs, notation) in unsupported {

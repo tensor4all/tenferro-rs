@@ -1,10 +1,9 @@
 //! Tropical einsum execution through tenferro-einsum lowering.
 //!
-//! This module executes the first supported tropical einsum shape: simple
-//! binary GEMM-style contractions over compact host `f32` and `f64` tensors.
-//! Subscript parsing, shape validation, contraction ordering, and GEMM layout
-//! metadata come from `tenferro-einsum`; this crate only supplies tropical
-//! arithmetic and argmax capture.
+//! This module executes binary tropical einsum contractions over compact host
+//! `f32` and `f64` tensors. Subscript parsing, shape validation, contraction
+//! ordering, and GEMM layout metadata come from `tenferro-einsum`; this crate
+//! only supplies tropical arithmetic and argmax capture.
 //!
 //! # Examples
 //!
@@ -243,17 +242,17 @@ pub struct TropicalEinsumResult {
     pub argmax: Vec<TropicalArgmaxStep>,
 }
 
-/// Execute a simple binary tropical einsum and capture first-winner argmax.
+/// Execute a binary tropical einsum and capture first-winner argmax.
 ///
-/// Task 4 supports exactly binary GEMM-style lowering over compact host `f32`
-/// and `f64` tensors, with no diagonal extraction, no pre-reduction, and no
-/// batch modes. Unsupported cases return
+/// This supports binary contractions over compact host `f32` and `f64`
+/// tensors, including batched GEMM-style contractions and a generic fallback
+/// for unique-label binary contractions. Unsupported cases return
 /// [`tenferro_tensor::Error::InvalidConfig`] instead of panicking.
 ///
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::InvalidConfig`] when notation, shapes,
-/// dtype, or lowering features are outside the Task 4 supported surface.
+/// dtype, or lowering features are outside the supported surface.
 ///
 /// # Examples
 ///
@@ -290,6 +289,9 @@ pub fn tropical_einsum_with_argmax(
         )));
     }
     ensure_unique_labels(&subscripts.output, "output subscripts")?;
+    for (input_index, input_labels) in subscripts.inputs.iter().enumerate() {
+        ensure_unique_input_labels(input_labels, input_index)?;
+    }
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = ContractionTree::optimize(&subscripts, &shapes)
@@ -329,37 +331,26 @@ pub fn tropical_einsum_with_argmax(
             "tropical einsum requires at least one contracted mode for argmax capture",
         ));
     }
-    if !gemm.batch_modes().is_empty() {
-        return Err(invalid_config(
-            "batched tropical einsum is not supported yet",
-        ));
-    }
-    if gemm.lhs_target_modes() != lhs_subs {
-        return Err(invalid_config(
-            "left input would require a pre-GEMM permutation, which is not supported yet",
-        ));
-    }
-    if gemm.rhs_target_modes() != rhs_subs {
-        return Err(invalid_config(
-            "right input would require a pre-GEMM permutation, which is not supported yet",
-        ));
-    }
-    if gemm.lhs_gemm_shape().len() != 2
-        || gemm.rhs_gemm_shape().len() != 2
-        || gemm.output_gemm_shape().len() != 2
-    {
-        return Err(invalid_config(
-            "only unbatched two-dimensional GEMM lowering is supported yet",
-        ));
-    }
 
     match (inputs[0].dtype(), inputs[1].dtype()) {
-        (DType::F32, DType::F32) => {
-            execute_typed::<f32>(kind, inputs, &subscripts, output_subs, &gemm)
-        }
-        (DType::F64, DType::F64) => {
-            execute_typed::<f64>(kind, inputs, &subscripts, output_subs, &gemm)
-        }
+        (DType::F32, DType::F32) => execute_typed::<f32>(
+            kind,
+            inputs,
+            &subscripts,
+            lhs_subs,
+            rhs_subs,
+            output_subs,
+            &gemm,
+        ),
+        (DType::F64, DType::F64) => execute_typed::<f64>(
+            kind,
+            inputs,
+            &subscripts,
+            lhs_subs,
+            rhs_subs,
+            output_subs,
+            &gemm,
+        ),
         (lhs, rhs) if lhs != rhs => Err(invalid_config(format!(
             "input dtype mismatch: left is {lhs:?}, right is {rhs:?}"
         ))),
@@ -373,6 +364,8 @@ fn execute_typed<T>(
     kind: TropicalEinsumKind,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
+    lhs_subs: &[u32],
+    rhs_subs: &[u32],
     output_subs: &[u32],
     gemm: &tenferro_einsum::lowering::GemmPlan<'_>,
 ) -> tenferro_tensor::Result<TropicalEinsumResult>
@@ -381,6 +374,47 @@ where
 {
     let lhs = T::host_slice(inputs[0])?;
     let rhs = T::host_slice(inputs[1])?;
+    if gemm.lhs_target_modes() == lhs_subs
+        && gemm.rhs_target_modes() == rhs_subs
+        && gemm_shapes_match(gemm)?
+    {
+        return execute_target_order_gemm_typed::<T>(
+            kind,
+            inputs,
+            lhs,
+            rhs,
+            subscripts,
+            output_subs,
+            gemm,
+        );
+    }
+
+    execute_fallback_typed::<T>(
+        kind,
+        inputs,
+        lhs,
+        rhs,
+        subscripts,
+        lhs_subs,
+        rhs_subs,
+        output_subs,
+        gemm,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_target_order_gemm_typed<T>(
+    kind: TropicalEinsumKind,
+    inputs: &[&Tensor],
+    lhs: &[T],
+    rhs: &[T],
+    subscripts: &Subscripts,
+    output_subs: &[u32],
+    gemm: &tenferro_einsum::lowering::GemmPlan<'_>,
+) -> tenferro_tensor::Result<TropicalEinsumResult>
+where
+    T: TropicalFloat,
+{
     let canonical_shape = gemm.expanded_output_shape().to_vec();
     let requested_shape = output_shape_for_labels(output_subs, subscripts, inputs)?;
     let contracted_shape = gemm.contracted_shape().to_vec();
@@ -400,32 +434,54 @@ where
         });
     }
 
-    if gemm.k() == 0 {
-        return Err(invalid_config(
-            "zero-sized contracted modes are supported only when the requested output is empty",
-        ));
-    }
+    ensure_nonzero_contraction(gemm.k())?;
 
-    let out = tropical_gemm_with_argmax(
-        TropicalGemmKind::from(kind),
-        lhs,
-        gemm.m(),
-        gemm.k(),
-        rhs,
-        gemm.n(),
-    )?;
+    let batch_len = element_count(gemm.batch_shape())?;
+    let lhs_batch_len = checked_len(gemm.m(), gemm.k(), "left GEMM batch slice")?;
+    let rhs_batch_len = checked_len(gemm.k(), gemm.n(), "right GEMM batch slice")?;
+    let output_batch_len = checked_len(gemm.m(), gemm.n(), "output GEMM batch slice")?;
+    let mut canonical_values = Vec::with_capacity(output_len);
+    let mut canonical_argmax = Vec::with_capacity(output_len);
+
+    for batch_index in 0..batch_len {
+        let lhs_start = checked_len(batch_index, lhs_batch_len, "left batch offset")?;
+        let rhs_start = checked_len(batch_index, rhs_batch_len, "right batch offset")?;
+        let lhs_end = lhs_start
+            .checked_add(lhs_batch_len)
+            .ok_or_else(|| invalid_config("left batch slice end overflows usize"))?;
+        let rhs_end = rhs_start
+            .checked_add(rhs_batch_len)
+            .ok_or_else(|| invalid_config("right batch slice end overflows usize"))?;
+        let lhs_batch = lhs
+            .get(lhs_start..lhs_end)
+            .ok_or_else(|| invalid_config("left GEMM batch slice is outside input storage"))?;
+        let rhs_batch = rhs
+            .get(rhs_start..rhs_end)
+            .ok_or_else(|| invalid_config("right GEMM batch slice is outside input storage"))?;
+        let out = tropical_gemm_with_argmax(
+            TropicalGemmKind::from(kind),
+            lhs_batch,
+            gemm.m(),
+            gemm.k(),
+            rhs_batch,
+            gemm.n(),
+        )?;
+        debug_assert_eq!(out.values.len(), output_batch_len);
+        canonical_values.extend(out.values);
+        canonical_argmax.extend(out.argmax);
+    }
 
     let (values, indices) = if gemm.needs_final_permute() {
         (
             permute_col_major(
-                &out.values,
+                &canonical_values,
                 &canonical_shape,
                 gemm.canonical_output_modes(),
                 &requested_shape,
                 output_subs,
             )?,
             permute_col_major(
-                &out.argmax,
+                &canonical_argmax,
                 &canonical_shape,
                 gemm.canonical_output_modes(),
                 &requested_shape,
@@ -438,7 +494,7 @@ where
                 "lowering output shape {canonical_shape:?} does not match requested shape {requested_shape:?}"
             )));
         }
-        (out.values, out.argmax)
+        (canonical_values, canonical_argmax)
     };
 
     let argmax_step = TropicalArgmaxStep::new(
@@ -446,6 +502,104 @@ where
         requested_shape.clone(),
         output_subs.to_vec(),
         gemm.contracted_modes().to_vec(),
+        contracted_shape,
+    );
+    Ok(TropicalEinsumResult {
+        output: Tensor::from_vec_col_major(requested_shape, values),
+        argmax: vec![argmax_step],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_fallback_typed<T>(
+    kind: TropicalEinsumKind,
+    inputs: &[&Tensor],
+    lhs: &[T],
+    rhs: &[T],
+    subscripts: &Subscripts,
+    lhs_subs: &[u32],
+    rhs_subs: &[u32],
+    output_subs: &[u32],
+    gemm: &tenferro_einsum::lowering::GemmPlan<'_>,
+) -> tenferro_tensor::Result<TropicalEinsumResult>
+where
+    T: TropicalFloat,
+{
+    let requested_shape = output_shape_for_labels(output_subs, subscripts, inputs)?;
+    let contracted_modes = gemm.contracted_modes();
+    let contracted_shape = gemm.contracted_shape().to_vec();
+    let output_len = element_count(&requested_shape)?;
+
+    if output_len == 0 {
+        let argmax_step = TropicalArgmaxStep::new(
+            Vec::new(),
+            requested_shape.clone(),
+            output_subs.to_vec(),
+            contracted_modes.to_vec(),
+            contracted_shape,
+        );
+        return Ok(TropicalEinsumResult {
+            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new()),
+            argmax: vec![argmax_step],
+        });
+    }
+
+    let contracted_len = element_count(&contracted_shape)?;
+    ensure_nonzero_contraction(contracted_len)?;
+    ensure_argmax_representable(contracted_len)?;
+
+    let lhs_strides = col_major_strides(inputs[0].shape())?;
+    let rhs_strides = col_major_strides(inputs[1].shape())?;
+    let lhs_axes = axis_sources(lhs_subs, output_subs, contracted_modes)?;
+    let rhs_axes = axis_sources(rhs_subs, output_subs, contracted_modes)?;
+    if lhs_axes.len() != lhs_strides.len() || rhs_axes.len() != rhs_strides.len() {
+        return Err(invalid_config(
+            "input rank does not match tensor shape rank for fallback execution",
+        ));
+    }
+    let mut values = Vec::with_capacity(output_len);
+    let mut argmax = Vec::with_capacity(output_len);
+    let mut output_index = vec![0usize; requested_shape.len()];
+    let mut contracted_index = vec![0usize; contracted_shape.len()];
+
+    for _ in 0..output_len {
+        let mut best = tropical_identity(kind);
+        let mut winner = 0_u32;
+        let mut has_ordered_candidate = false;
+        contracted_index.fill(0);
+
+        for contracted_flat in 0..contracted_len {
+            let lhs_offset =
+                offset_for_axes(&lhs_axes, &lhs_strides, &output_index, &contracted_index)?;
+            let rhs_offset =
+                offset_for_axes(&rhs_axes, &rhs_strides, &output_index, &contracted_index)?;
+            let lhs_value = lhs
+                .get(lhs_offset)
+                .ok_or_else(|| invalid_config("fallback left input offset is out of bounds"))?;
+            let rhs_value = rhs
+                .get(rhs_offset)
+                .ok_or_else(|| invalid_config("fallback right input offset is out of bounds"))?;
+            let candidate = *lhs_value + *rhs_value;
+            if !candidate.is_nan()
+                && tropical_candidate_is_better(kind, candidate, best, has_ordered_candidate)
+            {
+                best = candidate;
+                winner = contracted_flat as u32;
+                has_ordered_candidate = true;
+            }
+            increment_col_major_index(&mut contracted_index, &contracted_shape);
+        }
+
+        values.push(best);
+        argmax.push(winner);
+        increment_col_major_index(&mut output_index, &requested_shape);
+    }
+
+    let argmax_step = TropicalArgmaxStep::new(
+        argmax,
+        requested_shape.clone(),
+        output_subs.to_vec(),
+        contracted_modes.to_vec(),
         contracted_shape,
     );
     Ok(TropicalEinsumResult {
@@ -518,6 +672,130 @@ fn ensure_unique_labels(labels: &[u32], role: &'static str) -> tenferro_tensor::
         }
     }
     Ok(())
+}
+
+fn ensure_unique_input_labels(labels: &[u32], input_index: usize) -> tenferro_tensor::Result<()> {
+    for (axis, label) in labels.iter().enumerate() {
+        if labels[..axis].contains(label) {
+            return Err(invalid_config(format!(
+                "repeated input {input_index} label {label} is not supported yet"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_nonzero_contraction(contracted_len: usize) -> tenferro_tensor::Result<()> {
+    if contracted_len == 0 {
+        return Err(invalid_config(
+            "zero-sized contracted modes are supported only when the requested output is empty",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_argmax_representable(contracted_len: usize) -> tenferro_tensor::Result<()> {
+    let max_argmax_len = (u32::MAX as usize).saturating_add(1);
+    if contracted_len > max_argmax_len {
+        return Err(invalid_config(format!(
+            "contracted element count {contracted_len} cannot be represented as u32 argmax indices"
+        )));
+    }
+    Ok(())
+}
+
+fn gemm_shapes_match(
+    gemm: &tenferro_einsum::lowering::GemmPlan<'_>,
+) -> tenferro_tensor::Result<bool> {
+    let expected_lhs = expected_grouped_shape(gemm.m(), gemm.k(), gemm.batch_shape());
+    let expected_rhs = expected_grouped_shape(gemm.k(), gemm.n(), gemm.batch_shape());
+    let expected_output = expected_grouped_shape(gemm.m(), gemm.n(), gemm.batch_shape());
+    Ok(gemm.lhs_gemm_shape() == expected_lhs.as_slice()
+        && gemm.rhs_gemm_shape() == expected_rhs.as_slice()
+        && gemm.output_gemm_shape() == expected_output.as_slice()
+        && element_count(gemm.expanded_output_shape())? == element_count(gemm.output_gemm_shape())?)
+}
+
+fn expected_grouped_shape(first: usize, second: usize, batch_shape: &[usize]) -> Vec<usize> {
+    let mut shape = Vec::with_capacity(2 + batch_shape.len());
+    shape.push(first);
+    shape.push(second);
+    shape.extend_from_slice(batch_shape);
+    shape
+}
+
+#[derive(Clone, Copy)]
+enum AxisSource {
+    Output(usize),
+    Contracted(usize),
+}
+
+fn axis_sources(
+    input_labels: &[u32],
+    output_labels: &[u32],
+    contracted_labels: &[u32],
+) -> tenferro_tensor::Result<Vec<AxisSource>> {
+    input_labels
+        .iter()
+        .map(|label| {
+            if let Some(axis) = output_labels
+                .iter()
+                .position(|candidate| candidate == label)
+            {
+                Ok(AxisSource::Output(axis))
+            } else if let Some(axis) = contracted_labels
+                .iter()
+                .position(|candidate| candidate == label)
+            {
+                Ok(AxisSource::Contracted(axis))
+            } else {
+                Err(invalid_config(format!(
+                    "input label {label} would require pre-reduction, which is not supported yet"
+                )))
+            }
+        })
+        .collect()
+}
+
+fn offset_for_axes(
+    axes: &[AxisSource],
+    strides: &[usize],
+    output_index: &[usize],
+    contracted_index: &[usize],
+) -> tenferro_tensor::Result<usize> {
+    axes.iter()
+        .zip(strides)
+        .try_fold(0usize, |offset, (axis, stride)| {
+            let coordinate = match *axis {
+                AxisSource::Output(output_axis) => output_index[output_axis],
+                AxisSource::Contracted(contracted_axis) => contracted_index[contracted_axis],
+            };
+            let term = coordinate
+                .checked_mul(*stride)
+                .ok_or_else(|| invalid_config("input offset multiplication overflows usize"))?;
+            offset
+                .checked_add(term)
+                .ok_or_else(|| invalid_config("input offset addition overflows usize"))
+        })
+}
+
+fn tropical_identity<T: Float>(kind: TropicalEinsumKind) -> T {
+    match kind {
+        TropicalEinsumKind::MaxPlus => T::neg_infinity(),
+        TropicalEinsumKind::MinPlus => T::infinity(),
+    }
+}
+
+fn tropical_candidate_is_better<T: Float>(
+    kind: TropicalEinsumKind,
+    candidate: T,
+    best: T,
+    has_ordered_candidate: bool,
+) -> bool {
+    match kind {
+        TropicalEinsumKind::MaxPlus => !has_ordered_candidate || candidate > best,
+        TropicalEinsumKind::MinPlus => !has_ordered_candidate || candidate < best,
+    }
 }
 
 fn permute_col_major<T: Copy>(
@@ -599,6 +877,14 @@ fn element_count(shape: &[usize]) -> tenferro_tensor::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &extent| {
         acc.checked_mul(extent)
             .ok_or_else(|| invalid_config(format!("shape {shape:?} overflows usize")))
+    })
+}
+
+fn checked_len(lhs: usize, rhs: usize, label: &str) -> tenferro_tensor::Result<usize> {
+    lhs.checked_mul(rhs).ok_or_else(|| {
+        invalid_config(format!(
+            "{label} element count overflows usize for dimensions {lhs} and {rhs}"
+        ))
     })
 }
 
