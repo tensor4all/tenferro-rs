@@ -16,6 +16,7 @@ from .runtime import (
     PINNED_TORCH_VERSION,
     apply_spec_observable,
     build_call_metadata,
+    build_custom_input_map,
     build_direction_map,
     build_input_map,
     build_observable_function,
@@ -26,6 +27,7 @@ from .runtime import (
     dtype_name,
     import_generation_runtime,
     import_scalar_generation_runtime,
+    is_custom_spec,
     lookup_upstream_opinfo,
     map_allclose,
     normalize_torch_version,
@@ -149,12 +151,11 @@ def _normalized_scalar_upstream_op_id(name: str, variant_name: str) -> str:
     return base
 
 
-def build_supported_upstream_mapping_index() -> dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]]:
+def build_supported_upstream_mapping_index() -> dict[
+    tuple[str, str], tuple[UpstreamMappedFamily, ...]
+]:
     """Map upstream AD-relevant OpInfo variants to planned DB families."""
-    inventory = {
-        (row.name, row.variant_name): row
-        for row in collect_ad_relevant_linalg_opinfos()
-    }
+    inventory = {(row.name, row.variant_name): row for row in collect_ad_relevant_linalg_opinfos()}
     mapping: dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]] = {}
     for row in inventory.values():
         key = (row.name, row.variant_name)
@@ -203,13 +204,12 @@ def build_supported_upstream_mapping_index() -> dict[tuple[str, str], tuple[Upst
 
 def build_unsupported_upstream_mapping_index() -> dict[tuple[str, str], str]:
     """Return explicitly classified upstream AD variants that are not DB success/error families yet."""
-    return {
-        key: "unsupported_or_xfail_family"
-        for key in UNSUPPORTED_UPSTREAM_KEYS
-    }
+    return {key: "unsupported_or_xfail_family" for key in UNSUPPORTED_UPSTREAM_KEYS}
 
 
-def build_supported_scalar_mapping_index() -> dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]]:
+def build_supported_scalar_mapping_index() -> dict[
+    tuple[str, str], tuple[UpstreamMappedFamily, ...]
+]:
     """Map dense scalar upstream OpInfo variants to planned DB families."""
     mapping: dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]] = {}
     for row in collect_ad_relevant_scalar_opinfos():
@@ -228,15 +228,10 @@ def build_supported_scalar_mapping_index() -> dict[tuple[str, str], tuple[Upstre
 
 def build_unsupported_scalar_mapping_index() -> dict[tuple[str, str], str]:
     """Return explicitly classified scalar OpInfo variants outside the DB contract."""
-    return {
-        key: "fd_hostile_piecewise_family"
-        for key in UNSUPPORTED_SCALAR_UPSTREAM_KEYS
-    }
+    return {key: "fd_hostile_piecewise_family" for key in UNSUPPORTED_SCALAR_UPSTREAM_KEYS}
 
 
-def _observable_kind_for_target(
-    key: tuple[str, str], target: UpstreamMappedFamily
-) -> str:
+def _observable_kind_for_target(key: tuple[str, str], target: UpstreamMappedFamily) -> str:
     if key[0] == "linalg.svd":
         return {
             "u_abs": "svd_u_abs",
@@ -268,8 +263,7 @@ def _sample_process_name_for_target(
 
 def _build_success_case_specs() -> tuple[CaseFamilySpec, ...]:
     inventory_rows = {
-        (row.name, row.variant_name): row
-        for row in collect_ad_relevant_linalg_opinfos()
+        (row.name, row.variant_name): row for row in collect_ad_relevant_linalg_opinfos()
     }
     specs: list[CaseFamilySpec] = []
     for key, targets in build_supported_upstream_mapping_index().items():
@@ -322,8 +316,7 @@ def _build_error_case_specs() -> tuple[CaseFamilySpec, ...]:
 
 def _build_scalar_case_specs() -> tuple[CaseFamilySpec, ...]:
     inventory_rows = {
-        (row.name, row.variant_name): row
-        for row in collect_ad_relevant_scalar_opinfos()
+        (row.name, row.variant_name): row for row in collect_ad_relevant_scalar_opinfos()
     }
     specs: list[CaseFamilySpec] = []
     for key, targets in build_supported_scalar_mapping_index().items():
@@ -348,8 +341,30 @@ def _build_scalar_case_specs() -> tuple[CaseFamilySpec, ...]:
     return tuple(specs)
 
 
+def _build_custom_case_specs() -> tuple[CaseFamilySpec, ...]:
+    return (
+        CaseFamilySpec(
+            op="tropical_einsum_maxplus",
+            family="identity",
+            observable_kind="identity",
+            expected_behavior="success",
+            source_file="torch",
+            source_function="torch.max(a.unsqueeze(2) + b.unsqueeze(0), dim=1).values",
+            hvp_enabled=False,
+            inventory_kind="custom",
+            supported_dtype_names=("float64",),
+        ),
+    )
+
+
 def _build_case_specs() -> tuple[CaseFamilySpec, ...]:
-    return _build_success_case_specs() + _build_error_case_specs() + _build_scalar_case_specs()
+    return (
+        _build_success_case_specs()
+        + _build_error_case_specs()
+        + _build_scalar_case_specs()
+        + _build_custom_case_specs()
+    )
+
 
 @lru_cache(maxsize=1)
 def _case_specs_cached() -> tuple[CaseFamilySpec, ...]:
@@ -360,10 +375,7 @@ def _case_specs_cached() -> tuple[CaseFamilySpec, ...]:
 def _case_families_cached() -> dict[str, tuple[str, ...]]:
     specs = _case_specs_cached()
     target_ops = tuple(dict.fromkeys(spec.op for spec in specs))
-    return {
-        op: tuple(spec.family for spec in specs if spec.op == op)
-        for op in target_ops
-    }
+    return {op: tuple(spec.family for spec in specs if spec.op == op) for op in target_ops}
 
 
 def build_case_families() -> dict[str, tuple[str, ...]]:
@@ -517,17 +529,11 @@ def materialize_success_case(
         pytorch_jvp=encoding.encode_tensor_map(raw_pytorch_jvp),
         pytorch_vjp=encoding.encode_tensor_map(raw_pytorch_vjp),
         pytorch_hvp=(
-            None
-            if raw_pytorch_hvp is None
-            else encoding.encode_tensor_map(raw_pytorch_hvp)
+            None if raw_pytorch_hvp is None else encoding.encode_tensor_map(raw_pytorch_hvp)
         ),
         fd_step=fd_step,
         fd_jvp=encoding.encode_tensor_map(raw_fd_jvp),
-        fd_hvp=(
-            None
-            if raw_fd_hvp is None
-            else encoding.encode_tensor_map(raw_fd_hvp)
-        ),
+        fd_hvp=(None if raw_fd_hvp is None else encoding.encode_tensor_map(raw_fd_hvp)),
     )
     return make_success_case(
         spec,
@@ -571,10 +577,7 @@ def _materialize_hvp_for_spec(spec: CaseFamilySpec, *, dtype_name: str) -> bool:
 
 def _is_skippable_hvp_runtime_error(exc: RuntimeError) -> bool:
     message = str(exc)
-    return (
-        "forward differentiable view operations" in message
-        or "has_fw_view" in message
-    )
+    return "forward differentiable view operations" in message or "has_fw_view" in message
 
 
 def _resolve_runtime_for_spec(spec: CaseFamilySpec):
@@ -635,7 +638,7 @@ def _validate_success_probe(
         torch.zeros_like(residual),
         rtol=first_order["rtol"],
         atol=first_order["atol"],
-        ):
+    ):
         raise ValueError("probe failed adjoint consistency")
 
     if pytorch_hvp is None and fd_hvp is None:
@@ -658,22 +661,14 @@ def _measured_comparison(
 ) -> dict[str, float | str]:
     comparison = {
         "first_order": comparison_from_observed_residuals(
-            max_rel_residual=max(
-                payload.first_order_max_rel_residual for payload in payloads
-            ),
-            max_abs_residual=max(
-                payload.first_order_max_abs_residual for payload in payloads
-            ),
+            max_rel_residual=max(payload.first_order_max_rel_residual for payload in payloads),
+            max_abs_residual=max(payload.first_order_max_abs_residual for payload in payloads),
         )
     }
     if any(payload.pytorch_hvp is not None for payload in payloads):
         comparison["second_order"] = comparison_from_observed_residuals(
-            max_rel_residual=max(
-                payload.second_order_max_rel_residual for payload in payloads
-            ),
-            max_abs_residual=max(
-                payload.second_order_max_abs_residual for payload in payloads
-            ),
+            max_rel_residual=max(payload.second_order_max_rel_residual for payload in payloads),
+            max_abs_residual=max(payload.second_order_max_abs_residual for payload in payloads),
         )
     return comparison
 
@@ -684,6 +679,9 @@ def _generate_success_records(
     limit: int | None = None,
     seed: int = 17,
 ) -> list[dict]:
+    if is_custom_spec(spec):
+        return _generate_custom_success_records(spec, limit=limit, seed=seed)
+
     ensure_runtime_dependencies()
     torch, opinfo_source = _resolve_runtime_for_spec(spec)
     opinfo = lookup_upstream_opinfo(opinfo_source, spec)
@@ -785,12 +783,10 @@ def _generate_success_records(
                 input_norm=combined_input_norm(torch, inputs),
             )
             plus_inputs = {
-                name: tensor + fd_step * direction[name]
-                for name, tensor in inputs.items()
+                name: tensor + fd_step * direction[name] for name, tensor in inputs.items()
             }
             minus_inputs = {
-                name: tensor - fd_step * direction[name]
-                for name, tensor in inputs.items()
+                name: tensor - fd_step * direction[name] for name, tensor in inputs.items()
             }
             plus_output = apply_spec_observable(
                 torch,
@@ -926,6 +922,137 @@ def _generate_success_records(
     return records
 
 
+def _generate_custom_success_records(
+    spec: CaseFamilySpec,
+    *,
+    limit: int | None = None,
+    seed: int = 17,
+) -> list[dict]:
+    ensure_runtime_dependencies()
+    import torch
+
+    source_commit = getattr(torch.version, "git_version", None) or torch.__version__
+    count = 1 if limit is None else min(limit, 1)
+    records: list[dict] = []
+    for index in range(count):
+        dtype = torch.float64
+        dtype_name_value = dtype_name(torch, dtype)
+        inputs = build_custom_input_map(torch, spec, dtype=dtype)
+        output = apply_spec_observable(torch, spec, None, inputs)
+
+        case_seed = seed + index
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(case_seed)
+        direction = build_direction_map(torch, spec, inputs, generator=generator)
+        cotangent = normalize_raw_tensor_map(
+            torch,
+            {
+                name: randn_like(torch, tensor, generator=generator)
+                for name, tensor in output.items()
+            },
+        )
+
+        input_names = tuple(inputs.keys())
+        output_names = tuple(output.keys())
+        observable_fn = build_observable_function(
+            torch,
+            spec,
+            None,
+            input_names,
+            output_names=output_names,
+        )
+        _, jvp_tuple = torch.func.jvp(
+            observable_fn,
+            tensor_map_to_tuple(inputs),
+            tensor_map_to_tuple(direction),
+        )
+        pytorch_jvp = tuple_to_tensor_map(output_names, jvp_tuple)
+        grads = torch.autograd.grad(
+            tensor_map_to_tuple(output),
+            tensor_map_to_tuple(inputs),
+            grad_outputs=tensor_map_to_tuple(cotangent),
+            allow_unused=True,
+        )
+        pytorch_vjp = zeros_like_input_map(torch, inputs, grads)
+
+        fd_step = compute_step(
+            dtype_name_value,
+            input_norm=combined_input_norm(torch, inputs),
+        )
+        plus_inputs = {name: tensor + fd_step * direction[name] for name, tensor in inputs.items()}
+        minus_inputs = {name: tensor - fd_step * direction[name] for name, tensor in inputs.items()}
+        plus_output = apply_spec_observable(torch, spec, None, plus_inputs)
+        minus_output = apply_spec_observable(torch, spec, None, minus_inputs)
+        fd_jvp = {
+            name: (plus_output[name] - minus_output[name]) / (2.0 * fd_step)
+            for name in output_names
+        }
+
+        jvp_abs = max_abs_diff(torch, pytorch_jvp, fd_jvp)
+        jvp_rel = max_rel_diff(torch, pytorch_jvp, fd_jvp)
+        lhs = tensor_map_inner_product(torch, cotangent, fd_jvp)
+        rhs = tensor_map_inner_product(torch, pytorch_vjp, direction)
+        adj_abs, adj_rel = scalar_residual(torch, lhs, rhs)
+        comparison = _measured_comparison(
+            [
+                SuccessProbePayload(
+                    case_seed=case_seed,
+                    dtype_name=dtype_name_value,
+                    op_args=[],
+                    op_kwargs={},
+                    inputs=inputs,
+                    direction=direction,
+                    cotangent=cotangent,
+                    pytorch_jvp=pytorch_jvp,
+                    pytorch_vjp=pytorch_vjp,
+                    pytorch_hvp=None,
+                    fd_step=fd_step,
+                    fd_jvp=fd_jvp,
+                    fd_hvp=None,
+                    first_order_max_rel_residual=max(jvp_rel, adj_rel),
+                    first_order_max_abs_residual=max(jvp_abs, adj_abs),
+                    second_order_max_rel_residual=0.0,
+                    second_order_max_abs_residual=0.0,
+                )
+            ]
+        )
+        _validate_success_probe(
+            torch,
+            comparison=comparison,
+            direction=direction,
+            cotangent=cotangent,
+            pytorch_jvp=pytorch_jvp,
+            pytorch_vjp=pytorch_vjp,
+            fd_jvp=fd_jvp,
+        )
+        provenance = build_provenance(
+            spec,
+            source_commit=source_commit,
+            seed=case_seed,
+            torch_version=normalize_torch_version(torch.__version__),
+            comment="repository-local PyTorch composition for max-plus ij,jk->ik",
+        )
+        records.append(
+            materialize_success_case(
+                spec,
+                case_id=_case_id(spec, dtype=dtype_name_value, index=index + 1),
+                dtype=dtype_name_value,
+                raw_inputs=inputs,
+                comparison=comparison,
+                probe_id="p0",
+                raw_direction=direction,
+                raw_cotangent=cotangent,
+                raw_pytorch_jvp=pytorch_jvp,
+                raw_pytorch_vjp=pytorch_vjp,
+                fd_step=fd_step,
+                raw_fd_jvp=fd_jvp,
+                provenance=provenance,
+            )
+        )
+
+    return records
+
+
 def _make_spectral_error_input(torch, spec: CaseFamilySpec, *, generator):
     a = torch.randn((3, 3), dtype=torch.complex128, device="cpu", generator=generator)
     if spec.op == "eigh":
@@ -1040,14 +1167,11 @@ def ensure_runtime_dependencies() -> None:
             missing.append(module_name)
         except ImportError as exc:
             raise RuntimeError(
-                "PyTorch v1 case generation failed to import optional dependency: "
-                f"{module_name}"
+                f"PyTorch v1 case generation failed to import optional dependency: {module_name}"
             ) from exc
     if missing:
         deps = ", ".join(missing)
-        raise RuntimeError(
-            "PyTorch v1 case generation requires optional dependencies: " f"{deps}"
-        )
+        raise RuntimeError(f"PyTorch v1 case generation requires optional dependencies: {deps}")
 
     import torch
 

@@ -10,7 +10,7 @@
 
 This document is the normative specification for the `ExtensionOp` contract
 implemented by the traced `StdTensorOp` graph. `ExtensionOp` enables out-of-tree
-extension primitives (e.g. `FusedTropicalDotGeneral`) to participate in the
+extension primitives (e.g. `tenferro-ext-tropical.einsum.v1`) to participate in the
 graph as `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` variants without
 modifying the core workspace.
 
@@ -38,11 +38,12 @@ This spec extends the three normative contracts that already exist in
   document extends it by specifying how an `ExtensionOp` participates in
   AD **without** itself implementing `PrimitiveOp`: the dispatcher in
   `tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
-  registered rule for `op.family_id()`. The rule emits tangents and
-  cotangents expressed in the core `StdTensorOp` vocabulary, or in other
-  registered extension families. The ad-contract closure rule (emit only
-  ops that implement `PrimitiveOp`) is preserved at the carrier level
-  because the graph still contains only `StdTensorOp` values.
+  rule for `op.family_id()` in the active `ExtensionRuleSet`. The rule emits
+  tangents and cotangents expressed in the core `StdTensorOp` vocabulary, or
+  in extension helper families covered by Section 10's AD-closure rules. The
+  ad-contract closure rule (emit only ops that implement `PrimitiveOp`) is
+  preserved at the carrier level because the graph still contains only
+  `StdTensorOp` values.
 - [`primitive-catalog.md`](primitive-catalog.md) owns the core op
   vocabulary. `ExtensionOp` does **not** add to that vocabulary; it is a
   single carrier variant `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`.
@@ -59,7 +60,7 @@ everything else.
 
 This document does **not** own:
 
-- the concrete registry data structure (see Section 15)
+- compatibility global registry internals
 - cross-process graph serialization format (Section 11, Section 15)
 - per-extension semantics (those live with each extension crate)
 
@@ -148,14 +149,19 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     /// `Clone` on the concrete type.
     fn clone_arc(&self) -> std::sync::Arc<dyn ExtensionOp>;
 
+    /// Upcast this extension to `&dyn Any` for payload downcasting.
+    ///
+    /// Implementations SHOULD return `self` verbatim.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     // ----- Arity (Section 6) -----
 
     /// Number of primal inputs. MUST be consistent with
-    /// `infer_output_shapes` (same input count).
+    /// `infer_output_meta` (same input count).
     fn n_inputs(&self) -> usize;
 
     /// Number of outputs. MUST match the length of the returned
-    /// `Vec` from `infer_output_shapes`.
+    /// `Vec` from `infer_output_meta`.
     fn n_outputs(&self) -> usize;
 
     // ----- Shape and dtype inference (Section 7) -----
@@ -283,8 +289,8 @@ op interner, AD rule caching, and structural graph comparison.
 - An implementer whose `payload_hash` disagrees with `payload_eq`
   breaks `HashMap`-keyed caches. Symptom: AD caches return wrong
   cotangents or miss.
-- An implementer whose registered AD rule emits an `Extension` whose family
-  has no registered AD rule gets `ADRuleError::Unsupported` on the next AD
+- An implementer whose AD rule emits an `Extension` whose family has no rule in
+  the active `ExtensionRuleSet` gets `ADRuleError::Unsupported` on the next AD
   pass.
 
 ---
@@ -312,7 +318,7 @@ Every `family_id` MUST follow the namespaced format:
 Example:
 
 ```
-"tenferro-ext-tropical.fused_dot_general.v1"
+"tenferro-ext-tropical.einsum.v1"
 ```
 
 Extension crates MAY use the `ExtensionFamilyId` derive macro re-exported by
@@ -331,10 +337,19 @@ assert_eq!(FftOp::FAMILY_ID, "my-crate.fft.v1");
 
 ### Uniqueness
 
-`family_id` uniqueness is enforced at registration (see Section 9). The
-registry MUST reject a second registration under an already-registered
-`family_id`. This makes collisions a contract violation surfaced at
-registration time, not a silent equality bug.
+`family_id` uniqueness is an implementer contract for operation identity.
+Extension crates MUST choose a family id that uniquely names one payload schema
+and semantic family. The core graph does not globally register op payloads, so
+payload family collisions are not caught when a payload is constructed.
+
+Registration surfaces enforce narrower duplicate rules:
+
+- `ExtensionRuleSet` rejects two AD rules with the same `family_id`.
+- runtime executor registration is idempotent by `family_id` and keeps the
+  first executor.
+
+These checks catch common configuration mistakes, but they do not replace the
+requirement that extension authors reserve stable, collision-free family ids.
 
 ### Hashing derivation
 
@@ -359,22 +374,22 @@ but different families are not accidentally unified by the op interner.
 
 ### Worked example
 
-For `FusedTropicalDotGeneral` in `tenferro-ext-tropical`:
+For `TropicalEinsumOp` in `tenferro-ext-tropical`:
 
-- `family_id = "tenferro-ext-tropical.fused_dot_general.v1"`
-- payload = `DotGeneralConfig` (from `tenferro-tensor`)
-- `payload_hash` hashes the four `Vec<usize>` fields of `DotGeneralConfig`
-  in the order they are declared, via `DotGeneralConfig: Hash`
+- `family_id = "tenferro-ext-tropical.einsum.v1"`
+- payload = `TropicalKind` plus parsed `tenferro_einsum::Subscripts`
+- `payload_hash` hashes the semiring kind and the parsed input/output label
+  lists in a stable order
 - `payload_eq` downcasts `other` to the concrete type and defers to
-  `PartialEq` on `DotGeneralConfig`
+  `PartialEq` on the concrete payload
 
 Downcasting across the trait boundary SHOULD use the standard pattern:
 
 ```rust
 fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
     // Family id is the invariant; we only reach here after family match.
-    match (other as &dyn std::any::Any).downcast_ref::<FusedTropicalDotGeneral>() {
-        Some(that) => self.config == that.config,
+    match other.as_any().downcast_ref::<TropicalEinsumOp>() {
+        Some(that) => self == that,
         None => false,
     }
 }
@@ -573,7 +588,7 @@ avoids hidden thread-local or process-global state in extension crates.
 
 ---
 
-## 9. Operation construction and AD rule registration
+## 9. Operation construction and AD rule ownership
 
 ### Operation construction
 
@@ -589,21 +604,33 @@ future serialization format needs cross-process reconstruction by
 `family_id`, that format must define an explicit serialization registry rather
 than overloading runtime graph construction.
 
-### AD rule registry
+### AD rule ownership
 
-Only AD rules are process-global. The implementation uses a process-local
-`OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionAdRule>>>>`, keyed by
-`family_id`. New extension crates register an `ExtensionAdRule` with
-`register_extension_rule`.
+AD rules are owned by an explicit `ExtensionRuleSet` attached to
+`tenferro_ad::AdContext`. New extension crates should expose a helper that
+constructs a fresh rule set and registers one `ExtensionAdRule` per supported
+family:
 
-Double-registration under the same `family_id` MUST be rejected with
-`RegistrationError::DuplicateRule { family_id }`.
+```rust
+pub fn extension_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
+    let mut rules = ExtensionRuleSet::new();
+    rules.register_rule(Arc::new(MyExtensionRule))?;
+    Ok(rules)
+}
+```
 
-`RegistrationError`:
+Applications then pass that set through
+`tenferro_ad::AdContext::builder().with_extension_rules(...)`; eager runtimes
+that need extension AD should be built from the same `AdContext`.
+
+Double-registration under the same `family_id` in a rule set MUST be rejected
+with `ExtensionRegistryError::DuplicateRule { family_id }`.
+
+`ExtensionRegistryError`:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum RegistrationError {
+pub enum ExtensionRegistryError {
     #[error("AD rule for family_id {family_id:?} already registered")]
     DuplicateRule { family_id: &'static str },
     #[error("family_id {family_id:?} does not match the namespaced format")]
@@ -611,9 +638,15 @@ pub enum RegistrationError {
 }
 ```
 
-### Lookup
+### Compatibility global lookup
 
-The public API MUST expose a rule lookup function:
+The process-global AD rule registry and its `register_extension_rule` helper
+remain a compatibility bridge for older global lookup flows. It is not the
+primary extension AD path. Code that needs reproducible tests, multiple
+independent AD contexts, or explicit dependency ownership SHOULD use
+`ExtensionRuleSet` instead.
+
+The compatibility API exposes a rule lookup function:
 
 ```rust
 pub fn lookup_extension_rule(family_id: &str) -> Option<std::sync::Arc<dyn ExtensionAdRule>>;
@@ -624,18 +657,17 @@ handle absence (see Section 12).
 
 ### Thread safety
 
-The registry MUST be safe to read from any thread. Writes happen only
-during initialization (the `OnceLock` wrapper permits exactly this).
-Concurrent readers use the `RwLock`; writers MUST complete before any
-graph-building or execution work begins on the `family_id` they added.
+An `ExtensionRuleSet` MUST be safe to clone and read from any thread used by AD
+graph construction. The compatibility global registry MUST also be safe to read
+from any thread; writes happen only during initialization.
 
 ### Failure signature
 
-- Registering two AD rules with the same `family_id` returns
-  `RegistrationError::DuplicateRule`.
+- Registering two AD rules with the same `family_id` in one rule set returns
+  `ExtensionRegistryError::DuplicateRule`.
 - Looking up an unregistered AD rule `family_id` returns `None`.
-- Running a graph that references an extension op with no registered AD rule is
-  valid for forward execution. AD through that op returns
+- Running a graph that references an extension op with no rule in the active
+  `AdContext` is valid for forward execution. AD through that op returns
   `ADRuleError::Unsupported` with the `family_id` and rule kind.
 
 ---
@@ -643,10 +675,10 @@ graph-building or execution work begins on the `family_id` they added.
 ## 10. AD API surface
 
 Extension AD is registered independently from the primal op. Extension crates
-implement `ExtensionAdRule` and register it with
-`register_extension_rule(Arc<dyn ExtensionAdRule>)`. Rule signatures mirror
-`PrimitiveOp::try_linearize` and `PrimitiveOp::try_transpose_rule` and return
-`ADRuleResult<_>` so missing rules can propagate without panic:
+implement `ExtensionAdRule` and add it to an `ExtensionRuleSet`. Rule
+signatures mirror `PrimitiveOp::try_linearize` and
+`PrimitiveOp::try_transpose_rule` and return `ADRuleResult<_>` so missing rules
+can propagate without panic:
 
 ```rust
 pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
@@ -681,9 +713,12 @@ that need payload parameters should downcast via `op.as_any()`.
 
 `linearize` and `transpose_rule` may emit core `StdTensorOp` values and
 `StdTensorOp::Extension` values. Emitted extension families MUST have their
-own registered `ExtensionAdRule` before a subsequent AD pass reaches them.
-This keeps out-of-tree operations in the same compute graph while preserving
-the `PrimitiveOp` closure invariant at the `StdTensorOp` carrier level.
+own `ExtensionAdRule` in the active `ExtensionRuleSet` before a subsequent AD
+pass reaches them. Terminal first-order helper families MAY omit a separate AD
+rule when the owning extension documents that higher-order AD through that
+helper is unsupported. This keeps out-of-tree operations in the same compute
+graph while preserving the `PrimitiveOp` closure invariant at the
+`StdTensorOp` carrier level.
 
 ### `ShapeGuardContext` interaction
 
@@ -709,7 +744,7 @@ extension's AD rules.
 ### Failure signature
 
 - Dispatcher reaching a `StdTensorOp::Extension` variant for an
-  `family_id` with no registered `ExtensionAdRule` returns
+  `family_id` with no `ExtensionAdRule` in the active rule set returns
   `ADRuleError::Unsupported` with the family ID and rule kind.
 
 ---
@@ -777,12 +812,13 @@ these error types / behaviours in the listed scenarios.
 | Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::backend_failure(...)` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
-| Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
+| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no rule in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
+| Duplicate AD rule `family_id` in one `ExtensionRuleSet` or the compatibility global registry | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
-| Registration with malformed `family_id` | `RegistrationError::MalformedFamilyId`. |
+| AD rule registration with malformed `family_id` | `ExtensionRegistryError::MalformedFamilyId`. |
+| Runtime executor registration with malformed `family_id` | `ExtensionRuntimeRegistryError::MalformedFamilyId`. |
 
 ### Constants for `op` field
 
@@ -812,9 +848,10 @@ The legacy semiring pipeline, specifically:
 `refactor_ad_v3`), with additional cleanup of ad module renaming (`e1af8e9`),
 compile-path isolation (`d134763`), and docs demotion (`0258531`). Equivalent
 test coverage for tropical moved to a temporary `tenferro-ext-tropical` proof
-of concept in commits `7317268` and `188a278`. That in-tree POC was later
-removed during the no-facade crate-boundary cleanup; this section remains a
-historical record of the extension contract it exercised.
+of concept in commits `7317268` and `188a278`. That early POC was later
+removed during the no-facade crate-boundary cleanup. A current nested
+`ext/tropical` crate exists again, but it is an extension consumer of this
+contract, not a revival of the retired semiring substrate.
 
 ### What `ExtensionOp` is NOT
 
@@ -823,14 +860,14 @@ historical record of the extension contract it exercised.
 - The graph is no longer algebra-parameterized. Tropical and other
   non-standard-arithmetic paths live outside the core graph, either as
   compositions of core primitives or as fused extensions such as
-  `FusedTropicalDotGeneral`.
+  `tenferro-ext-tropical.einsum.v1`.
 - `ExtensionOp` provides a single variant `StdTensorOp::Extension(Arc<dyn
   ExtensionOp>)` carrying arbitrary payloads. It does not bring back a
   parallel graph vocabulary keyed on an algebra type parameter.
-- Eager T-generic tropical execution continues to work through scalar
-  newtypes (`MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`) driving the
-  existing `TypedTensor<T>` kernels. That path is independent of
-  `ExtensionOp` and was not affected by the `SemiringBackend` removal.
+- Scalar tropical newtypes (`MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`) remain
+  useful for documenting and testing algebraic scalar semantics. They do not
+  make the sealed tensor runtime scalar surface algebra-generic; traced or
+  backend-visible tropical behavior still uses composition or `ExtensionOp`.
 
 ### Historical record
 
@@ -849,167 +886,45 @@ nor does it tie identity to an algebra type parameter. Identity is carried by
 
 ---
 
-## 14. Worked example: `FusedTropicalDotGeneral` (informative)
+## 14. Worked implementation: tropical einsum (informative)
 
 This section is **informative** (non-normative). It exists to
-cross-validate the normative contract against an external consumer. If
-the spec above is insufficient to guide a working `FusedTropicalDotGeneral`
-implementation, the spec is wrong and MUST be revised.
+cross-validate the normative contract against a concrete consumer. If the spec
+above is insufficient to guide the current `ext/tropical` implementation, the
+spec is wrong and MUST be revised.
 
-### Sketch
+The nested `ext/tropical` crate demonstrates the contract with fused binary
+tropical einsum:
 
-```rust
-// In tenferro-ext-tropical:
+- The primal payload is `TropicalEinsumOp { kind, subscripts }` with family id
+  `tenferro-ext-tropical.einsum.v1`.
+- The public traced helpers validate notation, dtype, rank, concrete shared
+  label sizes, and output labels before calling `tenferro_runtime::extension`.
+- Arity is fixed at 2 inputs / 1 output. Output metadata is inferred from
+  `tenferro_einsum::Subscripts` and `SymDim`, so symbolic and concrete shapes
+  use the same carrier.
+- Forward execution delegates to `tropical_einsum_subscripts_with_argmax`,
+  which reuses `tenferro-einsum` contraction-tree lowering for parsing,
+  contraction order, shape planning, and GEMM layout. The tropical crate owns
+  tropical arithmetic, first-winner argmax metadata, fallback execution, and
+  optional `tropical-gemm` dispatch.
+- Runtime registration is explicit through `tenferro_ext_tropical::register_runtime`.
+- With the `autodiff` feature, `tenferro_ext_tropical::tropical_ad_rules()`
+  builds an explicit rule set for `tenferro_ad::AdContext`. That rule set
+  registers the primal family `tenferro-ext-tropical.einsum.v1` and the JVP
+  helper family `tenferro-ext-tropical.einsum_jvp.v1`. The transposed JVP emits
+  runtime-registered VJP execution helper `tenferro-ext-tropical.einsum_vjp.v1`;
+  it is a terminal transpose helper, not a separately registered AD rule family
+  for higher-order AD.
+- Tropical AD follows the unique-winner subgradient. The JVP gathers the active
+  tangent at each first-winning contracted coordinate; the VJP scatters the
+  cotangent back to the first-winning input coordinates. Oracle replay and
+  finite-difference tests cover the supported unique-winner path.
 
-use std::sync::Arc;
-use tenferro_ops::{ExtensionOp, StdTensorOp};
-use tenferro_tensor::DotGeneralConfig;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FusedTropicalDotGeneral {
-    pub config: DotGeneralConfig,
-}
-
-impl ExtensionOp for FusedTropicalDotGeneral {
-    fn family_id(&self) -> &'static str {
-        "tenferro-ext-tropical.fused_dot_general.v1"
-    }
-
-    fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
-        use std::hash::Hash;
-        self.config.hash(hasher);
-    }
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        // See Section 5 on the Any downcast convention.
-        (other as &dyn std::any::Any)
-            .downcast_ref::<FusedTropicalDotGeneral>()
-            .is_some_and(|that| self.config == that.config)
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(self.clone())
-    }
-
-    fn n_inputs(&self) -> usize { 2 }
-    fn n_outputs(&self) -> usize { 1 }
-
-    fn infer_output_meta(
-        &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        // Same shape rule as DotGeneral: lhs_batch + lhs_remaining + rhs_remaining.
-        // Dtype promotion follows Standard DotGeneral; tropical semantics do
-        // not change dtype.
-        todo!("use the same shape rule as StdTensorOp::DotGeneral")
-    }
-
-    fn eager_execute(
-        &self,
-        inputs: &[&tenferro_tensor::Tensor],
-    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
-        // Fused tropical GEMM: op is (max, +) over the contracting axes.
-        // Implementation dispatches to a CPU / GPU kernel that also records
-        // argmax indices for use in AD.
-        todo!("tropical fused GEMM kernel")
-    }
-}
-```
-
-AD registration:
-
-```rust
-#[derive(Debug)]
-struct FusedTropicalDotGeneralRule;
-
-impl ExtensionAdRule for FusedTropicalDotGeneralRule {
-    fn family_id(&self) -> &'static str {
-        "tenferro-ext-tropical.fused_dot_general.v1"
-    }
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = op.as_any().downcast_ref::<FusedTropicalDotGeneral>().unwrap();
-        // Sketch only; the real implementation lives in tenferro-ext-tropical.
-        // Emit a tangent graph using core StdTensorOp values.
-        todo!("emit the tropical JVP graph for op.config");
-    }
-
-    fn transpose_rule(
-        &self,
-        op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = op.as_any().downcast_ref::<FusedTropicalDotGeneral>().unwrap();
-        // Sketch only. Scatter or indicator-mask the incoming cotangent
-        // back to lhs and rhs cotangents using core StdTensorOp values.
-        todo!("emit the tropical VJP graph for op.config");
-    }
-}
-```
-
-Registration:
-
-```rust
-// In tenferro-ext-tropical/src/lib.rs:
-pub fn register() -> Result<(), RegistrationError> {
-    tenferro_ad::extension::register_extension_rule(Arc::new(FusedTropicalDotGeneralRule))
-}
-```
-
-### What this sketch demonstrates
-
-- Identity (`family_id`, `payload_hash`, `payload_eq`) is carried by the
-  trait (Section 5).
-- Arity is fixed at 2-in / 1-out (Section 6).
-- Shape inference mirrors a core op's shape rule (Section 7).
-- Eager execution is the extension's own kernel; the core pipeline does
-  not know about tropical semantics (Section 8).
-- AD emits only core ops (Section 10), preserving ad-contract.md's
-  closure rule.
-- Registration is explicit (Section 9).
-
-If an external fused op cannot be implemented from this spec, the spec is
-insufficient and MUST be revised.
-
-### Historical note — reconciliation with the temporary external implementation
-
-The former in-tree `tenferro-ext-tropical` proof of concept implemented the op
-shape described above with two deviations from this informative sketch, both
-within the spec's flexibility. That proof of concept is no longer part of the
-workspace:
-
-- **Payload**: the actual `FusedTropicalDotGeneralOp` carries a small
-  `TropicalKind { MaxPlus, MinPlus }` enum instead of a
-  `DotGeneralConfig`. The current external implementation is scoped to rank-2
-  inputs with fixed contracting axes, so the full `DotGeneralConfig` is not needed; a
-  richer payload is a straightforward later bump to
-  `tenferro-ext-tropical.fused_dot_general.v2` (Section 5 versioning).
-- **AD emission**: the sketch suggests `Gather` / `Scatter` on saved
-  argmax indices. The core op vocabulary intentionally does not
-  include an `ArgMax` variant, so the implementation uses the mathematically
-  equivalent **indicator-mask**
-  construction (the same `Compare(Eq) + Convert + Mul + ReduceSum + Div` pattern
-  used by the core `ReduceMax` / `ReduceMin` AD rule in
-  `tenferro-internal-ops/src/ad/contraction.rs`). The two are two expressions
-  of the same subgradient; only the indicator form is expressible in
-  the current core op vocabulary.
-
-Neither deviation weakens the normative contract — identity, arity,
-shape inference, forward dispatch, registry, AD closure, serialization
-versioning, and failure modes all hold unchanged.
+This implementation keeps ordinary einsum semantics unchanged. Ordinary einsum
+owns `sum(mul(...))` values and standard AD, while tropical einsum reuses only
+the semiring-neutral public lowering information needed to build equivalent
+binary contraction loops.
 
 ---
 
@@ -1018,32 +933,23 @@ versioning, and failure modes all hold unchanged.
 The following are explicitly deferred. Future implementations may decide these
 without revisiting this document.
 
-1. **Exact AD rule registry data structure.** Section 9 normatively picks
-   `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionAdRule>>>>`.
-   A future evidence-driven migration to `linkme`-style distributed
-   slices is permitted but out of scope for the current contract.
-
-2. **`no_std` / wasm targets.** The initial implementation
+1. **`no_std` / wasm targets.** The initial implementation
    MAY restrict `ExtensionOp` to `std`-targets. Widening to `no_std`
    (e.g. for embedded or wasm backends) is deferred until a concrete
    consumer appears.
 
-3. **Cross-process graph serialization format.** Section 11 fixes
+2. **Cross-process graph serialization format.** Section 11 fixes
    required invariants for any future serializer, but does not
    mandate a specific format. Choosing one (e.g. a bincode / StableHLO
    / protobuf encoding) is out of scope for this contract.
 
-4. **Deep-clone semantics for `Arc<dyn ExtensionOp>`.** Section 4's
+3. **Deep-clone semantics for `Arc<dyn ExtensionOp>`.** Section 4's
    `clone_arc` is intended to be rarely invoked. If a future consumer
    needs a principled "split one Arc into two independent Arcs" path
    (e.g. for cross-thread isolation), the concrete semantics of that
    split are open.
 
-5. **Downcast convention.** Section 5 allows either `Any`
-   supertrait or `fn as_any(&self) -> &dyn Any`. Implementations pick one
-   convention and document it on the trait.
-
-6. **Metrics / observability hooks.** Whether `eager_execute` should
+4. **Metrics / observability hooks.** Whether `eager_execute` should
    emit tracing spans (via `tracing` crate or similar) is deferred.
    Extensions MAY emit their own; the core pipeline does not
    instrument extension calls today.
@@ -1063,7 +969,9 @@ without revisiting this document.
   `tenferro-ext-tropical` on branch `codex-stage-7` (branched from
   `c9266f9`). The fused op and public traced wrappers landed in commit
   `e03ea60`; the AD parity and contract self-tests in commit
-  `1d9c343`. Section 14 was updated in the same branch to reconcile its
-  informative sketch with the realised implementation (payload is
-  `TropicalKind`, AD emits indicator-mask rather than Gather/Scatter —
-  the latter requires an `ArgMax` op the core does not ship).
+  `1d9c343`. The then-current Section 14 sketch was updated in the same
+  branch to reconcile with that realised implementation.
+- 2026-05-29: Section 14 was refreshed to describe the current nested
+  `ext/tropical` binary tropical einsum implementation, its shared
+  `tenferro-einsum` lowering dependency, its JVP rule helper, and its
+  runtime-registered VJP execution helper.

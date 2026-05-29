@@ -57,6 +57,12 @@ pub(crate) struct GemmPlan {
     pub(crate) ro_modes: Vec<u32>,
     /// Summed (contracted) dimension modes.
     pub(crate) sum_modes: Vec<u32>,
+    /// Pre-computed left-only dimension sizes.
+    pub(crate) lo_sizes: Vec<usize>,
+    /// Pre-computed right-only dimension sizes.
+    pub(crate) ro_sizes: Vec<usize>,
+    /// Pre-computed summed dimension sizes.
+    pub(crate) sum_sizes: Vec<usize>,
     /// Pre-computed batch dimension sizes.
     pub(crate) batch_sizes: Vec<usize>,
     /// Fused left-only size (product of lo dimensions).
@@ -274,9 +280,9 @@ pub(crate) fn compile_pairwise_step_plan(
     let ro_sizes: Vec<usize> = ro_modes.iter().map(|m| size_dict[m]).collect();
     let sum_sizes: Vec<usize> = sum_modes.iter().map(|m| size_dict[m]).collect();
 
-    let m = lo_sizes.iter().product::<usize>().max(1);
-    let n = ro_sizes.iter().product::<usize>().max(1);
-    let k = sum_sizes.iter().product::<usize>().max(1);
+    let m = product_or_one_for_empty(&lo_sizes);
+    let n = product_or_one_for_empty(&ro_sizes);
+    let k = product_or_one_for_empty(&sum_sizes);
 
     let target_a: Vec<u32> = lo_modes
         .iter()
@@ -334,6 +340,9 @@ pub(crate) fn compile_pairwise_step_plan(
             lo_modes,
             ro_modes,
             sum_modes,
+            lo_sizes,
+            ro_sizes,
+            sum_sizes,
             batch_sizes,
             m,
             n,
@@ -348,6 +357,14 @@ pub(crate) fn compile_pairwise_step_plan(
             b_gemm_shape,
         },
     })
+}
+
+fn product_or_one_for_empty(sizes: &[usize]) -> usize {
+    if sizes.is_empty() {
+        1
+    } else {
+        sizes.iter().product()
+    }
 }
 
 /// Compile step plans for all steps in a contraction tree.

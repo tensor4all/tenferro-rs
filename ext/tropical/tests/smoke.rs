@@ -1,0 +1,36 @@
+use tenferro_einsum::Subscripts;
+use tenferro_ext_tropical::{traced::tropical_einsum_subscripts, MaxPlus, MinPlus, TropicalKind};
+use tenferro_runtime::{DType, TracedTensor};
+
+#[test]
+fn tropical_crate_exports_core_types() {
+    assert_eq!(TropicalKind::MaxPlus, TropicalKind::MaxPlus);
+    assert_eq!(MaxPlus(2.0_f64).value(), 2.0);
+    assert_eq!(MinPlus(3.0_f64).value(), 3.0);
+}
+
+#[test]
+fn traced_einsum_validation_rejects_inputs_before_extension_shape_inference() {
+    let f64_lhs = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+    let f64_rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let f32_rhs = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32; 4]);
+    let i32_rhs = TracedTensor::input_concrete_shape(DType::I32, &[2, 2]);
+    let matmul = Subscripts::parse("ij,jk->ik").unwrap();
+    let missing_output = Subscripts::parse("ij,jk->ix").unwrap();
+
+    assert!(
+        tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&f64_lhs, &f32_rhs], &matmul).is_err()
+    );
+    assert!(
+        tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&i32_rhs, &i32_rhs], &matmul).is_err()
+    );
+    assert!(
+        tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&f64_lhs, &f64_rhs], &matmul).is_err()
+    );
+    assert!(tropical_einsum_subscripts(
+        TropicalKind::MaxPlus,
+        &[&f64_lhs, &f64_lhs],
+        &missing_output
+    )
+    .is_err());
+}

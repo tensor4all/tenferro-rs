@@ -315,11 +315,35 @@ impl ContractionTree {
         let n_inputs = self.subscripts.inputs.len();
         let step = self.steps.get(step_idx)?;
         let result_idx = n_inputs + step_idx;
+        let output_subs = if step_idx + 1 == self.steps.len() {
+            &self.subscripts.output
+        } else {
+            &self.operand_subs[result_idx]
+        };
         Some((
             &self.operand_subs[step.left],
             &self.operand_subs[step.right],
-            &self.operand_subs[result_idx],
+            output_subs,
         ))
+    }
+
+    /// Return the precomputed lowering plan for one pairwise contraction step.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+    ///
+    /// assert_eq!(tree.step_plan(0).unwrap().gemm().m(), 2);
+    /// ```
+    #[must_use]
+    pub fn step_plan(&self, step_idx: usize) -> Option<crate::lowering::PairwiseStepPlan<'_>> {
+        self.step_plans
+            .get(step_idx)
+            .map(crate::lowering::PairwiseStepPlan::new)
     }
 
     #[doc(hidden)]
@@ -377,6 +401,9 @@ fn gemm_plan_retained_bytes(plan: &GemmPlan) -> usize {
         + vec_retained_bytes(&plan.lo_modes)
         + vec_retained_bytes(&plan.ro_modes)
         + vec_retained_bytes(&plan.sum_modes)
+        + vec_retained_bytes(&plan.lo_sizes)
+        + vec_retained_bytes(&plan.ro_sizes)
+        + vec_retained_bytes(&plan.sum_sizes)
         + vec_retained_bytes(&plan.batch_sizes)
         + vec_retained_bytes(&plan.target_a)
         + vec_retained_bytes(&plan.target_b)

@@ -133,6 +133,42 @@ def sample_inputs_for_spec(torch, linalg, spec, *, seed: int, dtype=None):
         random.setstate(py_state)
 
 
+def is_custom_spec(spec) -> bool:
+    """Return whether a case family is backed by repository-local sample code."""
+    return getattr(spec, "inventory_kind", "linalg") == "custom"
+
+
+def build_custom_input_map(torch, spec, *, dtype):
+    """Return deterministic differentiable inputs for a repository-local family."""
+    if spec.op == "tropical_einsum_maxplus" and spec.family == "identity":
+        return {
+            "a": torch.tensor(
+                [[1.0, 4.0], [3.0, 0.0]],
+                dtype=dtype,
+                device="cpu",
+                requires_grad=True,
+            ),
+            "b": torch.tensor(
+                [[2.0, -1.0], [0.0, 5.0]],
+                dtype=dtype,
+                device="cpu",
+                requires_grad=True,
+            ),
+        }
+    raise ValueError(f"unsupported custom case family: {spec.op}/{spec.family}")
+
+
+def apply_custom_observable(torch, spec, inputs: dict[str, object]) -> dict[str, object]:
+    """Evaluate a repository-local observable reference."""
+    if spec.op == "tropical_einsum_maxplus" and spec.family == "identity":
+        a = inputs["a"]
+        b = inputs["b"]
+        return {
+            "value": torch.max(a.unsqueeze(2) + b.unsqueeze(0), dim=1).values,
+        }
+    raise ValueError(f"unsupported custom case family: {spec.op}/{spec.family}")
+
+
 def tensor_map_to_tuple(tensor_map: dict[str, object]) -> tuple[object, ...]:
     return tuple(tensor_map.values())
 
@@ -146,9 +182,7 @@ def tuple_to_tensor_map(keys: Iterable[str], values) -> dict[str, object]:
 
 
 def _is_differentiable_input_tensor(torch, value) -> bool:
-    return isinstance(value, torch.Tensor) and (
-        value.is_floating_point() or value.is_complex()
-    )
+    return isinstance(value, torch.Tensor) and (value.is_floating_point() or value.is_complex())
 
 
 def _contains_input_tensor(torch, value) -> bool:
@@ -293,8 +327,12 @@ def _restore_metadata_like(torch, sample_value, metadata_value):
 
 
 def build_call_metadata(torch, sample, *, spec=None) -> tuple[list[object], dict[str, object]]:
+    if is_custom_spec(spec):
+        return [], {}
     op_args = [
-        _canonical_metadata_value(torch, arg, arg) for arg in sample.args if not _contains_any_tensor(arg)
+        _canonical_metadata_value(torch, arg, arg)
+        for arg in sample.args
+        if not _contains_any_tensor(arg)
     ]
     op_kwargs = {}
     for key, value in sample.kwargs.items():
@@ -394,6 +432,8 @@ def apply_spec_observable(
     op_kwargs: dict[str, object] | None = None,
     preserve_identity_keys: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
+    if is_custom_spec(spec):
+        return apply_custom_observable(torch, spec, inputs)
     if opinfo is None:
         if linalg is None:
             _, linalg = import_generation_runtime()
@@ -421,7 +461,9 @@ def zeros_like_input_map(torch, inputs: dict[str, object], grads) -> dict[str, o
     return out
 
 
-def map_allclose(torch, expected: dict[str, object], actual: dict[str, object], *, rtol: float, atol: float) -> bool:
+def map_allclose(
+    torch, expected: dict[str, object], actual: dict[str, object], *, rtol: float, atol: float
+) -> bool:
     if expected.keys() != actual.keys():
         return False
     return all(
@@ -467,7 +509,9 @@ def _tensor_input_name(index: int) -> str:
     return f"t{index}"
 
 
-def _collect_tensor_inputs(torch, spec, value, out: dict[str, object], index_ref: list[int]) -> None:
+def _collect_tensor_inputs(
+    torch, spec, value, out: dict[str, object], index_ref: list[int]
+) -> None:
     if _is_differentiable_input_tensor(torch, value):
         index = index_ref[0]
         index_ref[0] += 1
@@ -597,18 +641,11 @@ def compute_fd_hvp(
     input_names = tuple(inputs.keys())
     argnums = tuple(range(len(input_names)))
     grad_fn = torch.func.grad(scalarized_fn, argnums=argnums)
-    plus_inputs = {
-        name: tensor + step * direction[name] for name, tensor in inputs.items()
-    }
-    minus_inputs = {
-        name: tensor - step * direction[name] for name, tensor in inputs.items()
-    }
+    plus_inputs = {name: tensor + step * direction[name] for name, tensor in inputs.items()}
+    minus_inputs = {name: tensor - step * direction[name] for name, tensor in inputs.items()}
     plus_grad = tuple_to_tensor_map(input_names, grad_fn(*tensor_map_to_tuple(plus_inputs)))
     minus_grad = tuple_to_tensor_map(
         input_names,
         grad_fn(*tensor_map_to_tuple(minus_inputs)),
     )
-    return {
-        name: (plus_grad[name] - minus_grad[name]) / (2.0 * step)
-        for name in input_names
-    }
+    return {name: (plus_grad[name] - minus_grad[name]) / (2.0 * step) for name in input_names}

@@ -1010,6 +1010,12 @@
       "anchor": "family-tensorsolve-identity"
     },
     {
+      "op": "tropical_einsum_maxplus",
+      "family": "identity",
+      "note_path": "docs/math/tropical_einsum.md",
+      "anchor": "op-tropical_einsum_maxplus"
+    },
+    {
       "op": "true_divide",
       "family": "identity",
       "note_path": "docs/math/scalar_ops.md",

@@ -53,12 +53,15 @@ are:
 - shape and dtype inference must be total over concrete and symbolic metadata
 - eager and compiled execution both route through the extension's execution
   method
-- extension AD must emit only core `StdTensorOp` values, never nested
-  `Extension` nodes
+- extension AD must emit only core `StdTensorOp` values, extension families
+  with AD rules before a later AD pass reaches them, or documented terminal
+  first-order helper families
 
-Example: an out-of-tree tropical extension crate can provide a
-`FusedTropicalDotGeneralOp` fused max-plus / min-plus dot-general. The
-temporary in-tree `ext/tropical` proof of concept has been removed.
+Example: the nested `ext/tropical` crate provides fused binary tropical
+einsum over max-plus and min-plus semirings. It reuses
+`tenferro-einsum` parsing and lowering plans, owns tropical arithmetic and
+first-winner argmax metadata, and may dispatch matmul-shaped contractions
+through the optional `tropical-gemm` feature.
 
 ### Scalar Newtypes
 
@@ -78,8 +81,12 @@ AD is defined for the standard core graph. External numeric behavior gets AD in
 one of two ways:
 
 - composition wrappers inherit the AD rules of the core ops they emit
-- fused `ExtensionOp` implementations provide `linearize` and
-  `transpose_rule`, but those methods must lower back to core ops
+- fused `ExtensionOp` implementations register `linearize` and
+  `transpose_rule` rules. Those rules must lower to core ops or to registered
+  extension helper families whose own AD rules are available before a later AD
+  pass reaches them. Terminal first-order helper families may omit AD rules when
+  the owning extension documents that higher-order AD through that helper is
+  unsupported.
 
 There is no separate AD system for arbitrary algebra-parameterized graphs.
 

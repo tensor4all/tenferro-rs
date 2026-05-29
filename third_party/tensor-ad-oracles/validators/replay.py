@@ -8,6 +8,7 @@ from pathlib import Path
 from generators.pytorch_v1 import build_case_spec_index
 from generators.runtime import (
     apply_spec_observable,
+    build_custom_input_map,
     build_call_metadata,
     build_input_map,
     build_observable_function,
@@ -16,6 +17,7 @@ from generators.runtime import (
     compute_pytorch_hvp,
     import_generation_runtime,
     import_scalar_generation_runtime,
+    is_custom_spec,
     lookup_upstream_opinfo,
     map_allclose,
     sample_inputs_for_spec,
@@ -92,7 +94,9 @@ def _decode_record_inputs(record: dict) -> dict[str, object]:
     }
 
 
-def _decode_success_probe(record: dict) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object], float]:
+def _decode_success_probe(
+    record: dict,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object], float]:
     probe = record["probes"][0]
     return (
         decode_tensor_map(probe["direction"]),
@@ -105,11 +109,7 @@ def _decode_success_probe(record: dict) -> tuple[dict[str, object], dict[str, ob
             else decode_tensor_map(probe["pytorch_ref"]["hvp"])
         ),
         float(probe["fd_ref"]["step"]),
-        (
-            None
-            if "hvp" not in probe["fd_ref"]
-            else decode_tensor_map(probe["fd_ref"]["hvp"])
-        ),
+        (None if "hvp" not in probe["fd_ref"] else decode_tensor_map(probe["fd_ref"]["hvp"])),
     )
 
 
@@ -194,7 +194,11 @@ def _find_candidate_samples(
             prepared.inputs,
             comparison=comparison,
         ):
-            if metadata_args or metadata_kwargs or getattr(spec, "inventory_kind", "linalg") == "scalar":
+            if (
+                metadata_args
+                or metadata_kwargs
+                or getattr(spec, "inventory_kind", "linalg") == "scalar"
+            ):
                 if prepared.op_args != metadata_args or prepared.op_kwargs != metadata_kwargs:
                     continue
             candidates.append(prepared.sample)
@@ -202,6 +206,15 @@ def _find_candidate_samples(
 
 
 def _prepare_samples_for_spec_dtype(torch, spec, *, dtype_name: str) -> list[PreparedSample]:
+    if is_custom_spec(spec):
+        return [
+            PreparedSample(
+                sample=None,
+                inputs=build_custom_input_map(torch, spec, dtype=getattr(torch, dtype_name)),
+                op_args=[],
+                op_kwargs={},
+            )
+        ]
     if getattr(spec, "inventory_kind", "linalg") == "scalar":
         _, runtime_source = import_scalar_generation_runtime()
     else:
@@ -249,11 +262,15 @@ def _replay_success_case_for_sample(
     input_names = tuple(inputs.keys())
     first_order = _first_order_comparison(comparison)
     second_order = _second_order_comparison(comparison)
-    if getattr(spec, "inventory_kind", "linalg") == "scalar":
+    if is_custom_spec(spec):
+        runtime_source = None
+        opinfo = None
+    elif getattr(spec, "inventory_kind", "linalg") == "scalar":
         _, runtime_source = import_scalar_generation_runtime()
+        opinfo = lookup_upstream_opinfo(runtime_source, spec)
     else:
         _, runtime_source = import_generation_runtime()
-    opinfo = lookup_upstream_opinfo(runtime_source, spec)
+        opinfo = lookup_upstream_opinfo(runtime_source, spec)
 
     try:
         observable = apply_spec_observable(
@@ -421,9 +438,7 @@ def _replay_success_case(
         stored_pytorch_hvp,
         fd_step,
         stored_fd_hvp,
-    ) = (
-        _decode_success_probe(record)
-    )
+    ) = _decode_success_probe(record)
     stored_fd_jvp = decode_tensor_map(record["probes"][0]["fd_ref"]["jvp"])
     cache_key = (record["op"], record["family"], record["dtype"])
     prepared_samples = prepared_sample_cache.get(cache_key)
@@ -517,9 +532,7 @@ def replay_case_file(path: Path, *, limit: int | None = None) -> ReplayResult:
             elif record["expected_behavior"] == "error":
                 _replay_error_case(record)
             else:
-                raise ValueError(
-                    f"unsupported expected_behavior: {record['expected_behavior']}"
-                )
+                raise ValueError(f"unsupported expected_behavior: {record['expected_behavior']}")
         except Exception as exc:
             result.failures.append(f"{record['case_id']}: {exc}")
         else:
