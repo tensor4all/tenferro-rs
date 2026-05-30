@@ -9,6 +9,7 @@ use tenferro_ad::EagerTensor;
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
 };
+use crate::optimize::{default_auto_options, EinsumPlanSpec};
 use crate::{parse_einsum_subscripts, EinsumSubscripts, TensorDotAxes};
 
 /// Execute an einsum eagerly on [`EagerTensor`] values.
@@ -31,11 +32,71 @@ pub fn einsum_subscripts(
             .map_err(|err| Error::Internal(err.to_string()))?;
     }
 
-    let op = Arc::new(EinsumExtensionOp::new(subscripts.clone()));
+    let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
+    let op = Arc::new(EinsumExtensionOp::with_output_shape_hint(
+        subscripts.clone(),
+        output_shape_hint,
+        EinsumPlanSpec::Auto(default_auto_options()),
+    ));
     let mut outputs = apply_eager(op, inputs)?;
     outputs
         .pop()
         .ok_or_else(|| Error::Internal("einsum extension produced no eager output".to_string()))
+}
+
+fn infer_eager_output_shape(
+    subscripts: &EinsumSubscripts,
+    inputs: &[&EagerTensor],
+) -> Result<Vec<tenferro_runtime::SymDim>> {
+    if inputs.is_empty() {
+        return Err(Error::ContractionError(
+            "einsum requires at least one input tensor".into(),
+        ));
+    }
+    if subscripts.inputs.len() != inputs.len() {
+        return Err(Error::ContractionError(format!(
+            "einsum subscripts expect {} inputs, got {}",
+            subscripts.inputs.len(),
+            inputs.len()
+        )));
+    }
+
+    let mut label_dims = std::collections::HashMap::new();
+    for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
+        let shape = tensor.data().shape();
+        if labels.len() != shape.len() {
+            return Err(Error::ContractionError(format!(
+                "einsum input rank mismatch: labels={}, shape={}",
+                labels.len(),
+                shape.len()
+            )));
+        }
+        for (&label, &dim) in labels.iter().zip(shape.iter()) {
+            if let Some(existing) = label_dims.insert(label, dim) {
+                if existing != dim {
+                    return Err(Error::ContractionError(format!(
+                        "einsum label {label} has inconsistent dimensions {existing} and {dim}"
+                    )));
+                }
+            }
+        }
+    }
+
+    subscripts
+        .output
+        .iter()
+        .map(|label| {
+            label_dims
+                .get(label)
+                .copied()
+                .map(tenferro_runtime::SymDim::from)
+                .ok_or_else(|| {
+                    Error::ContractionError(format!(
+                        "einsum output label {label} is missing from input labels"
+                    ))
+                })
+        })
+        .collect()
 }
 
 /// Execute a NumPy-style tensor contraction on [`EagerTensor`] values.

@@ -36,7 +36,7 @@ use crate::builder::build_einsum_fragment;
 use crate::cache::{
     einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
 };
-#[cfg(any(feature = "autodiff", test))]
+#[cfg(test)]
 use crate::optimize::default_auto_options;
 #[cfg(feature = "autodiff")]
 use crate::optimize::jax_path_to_v1_pairs;
@@ -75,7 +75,7 @@ impl std::fmt::Debug for EinsumExtensionOp {
 impl EinsumExtensionOp {
     /// Create an einsum extension payload without a precomputed plan.
     #[must_use]
-    #[cfg(any(feature = "autodiff", test))]
+    #[cfg(test)]
     pub(crate) fn new(subscripts: EinsumSubscripts) -> Self {
         Self::with_plan_spec(subscripts, EinsumPlanSpec::Auto(default_auto_options()))
     }
