@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 FORBIDDEN_PATHS = [
     ROOT / "tenferro" / "Cargo.toml",
-    ROOT / "ext" / "tropical" / "Cargo.toml",
 ]
 
 SKIP_DIRS = {

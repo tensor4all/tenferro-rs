@@ -26,16 +26,8 @@ gh_api_optional() {
   fi
 }
 resolve_settings_path() {
-  if [[ "$SETTINGS_PATH" == "ai/repo-settings.json" && -f "ai/repo-settings.local.json" ]]; then
-    printf '%s\n' "ai/repo-settings.local.json"
-    return
-  fi
   if [[ -f "$SETTINGS_PATH" ]]; then
     printf '%s\n' "$SETTINGS_PATH"
-    return
-  fi
-  if [[ "$SETTINGS_PATH" == "ai/repo-settings.json" && -f "ai/vendor/template-rs/repo-settings.json" ]]; then
-    printf '%s\n' "ai/vendor/template-rs/repo-settings.json"
     return
   fi
   printf '%s\n' "$SETTINGS_PATH"

@@ -4,7 +4,6 @@ set -euo pipefail
 BASE_BRANCH="main"
 TITLE=""
 BODY_FILE=""
-ALLOW_STALE=0
 AUTO_MERGE=1
 DRAFT=0
 AI_TOOL_NAME=""
@@ -18,7 +17,6 @@ Options:
   --base BRANCH          Base branch for the pull request (default: main)
   --title TITLE          Pull request title (defaults to the latest commit subject)
   --body-file PATH       Markdown body file to pass to gh pr create
-  --allow-stale          Allow stale or unverified agent assets
   --no-auto-merge        Do not enable auto-merge after PR creation
   --draft                Create the PR as a draft
   --ai-tool-name NAME    Attribution display name, for example "Claude Code"
@@ -97,10 +95,6 @@ while [[ $# -gt 0 ]]; do
       BODY_FILE="$2"
       shift 2
       ;;
-    --allow-stale)
-      ALLOW_STALE=1
-      shift
-      ;;
     --no-auto-merge)
       AUTO_MERGE=0
       shift
@@ -140,15 +134,6 @@ if [[ "$current_branch" == "main" || "$current_branch" == "master" ]]; then
 fi
 
 require_clean_tree
-
-set +e
-bash scripts/check-agent-assets.sh --quiet
-asset_status=$?
-set -e
-if [[ "$asset_status" -ne 0 && "$ALLOW_STALE" -eq 0 ]]; then
-  log "agent assets are stale or could not be verified; rerun with --allow-stale to continue"
-  exit 1
-fi
 
 bash scripts/check-repo-settings.sh --quiet
 

@@ -3,20 +3,23 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Before acting, read the latest shared tensor4all agent rules from the
-`tensor4all-agent-rules` repository. If internet access is unavailable or the
-remote cannot be resolved, use the sibling checkout:
+[`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)
+repository online. Start from:
+
+- `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`
+
+If internet access is unavailable or the remote cannot be resolved, use the
+sibling checkout:
 
 - `../tensor4all-agent-rules/rules/index.md`
 
 Load only the common, Rust, performance, numerical, docs, or benchmark rule
-files relevant to the task.
+files relevant to the task. If neither online access nor the sibling checkout
+is available, continue from this repository's local rules and state the shared
+rules were unavailable when creating a PR.
 
-Then read the vendored `template-rs` baseline rules and the tenferro-specific
-rules:
+Then read the tenferro-specific rules:
 
-- `ai/vendor/template-rs/common-agent-rules.md`
-- `ai/vendor/template-rs/numerical-rust-rules.md`
-- `ai/vendor/template-rs/pr-workflow-rules.md`
 - `REPOSITORY_RULES.md`
 
 The sections below are tenferro-specific additions and overrides.
@@ -31,11 +34,11 @@ The workspace contains active implementations alongside evolving APIs. Implement
 
 ## Repository Rule Source
 
-Keep cross-repository implementation rules in `tensor4all-agent-rules`.
-Keep tenferro-specific durable rules in `REPOSITORY_RULES.md`. This
-`AGENTS.md` file is the entry point and tenferro-specific orientation; avoid
-duplicating the detailed performance, layout, CPU kernel, slicing, cache,
-threading, and GPU backend rules here.
+Keep cross-repository implementation rules in `tensor4all-agent-rules`; do not
+vendor a copy into this repository. Keep tenferro-specific durable rules in
+`REPOSITORY_RULES.md`. This `AGENTS.md` file is the entry point and
+tenferro-specific orientation; avoid duplicating the detailed performance,
+layout, CPU kernel, slicing, cache, threading, and GPU backend rules here.
 
 ## Contribution Workflow Assets
 
@@ -56,6 +59,7 @@ Thin tool adapters live in `.agents/skills/`, `.claude/skills/`, and
 `.opencode/commands/`. Keep policy in `CONTRIBUTING.md` and
 `REPOSITORY_RULES.md`; keep reusable workflow steps in
 `ai/contribution-workflows/`.
+See `ai/README.md` for the repository-local AI workflow layout.
 
 ### GPU Status
 
