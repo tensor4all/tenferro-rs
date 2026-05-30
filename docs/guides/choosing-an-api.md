@@ -1,17 +1,18 @@
-# Choosing a Tensor Layer
+# Choosing a Tensor API
 
-This page is about choosing a tensor layer, not choosing one monolithic API.
-tenferro has separate axes for data representation, execution timing, and
-backend/device placement.
+This page is about choosing the tensor API that matches your workflow.
+tenferro separates the value you pass around, when computation runs, and which
+backend or device executes the work.
 
 ## Start Here
 
 ![Decision tree for choosing a tensor model](../assets/tensor-layer-decision.svg)
 
-For most non-AD projects, `TypedTensor<T, R>` or `Tensor` should come first.
-Move to `EagerTensor` when you want immediate execution under an
-`EagerRuntime`; make tensors tracked only when the workflow needs scalar-loss
-`backward()`. Move to `TracedTensor` when the workflow needs graph transforms.
+For most projects without autodiff, `TypedTensor<T, R>` or `Tensor` should
+come first. Move to `EagerTensor` when you want immediate execution under an
+`EagerRuntime`; make tensors tracked only when the workflow needs `backward()`
+on scalar losses. Move to `TracedTensor` when the workflow needs `grad`, `vjp`,
+or `jvp` on traced graphs.
 
 Quick reference:
 
@@ -19,20 +20,20 @@ Quick reference:
 | --- | --- |
 | No autodiff, scalar type known at compile time | `TypedTensor<T, R>` |
 | No autodiff, dtype selected at runtime | `Tensor` |
-| Immediate forward execution in one runtime, optionally scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` |
-| JAX-like `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
+| Immediate forward execution in one runtime, optionally `backward()` on scalar losses | `EagerTensor` + `EagerRuntime` |
+| `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
 
-## Data Layer
+## Tensor Types
 
 `TypedTensor<T, R = DynRank>` owns runtime tensor data with a compile-time
-scalar type and optional compile-time rank marker. It can be host-backed or
-backend-backed, and owned values are compact column-major. Arbitrary strides
-belong to `TypedTensorView` and `TypedTensorViewMut`.
+scalar type and optional compile-time rank marker. Owned values use tenferro's
+column-major layout. Strided views use `TypedTensorView` and
+`TypedTensorViewMut`.
 
 `Tensor` owns the same kind of dense data, but wraps supported scalar types in
 a runtime dtype enum and remains dynamic-rank. Use it when dtype must be
 selected dynamically, when you want the broad concrete tensor operation
-surface, or when you need to pass CPU or CUDA tensors through backend dispatch.
+API, or when you need to pass CPU or CUDA tensors through backend dispatch.
 
 `tenferro-tensor-core` is lower-level: it owns rank/layout metadata and
 host-only adapters such as `HostTensor<T>`, not the backend-capable
@@ -41,10 +42,10 @@ host-only adapters such as `HostTensor<T>`, not the backend-capable
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.
 Untracked eager tensors are forward-only. Tracked eager tensors additionally
-record reverse-mode state for scalar-loss `backward()`.
+record reverse-mode state for `backward()` on scalar losses.
 
-`TracedTensor` is a graph-building handle. It is the transform and compilation
-surface, not the default concrete tensor type.
+`TracedTensor` is a graph-building handle. It is the graph and compilation API,
+not the default concrete tensor type.
 
 ## Execution Model
 
@@ -70,32 +71,33 @@ eager, and traced workflows. CPU/GPU transfer is explicit:
 - download only when the host must inspect values,
 - do not expect an unsupported CUDA operation to silently fall back to CPU.
 
-Compact-only operations may canonicalize views within the same placement.
-They do not silently upload CPU tensors or download CUDA tensors.
+Operations that require compact storage may copy a view into compact storage on
+the same device. They do not silently upload CPU tensors or download CUDA
+tensors.
 
 The current CUDA operation and dtype table is in
 [Devices and GPU](devices-and-gpu.md).
 
 ## Operation Entry Points
 
-Choose the tensor layer first, then choose the operation family. CUDA is not a
+Choose the tensor API first, then choose the operation family. CUDA is not a
 separate operation entry point; it is a backend/device choice for supported
 operations.
 
-| Need | No-AD concrete path | Eager path | Traced path |
+| Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
 | Everyday tensor ops | `tenferro_runtime::tensor` functions; selected `tenferro_runtime::typed_tensor` wrappers | `tenferro_ad::eager_tensor` functions | `tenferro_runtime::traced_tensor` functions |
 | Einsum | Internal to `tenferro-einsum` runtime execution | `tenferro_einsum::eager_tensor::einsum` | `tenferro_einsum::traced_tensor::einsum` plus `register_runtime` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `tenferro_einsum::eager_tensor::tensordot` | `tenferro_einsum::traced_tensor::tensordot` |
 | Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `tenferro_linalg::eager_tensor` helpers with `autodiff` | `tenferro_linalg::traced_tensor` helpers |
-| Automatic differentiation | Not applicable | Scalar-loss `backward()` on tracked values | `grad`, `vjp`, `jvp`, HVP via composition |
+| Automatic differentiation | Not applicable | `backward()` on tracked scalar losses | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 
 Use CPU or CUDA with these paths according to backend coverage. CUDA tensors
 must be moved explicitly with upload/download helpers, and unsupported CUDA
 operations do not silently fall back to CPU.
 
-## Extension Story
+## Extension Model
 
 Automatic differentiation is externally extensible. An extension crate can add
 operations, eager/traced execution hooks, and AD rules without forcing the core

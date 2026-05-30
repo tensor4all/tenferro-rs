@@ -1,28 +1,26 @@
 # tenferro
 
-tenferro is a dense tensor computation stack for Rust users who want direct
-typed tensor computation, PyTorch-like eager execution and `backward()`,
-JAX-like traced graph transforms, einsum, linear algebra, and explicit
-CPU/CUDA backend control.
+tenferro is a dense tensor computation stack for Rust users who want typed
+tensor computation, PyTorch-like immediate execution with `backward()`,
+JAX-like traced graphs, einsum, linear algebra, and explicit CPU/CUDA backend
+control.
 
-The project covers both no-AD and AD workflows. Start with the lowest layer
-that solves your problem, then add autodiff, graph compilation, or CUDA only
-when the workflow needs them.
+The project covers both ordinary tensor computation and autodiff workflows.
+Start with the smallest API that solves your problem, then add autodiff, graph
+compilation, or CUDA only when the workflow needs them.
 
-## Start Here
+## Where To Start
 
-- [Core Concepts](getting-started/core-concepts.md)
-- [Tutorials](tutorials/index.md)
-- [Choosing a Tensor Layer](guides/choosing-an-api.md)
-- [Execution Models](guides/execution-models.md)
-- [Memory Order](guides/memory-order.md)
-- [Devices and GPU](guides/devices-and-gpu.md)
-- [CPU Benchmarks](performance/cpu-benchmarks.md)
-- [API Reference](api/index.md)
-
-Installation details live in the README. The online guides focus on the tensor
-stack, memory model, execution modes, operation coverage, backend/device model,
-and extension model.
+| Workflow | Start with |
+| --- | --- |
+| First setup and a checked CPU program | [Getting Started](getting-started/index.md) |
+| Core terms and the three main choices | [Core Concepts](getting-started/core-concepts.md) |
+| Step-by-step runnable examples | [Tutorials](tutorials/index.md) |
+| Choosing between `TypedTensor`, `Tensor`, `EagerTensor`, and `TracedTensor` | [Choosing a Tensor API](guides/choosing-an-api.md) |
+| Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
+| Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
+| CPU and CUDA backend behavior | [Devices and GPU](guides/devices-and-gpu.md) |
+| API documentation for every crate | [API Reference](api/index.md) |
 
 ## First CPU Example
 
@@ -49,29 +47,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Mental Model
 
-tenferro has three independent axes. Do not read CUDA, eager execution, and traced
-graphs as competing APIs; they answer different questions.
+tenferro has three independent choices. CUDA, eager execution, and traced
+graphs are not competing APIs; they answer different questions.
 
-| Axis | Question | Choices |
+| Choice | Question | Options |
 | --- | --- | --- |
-| Data layer | What kind of tensor value do I hold? | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
-| Execution model | When does computation run? | Direct backend call, eager execution, traced compile/run |
-| Device/backend | Where does computation run? | CPU backend or CUDA backend, with explicit transfer |
+| Tensor API | What kind of value do I pass around? | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
+| Execution timing | When does computation run? | Direct backend call, immediate eager execution, traced compile/run |
+| Backend/device | Where does computation run? | CPU backend or CUDA backend, with explicit transfer |
 
-Most no-AD code starts with `TypedTensor<T>` when the scalar type is known at
-compile time, or `Tensor` when dtype must be dynamic. `EagerTensor` adds
-immediate execution through an `EagerRuntime` and optional PyTorch-style
-scalar-loss `backward()`. `TracedTensor` adds graph compilation, transform AD,
-symbolic inputs, and reuse.
-
-## Guides By Workflow
-
-| Workflow | Start with |
-| --- | --- |
-| Step-by-step runnable examples | [`Tutorials`](tutorials/index.md) |
-| No-AD computation with a fixed scalar type | [`TypedTensor<T>` and direct tensor workflows](guides/choosing-an-api.md) |
-| No-AD dynamic dtype computation | [`Tensor` with a backend](guides/eager-operations.md) |
-| PyTorch-like eager execution and optional scalar-loss `backward()` | [`EagerTensor` and `EagerRuntime`](guides/eager-operations.md) |
-| JAX-like graph transforms and repeated execution | [`TracedTensor`, `GraphCompiler`, and `GraphExecutor`](guides/execution-models.md) |
-| CUDA execution | [Explicit upload/download and CUDA backend coverage](guides/devices-and-gpu.md) |
-| External operations and AD rules | [Custom operations](guides/custom-operations.md) and [FFT (extension)](guides/tenferro-fft.md) |
+Most code without autodiff starts with `TypedTensor<T>` when the scalar type is
+known at compile time, or `Tensor` when dtype must be selected at runtime.
+`EagerTensor` adds immediate execution through an `EagerRuntime` and optional
+`backward()` on scalar losses. `TracedTensor` adds graph compilation, `grad`,
+`vjp`, and `jvp` on traced graphs, symbolic inputs, and reuse.

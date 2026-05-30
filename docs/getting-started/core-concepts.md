@@ -1,10 +1,11 @@
 # Core Concepts
 
 tenferro separates tensor data, execution timing, automatic differentiation,
-and device placement. That separation is the main design point: users can stay
-in no-AD typed tensor code for ordinary numeric work, move to eager execution
-for PyTorch-like forward-and-backward training loops, or move to traced graphs
-for JAX-like transforms and compile/run reuse.
+and device location. That separation is the main design point: users can stay
+in typed tensor code for ordinary numeric work without autodiff, move to eager
+execution for PyTorch-like forward-and-backward training loops, or move to
+traced graphs for JAX-like `grad`, `vjp`, and `jvp` workflows plus compile/run
+reuse.
 
 ## The Three Axes
 
@@ -14,21 +15,21 @@ for JAX-like transforms and compile/run reuse.
 | Execution model | When operations run | Direct, eager, traced compile/run |
 | Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::cubecl::CubeclBackend` |
 
-CUDA is not a separate tensor layer. The same concrete, eager, and traced
-surfaces can run supported operations on CUDA tensors when data is explicitly
-uploaded to a CUDA backend.
+CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
+can run supported operations on CUDA tensors when data is explicitly uploaded
+to a CUDA backend.
 
 ## Tensor Layers
 
 | Layer | Role | Good fit |
 | --- | --- | --- |
-| `TypedTensor<T>` | Concrete no-AD tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
-| `Tensor` | Concrete no-AD tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
-| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; scalar-loss reverse-mode AD when tracked |
-| `TracedTensor` | Symbolic graph-building tensor | Transform AD, graph optimization, repeated execution |
+| `TypedTensor<T>` | Concrete tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
+| `Tensor` | Concrete tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
+| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; reverse-mode AD on scalar losses when tracked |
+| `TracedTensor` | Graph-building tensor | `grad`, `vjp`, and `jvp` on traced graphs, graph optimization, repeated execution |
 
 Use the smallest layer that matches the job. AD is optional, and many projects
-should never leave the concrete tensor layers.
+should never leave the concrete tensor APIs.
 
 ## Memory Model
 
@@ -60,7 +61,7 @@ physical order.
 ## Direct Tensor Execution
 
 `Tensor` operations run immediately through an explicit backend. Use this for
-ordinary no-AD computation when runtime dtype is useful.
+ordinary tensor computation without autodiff when runtime dtype is useful.
 
 ```rust
 use tenferro_cpu::CpuBackend;
@@ -91,8 +92,8 @@ host inspection. If a tensor is a tracked variable, eager operations also
 record reverse-mode state so a scalar loss can call `backward()` and accumulate
 gradients.
 
-This is not the forward-mode AD/JVP surface. Use `TracedTensor` for transform
-AD such as `grad`, `vjp`, `jvp`, and HVP via composition.
+This is not the forward-mode AD/JVP API. Use `TracedTensor` for `grad`, `vjp`,
+`jvp`, and HVP via composition on traced graphs.
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
@@ -127,5 +128,5 @@ let result = executor.run(&program).unwrap();
 assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 ```
 
-Traced mode is the right layer for transform AD (`grad`, `vjp`, `jvp`, HVP via
-composition), symbolic inputs, graph optimization, and repeated execution.
+Traced mode is the right API for `grad`, `vjp`, `jvp`, and HVP via composition
+on traced graphs, symbolic inputs, graph optimization, and repeated execution.

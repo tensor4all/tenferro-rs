@@ -11,7 +11,7 @@ extension machinery directly.
 
 ## Current API
 
-The initial surface mirrors the common PyTorch and JAX one-dimensional FFT
+The initial API mirrors the common PyTorch and JAX one-dimensional FFT
 families:
 
 | Operation family | Purpose |
@@ -63,7 +63,7 @@ when odd and even original signal sizes would otherwise be ambiguous.
 
 ## Planned Extensions
 
-The remaining FFT families are planned but not part of the initial surface:
+The remaining FFT families are planned but not part of the initial API:
 
 | Operation family | Purpose |
 | --- | --- |
@@ -80,7 +80,7 @@ The compatibility target is the behavior users expect from:
 - `jax.numpy.fft.fft`, `jax.numpy.fft.ifft`, `jax.numpy.fft.rfft`,
   `jax.numpy.fft.irfft`, and their `n`/`2` variants.
 
-The extension should canonicalize axes and lengths before execution, then
+The extension should normalize axes and lengths before execution, then
 return results in the same logical axis order as the input. Backend-specific
 layout or transposition needed to call an FFT implementation should stay inside
 the extension.

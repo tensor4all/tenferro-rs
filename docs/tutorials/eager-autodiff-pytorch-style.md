@@ -1,7 +1,7 @@
 # Eager Autodiff, PyTorch Style
 
 Use `EagerTensor` when you want operations to execute immediately and want a
-PyTorch-like scalar-loss `backward()` workflow. Tracked tensors created from an
+PyTorch-like `backward()` workflow on scalar losses. Tracked tensors created from an
 `EagerRuntime` accumulate gradients until you clear them.
 
 The example below computes `loss = sum(x * x)`, runs `backward()`, and checks

@@ -1,9 +1,9 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `LinalgBackend` for no-AD direct execution, `EagerTensor` helpers for
+Use `LinalgBackend` for direct execution without autodiff, `EagerTensor` helpers for
 immediate forward execution under an `EagerRuntime`, and `TracedTensor` helpers
-when the operation should be part of a graph, transform AD pass, or repeated
+when the operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated
 compile/run workflow.
 
 ## Layer Coverage
@@ -11,8 +11,8 @@ compile/run workflow.
 | Layer | Linear algebra style |
 | --- | --- |
 | Concrete `Tensor` | `tenferro_linalg::LinalgBackend` methods on a backend |
-| `EagerTensor` | `tenferro_linalg::eager_tensor` helpers behind `autodiff`; tracked variables record scalar-loss gradients where AD rules support the operation |
-| `TracedTensor` | `tenferro_linalg::traced_tensor` helpers for graph execution and transform AD |
+| `EagerTensor` | `tenferro_linalg::eager_tensor` helpers behind `autodiff`; tracked variables record gradients for scalar losses where AD rules support the operation |
+| `TracedTensor` | `tenferro_linalg::traced_tensor` helpers for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 `TracedTensor` paths. It is not a separate linear algebra layer. See
@@ -54,14 +54,14 @@ assert_eq!(factor.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ## Direct Decompositions
 
 The same operation families are available outside traced graphs. Use concrete
-or typed tensors for direct no-AD execution, eager tensors when the result
+or typed tensors for direct execution without autodiff, eager tensors when the result
 should be produced immediately under an `EagerRuntime`, and traced helpers when
 the operation belongs in a reusable graph. Use tracked eager tensors only when
-the result should remain connected to a scalar-loss `backward()` pass.
+the result should remain connected to a scalar loss `backward()` pass.
 For linalg eager helpers or linalg AD rules, enable `tenferro-linalg`'s
 `autodiff` feature.
 
-When transform AD must differentiate through linalg extension ops, include the
+When traced graph AD must differentiate through linalg extension ops, include the
 owned rule set in an explicit context:
 
 ```rust

@@ -4,7 +4,7 @@ tenferro dense tensors use contiguous column-major storage. The leftmost
 dimension varies fastest in memory.
 Owned runtime tensors are compact column-major only. Arbitrary strides,
 offsets, transposes, slices, and reversals live on typed views or layout
-metadata until an explicit same-placement canonicalization boundary is reached.
+metadata until an operation needs compact storage.
 
 This is intentional. tenferro is designed to feel natural for Fortran, Julia,
 MATLAB, Eigen/LAPACK-oriented, and scientific computing workflows where
@@ -99,6 +99,6 @@ row-major data.
 Metadata-only operations such as transpose and slice can create strided views
 without changing the backing buffer. Compact-only operations may copy a host
 view into a host compact tensor, or a GPU view into a GPU compact tensor, when
-the backend requires compact storage. That canonicalization stays in the same
-placement. tenferro never silently uploads CPU tensors or downloads GPU tensors
-as part of a tensor operation.
+the backend requires compact storage. That copy stays on the same device.
+tenferro never silently uploads CPU tensors or downloads GPU tensors as part of
+a tensor operation.

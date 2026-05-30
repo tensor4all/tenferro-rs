@@ -2,14 +2,14 @@
 
 tenferro supports two autodiff workflows on top of the same dense tensor stack:
 
-- PyTorch-like eager execution with scalar-loss `EagerTensor::backward()`,
-- JAX-like transform AD on `TracedTensor`.
+- PyTorch-like eager execution with `EagerTensor::backward()` on scalar losses,
+- JAX-like `grad`, `vjp`, and `jvp` on `TracedTensor` graphs.
 
-This page focuses on graph transforms that you compile and execute explicitly.
-For eager forward execution and scalar-loss accumulation semantics, see
+This page focuses on traced graph workflows that you compile and execute
+explicitly. For eager forward execution and scalar loss accumulation semantics, see
 [Eager Operations](eager-operations.md).
 
-- `grad` for scalar-loss reverse mode
+- `grad` for reverse mode on scalar losses
 - `vjp` for vector-Jacobian products
 - `jvp` for Jacobian-vector products
 - Higher-order AD via composition, such as `jvp(grad(f))` for HVPs

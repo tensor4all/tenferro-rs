@@ -173,7 +173,7 @@ let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.clear_all_caches();
 ```
 
-`retained_bytes` in cache stats is tenferro's logical retained-payload
+`retained_bytes` in cache stats is tenferro's logical retained-data
 estimate. It is not operating-system RSS and does not include allocator arena
 slack, thread stacks, or provider-owned memory.
 

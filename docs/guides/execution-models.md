@@ -1,8 +1,9 @@
 # Execution Models
 
 tenferro supports direct execution, PyTorch-like eager execution with optional
-reverse AD, and JAX-like traced execution on the same dense tensor stack. The
-key distinction is when work is submitted and when the host waits for results.
+reverse-mode AD, and JAX-like traced graph execution on the same dense tensor
+stack. The key distinction is when work is submitted and when the host waits
+for results.
 
 ![Eager CPU, Eager GPU, and Traced execution timelines](../assets/execution-models.svg)
 
@@ -12,12 +13,13 @@ Direct CPU tensor operations and eager CPU operations run immediately. A call
 enters the CPU backend, the CPU work completes, and the returned value is
 host-readable.
 
-This is the easiest model for debugging and for ordinary no-AD numeric code.
+This is the easiest model for debugging and for ordinary numeric code without
+autodiff.
 Use `TypedTensor<T, R>` or `Tensor` when no gradient state is needed.
-`TypedTensor<T, R>` may be host-backed or backend-backed; `Tensor` is the
-dtype-erased dynamic-rank form. Use `EagerTensor` when you want immediate
-forward execution through an `EagerRuntime`, and make tensors tracked when you
-want PyTorch-style scalar-loss `backward()`.
+`TypedTensor<T, R>` carries the scalar type in Rust; `Tensor` stores dtype at
+runtime. Use `EagerTensor` when you want immediate forward execution through an
+`EagerRuntime`, and make tensors tracked when you want PyTorch-style
+`backward()` on scalar losses.
 
 ## Eager GPU
 
@@ -36,9 +38,10 @@ Traced mode records operations into a graph first. It is similar to JAX's
 tracing and `jit` workflow: build the expression, compile it, then run the
 compiled program through a `GraphExecutor<B>`.
 
-Use traced mode for transform AD (`grad`, `vjp`, `jvp`, and HVP via
-composition), symbolic inputs, graph optimization, and repeated execution. The executor backend decides
-whether the compiled program runs on CPU or CUDA for supported operations.
+Use traced mode for `grad`, `vjp`, `jvp`, and HVP via composition on traced
+graphs, symbolic inputs, graph optimization, and repeated execution. The
+executor backend decides whether the compiled program runs on CPU or CUDA for
+supported operations.
 
 ## Why Support Both?
 
@@ -48,7 +51,7 @@ Eager and traced serve different workflows on the same tensor stack.
 | --- | --- |
 | Inspect intermediate values while developing | Eager CPU or eager GPU with explicit download |
 | Immediate forward execution through one runtime | `EagerTensor` |
-| Scalar-loss reverse-mode AD with gradient accumulation | tracked `EagerTensor` variables |
-| Transform AD and higher-order AD | `TracedTensor` |
+| Reverse-mode AD on scalar losses with gradient accumulation | tracked `EagerTensor` variables |
+| `grad`, `vjp`, `jvp`, and higher-order AD on traced graphs | `TracedTensor` |
 | Reuse the same computation many times | `GraphCompiler` + `GraphExecutor<B>` |
-| Keep no-AD code simple | `TypedTensor<T, R>` or `Tensor` |
+| Keep code without autodiff simple | `TypedTensor<T, R>` or `Tensor` |

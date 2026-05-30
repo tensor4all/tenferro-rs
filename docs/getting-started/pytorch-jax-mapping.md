@@ -74,17 +74,16 @@ setup commands.
 ### Lazy traced execution
 
 PyTorch users usually expect every operation to execute immediately. JAX users
-often switch between eager execution and `jit`. tenferro's traced surface stays
+often switch between eager execution and `jit`. tenferro's traced API stays
 lazy until you lower a `TracedTensor` graph with `GraphCompiler` and run the
 resulting `GraphProgram` with `GraphExecutor`.
 
 ### Autodiff split
 
 Eager tenferro matches PyTorch-style eager forward execution. When tensors are
-tracked, it also matches the scalar-loss `loss.backward()` workflow with
-accumulation semantics. Traced tenferro is the transform surface for
-`torch.autograd.grad`, `jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order
-compositions such as HVPs.
+tracked, it also matches the scalar loss `loss.backward()` workflow with
+accumulation semantics. Traced tenferro is the API for `torch.autograd.grad`,
+`jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order compositions such as HVPs.
 
 ### Compiler and executor ownership
 

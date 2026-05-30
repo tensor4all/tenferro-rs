@@ -3,8 +3,8 @@
 tenferro follows the PyTorch convention: no implicit CPU/GPU transfer. A tensor
 must already live on the device required by the backend operation.
 
-CUDA is a backend/device axis, not a separate tensor layer. The same concrete,
-eager, and traced surfaces can run supported CUDA operations when tensors are
+CUDA is a backend/device choice, not a separate tensor type. The same concrete,
+eager, and traced APIs can run supported CUDA operations when tensors are
 explicitly uploaded to CUDA memory and the executor/backend is CUDA-backed.
 
 CUDA support targets NVIDIA CUDA. AMD/ROCm is not a
@@ -23,9 +23,9 @@ supported execution path yet.
 Keep tensors on CUDA across a CUDA workload. Download only when the host needs
 to inspect values or hand data to CPU-only code.
 
-View canonicalization follows the same rule. A CUDA backend may compact a CUDA
-view into CUDA memory, and host code may compact a host view into host memory,
-but tenferro does not use canonicalization as a hidden CPU/GPU transfer.
+View compaction follows the same rule. A CUDA backend may copy a CUDA view into
+compact CUDA memory, and host code may copy a host view into compact host
+memory, but tenferro does not use that copy as a hidden CPU/GPU transfer.
 
 ## Eager GPU Synchronization
 
@@ -87,7 +87,7 @@ The example downloads the result back to CPU and asserts the expected values.
 
 | Tensor model | How CUDA fits |
 | --- | --- |
-| `TypedTensor<T, R>` | Fixed-dtype runtime tensor with optional compile-time rank; storage may be host-backed or backend-backed, and host access still requires explicit download for CUDA buffers. |
+| `TypedTensor<T, R>` | Fixed-dtype runtime tensor with optional compile-time rank; host access still requires explicit download for CUDA buffers. |
 | `Tensor` | Main concrete CUDA value for backend execution |
 | `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
 | `TracedTensor` | Graphs can be executed by `GraphExecutor<CudaBackend>` for supported ops |
@@ -96,7 +96,7 @@ CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 
 ## Coverage
 
-The CUDA backend uses the same concrete, eager, and traced tensor surfaces as
+The CUDA backend uses the same concrete, eager, and traced tensor APIs as
 the CPU backend. The table below describes the current CUDA backend dispatch
 coverage for CUDA-resident `Tensor` values. It is not an autodiff coverage table.
 

@@ -1,9 +1,9 @@
 # Traced Autodiff, JAX Style
 
 Use `TracedTensor` when you want graph construction separated from execution.
-This is the natural entry point for JAX-like transform AD: build a graph,
-compile and run it, then derive transformed graphs such as gradients or
-Jacobian-vector products.
+This is the natural entry point for JAX-like `grad`, `vjp`, and `jvp`
+workflows: build a graph, compile and run it, then derive graphs for gradients
+or Jacobian-vector products.
 
 The example below evaluates `sum(x * x)`, builds its gradient with respect to
 `x`, and evaluates a directional derivative with `jvp`.

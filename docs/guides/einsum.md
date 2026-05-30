@@ -86,7 +86,7 @@ assert_eq!(out.rank, 2);
 The default policy chooses an N-ary contraction order automatically. Advanced
 users can pass an explicit strategy through
 `tenferro_einsum::traced_tensor::einsum_with`.
-The public optimizer surface is limited to the types needed to express that
+The public optimizer API is limited to the types needed to express that
 choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.
 
@@ -123,7 +123,7 @@ Einsum uses the shared extension cache infrastructure from `tenferro-runtime`.
 Compile-time extension caches live on `GraphCompiler`; runtime
 contraction-plan caches live on `GraphExecutor` and `EagerRuntime`.
 Einsum plan cache identity includes the planning policy or explicit path, not
-only the subscripts and shapes. Traced extension payload identity also includes
+only the subscripts and shapes. Traced extension operation identity also includes
 those planner options and paths, so two calls with different policies are not
 treated as identical extension ops.
 

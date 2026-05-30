@@ -2,36 +2,36 @@
 
 This guide covers everyday tensor operations: elementwise math, shape changes,
 broadcasting, reductions, and concrete backend execution. These operations are
-available through different tensor layers depending on whether you need no-AD
-computation, eager forward execution with optional scalar-loss `backward()`, or
-traced graph execution.
+available through different tensor APIs depending on whether you need
+computation without autodiff, eager forward execution with optional
+`backward()` on scalar losses, or traced graph execution.
 
 ## Layer Coverage
 
-Choose the tensor layer first, then choose the operation entry point.
+Choose the tensor API first, then choose the operation entry point.
 
 | Layer | Start here when | Operation entry point | AD |
 | --- | --- | --- | --- |
-| `TypedTensor<T, R>` | No AD, scalar type known at compile time | direct typed accessors; selected `tenferro_runtime::typed_tensor` wrappers for dynamic-rank `TypedTensor<T>` | No |
-| `Tensor` | No AD, dtype selected at runtime or passed through backend dispatch | `tenferro_runtime::tensor` functions with an explicit backend | No |
-| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with scalar-loss `backward()` | `tenferro_ad::eager_tensor` functions and methods | Yes, for tracked values |
+| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; selected `tenferro_runtime::typed_tensor` wrappers for dynamic-rank `TypedTensor<T>` | No |
+| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `tenferro_runtime::tensor` functions with an explicit backend | No |
+| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `tenferro_ad::eager_tensor` functions and methods | Yes, for tracked values |
 | `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `tenferro_runtime::traced_tensor` functions and methods | Yes, through graph transforms |
 
-For most no-AD code, start with `TypedTensor<T, R>` when the scalar type is
+For most code without autodiff, start with `TypedTensor<T, R>` when the scalar type is
 known in Rust, and use `Tensor` when the dtype must remain dynamic. `Tensor`
-is the concrete dtype-erased value type underneath eager and traced execution,
+is the concrete runtime-dtype value type underneath eager and traced execution,
 but AD workflows should normally enter through `EagerTensor` or
 `TracedTensor`, not by using `Tensor` directly.
 
 CUDA is a backend/device choice for supported operations on `Tensor`,
-`EagerTensor`, and `TracedTensor`; it is not a separate tensor layer.
+`EagerTensor`, and `TracedTensor`; it is not a separate tensor API.
 Owned runtime tensors are compact column-major. Arbitrary strides live on
-views, and compact-only operations may canonicalize those views within the same
-placement without silently transferring CPU/GPU data.
+views. Operations that require compact storage may copy a view into compact
+storage on the same device, without silently transferring CPU/GPU data.
 
 ## Common Concepts And Differences
 
-All tensor layers use the same basic tensor vocabulary: shape, rank, dtype or
+All tensor APIs use the same basic tensor vocabulary: shape, rank, dtype or
 scalar type, column-major dense storage for owned runtime tensors, explicit
 backend execution, explicit CPU/GPU transfers, and NumPy-style broadcasting
 where the operation supports it. The difference is which facts are represented
@@ -41,16 +41,16 @@ in Rust's type system and when computation happens.
 | --- | --- | --- | --- | --- |
 | Scalar type in Rust type | Yes, `T` | No, runtime dtype enum | No, wraps `Tensor` | No, graph metadata |
 | Rank in Rust type | Optional, `R = DynRank` or `Rank<N>` | Dynamic | Dynamic | Dynamic or symbolic metadata |
-| Host typed slice access | Direct `&[T]` on host-backed tensors | Fallible `as_slice::<T>()` | Through concrete data | Only after graph execution |
-| Host iteration | Direct `iter()` and `iter_mut()` on host-backed tensors | Fallible `iter::<T>()` and `iter_mut::<T>()` | Through concrete data | Not a concrete-data API |
-| Backend math | Selected typed wrappers | Broad concrete backend surface | Eager runtime surface | Graph-building surface |
+| Host typed slice access | Direct `&[T]` on host tensors | Fallible `as_slice::<T>()` | Through concrete data | Only after graph execution |
+| Host iteration | Direct `iter()` and `iter_mut()` on host tensors | Fallible `iter::<T>()` and `iter_mut::<T>()` | Through concrete data | Not a concrete-data API |
+| Backend math | Selected typed wrappers | Broad concrete backend API | Eager runtime API | Graph-building API |
 | AD | No | No | Optional reverse-mode for tracked values | Transform AD and graph reuse |
 
 Use this distinction when reading operation examples:
 
 - direct typed accessors are `TypedTensor`-specific conveniences;
 - backend elementwise, structural, reduction, and dot operations are concrete
-  execution concepts shared by the no-AD, eager, and traced surfaces;
+  execution concepts shared by the non-autodiff, eager, and traced APIs;
 - AD-only operations such as `backward`, `grad`, `vjp`, and `jvp` live on the
   eager or traced layers.
 
@@ -91,7 +91,7 @@ and they do not configure CPU parallelism.
 
 ## TypedTensor Backend Operations
 
-For common typed no-AD math, `tenferro_runtime::typed_tensor` provides selected
+For common typed math without autodiff, `tenferro_runtime::typed_tensor` provides selected
 wrappers that accept dynamic-rank `TypedTensor<T>` values and return typed
 results.
 
@@ -129,7 +129,7 @@ The current typed wrapper set covers:
 
 These wrappers are a convenience layer over concrete tensor backend execution.
 For backend-resident CUDA tensors or operation families not covered by the
-typed wrappers, use the dtype-erased `Tensor` path or the eager/traced layer
+typed wrappers, use the runtime-dtype `Tensor` path or the eager/traced layer
 that matches the workflow. Prefer backend-aware typed wrappers for tensor
 reductions and shape operations; reserve `iter()` and `as_slice()` for
 host-side inspection, small assertions, or interoperability with ordinary Rust
@@ -153,8 +153,8 @@ There is no public closure-style `TypedTensor::map` or `mapv` method in the
 current public API. For host-only transformations, use `iter`, `iter_mut`,
 `as_slice`, `host_data_mut`, or `as_physical_slice_mut`. For tensor math,
 reductions, or shape operations that should use backend execution, use typed
-wrappers or the dtype-erased `Tensor`, `EagerTensor`, or `TracedTensor`
-operation surface.
+wrappers or the runtime-dtype `Tensor`, `EagerTensor`, or `TracedTensor`
+operation API.
 
 Host iterators are ordinary Rust slice iterators. Backend CPU parallelism is
 controlled by the backend execution context, not by `iter()` itself. See
@@ -166,7 +166,7 @@ controls.
 `TypedTensor<T, R>` is generic enough to hold host data for many Rust element
 types when you only need construction, shape/layout metadata, and host access.
 The tenferro operation and dtype system is intentionally narrower. Backend
-operations and dtype-erased `Tensor` conversion require `T: TensorScalar`,
+operations and runtime-dtype `Tensor` conversion require `T: TensorScalar`,
 which is the supported scalar set:
 
 - `f32` and `f64`;
@@ -174,15 +174,15 @@ which is the supported scalar set:
 - `bool`;
 - `num_complex::Complex32` and `num_complex::Complex64`.
 
-`bool` is a first-class dtype for masks, comparisons, and selection. It does
+`bool` is a supported dtype for masks, comparisons, and selection. It does
 not mean every numeric or analytic operation is valid for boolean tensors.
 Arbitrary non-numeric Rust structs can be useful as host-side typed storage,
-but they are not part of backend math, CUDA execution, AD, or the dtype-erased
-`Tensor` operation surface.
+but they are not part of backend math, CUDA execution, AD, or the runtime-dtype
+`Tensor` operation API.
 
-## DType-Erased Tensor Example
+## Runtime-DType Tensor Example
 
-Use `Tensor` with a backend when you want direct no-AD computation but the dtype
+Use `Tensor` with a backend when you want direct computation without autodiff but the dtype
 should remain dynamic.
 
 ```rust

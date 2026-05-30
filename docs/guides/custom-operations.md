@@ -15,7 +15,7 @@ it clearly.
 
 An extension operation is a tensor operation supplied by another crate. The
 extension crate owns the public function names, validates arguments, and
-applies extension op payloads through `tenferro_runtime::extension`.
+applies the lower-level extension operation through `tenferro_runtime::extension`.
 
 An extension can participate in the same eager and traced workflows as built-in
 tensor operations when it provides the required metadata and execution hooks.
@@ -31,7 +31,7 @@ traits is for authors of those crates.
 
 An extension crate is responsible for:
 
-- a stable operation family and payload, so graphs can compare and cache it,
+- a stable operation descriptor, so graphs can compare and cache it,
 - output dtype and shape inference,
 - concrete execution for the supported backend and device combinations,
 - optional JVP/VJP rules for automatic differentiation,
@@ -39,21 +39,21 @@ An extension crate is responsible for:
 
 ## Cache Ownership
 
-Keep semantic operation payloads and runtime caches separate.
+Keep operation identity and runtime caches separate.
 
-The `ExtensionOpTrait` payload is graph identity. It participates in hashing,
-equality, graph comparison, and AD rule lookup. Put parameters that change the
-meaning of the operation there: axes, normalization mode, algorithm choice, and
-similar values. Do not hide unbounded plan caches, vendor handles, or mutable
-global state inside the payload semantics.
+The `ExtensionOpTrait` value is the operation's graph identity. It participates
+in hashing, equality, graph comparison, and AD rule lookup. Put parameters that
+change the meaning of the operation there: axes, normalization mode, algorithm
+choice, and similar values. Do not hide unbounded plan caches, vendor handles,
+or mutable global state inside operation identity.
 
-There is no monolithic process-global owner for arbitrary extension state.
+There is no single process-global owner for arbitrary extension state.
 `EagerRuntime`, `GraphCompiler`, and `GraphExecutor` own explicit generic
 extension cache stores. Extension runtimes put entries in those stores with
 `ExtensionCacheKey`, so retained plans are tied to the compiler, eager context,
 or executor that uses them.
 
-An op payload may hold an `Arc` to such an extension-owned cache object only
+An operation descriptor may hold an `Arc` to such an extension-owned cache object only
 when the cache is a performance detail and is not part of semantic equality.
 Two extension ops that compare equal must remain interchangeable even if their
 caches are empty, warm, or independently owned.
@@ -70,12 +70,12 @@ users a way to clear it and inspect retained entries.
 
 ## Implementing An Extension Op
 
-Implement `tenferro_runtime::extension::ExtensionOpTrait` for the op payload. The
-payload carries operation parameters such as axes, modes, constants, or kernel
-configuration. Tensor-valued parameters should usually be normal inputs, not
-payload fields.
+Implement `tenferro_runtime::extension::ExtensionOpTrait` for the operation
+descriptor. It carries operation parameters such as axes, modes, constants, or
+kernel configuration. Tensor-valued parameters should usually be normal inputs,
+not descriptor fields.
 
-Extension op payloads do not need process-global registration. Construct
+Extension operation descriptors do not need process-global registration. Construct
 `Arc<dyn ExtensionOpTrait>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
@@ -95,11 +95,11 @@ When porting Julia `frule` / `rrule` code:
 - emit only built-in tensor operations or extension ops whose AD rules are
   registered before a later AD pass reaches them.
 
-The lower-level adapter surface remains available for specialized extension
+The lower-level adapter API remains available for specialized extension
 authors who need direct graph-builder control. New extension authors should
 start with `ExtensionAdRuleTrait` plus an explicit `ExtensionRuleSet`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
-removed; operation payloads are carried directly in the graph.
+removed; operation descriptors are carried directly in the graph.
 
 The detailed trait contract is documented in the internal
 [ExtensionOp specification](../spec/extension-op.md). User-facing extension

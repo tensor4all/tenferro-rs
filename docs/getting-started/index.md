@@ -1,8 +1,9 @@
 # Getting Started
 
-tenferro supports no-AD tensor computation, eager forward execution with
-optional scalar-loss `backward()`, traced execution, transform AD, einsum,
-linear algebra, and CUDA execution through the feature-gated CUDA backend.
+tenferro supports tensor computation without autodiff, immediate execution with
+optional `backward()` on scalar losses, traced graph execution, `grad`, `vjp`,
+and `jvp` on traced graphs, einsum, linear algebra, and CUDA execution through
+the feature-gated CUDA backend.
 
 ## Setup
 
@@ -80,14 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Next Steps
 
-- [Core concepts](./core-concepts.md)
-- [Choosing a tensor layer](../guides/choosing-an-api.md)
-- [Execution models](../guides/execution-models.md)
-- [Memory order](../guides/memory-order.md)
-- [Devices and GPU](../guides/devices-and-gpu.md)
-- [PyTorch and JAX mapping](./pytorch-jax-mapping.md)
-- [Eager operations guide](../guides/eager-operations.md)
-- [Tensor operations guide](../guides/tensor-operations.md)
-- [Einsum guide](../guides/einsum.md)
-- [Autodiff guide](../guides/autodiff.md)
-- [Linear algebra guide](../guides/linear-algebra.md)
+After the first CPU program, read [Core Concepts](./core-concepts.md) for the
+main mental model or [Choosing a Tensor API](../guides/choosing-an-api.md) to
+pick between `TypedTensor`, `Tensor`, `EagerTensor`, and `TracedTensor`. The
+sidebar links to the full guides for memory order, CUDA, tensor operations,
+autodiff, einsum, and linear algebra.

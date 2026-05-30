@@ -1,9 +1,9 @@
 # Eager Operations
 
-This guide covers immediate execution: direct no-AD tensor computation and
+This guide covers immediate execution: direct tensor computation without autodiff and
 `EagerTensor` forward execution with optional PyTorch-like reverse-mode
 autodiff on scalar losses. Start with `TypedTensor<T, R>` or `Tensor` for
-no-AD work. Use `EagerTensor` when you want operations to run immediately
+work without autodiff. Use `EagerTensor` when you want operations to run immediately
 inside an `EagerRuntime`, and create tracked variables when the workflow needs
 gradient accumulation and `backward()`.
 
@@ -18,7 +18,7 @@ let mut ctx = CpuBackend::new();
 
 Every direct tensor operation requires a backend context. `CpuBackend` is the
 standard CPU backend using the faer linear algebra library. With the `cuda`
-feature, the same concrete and eager surfaces can execute supported operations
+feature, the same concrete and eager APIs can execute supported operations
 on the CUDA backend when tensors are explicitly placed on the GPU.
 
 `EagerRuntime` owns the eager backend and the optional gradient slots for
@@ -29,7 +29,8 @@ the same state and you can reset them together with `clear_grads()`.
 Most broad concrete operations are available as `tenferro_runtime::tensor` free
 functions, with method wrappers kept for compatibility. `TypedTensor<T, R>` is
 the first layer to consider when you want compile-time dtype safety, optional
-rank typing, or typed data that may be host-backed or backend-backed. Einsum is
+rank typing, or typed data that may live on the host or in backend-owned
+storage. Einsum is
 provided by the separate `tenferro-einsum` standard extension.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
@@ -64,9 +65,9 @@ assert_eq!(c.shape(), &[2, 3]);
 The flat buffers above are in column-major order, so a `[2, 3]` tensor stores
 its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 Owned tensors stay compact column-major. Metadata-only strided views live on
-`TypedTensorView` and `TypedTensorViewMut`; compact-only operation boundaries
-may canonicalize such views within the same placement, but they do not silently
-upload CPU tensors or download CUDA tensors.
+`TypedTensorView` and `TypedTensorViewMut`; operations that require compact
+storage may copy a view into compact storage on the same device, but they do
+not silently upload CPU tensors or download CUDA tensors.
 
 ## Arithmetic
 
@@ -183,7 +184,7 @@ row-major order.
 ## Eager Forward And Reverse-Mode Gradients
 
 Eager tensors always compute the forward value immediately. Tracked eager
-tensors also support scalar-loss reverse-mode autodiff with accumulation.
+tensors also support reverse-mode autodiff on scalar losses with accumulation.
 Repeated `backward()` calls add to the existing gradients, and you clear them
 explicitly when you want a fresh pass.
 
@@ -219,12 +220,12 @@ assert!(y.grad().is_none());
 
 | Scenario | Recommended |
 |----------|-------------|
-| Fixed scalar type and no AD | `TypedTensor<T, R>` |
-| Dynamic dtype and no AD | `Tensor` + a backend |
+| Fixed scalar type and no autodiff | `TypedTensor<T, R>` |
+| Dynamic dtype and no autodiff | `Tensor` + a backend |
 | Data preprocessing | `Tensor` + a backend |
 | Tight inner loops | Direct/eager execution |
 | Exploratory computation | Direct/eager execution |
 | Immediate forward execution through one runtime | `EagerTensor` |
-| Need scalar-loss reverse-mode gradients | tracked `EagerTensor` variables + `backward()` |
-| Need transform AD (`grad` / `vjp` / `jvp` / HVP via composition) | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
+| Need reverse-mode gradients on scalar losses | tracked `EagerTensor` variables + `backward()` |
+| Need `grad` / `vjp` / `jvp` / HVP via composition on traced graphs | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
 | CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphExecutor<B>`) with explicit upload/download |

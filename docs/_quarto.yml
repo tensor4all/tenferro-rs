@@ -6,6 +6,7 @@ project:
     - getting-started/**/*.md
     - tutorials/**/*.md
     - guides/**/*.md
+    - performance/**/*.md
     - api/**/*.md
     - internals/**/*.md
     - architecture/**/*.md
@@ -37,7 +38,8 @@ website:
           - tutorials/traced-autodiff-jax-style.md
       - section: "Guides"
         contents:
-          - guides/choosing-an-api.md
+          - text: "Choosing a Tensor API"
+            href: guides/choosing-an-api.md
           - guides/execution-models.md
           - guides/eager-operations.md
           - guides/tensor-operations.md
@@ -55,6 +57,11 @@ website:
       - section: "API"
         contents:
           - api/index.md
+      - section: "Performance"
+        contents:
+          - performance/cpu-benchmarks.md
+          - performance/cpu-benchmark-results-2026-05-23.md
+          - performance/tt-inner-product-overhead.md
       - section: "Internals"
         contents:
           - internals/index.md

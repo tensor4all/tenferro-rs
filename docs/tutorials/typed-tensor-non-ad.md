@@ -1,4 +1,4 @@
-# TypedTensor For No-AD Numeric Computation
+# TypedTensor For Numeric Computation Without Autodiff
 
 Use `TypedTensor<T>` when the scalar type is fixed in Rust and the workflow does
 not need automatic differentiation. This is the closest tenferro path for
@@ -14,7 +14,7 @@ The example below shows four details that matter in real code:
 - Reductions such as `typed_tensor::reduce_sum` are backend-aware tensor
   operations, unlike small host-only checks over `iter()`.
 - Structural helpers such as `typed_tensor::transpose` preserve the typed
-  workflow without switching to dtype-erased `Tensor`.
+  workflow without switching to runtime-dtype `Tensor`.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/typed_tensor_non_ad.rs -->
 ```rust
