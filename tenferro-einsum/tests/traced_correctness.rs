@@ -10,7 +10,7 @@ use tenferro_einsum::{
     ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
 };
 use tenferro_runtime::error::Result;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
 #[path = "traced_correctness/ported_and_paths.rs"]
@@ -468,6 +468,72 @@ fn einsum_symbolic_three_tensor_chain_matches_static_path() {
     )
     .unwrap();
     let actual = actual.run_with(&mut engine).unwrap();
+
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(get_f64_data(&actual), get_f64_data(&expected));
+}
+
+#[test]
+fn einsum_symbolic_explicit_path_matches_static_execution() {
+    let a_value = f64_tensor(vec![2, 3], vec![1.0, -0.5, 2.0, 0.75, -1.25, 1.5]);
+    let b_value = f64_tensor(
+        vec![3, 4],
+        vec![
+            0.5, 1.5, -1.0, 0.25, 2.0, -0.75, 1.25, -1.5, 0.0, 0.5, -2.0, 3.0,
+        ],
+    );
+    let c_value = f64_tensor(
+        vec![4, 2],
+        vec![2.0, -1.5, 0.75, 1.25, -0.5, 1.0, 3.0, -2.0],
+    );
+
+    let mut static_engine = GraphExecutor::new(CpuBackend::new());
+    let a_static = TracedTensor::from_tensor_concrete_shape(a_value.clone());
+    let b_static = TracedTensor::from_tensor_concrete_shape(b_value.clone());
+    let c_static = TracedTensor::from_tensor_concrete_shape(c_value.clone());
+    let expected = einsum_with(
+        &mut static_engine,
+        &[&a_static, &b_static, &c_static],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let expected = expected.run_with(&mut static_engine).unwrap().clone();
+
+    let a_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let c_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+    let actual = einsum_with(
+        &mut compiler,
+        &[&a_symbolic, &b_symbolic, &c_symbolic],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let program = compiler
+        .compile_with_input_specs(
+            &actual,
+            &[
+                (&a_symbolic, DType::F64, &[2, 3]),
+                (&b_symbolic, DType::F64, &[3, 4]),
+                (&c_symbolic, DType::F64, &[4, 2]),
+            ],
+        )
+        .unwrap();
+
+    let mut symbolic_engine = GraphExecutor::new(CpuBackend::new());
+    symbolic_engine
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    let run_inputs = [
+        (&a_symbolic, &a_value),
+        (&b_symbolic, &b_value),
+        (&c_symbolic, &c_value),
+    ];
+    let actual = symbolic_engine
+        .run_with_inputs(&program, &run_inputs)
+        .unwrap();
 
     assert_eq!(actual.shape(), expected.shape());
     assert_eq!(get_f64_data(&actual), get_f64_data(&expected));

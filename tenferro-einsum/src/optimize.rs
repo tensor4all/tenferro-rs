@@ -8,9 +8,16 @@ use crate::{
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
-/// This is the runtime-independent strategy enum from the current traced
-/// implementation. Frontends can resolve it to a [`ContractionTree`] once
-/// concrete input shapes are available.
+/// The traced API resolves this enum into a shape-independent plan
+/// specification and stores that specification in the einsum extension
+/// payload. Concrete input shapes are used later to build a [`ContractionTree`]
+/// from that payload when the graph is compiled or executed.
+///
+/// Planner options and explicit paths are part of the extension payload
+/// identity. Two otherwise identical traced einsum ops with different
+/// optimizer options, explicit paths, or fixed plan identities are not treated
+/// as the same extension op, and their compile/runtime plan cache entries are
+/// kept separate.
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),
@@ -22,8 +29,15 @@ pub enum EinsumOptimize {
     ///
     /// Each pair references positions in a shrinking operand list. After each
     /// contraction, the two operands are removed and the result is appended.
+    /// Because this representation is independent of concrete dimension
+    /// values, it can be used with symbolic traced inputs.
     Path(Vec<(usize, usize)>),
     /// Pre-computed contraction tree.
+    ///
+    /// A tree contains concrete shape-dependent planning results. It is
+    /// accepted when shapes are concrete, then converted into fixed contraction
+    /// pairs for the extension payload. Use [`EinsumOptimize::Path`] instead
+    /// when building a traced graph from symbolic inputs.
     Tree(ContractionTree),
 }
 

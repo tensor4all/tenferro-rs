@@ -23,6 +23,11 @@ use crate::{
 };
 
 /// N-ary einsum with default FLOPS-first optimization.
+///
+/// The default optimizer is resolved into a shape-independent plan
+/// specification stored in the extension payload. That payload identity
+/// participates in traced extension-op equality and in compile/runtime einsum
+/// plan caches.
 pub fn einsum(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -32,6 +37,11 @@ pub fn einsum(
 }
 
 /// N-ary einsum using integer labels and the default contraction strategy.
+///
+/// The default optimizer is resolved into a shape-independent plan
+/// specification stored in the extension payload. That payload identity
+/// participates in traced extension-op equality and in compile/runtime einsum
+/// plan caches.
 pub fn einsum_subscripts(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -41,6 +51,17 @@ pub fn einsum_subscripts(
 }
 
 /// N-ary einsum with explicit contraction strategy.
+///
+/// `optimize` is converted to a shape-independent plan specification carried
+/// by the extension payload. `EinsumOptimize::Path` uses JAX-style positions
+/// over the current shrinking operand list, so it works with symbolic traced
+/// inputs. `EinsumOptimize::Tree` requires concrete shapes; when accepted, the
+/// tree is converted to fixed contraction pairs for the payload.
+///
+/// Planner options, explicit paths, and fixed plan identities affect traced
+/// extension payload identity and the einsum compile/runtime plan caches.
+/// Different options or paths are therefore not treated as identical extension
+/// ops.
 pub fn einsum_with(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -52,6 +73,17 @@ pub fn einsum_with(
 }
 
 /// N-ary einsum with integer labels and explicit contraction strategy.
+///
+/// `optimize` is converted to a shape-independent plan specification carried
+/// by the extension payload. `EinsumOptimize::Path` uses JAX-style positions
+/// over the current shrinking operand list, so it works with symbolic traced
+/// inputs. `EinsumOptimize::Tree` requires concrete shapes; when accepted, the
+/// tree is converted to fixed contraction pairs for the payload.
+///
+/// Planner options, explicit paths, and fixed plan identities affect traced
+/// extension payload identity and the einsum compile/runtime plan caches.
+/// Different options or paths are therefore not treated as identical extension
+/// ops.
 pub fn einsum_subscripts_with(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
