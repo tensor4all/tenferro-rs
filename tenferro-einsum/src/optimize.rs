@@ -73,6 +73,7 @@ pub(crate) fn plan_spec_from_optimize(
         EinsumOptimize::False => Ok(EinsumPlanSpec::LeftToRight),
         EinsumOptimize::Nested(nested) => {
             let pairs = nested_to_v1_pairs(&nested, subscripts.inputs.len())?;
+            validate_fixed_pairs(&pairs, subscripts.inputs.len())?;
             Ok(EinsumPlanSpec::FixedPairs(pairs))
         }
         EinsumOptimize::Path(path) => {
@@ -95,6 +96,7 @@ pub(crate) fn resolve_einsum_strategy_with_spec(
         EinsumOptimize::Tree(tree) => {
             let pairs = tree_pairs(&tree);
             let spec = EinsumPlanSpec::FixedPairs(pairs);
+            let tree = resolve_plan_spec(&spec, subscripts, shapes)?;
             Ok((spec, tree))
         }
         optimize => {
@@ -166,6 +168,53 @@ fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
     (0..tree.step_count())
         .filter_map(|step| tree.step_pair(step))
         .collect()
+}
+
+fn validate_fixed_pairs(pairs: &[(usize, usize)], n_inputs: usize) -> Result<()> {
+    let required_steps = n_inputs.saturating_sub(1);
+    if pairs.len() != required_steps {
+        return Err(Error::InvalidArgument(format!(
+            "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+            pairs.len()
+        )));
+    }
+
+    let mut live = vec![false; n_inputs + pairs.len()];
+    for slot in live.iter_mut().take(n_inputs) {
+        *slot = true;
+    }
+
+    for (step_idx, &(left, right)) in pairs.iter().enumerate() {
+        let next_idx = n_inputs + step_idx;
+        if left == right {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) must reference two distinct live operands"
+            )));
+        }
+        if left >= next_idx || right >= next_idx {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) references non-existent operand"
+            )));
+        }
+        if !live[left] || !live[right] {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) references an operand or intermediate that is no longer live"
+            )));
+        }
+
+        live[left] = false;
+        live[right] = false;
+        live[next_idx] = true;
+    }
+
+    let live_count = live.iter().filter(|&&is_live| is_live).count();
+    if live_count != 1 {
+        return Err(Error::InvalidArgument(format!(
+            "explicit contraction path must leave exactly one live result, got {live_count}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn hash_pairs(pairs: &[(usize, usize)], state: &mut dyn Hasher) {

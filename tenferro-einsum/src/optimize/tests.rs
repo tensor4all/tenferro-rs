@@ -83,6 +83,98 @@ fn concrete_tree_strategy_converts_to_fixed_pairs() {
     assert_eq!(resolved_tree.step_pair(1), Some((0, 3)));
 }
 
+#[test]
+fn concrete_tree_strategy_revalidates_current_shapes() {
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let original_shapes = [&[2, 3][..], &[3, 4][..]];
+    let tree = ContractionTree::from_pairs(&subs, &original_shapes, &[(0, 1)]).unwrap();
+    let current_shapes = [&[2, 3][..], &[5, 4][..]];
+
+    let err =
+        match resolve_einsum_strategy_with_spec(EinsumOptimize::Tree(tree), &subs, &current_shapes)
+        {
+            Ok(_) => panic!("expected incompatible shapes to be rejected"),
+            Err(err) => err,
+        };
+
+    assert!(
+        matches!(err, Error::ShapeMismatch { .. }),
+        "expected ShapeMismatch, got {err}"
+    );
+}
+
+#[test]
+fn concrete_tree_strategy_rejects_different_current_arity() {
+    let original_subs = Subscripts::parse("ij,jk,kl->il").unwrap();
+    let original_shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..]];
+    let tree =
+        ContractionTree::from_pairs(&original_subs, &original_shapes, &[(1, 2), (0, 3)]).unwrap();
+    let current_subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let current_shapes = [&[2, 3][..], &[3, 4][..]];
+
+    let err = match resolve_einsum_strategy_with_spec(
+        EinsumOptimize::Tree(tree),
+        &current_subs,
+        &current_shapes,
+    ) {
+        Ok(_) => panic!("expected different current arity to be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(format!("{err}").contains("must have"), "got {err}");
+}
+
+#[test]
+fn plan_spec_from_nested_rejects_duplicate_leaves() {
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let nested = NestedEinsum::Node {
+        subscripts: subs.clone(),
+        children: vec![NestedEinsum::Leaf(0), NestedEinsum::Leaf(0)],
+    };
+
+    let err = plan_spec_from_optimize(EinsumOptimize::Nested(nested), &subs).unwrap_err();
+
+    assert!(format!("{err}").contains("distinct"), "got {err}");
+}
+
+#[test]
+fn plan_spec_from_nested_rejects_missing_leaves() {
+    let subs = Subscripts::parse("ij,jk,kl->il").unwrap();
+    let nested = NestedEinsum::Node {
+        subscripts: Subscripts::parse("ij,jk->ik").unwrap(),
+        children: vec![NestedEinsum::Leaf(0), NestedEinsum::Leaf(1)],
+    };
+
+    let err = plan_spec_from_optimize(EinsumOptimize::Nested(nested), &subs).unwrap_err();
+
+    assert!(format!("{err}").contains("must have"), "got {err}");
+}
+
+#[test]
+fn plan_spec_from_auto_rejects_nan_options() {
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let options = ContractionOptimizerOptions {
+        betas: vec![f64::NAN],
+        ..ContractionOptimizerOptions::default()
+    };
+
+    let err = plan_spec_from_optimize(EinsumOptimize::Auto(options), &subs).unwrap_err();
+
+    assert!(
+        format!("{err}").contains("must not contain NaN"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn identical_plan_specs_have_equal_hashes() {
+    let lhs = EinsumPlanSpec::FixedPairs(vec![(1, 2), (0, 3)]);
+    let rhs = EinsumPlanSpec::FixedPairs(vec![(1, 2), (0, 3)]);
+
+    assert!(plan_specs_equal(&lhs, &rhs));
+    assert_eq!(hash_plan_spec(&lhs), hash_plan_spec(&rhs));
+}
+
 fn hash_plan_spec(spec: &EinsumPlanSpec) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     hash_einsum_plan_spec(spec, &mut hasher);
