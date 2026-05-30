@@ -190,7 +190,7 @@ fn infer_symbolic_output_shape(
                 shape.len()
             )));
         }
-        for (&label, dim) in labels.iter().zip(shape.into_iter()) {
+        for (&label, dim) in labels.iter().zip(shape) {
             label_dims.entry(label).or_insert(dim);
         }
     }

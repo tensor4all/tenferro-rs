@@ -172,6 +172,8 @@ impl DimExpr {
     /// let expr = DimExpr::add(DimExpr::Const(2), DimExpr::Const(3));
     /// assert_eq!(expr.eval(&[]), 5);
     /// ```
+    // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(a: Self, b: Self) -> Self {
         Self::Add(Box::new(a), Box::new(b))
     }
@@ -186,6 +188,8 @@ impl DimExpr {
     /// let expr = DimExpr::sub(DimExpr::Const(7), DimExpr::Const(2));
     /// assert_eq!(expr.eval(&[]), 5);
     /// ```
+    // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(a: Self, b: Self) -> Self {
         Self::Sub(Box::new(a), Box::new(b))
     }
@@ -200,6 +204,8 @@ impl DimExpr {
     /// let expr = DimExpr::mul(DimExpr::Const(3), DimExpr::Const(4));
     /// assert_eq!(expr.eval(&[]), 12);
     /// ```
+    // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(a: Self, b: Self) -> Self {
         Self::Mul(Box::new(a), Box::new(b))
     }

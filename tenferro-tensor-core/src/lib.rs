@@ -461,7 +461,7 @@ fn for_each_col_major_index(
         f(&[])?;
         return Ok(());
     }
-    if shape.iter().any(|&extent| extent == 0) {
+    if shape.contains(&0) {
         return Ok(());
     }
     let mut index = vec![0usize; shape.len()];
@@ -490,7 +490,7 @@ fn for_each_row_major_index(
         f(&[])?;
         return Ok(());
     }
-    if shape.iter().any(|&extent| extent == 0) {
+    if shape.contains(&0) {
         return Ok(());
     }
     let mut index = vec![0usize; shape.len()];
@@ -875,7 +875,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.shape.iter().any(|&extent| extent == 0)
+        self.shape.contains(&0)
     }
 
     /// Return whether this view has compact column-major logical strides.

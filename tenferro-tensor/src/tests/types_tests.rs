@@ -842,7 +842,7 @@ fn tensor_view_covers_dtype_shape_and_materialization() {
 #[test]
 fn typed_tensor_view_materializes_sliced_host_layouts() {
     let row_major = [1_i32, 2, 3, 4, 5, 6];
-    let view = TypedTensorView::from_slice(&[2, 3], &[3, 1], 0, &row_major).unwrap();
+    let view = TypedTensorView::from_slice([2, 3], [3, 1], 0, &row_major).unwrap();
 
     assert_eq!(view.shape(), &[2, 3]);
     assert_eq!(view.strides(), &[3, 1]);
@@ -912,7 +912,7 @@ fn tensor_view_covers_strided_i32_and_bool() {
 #[test]
 fn strided_tensor_view_mut_updates_sliced_host_layouts() {
     let mut row_major = [1_i32, 2, 3, 4, 5, 6];
-    let mut view = TypedTensorViewMut::from_slice(&[2, 3], &[3, 1], 0, &mut row_major).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([2, 3], [3, 1], 0, &mut row_major).unwrap();
 
     assert_eq!(view.shape(), &[2, 3]);
     assert_eq!(view.strides(), &[3, 1]);
@@ -925,7 +925,7 @@ fn strided_tensor_view_mut_updates_sliced_host_layouts() {
         let mut transposed = view.transpose_view([1, 0]).unwrap();
         *transposed.get_mut(&[2, 1]).unwrap() = 600;
     }
-    let mut view = TypedTensorViewMut::from_slice(&[2, 3], &[3, 1], 0, &mut row_major).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([2, 3], [3, 1], 0, &mut row_major).unwrap();
     assert_eq!(view.get(&[1, 2]), Some(&600));
 
     {
@@ -942,30 +942,30 @@ fn strided_tensor_view_mut_updates_sliced_host_layouts() {
 #[test]
 fn strided_tensor_view_mut_rejects_aliasing_layouts() {
     let data = [1_i32, 2, 3, 4];
-    assert!(TypedTensorView::from_slice(&[2, 2], &[1, 1], 0, &data).is_ok());
+    assert!(TypedTensorView::from_slice([2, 2], [1, 1], 0, &data).is_ok());
 
     let mut data = [1_i32, 2, 3, 4];
-    let err = TypedTensorViewMut::from_slice(&[2, 2], &[1, 1], 0, &mut data).unwrap_err();
+    let err = TypedTensorViewMut::from_slice([2, 2], [1, 1], 0, &mut data).unwrap_err();
     assert!(matches!(err, Error::InvalidConfig { .. }));
 
     let mut data = [1_i32, 2];
-    assert!(TypedTensorViewMut::from_slice(&[2], &[0], 0, &mut data).is_err());
+    assert!(TypedTensorViewMut::from_slice([2], [0], 0, &mut data).is_err());
 
     let mut data = [1_i32, 2, 3];
-    let mut reversed = TypedTensorViewMut::from_slice(&[3], &[-1], 2, &mut data).unwrap();
+    let mut reversed = TypedTensorViewMut::from_slice([3], [-1], 2, &mut data).unwrap();
     *reversed.get_mut(&[2]).unwrap() = 10;
     assert_eq!(reversed.as_physical_slice(), &[10, 2, 3]);
 
     let mut data = [1_i32, 2];
     let singleton_zero_stride =
-        TypedTensorViewMut::from_slice(&[1, 2], &[0, 1], 0, &mut data).unwrap();
+        TypedTensorViewMut::from_slice([1, 2], [0, 1], 0, &mut data).unwrap();
     assert_eq!(singleton_zero_stride.shape(), &[1, 2]);
 }
 
 #[test]
 fn strided_tensor_view_mut_multi_slice_returns_option() {
     let mut data = [1_i32, 2, 3, 4, 5, 6];
-    let mut view = TypedTensorViewMut::from_slice(&[6], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([6], [1], 0, &mut data).unwrap();
 
     {
         let (mut left, mut right) = view
@@ -1044,7 +1044,7 @@ fn typed_tensor_view_mut_multi_slice_returns_option_for_strided_layouts() {
 fn strided_tensor_view_validation_covers_error_edges() {
     let data = [1_i32, 2, 3];
 
-    let empty = TypedTensorView::from_slice(&[0, 3], &[1, 0], 3, &data).unwrap();
+    let empty = TypedTensorView::from_slice([0, 3], [1, 0], 3, &data).unwrap();
     assert_eq!(empty.n_elements(), 0);
     assert_eq!(
         materialize_typed_view_col_major(&empty, "test")
@@ -1054,38 +1054,38 @@ fn strided_tensor_view_validation_covers_error_edges() {
     );
     assert_eq!(empty.get(&[0, 0]), None);
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[0], &[1], 4, &data),
+        TypedTensorView::<i32>::from_slice([0], [1], 4, &data),
         Err(Error::InvalidConfig { .. })
     ));
 
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[2], &[1, 1], 0, &data),
+        TypedTensorView::<i32>::from_slice([2], [1, 1], 0, &data),
         Err(Error::RankMismatch { .. })
     ));
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[2], &[-1], 0, &data[..1]),
+        TypedTensorView::<i32>::from_slice([2], [-1], 0, &data[..1]),
         Err(Error::InvalidConfig { .. })
     ));
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[2], &[2], 0, &data[..1]),
+        TypedTensorView::<i32>::from_slice([2], [2], 0, &data[..1]),
         Err(Error::InvalidConfig { .. })
     ));
 
-    let view = TypedTensorView::from_slice(&[3], &[1], 0, &data).unwrap();
+    let view = TypedTensorView::from_slice([3], [1], 0, &data).unwrap();
     assert_eq!(view.try_get(&[1]), Some(&2));
     assert_eq!(view.try_linear_offset(&[0, 0]), None);
     assert_eq!(view.try_linear_offset(&[3]), None);
 
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[usize::MAX, 2], &[1, 1], 0, &[]),
+        TypedTensorView::<i32>::from_slice([usize::MAX, 2], [1, 1], 0, &[]),
         Err(Error::InvalidConfig { .. })
     ));
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[3], &[isize::MAX], 0, &[]),
+        TypedTensorView::<i32>::from_slice([3], [isize::MAX], 0, &[]),
         Err(Error::InvalidConfig { .. })
     ));
     assert!(matches!(
-        TypedTensorView::<i32>::from_slice(&[2, 2], &[isize::MAX, 1], 0, &[]),
+        TypedTensorView::<i32>::from_slice([2, 2], [isize::MAX, 1], 0, &[]),
         Err(Error::InvalidConfig { .. })
     ));
 }
@@ -1093,7 +1093,7 @@ fn strided_tensor_view_validation_covers_error_edges() {
 #[test]
 fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     let data = [1_i32, 2, 3, 4, 5, 6];
-    let view = TypedTensorView::from_slice(&[2, 3], &[3, 1], 0, &data).unwrap();
+    let view = TypedTensorView::from_slice([2, 3], [3, 1], 0, &data).unwrap();
 
     assert!(matches!(
         view.transpose_view([0]),
@@ -1157,14 +1157,14 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     assert_eq!(scalar.strides(), &[] as &[isize]);
     assert_eq!(scalar.get(&[]), Some(&1));
 
-    let singleton_axis = TypedTensorView::from_slice(&[1, 3], &[99, 1], 0, &data).unwrap();
+    let singleton_axis = TypedTensorView::from_slice([1, 3], [99, 1], 0, &data).unwrap();
     assert_eq!(singleton_axis.try_reshape(&[3]).unwrap().strides(), &[1]);
 }
 
 #[test]
 fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cases() {
     let mut data = [0_i32, 1, 2, 3, 4, 5];
-    let mut view = TypedTensorViewMut::from_slice(&[6], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([6], [1], 0, &mut data).unwrap();
     {
         let (mut high, mut low) = view
             .try_multi_slice_mut(
@@ -1178,7 +1178,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
     assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3, 40, 5]);
 
     let mut data = [0_i32, 1, 2, 3];
-    let mut view = TypedTensorViewMut::from_slice(&[4], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
     {
         let (empty, mut right) = view
             .try_multi_slice_mut(
@@ -1192,7 +1192,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
     assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3]);
 
     let mut data = [0_i32, 1, 2, 3];
-    let mut view = TypedTensorViewMut::from_slice(&[4], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
     {
         let (mut left, empty) = view
             .try_multi_slice_mut(
@@ -1206,7 +1206,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
     assert_eq!(view.as_physical_slice(), &[0, 10, 2, 3]);
 
     let mut data = [0_i32, 1, 2, 3];
-    let mut view = TypedTensorViewMut::from_slice(&[4], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
     let (empty_left, empty_right) = view
         .try_multi_slice_mut(
             &[StridedSliceSpec::new(0, Some(0), 1)],
@@ -1217,7 +1217,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
     assert_eq!(empty_right.n_elements(), 0);
 
     let mut data = [0_i32, 1, 2, 3, 4, 5];
-    let mut view = TypedTensorViewMut::from_slice(&[6], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([6], [1], 0, &mut data).unwrap();
     {
         let (mut reversed_high, mut low) = view
             .try_multi_slice_mut(
@@ -1232,7 +1232,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
     assert_eq!(view.as_physical_slice(), &[0, 1, 20, 30, 4, 5]);
 
     let mut data = [0_i32, 1, 2, 3, 4, 5];
-    let mut view = TypedTensorViewMut::from_slice(&[6], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([6], [1], 0, &mut data).unwrap();
     assert!(view
         .try_multi_slice_mut(
             &[StridedSliceSpec::new(0, Some(6), 2)],

@@ -276,14 +276,12 @@ fn self_greedy_with_four_operands_chooses_cheapest_pairs() {
     let pairs = optimize_self_greedy_pairs(&subs, &size_dict).unwrap();
     assert_eq!(pairs.len(), 3);
     let mut live: Vec<usize> = (0..4).collect();
-    let mut next = 4;
-    for &(l, r) in &pairs {
+    for (next, &(l, r)) in (4..).zip(pairs.iter()) {
         assert!(l < next);
         assert!(r < next);
         assert_ne!(l, r);
         live.retain(|&x| x != l && x != r);
         live.push(next);
-        next += 1;
     }
     assert_eq!(live.len(), 1);
 }

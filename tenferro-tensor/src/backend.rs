@@ -472,6 +472,8 @@ pub trait SessionCachedDot: TensorDot {
         self.dot_general(lhs, rhs, config)
     }
 
+    // Mirrors the dot-general signature plus runtime-cache metadata.
+    #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     fn dot_general_with_conj_cached(
         &mut self,
@@ -651,6 +653,8 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         self.dot_general(lhs, rhs, config)
     }
 
+    // Mirrors the dot-general signature plus runtime-cache metadata.
+    #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     fn dot_general_with_conj_cached(
         &mut self,

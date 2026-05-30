@@ -155,13 +155,13 @@ fn constant_f64_parses_bytes() {
     let result = exec_op_on_tensors(
         &StdTensorOp::Constant {
             dtype: DType::F64,
-            bytes: 3.14_f64.to_le_bytes().to_vec(),
+            bytes: 3.125_f64.to_le_bytes().to_vec(),
         },
         &[],
         &mut b,
     )
     .unwrap();
-    assert!((data(&result[0])[0] - 3.14).abs() < 1e-12);
+    assert!((data(&result[0])[0] - 3.125).abs() < 1e-12);
 }
 
 #[test]

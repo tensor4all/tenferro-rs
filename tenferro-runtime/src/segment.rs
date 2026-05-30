@@ -225,9 +225,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
                                         output_slots.len()
                                     )));
                                 }
-                                for (slot, tensor) in
-                                    output_slots.iter().copied().zip(outputs.into_iter())
-                                {
+                                for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
                                     slots[slot] = Some(tensor);
                                 }
                                 reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
@@ -392,8 +390,7 @@ fn build_elementwise_fusion_plan(
     }
 
     let mut ops = Vec::with_capacity(instructions.len());
-    let mut next_value = input_slots.len();
-    for inst in instructions {
+    for (next_value, inst) in (input_slots.len()..).zip(instructions.iter()) {
         if inst.dtype != dtype || inst.output_slots.len() != 1 {
             return None;
         }
@@ -405,7 +402,6 @@ fn build_elementwise_fusion_plan(
             .collect::<Option<Vec<_>>>()?;
         ops.push(ElementwiseFusionInst { op, inputs });
         slot_to_value.insert(inst.output_slots[0], next_value);
-        next_value += 1;
     }
 
     let outputs = output_slots

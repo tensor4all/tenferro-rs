@@ -417,10 +417,7 @@ fn gemm_plan_retained_bytes(plan: &GemmPlan) -> usize {
 fn step_plan_retained_bytes(plan: &StepPlan) -> usize {
     plan.diag_a.as_ref().map_or(0, diag_plan_retained_bytes)
         + plan.diag_b.as_ref().map_or(0, diag_plan_retained_bytes)
-        + plan
-            .strict_binary
-            .as_ref()
-            .map_or(0, |plan| size_of_val(plan))
+        + plan.strict_binary.as_ref().map_or(0, size_of_val)
         + gemm_plan_retained_bytes(&plan.gemm)
 }
 

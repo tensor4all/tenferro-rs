@@ -157,7 +157,7 @@ macro_rules! define_kind {
             ///
             /// assert!(PrimitiveOpKind::COUNT > 0);
             /// ```
-            pub const COUNT: usize = <[()]>::len(&[$({ let _ = stringify!($variant); () }),*]);
+            pub const COUNT: usize = [$(PrimitiveOpKind::$variant),*].len();
 
             /// Return this kind's dense catalog index.
             ///

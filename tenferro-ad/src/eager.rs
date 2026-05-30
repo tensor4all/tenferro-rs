@@ -864,7 +864,7 @@ impl EagerTensor {
         let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)
             .map_err(|err| Error::Internal(err.to_string()))?;
         drop(callbacks);
-        self.ctx.store_grads(&cotangents, &mut *backend)?;
+        self.ctx.store_grads(&cotangents, &mut backend)?;
         Ok(cotangents)
     }
 }
@@ -900,7 +900,7 @@ pub(crate) fn record_eager_outputs(
     outputs: &[Arc<Tensor>],
     inputs: &[&EagerTensor],
 ) -> RecordedEagerOutputs {
-    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(*tensor)).collect();
+    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(tensor)).collect();
     let mut key_source = EagerTensorKeySource;
     let traces = tidu::record_eager_op(&mut key_source, op.clone(), &input_values, outputs);
 

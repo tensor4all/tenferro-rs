@@ -15,11 +15,11 @@ thread_local! {
     static EAGER_EINSUM_PROFILE_STATE: RefCell<HashMap<&'static str, EagerEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
     #[cfg(test)]
-    static EAGER_EINSUM_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = RefCell::new(None);
+    static EAGER_EINSUM_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
-    static EAGER_EINSUM_TRACE_ENABLED_OVERRIDE: RefCell<Option<bool>> = RefCell::new(None);
+    static EAGER_EINSUM_TRACE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
-    static EAGER_EINSUM_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = RefCell::new(None);
+    static EAGER_EINSUM_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
 }
 
 pub(super) fn eager_einsum_profile_enabled() -> bool {

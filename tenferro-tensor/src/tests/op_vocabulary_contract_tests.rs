@@ -105,7 +105,8 @@ fn is_current_text_file(relative_path: &Path) -> bool {
 fn files_containing(files: &[(PathBuf, String)], needle: &str) -> Vec<PathBuf> {
     files
         .iter()
-        .filter_map(|(path, contents)| contents.contains(needle).then(|| path.clone()))
+        .filter(|(_, contents)| contents.contains(needle))
+        .map(|(path, _)| path.clone())
         .collect()
 }
 

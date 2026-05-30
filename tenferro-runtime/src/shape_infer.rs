@@ -58,7 +58,7 @@ pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
 pub fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {
     dtypes
         .into_iter()
-        .reduce(|a, b| promote_dtype(a, b))
+        .reduce(promote_dtype)
         .unwrap_or(DType::F64)
 }
 
@@ -664,7 +664,7 @@ fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Vec<DimExpr> {
     (0..rank)
         .map(|axis| {
             let span = config.limits[axis] - config.starts[axis];
-            DimExpr::Const((span + config.strides[axis] - 1) / config.strides[axis])
+            DimExpr::Const(span.div_ceil(config.strides[axis]))
         })
         .collect()
 }

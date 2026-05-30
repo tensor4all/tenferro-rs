@@ -761,7 +761,7 @@ fn grad_dynamic_slice_clamped_start_matches_finite_diff() {
             .sum()
     };
     let expected: Vec<f64> = (0..input_data.len())
-        .map(|idx| finite_diff_scalar(loss, &input_data, idx, 1.0e-6))
+        .map(|idx| finite_diff_scalar(&loss, &input_data, idx, 1.0e-6))
         .collect();
     assert_close_slice(get_f64_data(&grad), &expected);
 }
@@ -850,10 +850,10 @@ fn grad_dynamic_update_slice_matches_finite_diff() {
             .sum()
     };
     let expected_operand: Vec<f64> = (0..operand_data.len())
-        .map(|idx| finite_diff_scalar_lhs(loss_with, &operand_data, &update_data, idx, 1.0e-6))
+        .map(|idx| finite_diff_scalar_lhs(&loss_with, &operand_data, &update_data, idx, 1.0e-6))
         .collect();
     let expected_update: Vec<f64> = (0..update_data.len())
-        .map(|idx| finite_diff_scalar_rhs(loss_with, &operand_data, &update_data, idx, 1.0e-6))
+        .map(|idx| finite_diff_scalar_rhs(&loss_with, &operand_data, &update_data, idx, 1.0e-6))
         .collect();
 
     assert_close_slice(get_f64_data(&grad_operand), &expected_operand);

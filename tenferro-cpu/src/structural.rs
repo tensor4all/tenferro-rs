@@ -613,19 +613,24 @@ where
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("embed_diagonal")),
     };
 
-    for flat in 0..tensor.n_elements() {
+    for (flat, value) in input_data
+        .iter()
+        .copied()
+        .enumerate()
+        .take(tensor.n_elements())
+    {
         flat_to_multi(flat, tensor.shape(), &mut in_idx);
         let diag_val = in_idx[axis_a];
         let mut src_axis = 0usize;
-        for out_axis in 0..out_rank {
+        for (out_axis, out_slot) in out_idx.iter_mut().enumerate().take(out_rank) {
             if out_axis == axis_b {
-                out_idx[out_axis] = diag_val;
+                *out_slot = diag_val;
             } else {
-                out_idx[out_axis] = in_idx[src_axis];
+                *out_slot = in_idx[src_axis];
                 src_axis += 1;
             }
         }
-        *out.get_mut(&out_idx) = input_data[flat];
+        *out.get_mut(&out_idx) = value;
     }
     Ok(out)
 }

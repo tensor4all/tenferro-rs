@@ -27,6 +27,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
 
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run workspace clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tropical extension clippy
+        run: cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings
+
   # test-workspace:
   #   name: cargo test (workspace)
   #   runs-on: ubuntu-latest

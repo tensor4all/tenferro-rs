@@ -539,7 +539,7 @@ fn scalar_row_major_helpers_cover_scalar_and_empty_shapes() {
 
 #[test]
 fn dynamic_tensor_accessors_cover_all_dtype_variants() {
-    let tensors = vec![
+    let tensors = [
         Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
         Tensor::from_vec_col_major(vec![1], vec![3_i32]).unwrap(),

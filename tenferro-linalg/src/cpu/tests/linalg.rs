@@ -81,8 +81,8 @@ fn test_batched_svd() {
 
 #[test]
 fn test_batched_qr() {
-    let a0 = vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0];
-    let a1 = vec![2.0, -1.0, 0.5, 3.0, -0.25, 1.5];
+    let a0 = [1.0, 2.0, 3.0, 4.0, 0.5, -1.0];
+    let a1 = [2.0, -1.0, 0.5, 3.0, -0.25, 1.5];
     let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 2, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
