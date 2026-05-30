@@ -5,6 +5,7 @@ general-purpose tensor workflows.
 
 ## Contents
 
+- [Overview](#overview)
 - [Direct Tensor Execution](#direct-tensor-execution)
 - [If You Know ndarray](#if-you-know-ndarray)
 - [Standard Operation Crates](#standard-operation-crates)
@@ -16,33 +17,40 @@ general-purpose tensor workflows.
   - [Agentic AI Engineering](#agentic-ai-engineering)
   - [Contributions Welcome](#contributions-welcome)
 
-It is inspired by JAX and PyTorch: eager and traced execution, automatic
-differentiation, GPU backends, and extensible operation families. At the same
-time, it is designed to remain usable in lightweight settings. If you only need
-an ndarray-like host tensor data model, `tenferro-tensor-core` provides
-rank/layout metadata and host-only tensor adapters without requiring AD, GPU
-runtimes, linalg backends, or provider linking.
+## Overview
+
+`tenferro` means tensor computation with an iron/Rust flavor: `tensor` +
+`ferro`.
+
+The project aims to provide a Rust-native tensor stack that can support both
+lightweight ndarray-like workflows and differentiable tensor computation. It is
+inspired by JAX and PyTorch: eager and traced execution, automatic
+differentiation, GPU backends, and extensible operation families. Its extension
+model is also influenced by the Julia ecosystem, where operation semantics and
+AD rules can be supplied outside a single monolithic tensor type.
+
+The stack is split so users can choose only the layers they need. If you only
+need a host tensor data model, `tenferro-tensor-core` provides rank/layout
+metadata and host-resident tensors/views without requiring AD, GPU runtimes,
+linalg backends, or provider linking.
 
 Runtime tensors live in `tenferro-tensor` and downstream runtime crates.
 `TypedTensor<T, R = DynRank>` is the fixed-dtype tensor type; it may hold host
 storage or backend-owned storage depending on placement. The dtype-erased
 `Tensor` enum stays dynamic-rank. Owned runtime tensors are compact
 column-major, while arbitrary strides live on `TypedTensorView` and
-`TypedTensorViewMut`. Compact-only operations may canonicalize views within the
-same placement, but tenferro never silently transfers tensor payloads between
-CPU and GPU.
+`TypedTensorViewMut`. Backend-owned buffers, including GPU allocations, are
+represented by `tenferro-tensor` plus backend crates such as `tenferro-gpu`, not
+by `tenferro-tensor-core`. Compact-only operations may canonicalize views within
+the same placement, but tenferro never silently transfers tensor payloads
+between CPU and GPU.
 
 Higher-level crates opt into execution, AD, CUDA, BLAS/LAPACK, and operation
 families explicitly. Standard operation families such as linalg, einsum, and
 FFT live in their own crates.
 
 External crates can add custom tensor operations and AD rules through the
-extension mechanism. This extensibility model is strongly influenced by the
-Julia ecosystem, where operation semantics and AD rules can be supplied outside
-a single monolithic tensor type.
-
-`tenferro` means tensor computation with an iron/Rust flavor: `tensor` +
-`ferro`.
+extension mechanism.
 
 Optional capabilities are selected on the crate that owns the operation family.
 For example, CUDA linalg with extension AD uses concrete backend features rather
