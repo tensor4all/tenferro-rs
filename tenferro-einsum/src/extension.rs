@@ -388,7 +388,7 @@ impl ExtensionAdRule for EinsumAdRule {
                 vjp_inputs,
                 OpMode::Linear {
                     active_mask: std::iter::once(true)
-                        .chain(std::iter::repeat(false).take(n_inputs.saturating_sub(1)))
+                        .chain(std::iter::repeat_n(false, n_inputs.saturating_sub(1)))
                         .collect(),
                 },
             );
@@ -639,10 +639,7 @@ fn hash_value<T: Hash>(value: &T) -> u64 {
 }
 
 #[cfg(feature = "autodiff")]
-fn downcast_ad_op<'a>(
-    op: &'a dyn ExtensionOp,
-    kind: ADRuleKind,
-) -> ADRuleResult<&'a EinsumExtensionOp> {
+fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&EinsumExtensionOp> {
     op.as_any()
         .downcast_ref::<EinsumExtensionOp>()
         .ok_or_else(|| ADRuleError::unsupported("tenferro.einsum.v1 payload type mismatch", kind))
