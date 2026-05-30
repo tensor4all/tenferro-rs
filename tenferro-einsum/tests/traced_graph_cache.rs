@@ -6,7 +6,7 @@ use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{
     eager_tensor::einsum as eager_einsum, einsum, einsum_with, parse_einsum_subscripts,
-    ContractionOptimizerOptions, EinsumOptimize,
+    ContractionOptimizerOptions, ContractionTree, EinsumOptimize,
 };
 use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor};
@@ -297,25 +297,52 @@ fn custom_static_auto_options_do_not_reuse_default_extension_cache_entry() {
 }
 
 #[test]
-fn symbolic_einsum_rejects_non_default_optimizer_strategy() {
+fn concrete_traced_einsum_static_cache_distinguishes_plan_spec() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+    let mut compiler = GraphCompiler::new();
+
+    let _ = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::False,
+    )
+    .unwrap();
+    let after_false = extension_cache_entries(&compiler);
+
+    let _ = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let after_path = extension_cache_entries(&compiler);
+
+    assert!(
+        after_path > after_false,
+        "static plan cache should keep separate entries for different plan specs"
+    );
+}
+
+#[test]
+fn symbolic_einsum_accepts_non_default_optimizer_strategy() {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(&mut compiler, &[&a, &b], "ij,jk->ik", EinsumOptimize::False);
-    let err = match result {
-        Ok(_) => panic!("expected symbolic einsum to reject non-default optimizer strategy"),
-        Err(err) => err,
-    };
 
     assert!(
-        format!("{err}").contains("symbolic einsum supports only default automatic optimization"),
-        "got {err}"
+        result.is_ok(),
+        "symbolic einsum should carry per-op plan spec"
     );
 }
 
 #[test]
-fn symbolic_einsum_rejects_custom_auto_options() {
+fn symbolic_einsum_accepts_custom_auto_options() {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
@@ -325,19 +352,63 @@ fn symbolic_einsum_rejects_custom_auto_options() {
         &[&a, &b],
         "ij,jk->ik",
         EinsumOptimize::Auto(ContractionOptimizerOptions {
-            ntrials: 0,
+            ntrials: 2,
             ..Default::default()
         }),
     );
+
+    assert!(
+        result.is_ok(),
+        "symbolic einsum should retain custom Auto options"
+    );
+}
+
+#[test]
+fn symbolic_einsum_rejects_precomputed_tree() {
+    let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk->ik").unwrap();
+    let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..]]).unwrap();
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+
+    let result = einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ij,jk->ik",
+        EinsumOptimize::Tree(tree),
+    );
     let err = match result {
-        Ok(_) => panic!("expected symbolic einsum to reject custom Auto options"),
+        Ok(_) => panic!("symbolic Tree should be rejected"),
         Err(err) => err,
     };
 
     assert!(
-        format!("{err}").contains("symbolic einsum supports only default automatic optimization"),
+        format!("{err}").contains("precomputed contraction tree requires concrete input shapes"),
         "got {err}"
     );
+}
+
+#[test]
+fn symbolic_einsum_rejects_nan_auto_options() {
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+
+    let result = einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ij,jk->ik",
+        EinsumOptimize::Auto(ContractionOptimizerOptions {
+            betas: vec![f64::NAN],
+            ..Default::default()
+        }),
+    );
+    let err = match result {
+        Ok(_) => panic!("NaN options should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(format!("{err}").contains("NaN"), "got {err}");
 }
 
 #[test]

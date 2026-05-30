@@ -14,7 +14,8 @@ use crate::cache::{
 use crate::extension::ensure_einsum_extension_rule_registered;
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{
-    default_auto_options, is_default_auto_options, resolve_einsum_strategy, EinsumPlanSpec,
+    hash_einsum_plan_spec, plan_spec_from_optimize, resolve_einsum_strategy_with_spec,
+    resolve_plan_spec, EinsumPlanSpec,
 };
 use crate::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
@@ -74,29 +75,52 @@ pub fn einsum_subscripts_with(
     }
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
-    let mut op = EinsumExtensionOp::with_output_shape_hint(
-        subscripts.clone(),
-        output_shape_hint,
-        EinsumPlanSpec::Auto(default_auto_options()),
-    );
+    let subs = Subscripts::from(subscripts);
 
-    if let Some(shapes) = concrete_shapes(inputs) {
+    let (plan_spec, static_tree) = if let Some(shapes) = concrete_shapes(inputs) {
         let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-        let subs = Subscripts::from(subscripts);
-        let tree = match optimize {
-            EinsumOptimize::Auto(opts) if is_default_auto_options(&opts) => {
-                let key = (subscripts.clone(), shapes.clone());
-                cached_static_tree(compiler.extension_caches_mut(), &key, || {
-                    resolve_einsum_strategy(EinsumOptimize::Auto(opts), &subs, &shape_refs)
-                })?
+        let (plan_spec, tree) = match optimize {
+            EinsumOptimize::Tree(tree) => {
+                let (plan_spec, tree) = resolve_einsum_strategy_with_spec(
+                    EinsumOptimize::Tree(tree),
+                    &subs,
+                    &shape_refs,
+                )
+                .map_err(to_tenferro_error)?;
+                let tree = cached_static_tree(
+                    compiler.extension_caches_mut(),
+                    subscripts,
+                    &plan_spec,
+                    &shapes,
+                    || Ok(tree),
+                )?;
+                (plan_spec, tree)
             }
-            optimize => Arc::new(
-                resolve_einsum_strategy(optimize, &subs, &shape_refs).map_err(to_tenferro_error)?,
-            ),
+            optimize => {
+                let plan_spec =
+                    plan_spec_from_optimize(optimize, &subs).map_err(to_tenferro_error)?;
+                let tree = cached_static_tree(
+                    compiler.extension_caches_mut(),
+                    subscripts,
+                    &plan_spec,
+                    &shapes,
+                    || resolve_plan_spec(&plan_spec, &subs, &shape_refs),
+                )?;
+                (plan_spec, tree)
+            }
         };
-        op = op.with_static_tree_hint(tree);
+        (plan_spec, Some(tree))
     } else {
-        validate_symbolic_optimize(&optimize)?;
+        (
+            plan_spec_from_optimize(optimize, &subs).map_err(to_tenferro_error)?,
+            None,
+        )
+    };
+
+    let mut op =
+        EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec);
+    if let Some(tree) = static_tree {
+        op = op.with_static_tree_hint(tree);
     }
 
     let outputs = extension::apply(Arc::new(op), inputs);
@@ -129,37 +153,33 @@ fn cached_subscripts(
 
 fn cached_static_tree(
     caches: &mut ExtensionCacheStore,
-    key_data: &(EinsumSubscripts, Vec<Vec<usize>>),
+    subscripts: &EinsumSubscripts,
+    plan_spec: &EinsumPlanSpec,
+    shapes: &[Vec<usize>],
     build: impl FnOnce() -> EinsumResult<ContractionTree>,
 ) -> Result<Arc<ContractionTree>> {
+    let mut plan_hasher = DefaultHasher::new();
+    hash_einsum_plan_spec(plan_spec, &mut plan_hasher);
+    let key_data = (subscripts.clone(), shapes.to_vec(), plan_hasher.finish());
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_STATIC_PLANS_CACHE,
-        hash_value(key_data),
+        hash_value(&key_data),
     );
     if let Some(cached) = caches.get::<Arc<ContractionTree>>(&key) {
         return Ok(Arc::clone(cached));
     }
 
     let tree = Arc::new(build().map_err(to_tenferro_error)?);
-    let retained_bytes = einsum_subscripts_retained_bytes(&key_data.0)
-        + key_data
-            .1
+    let retained_bytes = einsum_subscripts_retained_bytes(subscripts)
+        + shapes
             .iter()
             .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
             .sum::<usize>()
+        + std::mem::size_of::<u64>()
         + tree.retained_bytes_for_cache_stats();
     caches.put(key, Arc::clone(&tree), retained_bytes);
     Ok(tree)
-}
-
-fn validate_symbolic_optimize(optimize: &EinsumOptimize) -> Result<()> {
-    match optimize {
-        EinsumOptimize::Auto(opts) if is_default_auto_options(opts) => Ok(()),
-        _ => Err(Error::ContractionError(
-            "symbolic einsum supports only default automatic optimization".into(),
-        )),
-    }
 }
 
 fn concrete_shapes(inputs: &[&TracedTensor]) -> Option<Vec<Vec<usize>>> {
