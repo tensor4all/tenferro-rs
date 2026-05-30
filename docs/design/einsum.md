@@ -56,10 +56,14 @@ assert_eq!(result.shape(), &[2, 2]);
 | `Auto(ContractionOptimizerOptions)` | TreeSA/omeco path optimization with configured score |
 | `False` | left-to-right contraction |
 | `Nested(NestedEinsum)` | explicit parenthesized contraction tree |
-| `Path(Vec<(usize, usize)>)` | JAX-compatible shrinking-list path |
-| `Tree(ContractionTree)` | precomputed tree |
+| `Path(Vec<(usize, usize)>)` | JAX-compatible shrinking-list path; shape-independent and valid for symbolic traced inputs |
+| `Tree(ContractionTree)` | concrete/precomputed tree; accepted only when concrete shapes are available |
 
 `EinsumOptimize::default()` is time-optimized automatic planning.
+The traced API stores the resolved planning policy as a shape-independent plan
+specification in the extension payload. `Path` pairs remain positional over the
+current shrinking operand list; `Tree` values are converted to fixed
+contraction pairs when accepted for concrete inputs.
 
 ## Eager Tensor API
 
@@ -122,9 +126,12 @@ The traced extension API chooses the lowering mode from input shape availability
 | Any symbolic shape | emit one einsum extension op | optimize from actual input shapes at runtime |
 
 `tenferro_einsum` caches concrete-shape contraction trees in the extension
-cache. Runtime contraction trees are keyed by `(subscripts, input shapes)` so
-repeated symbolic-shape runs with the same concrete shapes amortize planning
-cost.
+cache. Runtime contraction trees are keyed by subscripts, input shapes, and the
+resolved planning policy or explicit path so repeated symbolic-shape runs with
+the same concrete shapes and policy amortize planning cost without conflating
+different optimizer settings. The same plan specification participates in
+traced extension payload identity, so otherwise identical ops that use
+different planner options or paths remain distinct extension ops.
 
 ## Planning
 
@@ -178,6 +185,11 @@ Current GPU status:
 Graph-level AD rules for einsum live in `tenferro-einsum` and are registered as
 extension AD rules. Primitive operations emitted by lowering still use the core
 AD rules from `tenferro-internal-ops/src/ad/`.
+
+VJP construction preserves the primal planning policy. For explicit
+`EinsumOptimize::Path` payloads, the AD rule remaps the positional path to the
+VJP operand list so the gradient contraction inherits the caller's selected
+order where that order is still meaningful.
 
 ## Tests
 

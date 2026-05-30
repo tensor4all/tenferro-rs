@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use omeco::ScoreFunction;
 
 use crate::{
@@ -6,9 +8,38 @@ use crate::{
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
-/// This is the runtime-independent strategy enum from the current traced
-/// implementation. Frontends can resolve it to a [`ContractionTree`] once
-/// concrete input shapes are available.
+/// The traced API resolves this enum into a shape-independent plan
+/// specification and stores that specification in the einsum extension
+/// payload. Concrete traced inputs can resolve a [`ContractionTree`] while the
+/// op is built; symbolic traced inputs carry the plan specification until the
+/// extension runtime sees concrete execution shapes.
+///
+/// Planner options and explicit paths are part of the extension payload
+/// identity. Two otherwise identical traced einsum ops with different
+/// optimizer options, explicit paths, or fixed plan identities are not treated
+/// as the same extension op, and their compile/runtime plan cache entries are
+/// kept separate.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::EinsumOptimize;
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+///
+/// let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+///
+/// let mut compiler = GraphCompiler::new();
+/// let out = tenferro_einsum::traced_tensor::einsum_with(
+///     &mut compiler,
+///     &[&lhs, &rhs],
+///     "ij,jk->ik",
+///     EinsumOptimize::False,
+/// )
+/// .unwrap();
+///
+/// assert_eq!(out.try_concrete_shape(), Some(vec![2, 2]));
+/// ```
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),
@@ -20,78 +51,227 @@ pub enum EinsumOptimize {
     ///
     /// Each pair references positions in a shrinking operand list. After each
     /// contraction, the two operands are removed and the result is appended.
+    /// Because this representation is independent of concrete dimension
+    /// values, it can be used with symbolic traced inputs.
     Path(Vec<(usize, usize)>),
     /// Pre-computed contraction tree.
+    ///
+    /// A tree contains concrete shape-dependent planning results. It is
+    /// accepted when shapes are concrete, then converted into fixed contraction
+    /// pairs for the extension payload. Use [`EinsumOptimize::Path`] instead
+    /// when building a traced graph from symbolic inputs.
     Tree(ContractionTree),
 }
 
 impl Default for EinsumOptimize {
-    /// Default: FLOPS-first automatic optimization.
+    /// Default: time-optimized automatic planning.
     fn default() -> Self {
-        Self::Auto(ContractionOptimizerOptions {
-            score: ScoreFunction::time_optimized(),
-            ..Default::default()
-        })
+        Self::Auto(default_auto_options())
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum EinsumPlanSpec {
+    Auto(ContractionOptimizerOptions),
+    LeftToRight,
+    Path(Vec<(usize, usize)>),
+    FixedPairs(Vec<(usize, usize)>),
 }
 
 /// Return the default automatic optimizer options.
 #[must_use]
 pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
-    match EinsumOptimize::default() {
-        EinsumOptimize::Auto(options) => options,
-        _ => unreachable!("EinsumOptimize::default must be automatic optimization"),
+    ContractionOptimizerOptions {
+        score: ScoreFunction::time_optimized(),
+        ..Default::default()
     }
 }
 
-/// Compare optimizer options with the default policy using bitwise float
-/// equality.
-#[must_use]
-pub(crate) fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
-    let default = default_auto_options();
-    options.ntrials == default.ntrials
-        && options.niters == default.niters
-        && f64_slices_equal_by_bits(&options.betas, &default.betas)
-        && score_functions_equal_by_bits(&options.score, &default.score)
+pub(crate) fn plan_spec_from_optimize(
+    optimize: EinsumOptimize,
+    subscripts: &Subscripts,
+) -> Result<EinsumPlanSpec> {
+    match optimize {
+        EinsumOptimize::Auto(options) => {
+            options.validate()?;
+            Ok(EinsumPlanSpec::Auto(options))
+        }
+        EinsumOptimize::False => Ok(EinsumPlanSpec::LeftToRight),
+        EinsumOptimize::Nested(nested) => {
+            let pairs = nested_to_v1_pairs(&nested, subscripts.inputs.len())?;
+            validate_fixed_pairs(&pairs, subscripts.inputs.len())?;
+            Ok(EinsumPlanSpec::FixedPairs(pairs))
+        }
+        EinsumOptimize::Path(path) => {
+            let _ = jax_path_to_v1_pairs(&path, subscripts.inputs.len())?;
+            Ok(EinsumPlanSpec::Path(path))
+        }
+        EinsumOptimize::Tree(_) => Err(Error::InvalidArgument(
+            "precomputed contraction tree requires concrete input shapes; use Path or parenthesized notation for symbolic traced einsum"
+                .into(),
+        )),
+    }
 }
 
-/// Resolve an [`EinsumOptimize`] strategy to a concrete contraction tree.
-///
-/// # Errors
-///
-/// Returns an error if subscripts and shapes are inconsistent or if an
-/// explicit path references invalid operands.
-pub(crate) fn resolve_einsum_strategy(
+pub(crate) fn resolve_einsum_strategy_with_spec(
     optimize: EinsumOptimize,
     subscripts: &Subscripts,
     shapes: &[&[usize]],
-) -> Result<ContractionTree> {
+) -> Result<(EinsumPlanSpec, ContractionTree)> {
     match optimize {
-        EinsumOptimize::Auto(opts) => {
-            ContractionTree::optimize_with_options(subscripts, shapes, &opts)
+        EinsumOptimize::Tree(tree) => {
+            let pairs = tree_pairs(&tree);
+            let spec = EinsumPlanSpec::FixedPairs(pairs);
+            let tree = resolve_plan_spec(&spec, subscripts, shapes)?;
+            Ok((spec, tree))
         }
-        EinsumOptimize::False => {
+        optimize => {
+            let spec = plan_spec_from_optimize(optimize, subscripts)?;
+            let tree = resolve_plan_spec(&spec, subscripts, shapes)?;
+            Ok((spec, tree))
+        }
+    }
+}
+
+pub(crate) fn resolve_plan_spec(
+    spec: &EinsumPlanSpec,
+    subscripts: &Subscripts,
+    shapes: &[&[usize]],
+) -> Result<ContractionTree> {
+    match spec {
+        EinsumPlanSpec::Auto(options) => {
+            ContractionTree::optimize_with_options(subscripts, shapes, options)
+        }
+        EinsumPlanSpec::LeftToRight => {
             let n = subscripts.inputs.len();
             if n <= 1 {
                 ContractionTree::from_pairs(subscripts, shapes, &[])
             } else {
-                let jax_path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
-                let v1_pairs = jax_path_to_v1_pairs(&jax_path, n)?;
-                ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
+                let path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
+                let pairs = jax_path_to_v1_pairs(&path, n)?;
+                ContractionTree::from_pairs(subscripts, shapes, &pairs)
             }
         }
-        EinsumOptimize::Nested(nested) => {
-            let n = subscripts.inputs.len();
-            let v1_pairs = nested_to_v1_pairs(&nested, n)?;
-            ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
+        EinsumPlanSpec::Path(path) => {
+            let pairs = jax_path_to_v1_pairs(path, subscripts.inputs.len())?;
+            ContractionTree::from_pairs(subscripts, shapes, &pairs)
         }
-        EinsumOptimize::Path(jax_path) => {
-            let n = subscripts.inputs.len();
-            let v1_pairs = jax_path_to_v1_pairs(&jax_path, n)?;
-            ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
-        }
-        EinsumOptimize::Tree(tree) => Ok(tree),
+        EinsumPlanSpec::FixedPairs(pairs) => ContractionTree::from_pairs(subscripts, shapes, pairs),
     }
+}
+
+pub(crate) fn hash_einsum_plan_spec(spec: &EinsumPlanSpec, state: &mut dyn Hasher) {
+    match spec {
+        EinsumPlanSpec::Auto(options) => {
+            state.write_u8(0);
+            hash_optimizer_options(options, state);
+        }
+        EinsumPlanSpec::LeftToRight => state.write_u8(1),
+        EinsumPlanSpec::Path(path) => {
+            state.write_u8(2);
+            hash_pairs(path, state);
+        }
+        EinsumPlanSpec::FixedPairs(pairs) => {
+            state.write_u8(3);
+            hash_pairs(pairs, state);
+        }
+    }
+}
+
+pub(crate) fn plan_specs_equal(lhs: &EinsumPlanSpec, rhs: &EinsumPlanSpec) -> bool {
+    match (lhs, rhs) {
+        (EinsumPlanSpec::Auto(lhs), EinsumPlanSpec::Auto(rhs)) => {
+            optimizer_options_equal_by_bits(lhs, rhs)
+        }
+        (EinsumPlanSpec::LeftToRight, EinsumPlanSpec::LeftToRight) => true,
+        (EinsumPlanSpec::Path(lhs), EinsumPlanSpec::Path(rhs)) => lhs == rhs,
+        (EinsumPlanSpec::FixedPairs(lhs), EinsumPlanSpec::FixedPairs(rhs)) => lhs == rhs,
+        _ => false,
+    }
+}
+
+fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
+    (0..tree.step_count())
+        .filter_map(|step| tree.step_pair(step))
+        .collect()
+}
+
+fn validate_fixed_pairs(pairs: &[(usize, usize)], n_inputs: usize) -> Result<()> {
+    let required_steps = n_inputs.saturating_sub(1);
+    if pairs.len() != required_steps {
+        return Err(Error::InvalidArgument(format!(
+            "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+            pairs.len()
+        )));
+    }
+
+    let mut live = vec![false; n_inputs + pairs.len()];
+    for slot in live.iter_mut().take(n_inputs) {
+        *slot = true;
+    }
+
+    for (step_idx, &(left, right)) in pairs.iter().enumerate() {
+        let next_idx = n_inputs + step_idx;
+        if left == right {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) must reference two distinct live operands"
+            )));
+        }
+        if left >= next_idx || right >= next_idx {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) references non-existent operand"
+            )));
+        }
+        if !live[left] || !live[right] {
+            return Err(Error::InvalidArgument(format!(
+                "pair ({left}, {right}) references an operand or intermediate that is no longer live"
+            )));
+        }
+
+        live[left] = false;
+        live[right] = false;
+        live[next_idx] = true;
+    }
+
+    let live_count = live.iter().filter(|&&is_live| is_live).count();
+    if live_count != 1 {
+        return Err(Error::InvalidArgument(format!(
+            "explicit contraction path must leave exactly one live result, got {live_count}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn hash_pairs(pairs: &[(usize, usize)], state: &mut dyn Hasher) {
+    state.write_usize(pairs.len());
+    for &(left, right) in pairs {
+        state.write_usize(left);
+        state.write_usize(right);
+    }
+}
+
+fn hash_optimizer_options(options: &ContractionOptimizerOptions, state: &mut dyn Hasher) {
+    state.write_usize(options.ntrials);
+    state.write_usize(options.niters);
+    state.write_usize(options.betas.len());
+    for value in &options.betas {
+        state.write_u64(value.to_bits());
+    }
+    state.write_u64(options.score.tc_weight.to_bits());
+    state.write_u64(options.score.sc_weight.to_bits());
+    state.write_u64(options.score.rw_weight.to_bits());
+    state.write_u64(options.score.sc_target.to_bits());
+}
+
+fn optimizer_options_equal_by_bits(
+    lhs: &ContractionOptimizerOptions,
+    rhs: &ContractionOptimizerOptions,
+) -> bool {
+    lhs.ntrials == rhs.ntrials
+        && lhs.niters == rhs.niters
+        && f64_slices_equal_by_bits(&lhs.betas, &rhs.betas)
+        && score_functions_equal_by_bits(&lhs.score, &rhs.score)
 }
 
 /// Convert JAX-style position-based path to fixed-ID pairs.

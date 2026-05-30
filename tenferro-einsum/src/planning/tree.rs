@@ -55,10 +55,24 @@ impl ContractionOptimizerOptions {
         )
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.ntrials == 0 {
             return Err(Error::InvalidArgument(
                 "contraction optimizer ntrials must be at least 1".into(),
+            ));
+        }
+        if self.betas.iter().any(|value| value.is_nan()) {
+            return Err(Error::InvalidArgument(
+                "contraction optimizer betas must not contain NaN".into(),
+            ));
+        }
+        if self.score.tc_weight.is_nan()
+            || self.score.sc_weight.is_nan()
+            || self.score.rw_weight.is_nan()
+            || self.score.sc_target.is_nan()
+        {
+            return Err(Error::InvalidArgument(
+                "contraction optimizer score fields must not contain NaN".into(),
             ));
         }
         Ok(())
@@ -122,12 +136,12 @@ impl ContractionTree {
         shapes: &[&[usize]],
         options: &ContractionOptimizerOptions,
     ) -> Result<Self> {
+        options.validate()?;
         let n_inputs = subscripts.inputs.len();
         if n_inputs <= 1 {
             return Self::from_pairs(subscripts, shapes, &[]);
         }
 
-        options.validate()?;
         let size_dict = build_size_dict(subscripts, shapes, None)?;
         let pairs =
             if let Some(omeco_pairs) = optimize_omeco_pairs(subscripts, &size_dict, options)? {

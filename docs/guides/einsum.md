@@ -90,6 +90,15 @@ The public optimizer surface is limited to the types needed to express that
 choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.
 
+`EinsumOptimize::Path` accepts a JAX-style positional path over the current
+operand list. After each contraction the referenced operands are removed and
+the result is appended, so `[(1, 2), (0, 1)]` for `ij,jk,kl->il` contracts the
+last two operands first and then contracts that result with the first operand.
+This path is shape-independent and can be used with symbolic traced inputs.
+`EinsumOptimize::Tree` is for concrete or precomputed `ContractionTree` values;
+it requires concrete shapes and is converted to fixed contraction pairs when a
+concrete traced op is built.
+
 ```rust
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_einsum::EinsumOptimize;
@@ -105,7 +114,7 @@ let c = tenferro_einsum::traced_tensor::einsum_with(
     EinsumOptimize::False,
 ).unwrap();
 
-assert_eq!(c.shape, vec![2, 2]);
+assert_eq!(c.try_concrete_shape(), Some(vec![2, 2]));
 ```
 
 ## Cache Management
@@ -113,7 +122,18 @@ assert_eq!(c.shape, vec![2, 2]);
 Einsum uses the shared extension cache infrastructure from `tenferro-runtime`.
 Compile-time extension caches live on `GraphCompiler`; runtime
 contraction-plan caches live on `GraphExecutor` and `EagerRuntime`.
+Einsum plan cache identity includes the planning policy or explicit path, not
+only the subscripts and shapes. Traced extension payload identity also includes
+those planner options and paths, so two calls with different policies are not
+treated as identical extension ops.
 
 Use `tenferro_einsum::EINSUM_EXTENSION_FAMILY_ID` with
 `ExtensionCacheSelector` when you need to inspect or clear only einsum cache
 entries.
+
+## Autodiff
+
+With the `autodiff` feature, einsum VJP rules preserve the primal planning
+policy. Explicit positional paths are remapped to the VJP operand order so the
+gradient contraction inherits the caller's intended plan instead of falling
+back to an unrelated default.
