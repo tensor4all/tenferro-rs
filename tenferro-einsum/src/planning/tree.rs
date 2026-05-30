@@ -136,12 +136,12 @@ impl ContractionTree {
         shapes: &[&[usize]],
         options: &ContractionOptimizerOptions,
     ) -> Result<Self> {
+        options.validate()?;
         let n_inputs = subscripts.inputs.len();
         if n_inputs <= 1 {
             return Self::from_pairs(subscripts, shapes, &[]);
         }
 
-        options.validate()?;
         let size_dict = build_size_dict(subscripts, shapes, None)?;
         let pairs =
             if let Some(omeco_pairs) = optimize_omeco_pairs(subscripts, &size_dict, options)? {

@@ -126,16 +126,66 @@ fn optimizer_options_reject_nan_betas() {
 fn optimizer_options_reject_nan_score_fields() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
+    let cases = [
+        (
+            "tc_weight",
+            ScoreFunction::new(f64::NAN, 1.0, 0.0, f64::INFINITY),
+        ),
+        (
+            "sc_weight",
+            ScoreFunction::new(1.0, f64::NAN, 0.0, f64::INFINITY),
+        ),
+        (
+            "rw_weight",
+            ScoreFunction::new(1.0, 1.0, f64::NAN, f64::INFINITY),
+        ),
+        ("sc_target", ScoreFunction::new(1.0, 1.0, 0.0, f64::NAN)),
+    ];
+
+    for (field, score) in cases {
+        let options = ContractionOptimizerOptions {
+            score,
+            ..ContractionOptimizerOptions::default()
+        };
+
+        let err = match ContractionTree::optimize_with_options(&subs, &shapes, &options) {
+            Ok(_) => panic!("expected NaN score field {field} to be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, Error::InvalidArgument(message) if message.contains("NaN")),
+            "expected InvalidArgument mentioning NaN for {field}"
+        );
+    }
+}
+
+#[test]
+fn single_operand_optimize_with_options_rejects_invalid_options() {
+    let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
+    let shapes = [&[2, 3][..]];
     let options = ContractionOptimizerOptions {
-        score: ScoreFunction::new(1.0, f64::NAN, 0.0, f64::INFINITY),
+        ntrials: 0,
         ..ContractionOptimizerOptions::default()
     };
 
     let err = match ContractionTree::optimize_with_options(&subs, &shapes, &options) {
-        Ok(_) => panic!("expected NaN score fields to be rejected"),
+        Ok(_) => panic!("expected invalid single-operand options to be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("NaN")));
+    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("ntrials")));
+}
+
+#[test]
+fn optimizer_options_permit_infinite_betas() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let options = ContractionOptimizerOptions {
+        betas: vec![f64::INFINITY],
+        ..ContractionOptimizerOptions::default()
+    };
+
+    let tree = ContractionTree::optimize_with_options(&subs, &shapes, &options).unwrap();
+    assert_eq!(tree.step_count(), 1);
 }
 
 #[test]
