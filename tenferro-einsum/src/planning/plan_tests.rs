@@ -1,11 +1,12 @@
 use crate::syntax::subscripts::Subscripts;
+use crate::{Error, Result as EinsumResult};
 
 use super::{compile_pairwise_step_plan, compile_strict_binary_lowering_step_plan};
 
 fn compile_strict_step_plan(
     subs: &Subscripts,
     shapes: &[&[usize]],
-) -> tenferro_device::Result<Option<super::StrictBinaryLoweringPlan>> {
+) -> EinsumResult<Option<super::StrictBinaryLoweringPlan>> {
     let size_dict = crate::util::build_size_dict(subs, shapes, None)?;
     compile_strict_binary_lowering_step_plan(
         &subs.inputs[0],
@@ -89,7 +90,7 @@ fn pairwise_step_plan_preserves_strict_lowering_error_type() {
 
     assert!(matches!(
         err,
-        tenferro_device::Error::InvalidArgument(message)
+        Error::InvalidArgument(message)
             if message.contains("unknown size")
     ));
 }

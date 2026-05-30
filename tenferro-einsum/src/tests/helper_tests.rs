@@ -1,7 +1,6 @@
-use tenferro_device::Error;
-
 use crate::planning::classify::classify_modes;
 use crate::syntax::notation::{char_to_label, split_and_validate_notation};
+use crate::Error;
 
 #[test]
 fn classify_modes_preserves_input_order_and_deduplicates_labels() {

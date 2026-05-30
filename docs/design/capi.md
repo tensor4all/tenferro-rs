@@ -16,8 +16,8 @@ Layer 3: tenferro-internal-ops
 Layer 2: tenferro-tensor
 ```
 
-Dependencies: `tenferro-internal-device`, `tenferro-tensor`, `tenferro-einsum`,
-`tenferro-linalg`.
+Dependencies: `tenferro-tensor`, `tenferro-einsum`, `tenferro-linalg`, and
+the runtime/backend crates required by those APIs.
 
 Tropical extension: `tenferro-ext-tropical-capi` (separate shared library)
 reuses `TfeTensorF64` handles and adds tropical einsum functions.
@@ -279,13 +279,17 @@ consistent across CPU and GPU backends.
 
 | Rust Error | `tfe_status_t` | Notes |
 |-----------|---------------|-------|
-| `tenferro_device::Error::InvalidArgument` | `TFE_INVALID_ARGUMENT` (-1) | |
-| `tenferro_device::Error::ShapeMismatch` | `TFE_SHAPE_MISMATCH` (-2) | |
-| `tenferro_device::Error::RankMismatch` | `TFE_SHAPE_MISMATCH` (-2) | Shape/rank grouped |
-| `tenferro_device::Error::DeviceError` | `TFE_INTERNAL_ERROR` (-3) | |
-| `tenferro_device::Error::NoCompatibleComputeDevice` | `TFE_INTERNAL_ERROR` (-3) | |
-| `tenferro_device::Error::CrossMemorySpaceOperation` | `TFE_INVALID_ARGUMENT` (-1) | |
-| `tenferro_device::Error::StrideError` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::InvalidConfig` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::ShapeMismatch` | `TFE_SHAPE_MISMATCH` (-2) | |
+| `tenferro_tensor::Error::RankMismatch` | `TFE_SHAPE_MISMATCH` (-2) | Shape/rank grouped |
+| `tenferro_tensor::Error::DTypeMismatch` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::AxisOutOfBounds` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::DuplicateAxis` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::AxisRoleConflict` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_tensor::Error::BackendFailure` | `TFE_INTERNAL_ERROR` (-3) | |
+| `tenferro_tensor::Error::MissingValue` | `TFE_INTERNAL_ERROR` (-3) | |
+| `tenferro_einsum::Error::InvalidArgument` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_einsum::Error::ShapeMismatch` | `TFE_SHAPE_MISMATCH` (-2) | |
 | `chainrules_core::AutodiffError::ModeNotSupported` | `TFE_INVALID_ARGUMENT` (-1) | Tropical frule/hvp |
 | `chainrules_core::AutodiffError::*` (other) | `TFE_INTERNAL_ERROR` (-3) | |
 | Rust panic (caught by `catch_unwind`) | `TFE_INTERNAL_ERROR` (-3) | |

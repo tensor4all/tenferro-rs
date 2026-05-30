@@ -1,4 +1,4 @@
-use tenferro_device::{Error, Result};
+use crate::{Error, Result};
 
 /// Reserved characters that cannot be used as einsum labels.
 const RESERVED_CHARS: &[char] = &[',', '-', '>', '(', ')', ' '];

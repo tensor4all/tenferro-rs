@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
-use tenferro_device::{Error, Result as DeviceResult};
-
 use crate::util::compute_output_shape;
+use crate::{Error, Result as EinsumResult};
 
 /// Narrow lowering plan for the bridge-equivalent binary GEMM path.
 #[derive(Debug, PartialEq, Eq)]
@@ -44,7 +43,7 @@ fn compile_strict_binary_lowering_plan_from_parts(
     lhs_dims: &[usize],
     rhs_dims: &[usize],
     size_dict: &HashMap<u32, usize>,
-) -> DeviceResult<Option<StrictBinaryLoweringPlan>> {
+) -> EinsumResult<Option<StrictBinaryLoweringPlan>> {
     let output_shape = compute_output_shape(out_labels, size_dict)?;
 
     let Some(lhs_positions) = positions_if_unique(lhs_labels) else {
@@ -154,7 +153,7 @@ fn compile_strict_binary_lowering_plan_from_parts(
                     Error::InvalidArgument(format!("strict lowering: missing output label {label}"))
                 })
         })
-        .collect::<DeviceResult<_>>()?;
+        .collect::<EinsumResult<_>>()?;
 
     Ok(Some(StrictBinaryLoweringPlan {
         size_dict: size_dict.clone(),
@@ -179,8 +178,8 @@ pub(crate) fn compile_strict_binary_lowering_step_plan(
     subs_b: &[u32],
     subs_c: &[u32],
     size_dict: &HashMap<u32, usize>,
-) -> DeviceResult<Option<StrictBinaryLoweringPlan>> {
-    let shape_from_subs = |subs: &[u32]| -> DeviceResult<Vec<usize>> {
+) -> EinsumResult<Option<StrictBinaryLoweringPlan>> {
+    let shape_from_subs = |subs: &[u32]| -> EinsumResult<Vec<usize>> {
         subs.iter()
             .map(|label| {
                 size_dict.get(label).copied().ok_or_else(|| {

@@ -7,6 +7,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use crate::builder::build_einsum_fragment;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
+use crate::{Error, Result};
 
 fn input_key(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -17,7 +18,7 @@ fn make_tree(notation: &str, shapes: &[&[usize]]) -> ContractionTree {
     ContractionTree::optimize(&subscripts, shapes).expect("optimize failed")
 }
 
-fn unwrap_local(result: tenferro_device::Result<ValRef<StdTensorOp>>) -> usize {
+fn unwrap_local(result: Result<ValRef<StdTensorOp>>) -> usize {
     match result.expect("builder should succeed") {
         ValRef::Local(id) => id,
         ValRef::External(_) => panic!("expected local"),
@@ -36,7 +37,7 @@ fn builder_reports_missing_output_label_instead_of_panicking() {
 
     assert!(matches!(
         err,
-        tenferro_device::Error::InvalidArgument(message)
+        Error::InvalidArgument(message)
             if message.contains("missing") && message.contains("label")
     ));
 }

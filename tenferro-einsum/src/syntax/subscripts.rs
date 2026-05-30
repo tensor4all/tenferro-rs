@@ -1,6 +1,5 @@
-use tenferro_device::{Error, Result};
-
 use crate::syntax::notation::{char_to_label, split_and_validate_notation};
+use crate::{Error, Result};
 
 /// Einsum subscripts using integer labels (omeinsum-rs compatible).
 ///

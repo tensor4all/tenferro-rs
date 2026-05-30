@@ -1,6 +1,5 @@
-use tenferro_device::Error;
-
 use super::Subscripts;
+use crate::Error;
 
 #[test]
 fn parse_rejects_parenthesized_order_without_discarding_it() {

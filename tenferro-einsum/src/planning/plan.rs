@@ -5,7 +5,7 @@ pub(crate) use crate::planning::strict_binary::{
     compile_strict_binary_lowering_step_plan, StrictBinaryLoweringPlan,
 };
 use crate::planning::tree::ContractionTree;
-use tenferro_device::Result as DeviceResult;
+use crate::Result as EinsumResult;
 
 /// Pre-computed information for reducing axes unique to one operand.
 #[derive(Debug, PartialEq, Eq)]
@@ -244,7 +244,7 @@ pub(crate) fn compile_pairwise_step_plan(
     subs_b: &[u32],
     subs_c: &[u32],
     size_dict: &HashMap<u32, usize>,
-) -> DeviceResult<StepPlan> {
+) -> EinsumResult<StepPlan> {
     // 1. Diagonal extraction for repeated labels
     let diag_a = compute_diag_plan(subs_a);
     let diag_b = compute_diag_plan(subs_b);
@@ -373,7 +373,7 @@ fn product_or_one_for_empty(sizes: &[usize]) -> usize {
 ///   1. Diagonal extraction (if repeated labels in operand)
 ///   2. Pre-reduction (if unique-only axes)
 ///   3. GEMM (always, after steps 1-2 make all labels unique)
-pub(crate) fn compile_step_plans(tree: &ContractionTree) -> DeviceResult<Vec<StepPlan>> {
+pub(crate) fn compile_step_plans(tree: &ContractionTree) -> EinsumResult<Vec<StepPlan>> {
     let n_inputs = tree.subscripts.inputs.len();
     let size_dict = &tree.size_dict;
 

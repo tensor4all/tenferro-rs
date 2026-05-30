@@ -1,6 +1,4 @@
-use tenferro_device::{Error, Result};
-
-use crate::Subscripts;
+use crate::{Error, Result, Subscripts};
 
 /// Canonical N-ary einsum subscripts using integer labels.
 ///

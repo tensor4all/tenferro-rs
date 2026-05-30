@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 
 use omeco::{EinCode as OmecoEinCode, Initializer, NestedEinsum, ScoreFunction};
-use tenferro_device::Error;
 
 use crate::syntax::subscripts::Subscripts;
+use crate::Error;
 
 use super::{
     nested_to_pairs, optimize_self_greedy_pairs, ContractionOptimizerOptions, ContractionTree,

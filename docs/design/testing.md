@@ -37,11 +37,6 @@ the top-level performance gate for contraction behavior.
 - Semiring axioms (associativity, distributivity, zero element, identity element)
 - `Standard<f64>` and `Standard<Complex64>` algebra
 
-### tenferro-internal-device
-
-- `ComputeDevice` Display formatting
-- Error type construction and display
-
 ### tenferro-tensor
 
 - `Tensor<T>` creation, shape/strides accessors

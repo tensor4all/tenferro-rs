@@ -165,15 +165,6 @@ program uses operations supported by that backend and tensors are placed
 explicitly by the execution pipeline or caller. Unsupported GPU ops return
 errors rather than silently falling back to CPU.
 
-## `tenferro-internal-device`
-
-`tenferro-internal-device` owns shared device and error infrastructure:
-
-- logical memory spaces,
-- compute device metadata,
-- common `Error` and `Result` types,
-- conversions from lower-level strided errors.
-
 ## AD Support Notes
 
 Current mainline AD coverage is intentionally narrower than primal execution.
