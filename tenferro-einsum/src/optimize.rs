@@ -19,6 +19,27 @@ use crate::{
 /// optimizer options, explicit paths, or fixed plan identities are not treated
 /// as the same extension op, and their compile/runtime plan cache entries are
 /// kept separate.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::EinsumOptimize;
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+///
+/// let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+///
+/// let mut compiler = GraphCompiler::new();
+/// let out = tenferro_einsum::traced_tensor::einsum_with(
+///     &mut compiler,
+///     &[&lhs, &rhs],
+///     "ij,jk->ik",
+///     EinsumOptimize::False,
+/// )
+/// .unwrap();
+///
+/// assert_eq!(out.try_concrete_shape(), Some(vec![2, 2]));
+/// ```
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),

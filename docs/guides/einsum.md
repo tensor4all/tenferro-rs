@@ -114,7 +114,7 @@ let c = tenferro_einsum::traced_tensor::einsum_with(
     EinsumOptimize::False,
 ).unwrap();
 
-assert_eq!(c.shape, vec![2, 2]);
+assert_eq!(c.try_concrete_shape(), Some(vec![2, 2]));
 ```
 
 ## Cache Management
