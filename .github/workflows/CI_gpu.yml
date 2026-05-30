@@ -63,7 +63,6 @@ jobs:
           cargo nextest archive \
             --release \
             --archive-file "${CUDA_ARCHIVE}" \
-            -p tenferro-internal-device \
             -p tenferro-gpu \
             -p tenferro-ad \
             -p tenferro-linalg \

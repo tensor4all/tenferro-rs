@@ -36,8 +36,6 @@ For contributors, internal crate APIs are also available in the
   operation catalog used by graph, runtime, and backend dispatch
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph op vocabulary and
   AD rule implementations
-- [tenferro-internal-device](./tenferro_device/index.html): shared device and
-  error infrastructure
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):
   procedural macros for extension-op registration
 
@@ -45,16 +43,22 @@ For contributors, internal crate APIs are also available in the
 
 ```text
 tenferro-tensor-core     -> host-only tensor data model
-tenferro-tensor          -> tenferro-tensor-core, tenferro-internal-device
+tenferro-tensor          -> tenferro-tensor-core, tenferro-core-ops
 tenferro-cpu             -> tenferro-tensor
-tenferro-gpu             -> tenferro-tensor
-tenferro-internal-ops    -> tenferro-core-ops, tenferro-tensor
-tenferro-runtime         -> tenferro-internal-ops, tenferro-tensor
-tenferro-ad              -> tenferro-runtime, tenferro-internal-ops
+tenferro-gpu             -> tenferro-tensor, tenferro-core-ops
+tenferro-internal-ops    -> tenferro-core-ops, tenferro-tensor,
+                             tenferro-internal-extension-macros
+tenferro-runtime         -> tenferro-internal-ops, tenferro-core-ops,
+                             tenferro-tensor
+tenferro-ad              -> tenferro-runtime, tenferro-internal-ops,
+                             tenferro-tensor, tenferro-cpu
 
-tenferro-einsum          -> tenferro-runtime
-tenferro-linalg          -> tenferro-runtime, tenferro-tensor
+tenferro-einsum          -> tenferro-runtime, tenferro-internal-ops,
+                             tenferro-tensor, tenferro-cpu
+tenferro-linalg          -> tenferro-runtime, tenferro-internal-ops,
+                             tenferro-tensor, tenferro-cpu
 tenferro-linalg/cuda     -> tenferro-gpu
-tenferro-fft             -> tenferro-runtime
+tenferro-fft             -> tenferro-runtime, tenferro-internal-ops,
+                             tenferro-tensor
 tenferro-internal-extension-macros    -- extension-op registration macros
 ```

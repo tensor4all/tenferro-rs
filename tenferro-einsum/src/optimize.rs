@@ -1,7 +1,8 @@
 use omeco::ScoreFunction;
-use tenferro_device::{Error, Result};
 
-use crate::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
+use crate::{
+    ContractionOptimizerOptions, ContractionTree, Error, NestedEinsum, Result, Subscripts,
+};
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///

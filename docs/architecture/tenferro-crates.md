@@ -39,7 +39,6 @@ The design goal is to keep these concerns separate:
 | `tenferro-fft` | FFT extension runtime and public FFT APIs |
 | `tenferro-core-ops` | Internal core primitive operation catalog used by graph, runtime, and backend dispatch |
 | `tenferro-internal-ops` | Graph op vocabulary and AD rule implementations |
-| `tenferro-internal-device` | Shared device and error infrastructure |
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |
 
 The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
@@ -81,36 +80,32 @@ Internal: tenferro-core-ops
           tenferro-internal-ops
           graph op vocabulary and AD rule implementations
 
-          tenferro-internal-device
-          shared device and error infrastructure
-
           tenferro-internal-extension-macros
           extension-op registration macros
 ```
 
 ## IV. Dependency Direction
 
-The dependency direction is deliberately one-way:
+The dependency direction is deliberately one-way. Arrows below mean
+"depends on":
 
 ```text
-tenferro-tensor-core
-    |
-    v
-tenferro-tensor <---------------- tenferro-cpu
-    ^                                  |
-    |                                  |
-    |----------------------------- tenferro-gpu
-    |                                  ^
-    |                                  |
-    v                                  |
-tenferro-internal-ops <-------- tenferro-einsum
-    |                         \-- tenferro-linalg
-    |                         \-- tenferro-fft
-    v
-tenferro-runtime
-    |
-    v
-tenferro-ad
+tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops
+tenferro-cpu              -> tenferro-tensor
+tenferro-gpu              -> tenferro-tensor, tenferro-core-ops
+tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
+                              tenferro-internal-extension-macros
+tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
+                              tenferro-internal-ops
+tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
+                              tenferro-tensor, tenferro-cpu
+
+tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
+                              tenferro-tensor, tenferro-cpu
+tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
+                              tenferro-tensor, tenferro-cpu
+tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
+                              tenferro-tensor
 ```
 
 Additional internal dependencies:
@@ -138,6 +133,10 @@ Rules:
   runtime registration, and extension cache ownership.
 - `tenferro-ad` owns eager AD surfaces and traced AD helper APIs. Primitive AD
   rule implementations remain in `tenferro-internal-ops/src/ad/`.
+- Device, placement, and error concepts are owned by the crate that uses them:
+  `tenferro-tensor` owns backend-independent tensor contracts,
+  `tenferro-gpu` owns GPU backend details, and each operation-family crate owns
+  operation-specific parse/planning errors.
 - Standard operation families stay in direct crates. Do not add a root
   `tenferro` facade path for them.
 

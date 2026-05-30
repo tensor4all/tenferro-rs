@@ -2,7 +2,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use tenferro_device::{Error as DeviceError, Result as DeviceResult};
 use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
@@ -16,7 +15,8 @@ use crate::extension::ensure_einsum_extension_rule_registered;
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{is_default_auto_options, resolve_einsum_strategy};
 use crate::{
-    parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts, Subscripts,
+    parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
+    Error as EinsumError, Result as EinsumResult, Subscripts,
 };
 
 /// N-ary einsum with default FLOPS-first optimization.
@@ -124,7 +124,7 @@ fn cached_subscripts(
 fn cached_static_tree(
     caches: &mut ExtensionCacheStore,
     key_data: &(EinsumSubscripts, Vec<Vec<usize>>),
-    build: impl FnOnce() -> DeviceResult<ContractionTree>,
+    build: impl FnOnce() -> EinsumResult<ContractionTree>,
 ) -> Result<Arc<ContractionTree>> {
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
@@ -207,7 +207,7 @@ fn infer_symbolic_output_shape(
         .collect()
 }
 
-fn to_tenferro_error(error: DeviceError) -> Error {
+fn to_tenferro_error(error: EinsumError) -> Error {
     Error::ContractionError(error.to_string())
 }
 

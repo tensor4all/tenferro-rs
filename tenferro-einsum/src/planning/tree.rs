@@ -4,11 +4,11 @@ use std::mem::{size_of, size_of_val};
 use omeco::{
     CodeOptimizer, EinCode as OmecoEinCode, Initializer, NestedEinsum, ScoreFunction, TreeSA,
 };
-use tenferro_device::{Error, Result};
 
 use crate::planning::plan::{compile_step_plans, DiagPlan, GemmPlan, ReducePlan, StepPlan};
 use crate::syntax::subscripts::Subscripts;
 use crate::util::{build_size_dict, contraction_cost, intermediate_subs};
+use crate::{Error, Result};
 
 /// A single step in the contraction sequence.
 pub(crate) struct ContractionStep {

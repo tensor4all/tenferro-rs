@@ -47,6 +47,7 @@ mod cache;
 mod eager;
 #[cfg(feature = "autodiff")]
 pub mod eager_tensor;
+mod error;
 mod extension;
 pub mod lowering;
 mod optimize;
@@ -61,6 +62,7 @@ mod typed_eager;
 pub(crate) mod util;
 
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
+pub use error::{Error, Result};
 pub use extension::register_runtime;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};

@@ -27,17 +27,25 @@ to keep the status code set small.
 
 ## Error Mapping
 
-### `tenferro_device::Error` → `tfe_status_t`
+### Crate-local tensor and operation errors -> `tfe_status_t`
 
-| Rust Variant | Status Code | Rationale |
+The workspace no longer has a shared device error crate. C-API bindings should
+map the concrete error type at the crate boundary where the FFI call invokes
+Rust code.
+
+| Rust Error | Status Code | Rationale |
 |---|---|---|
-| `InvalidArgument(_)` | `TFE_INVALID_ARGUMENT` | Bad caller input |
-| `ShapeMismatch { .. }` | `TFE_SHAPE_MISMATCH` | Operand dimensions incompatible |
-| `RankMismatch { .. }` | `TFE_SHAPE_MISMATCH` | Rank is a shape constraint |
-| `StrideError(_)` | `TFE_INVALID_ARGUMENT` | Bad memory layout |
-| `CrossMemorySpaceOperation { .. }` | `TFE_INVALID_ARGUMENT` | Caller mixed spaces |
-| `DeviceError(_)` | `TFE_INTERNAL_ERROR` | Backend failure |
-| `NoCompatibleComputeDevice { .. }` | `TFE_INTERNAL_ERROR` | No backend available |
+| `tenferro_tensor::Error::InvalidConfig { .. }` | `TFE_INVALID_ARGUMENT` | Bad caller input |
+| `tenferro_tensor::Error::ShapeMismatch { .. }` | `TFE_SHAPE_MISMATCH` | Operand dimensions incompatible |
+| `tenferro_tensor::Error::RankMismatch { .. }` | `TFE_SHAPE_MISMATCH` | Rank is a shape constraint |
+| `tenferro_tensor::Error::DTypeMismatch { .. }` | `TFE_INVALID_ARGUMENT` | Caller mixed incompatible dtypes |
+| `tenferro_tensor::Error::AxisOutOfBounds { .. }` | `TFE_INVALID_ARGUMENT` | Bad axis argument |
+| `tenferro_tensor::Error::DuplicateAxis { .. }` | `TFE_INVALID_ARGUMENT` | Bad axis argument |
+| `tenferro_tensor::Error::AxisRoleConflict { .. }` | `TFE_INVALID_ARGUMENT` | Bad axis argument |
+| `tenferro_tensor::Error::MissingValue { .. }` | `TFE_INTERNAL_ERROR` | Runtime graph/value failure |
+| `tenferro_tensor::Error::BackendFailure { .. }` | `TFE_INTERNAL_ERROR` | Backend failure |
+| `tenferro_einsum::Error::InvalidArgument(_)` | `TFE_INVALID_ARGUMENT` | Bad einsum notation or path |
+| `tenferro_einsum::Error::ShapeMismatch { .. }` | `TFE_SHAPE_MISMATCH` | Operand dimensions incompatible |
 
 ### `chainrules_core::AutodiffError` → `tfe_status_t`
 
@@ -72,16 +80,24 @@ Panic message stored in thread-local last-error buffer.
 ### Error Mapping Functions
 
 ```rust
-fn map_device_error(err: &tenferro_device::Error) -> tfe_status_t {
-    use tenferro_device::Error;
+fn map_tensor_error(err: &tenferro_tensor::Error) -> tfe_status_t {
+    use tenferro_tensor::Error;
     match err {
-        Error::InvalidArgument(_)
-        | Error::StrideError(_)
-        | Error::CrossMemorySpaceOperation { .. } => TFE_INVALID_ARGUMENT,
-        Error::ShapeMismatch { .. }
-        | Error::RankMismatch { .. } => TFE_SHAPE_MISMATCH,
-        Error::DeviceError(_)
-        | Error::NoCompatibleComputeDevice { .. } => TFE_INTERNAL_ERROR,
+        Error::InvalidConfig { .. }
+        | Error::DTypeMismatch { .. }
+        | Error::AxisOutOfBounds { .. }
+        | Error::DuplicateAxis { .. }
+        | Error::AxisRoleConflict { .. } => TFE_INVALID_ARGUMENT,
+        Error::ShapeMismatch { .. } | Error::RankMismatch { .. } => TFE_SHAPE_MISMATCH,
+        Error::MissingValue { .. } | Error::BackendFailure { .. } => TFE_INTERNAL_ERROR,
+    }
+}
+
+fn map_einsum_error(err: &tenferro_einsum::Error) -> tfe_status_t {
+    use tenferro_einsum::Error;
+    match err {
+        Error::InvalidArgument(_) => TFE_INVALID_ARGUMENT,
+        Error::ShapeMismatch { .. } => TFE_SHAPE_MISMATCH,
     }
 }
 

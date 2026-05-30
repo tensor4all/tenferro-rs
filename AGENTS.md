@@ -271,7 +271,6 @@ Layer 1: tenferro-tensor-core - Host-only tensor data model, dtype tags,
                                 scalar trait, metadata-only views
 Internal: tenferro-core-ops  - Internal core primitive operation catalog
           tenferro-internal-ops - Graph op vocabulary and AD rule implementations
-          tenferro-internal-device - Shared device and error infrastructure
           tenferro-internal-extension-macros - Extension-op registration macros
 ```
 

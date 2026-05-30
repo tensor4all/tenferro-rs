@@ -57,10 +57,40 @@ def check_runtime_has_no_gpu_backend_deps() -> list[str]:
     return violations
 
 
+def check_internal_device_decomposed() -> list[str]:
+    """Ensure the old catch-all device crate does not re-enter live crates."""
+
+    violations: list[str] = []
+    manifest = ROOT / "tenferro-internal-device" / "Cargo.toml"
+    if manifest.exists():
+        violations.append(
+            "tenferro-internal-device/Cargo.toml: old device facade crate must be decomposed"
+        )
+
+    forbidden = ("tenferro-internal-device", "tenferro_device")
+    paths = [
+        ROOT / ".github" / "workflows",
+        ROOT / "tenferro-einsum" / "Cargo.toml",
+        ROOT / "tenferro-einsum" / "src",
+    ]
+    for path in paths:
+        for file_path in iter_files(path):
+            text = file_path.read_text(encoding="utf-8")
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                for token in forbidden:
+                    if token in line:
+                        rel = file_path.relative_to(ROOT)
+                        violations.append(
+                            f"{rel}:{line_no}: forbidden old device crate token `{token}`"
+                        )
+    return violations
+
+
 def main() -> int:
     violations = [
         *check_tensor_has_no_gpu_runtime_deps(),
         *check_runtime_has_no_gpu_backend_deps(),
+        *check_internal_device_decomposed(),
     ]
     if violations:
         print("crate-boundary check failed:", file=sys.stderr)

@@ -39,12 +39,12 @@ use std::collections::{HashMap, HashSet};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
 
-use tenferro_device::{Error, Result};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DotGeneralConfig;
 
 use crate::planning::tree::ContractionTree;
+use crate::{Error, Result};
 
 #[derive(Clone, Debug)]
 struct LabeledVal {

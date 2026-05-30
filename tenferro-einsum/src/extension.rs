@@ -36,7 +36,9 @@ use crate::builder::build_einsum_fragment;
 use crate::cache::{
     einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
 };
-use crate::{ContractionTree, EinsumSubscripts, Subscripts};
+use crate::{
+    ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
+};
 
 /// Standard einsum extension payload.
 ///
@@ -587,7 +589,7 @@ fn cached_runtime_tree<B: TensorBackend>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
     subscripts: &EinsumSubscripts,
     shapes: &[Vec<usize>],
-    build: impl FnOnce() -> tenferro_device::Result<ContractionTree>,
+    build: impl FnOnce() -> EinsumResult<ContractionTree>,
 ) -> tenferro_tensor::Result<Arc<ContractionTree>> {
     let key_data = (subscripts.clone(), shapes.to_vec());
     let key = ExtensionCacheKey::new(
@@ -610,8 +612,8 @@ fn cached_runtime_tree<B: TensorBackend>(
     Ok(tree)
 }
 
-fn einsum_runtime_error(error: tenferro_device::Error) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::backend_failure("einsum_extension", error.to_string())
+fn einsum_runtime_error(error: EinsumError) -> tenferro_tensor::Error {
+    error.to_tensor_error("einsum_extension")
 }
 
 fn hash_value<T: Hash>(value: &T) -> u64 {

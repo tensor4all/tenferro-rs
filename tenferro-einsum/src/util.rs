@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use tenferro_device::{Error, Result};
-
 use crate::syntax::subscripts::Subscripts;
+use crate::{Error, Result};
 
 /// Build a label -> size mapping from subscripts and input shapes.
 pub(crate) fn build_size_dict(
