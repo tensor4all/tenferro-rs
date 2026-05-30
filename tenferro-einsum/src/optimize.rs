@@ -30,10 +30,7 @@ pub enum EinsumOptimize {
 impl Default for EinsumOptimize {
     /// Default: FLOPS-first automatic optimization.
     fn default() -> Self {
-        Self::Auto(ContractionOptimizerOptions {
-            score: ScoreFunction::time_optimized(),
-            ..Default::default()
-        })
+        Self::Auto(default_auto_options())
     }
 }
 
@@ -48,17 +45,10 @@ pub(crate) enum EinsumPlanSpec {
 /// Return the default automatic optimizer options.
 #[must_use]
 pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
-    match EinsumOptimize::default() {
-        EinsumOptimize::Auto(options) => options,
-        _ => unreachable!("EinsumOptimize::default must be automatic optimization"),
+    ContractionOptimizerOptions {
+        score: ScoreFunction::time_optimized(),
+        ..Default::default()
     }
-}
-
-/// Compare optimizer options with the default policy using bitwise float
-/// equality.
-#[must_use]
-pub(crate) fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
-    optimizer_options_equal_by_bits(options, &default_auto_options())
 }
 
 pub(crate) fn plan_spec_from_optimize(
@@ -246,20 +236,6 @@ fn optimizer_options_equal_by_bits(
         && lhs.niters == rhs.niters
         && f64_slices_equal_by_bits(&lhs.betas, &rhs.betas)
         && score_functions_equal_by_bits(&lhs.score, &rhs.score)
-}
-
-/// Resolve an [`EinsumOptimize`] strategy to a concrete contraction tree.
-///
-/// # Errors
-///
-/// Returns an error if subscripts and shapes are inconsistent or if an
-/// explicit path references invalid operands.
-pub(crate) fn resolve_einsum_strategy(
-    optimize: EinsumOptimize,
-    subscripts: &Subscripts,
-    shapes: &[&[usize]],
-) -> Result<ContractionTree> {
-    resolve_einsum_strategy_with_spec(optimize, subscripts, shapes).map(|(_, tree)| tree)
 }
 
 /// Convert JAX-style position-based path to fixed-ID pairs.
