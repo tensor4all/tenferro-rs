@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use omeco::ScoreFunction;
 
 use crate::{
@@ -35,6 +37,14 @@ impl Default for EinsumOptimize {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum EinsumPlanSpec {
+    Auto(ContractionOptimizerOptions),
+    LeftToRight,
+    Path(Vec<(usize, usize)>),
+    FixedPairs(Vec<(usize, usize)>),
+}
+
 /// Return the default automatic optimizer options.
 #[must_use]
 pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
@@ -48,11 +58,145 @@ pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
 /// equality.
 #[must_use]
 pub(crate) fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
-    let default = default_auto_options();
-    options.ntrials == default.ntrials
-        && options.niters == default.niters
-        && f64_slices_equal_by_bits(&options.betas, &default.betas)
-        && score_functions_equal_by_bits(&options.score, &default.score)
+    optimizer_options_equal_by_bits(options, &default_auto_options())
+}
+
+pub(crate) fn plan_spec_from_optimize(
+    optimize: EinsumOptimize,
+    subscripts: &Subscripts,
+) -> Result<EinsumPlanSpec> {
+    match optimize {
+        EinsumOptimize::Auto(options) => {
+            options.validate()?;
+            Ok(EinsumPlanSpec::Auto(options))
+        }
+        EinsumOptimize::False => Ok(EinsumPlanSpec::LeftToRight),
+        EinsumOptimize::Nested(nested) => {
+            let pairs = nested_to_v1_pairs(&nested, subscripts.inputs.len())?;
+            Ok(EinsumPlanSpec::FixedPairs(pairs))
+        }
+        EinsumOptimize::Path(path) => {
+            let _ = jax_path_to_v1_pairs(&path, subscripts.inputs.len())?;
+            Ok(EinsumPlanSpec::Path(path))
+        }
+        EinsumOptimize::Tree(_) => Err(Error::InvalidArgument(
+            "precomputed contraction tree requires concrete input shapes; use Path or parenthesized notation for symbolic traced einsum"
+                .into(),
+        )),
+    }
+}
+
+pub(crate) fn resolve_einsum_strategy_with_spec(
+    optimize: EinsumOptimize,
+    subscripts: &Subscripts,
+    shapes: &[&[usize]],
+) -> Result<(EinsumPlanSpec, ContractionTree)> {
+    match optimize {
+        EinsumOptimize::Tree(tree) => {
+            let pairs = tree_pairs(&tree);
+            let spec = EinsumPlanSpec::FixedPairs(pairs);
+            Ok((spec, tree))
+        }
+        optimize => {
+            let spec = plan_spec_from_optimize(optimize, subscripts)?;
+            let tree = resolve_plan_spec(&spec, subscripts, shapes)?;
+            Ok((spec, tree))
+        }
+    }
+}
+
+pub(crate) fn resolve_plan_spec(
+    spec: &EinsumPlanSpec,
+    subscripts: &Subscripts,
+    shapes: &[&[usize]],
+) -> Result<ContractionTree> {
+    match spec {
+        EinsumPlanSpec::Auto(options) => {
+            ContractionTree::optimize_with_options(subscripts, shapes, options)
+        }
+        EinsumPlanSpec::LeftToRight => {
+            let n = subscripts.inputs.len();
+            if n <= 1 {
+                ContractionTree::from_pairs(subscripts, shapes, &[])
+            } else {
+                let path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
+                let pairs = jax_path_to_v1_pairs(&path, n)?;
+                ContractionTree::from_pairs(subscripts, shapes, &pairs)
+            }
+        }
+        EinsumPlanSpec::Path(path) => {
+            let pairs = jax_path_to_v1_pairs(path, subscripts.inputs.len())?;
+            ContractionTree::from_pairs(subscripts, shapes, &pairs)
+        }
+        EinsumPlanSpec::FixedPairs(pairs) => ContractionTree::from_pairs(subscripts, shapes, pairs),
+    }
+}
+
+pub(crate) fn hash_einsum_plan_spec(spec: &EinsumPlanSpec, state: &mut dyn Hasher) {
+    match spec {
+        EinsumPlanSpec::Auto(options) => {
+            state.write_u8(0);
+            hash_optimizer_options(options, state);
+        }
+        EinsumPlanSpec::LeftToRight => state.write_u8(1),
+        EinsumPlanSpec::Path(path) => {
+            state.write_u8(2);
+            hash_pairs(path, state);
+        }
+        EinsumPlanSpec::FixedPairs(pairs) => {
+            state.write_u8(3);
+            hash_pairs(pairs, state);
+        }
+    }
+}
+
+pub(crate) fn plan_specs_equal(lhs: &EinsumPlanSpec, rhs: &EinsumPlanSpec) -> bool {
+    match (lhs, rhs) {
+        (EinsumPlanSpec::Auto(lhs), EinsumPlanSpec::Auto(rhs)) => {
+            optimizer_options_equal_by_bits(lhs, rhs)
+        }
+        (EinsumPlanSpec::LeftToRight, EinsumPlanSpec::LeftToRight) => true,
+        (EinsumPlanSpec::Path(lhs), EinsumPlanSpec::Path(rhs)) => lhs == rhs,
+        (EinsumPlanSpec::FixedPairs(lhs), EinsumPlanSpec::FixedPairs(rhs)) => lhs == rhs,
+        _ => false,
+    }
+}
+
+fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
+    (0..tree.step_count())
+        .filter_map(|step| tree.step_pair(step))
+        .collect()
+}
+
+fn hash_pairs(pairs: &[(usize, usize)], state: &mut dyn Hasher) {
+    state.write_usize(pairs.len());
+    for &(left, right) in pairs {
+        state.write_usize(left);
+        state.write_usize(right);
+    }
+}
+
+fn hash_optimizer_options(options: &ContractionOptimizerOptions, state: &mut dyn Hasher) {
+    state.write_usize(options.ntrials);
+    state.write_usize(options.niters);
+    state.write_usize(options.betas.len());
+    for value in &options.betas {
+        state.write_u64(value.to_bits());
+    }
+    state.write_u64(options.score.tc_weight.to_bits());
+    state.write_u64(options.score.sc_weight.to_bits());
+    state.write_u64(options.score.rw_weight.to_bits());
+    state.write_u64(options.score.sc_target.to_bits());
+}
+
+fn optimizer_options_equal_by_bits(
+    lhs: &ContractionOptimizerOptions,
+    rhs: &ContractionOptimizerOptions,
+) -> bool {
+    lhs.ntrials == rhs.ntrials
+        && lhs.niters == rhs.niters
+        && f64_slices_equal_by_bits(&lhs.betas, &rhs.betas)
+        && score_functions_equal_by_bits(&lhs.score, &rhs.score)
 }
 
 /// Resolve an [`EinsumOptimize`] strategy to a concrete contraction tree.
@@ -66,32 +210,7 @@ pub(crate) fn resolve_einsum_strategy(
     subscripts: &Subscripts,
     shapes: &[&[usize]],
 ) -> Result<ContractionTree> {
-    match optimize {
-        EinsumOptimize::Auto(opts) => {
-            ContractionTree::optimize_with_options(subscripts, shapes, &opts)
-        }
-        EinsumOptimize::False => {
-            let n = subscripts.inputs.len();
-            if n <= 1 {
-                ContractionTree::from_pairs(subscripts, shapes, &[])
-            } else {
-                let jax_path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
-                let v1_pairs = jax_path_to_v1_pairs(&jax_path, n)?;
-                ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
-            }
-        }
-        EinsumOptimize::Nested(nested) => {
-            let n = subscripts.inputs.len();
-            let v1_pairs = nested_to_v1_pairs(&nested, n)?;
-            ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
-        }
-        EinsumOptimize::Path(jax_path) => {
-            let n = subscripts.inputs.len();
-            let v1_pairs = jax_path_to_v1_pairs(&jax_path, n)?;
-            ContractionTree::from_pairs(subscripts, shapes, &v1_pairs)
-        }
-        EinsumOptimize::Tree(tree) => Ok(tree),
-    }
+    resolve_einsum_strategy_with_spec(optimize, subscripts, shapes).map(|(_, tree)| tree)
 }
 
 /// Convert JAX-style position-based path to fixed-ID pairs.
