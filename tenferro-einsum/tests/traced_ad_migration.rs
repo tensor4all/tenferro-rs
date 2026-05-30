@@ -51,3 +51,49 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
         &[6.0, 6.0, 1.0, 1.0, -2.0, -2.0],
     );
 }
+
+#[test]
+fn symbolic_grad_einsum_with_explicit_path_uses_extension_ad_rule() {
+    let a = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2);
+    let c = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+
+    let y = tenferro_einsum::einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        tenferro_einsum::EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let program = compiler
+        .compile_with_input_specs(
+            &grad_a,
+            &[
+                (&a, tenferro_runtime::DType::F64, &[2, 3]),
+                (&b, tenferro_runtime::DType::F64, &[3, 4]),
+                (&c, tenferro_runtime::DType::F64, &[4, 2]),
+            ],
+        )
+        .unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    let a_value = f64_tensor(vec![2, 3], vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75]);
+    let b_value = f64_tensor(
+        vec![3, 4],
+        vec![
+            2.0, 0.25, -1.5, 4.0, 0.75, -0.5, 1.0, -2.0, 0.5, 1.25, -1.0, 3.0,
+        ],
+    );
+    let c_value = f64_tensor(vec![4, 2], vec![1.0, 2.0, -0.5, 0.75, 1.5, -1.0, 2.5, 0.25]);
+    let out = executor
+        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(out.as_slice::<f64>().unwrap().len(), 6);
+}

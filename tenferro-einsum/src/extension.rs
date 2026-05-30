@@ -338,6 +338,12 @@ impl ExtensionAdRule for EinsumAdRule {
             OpMode::Linear { active_mask } => active_mask,
             OpMode::Primal => return Ok(vec![None; n_inputs]),
         };
+        let primal_input_shapes: Vec<Vec<SymDim>> = inputs
+            .iter()
+            .map(|input| ctx.shape_of(input).to_vec())
+            .collect();
+        let primal_output_shape =
+            infer_einsum_output_shape(input_labels, output_labels, &primal_input_shapes)?;
 
         let mut result = Vec::with_capacity(n_inputs);
         for active_idx in 0..n_inputs {
@@ -359,14 +365,17 @@ impl ExtensionAdRule for EinsumAdRule {
                 .collect();
             let mut vjp_input_labels = Vec::with_capacity(n_inputs);
             let mut vjp_inputs = Vec::with_capacity(n_inputs);
+            let mut vjp_input_shapes = Vec::with_capacity(n_inputs);
             vjp_input_labels.push(output_labels.clone());
             vjp_inputs.push(ValRef::Local(ct));
+            vjp_input_shapes.push(primal_output_shape.clone());
 
             for input_idx in 0..n_inputs {
                 if input_idx == active_idx {
                     continue;
                 }
                 vjp_input_labels.push(input_labels[input_idx].clone());
+                vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
                 vjp_inputs.push(conjugate_primal_if_complex(
                     emitter,
                     inputs[input_idx].clone(),
@@ -374,15 +383,16 @@ impl ExtensionAdRule for EinsumAdRule {
                 ));
             }
 
-            let output_shape_hint = ctx.shape_of(&inputs[active_idx]).to_vec();
-            let vjp_op = EinsumExtensionOp::with_output_shape_hint(
+            let output_shape_hint = primal_input_shapes[active_idx].clone();
+            let vjp_op = vjp_einsum_op_with_inherited_plan(
+                op,
                 EinsumSubscripts {
                     inputs: vjp_input_labels,
                     output: vjp_output_labels.clone(),
                 },
                 output_shape_hint.clone(),
-                op.plan_spec().clone(),
-            );
+                &vjp_input_shapes,
+            )?;
             let out = emitter.add_op(
                 StdTensorOp::Extension(Arc::new(vjp_op)),
                 vjp_inputs,
@@ -408,6 +418,78 @@ impl ExtensionAdRule for EinsumAdRule {
 
         Ok(result)
     }
+}
+
+#[cfg(feature = "autodiff")]
+fn infer_einsum_output_shape(
+    input_labels: &[Vec<u32>],
+    output_labels: &[u32],
+    input_shapes: &[Vec<SymDim>],
+) -> ADRuleResult<Vec<SymDim>> {
+    let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
+    for (labels, shape) in input_labels.iter().zip(input_shapes.iter()) {
+        if labels.len() != shape.len() {
+            return Err(ADRuleError::unsupported(
+                format!(
+                    "einsum VJP input rank mismatch: labels={}, shape={}",
+                    labels.len(),
+                    shape.len()
+                ),
+                ADRuleKind::Transpose,
+            ));
+        }
+        for (&label, dim) in labels.iter().zip(shape.iter()) {
+            label_dims.entry(label).or_insert_with(|| dim.clone());
+        }
+    }
+
+    output_labels
+        .iter()
+        .map(|label| {
+            label_dims.get(label).cloned().ok_or_else(|| {
+                ADRuleError::unsupported(
+                    format!("einsum VJP output label {label} is missing from inputs"),
+                    ADRuleKind::Transpose,
+                )
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "autodiff")]
+fn vjp_einsum_op_with_inherited_plan(
+    primal_op: &EinsumExtensionOp,
+    subscripts: EinsumSubscripts,
+    output_shape_hint: Vec<SymDim>,
+    input_shapes: &[Vec<SymDim>],
+) -> ADRuleResult<EinsumExtensionOp> {
+    let mut op = EinsumExtensionOp::with_output_shape_hint(
+        subscripts.clone(),
+        output_shape_hint,
+        primal_op.plan_spec().clone(),
+    );
+    if let Some(concrete_shapes) = concrete_sym_shapes(input_shapes) {
+        let shape_refs: Vec<&[usize]> = concrete_shapes.iter().map(Vec::as_slice).collect();
+        let raw_subscripts = Subscripts::from(&subscripts);
+        let tree = resolve_plan_spec(primal_op.plan_spec(), &raw_subscripts, &shape_refs).map_err(
+            |err| {
+                ADRuleError::unsupported(
+                    format!("failed to resolve inherited einsum VJP plan: {err}"),
+                    ADRuleKind::Transpose,
+                )
+            },
+        )?;
+        op = op.with_static_tree_hint(Arc::new(tree));
+    }
+    Ok(op)
+}
+
+#[cfg(feature = "autodiff")]
+fn concrete_sym_shapes(shapes: &[Vec<SymDim>]) -> Option<Vec<Vec<usize>>> {
+    shapes
+        .iter()
+        .map(|shape| shape.iter().map(SymDim::constant_value).collect())
+        .collect()
 }
 
 #[cfg(feature = "autodiff")]
