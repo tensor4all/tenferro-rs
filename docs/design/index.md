@@ -29,6 +29,7 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [capi.md](./capi.md) | C-API: opaque handles, DLPack, einsum + SVD + AD |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |
+| [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 
 ## Reference
 

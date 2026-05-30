@@ -162,7 +162,7 @@ pub fn compile_std_to_exec(
     program
 }
 
-fn exact_extents_from_shape(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
+pub(super) fn exact_extents_from_shape(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
     shape.iter().cloned().map(ShapeExtent::exact).collect()
 }
 
@@ -397,15 +397,15 @@ fn conj_sinking_one_pass(
                     let mut input_slots = producer.input_slots;
                     for input_idx in commuting_inputs {
                         let input_slot = input_slots[input_idx];
-                        input_slots[input_idx] = ensure_conj_slot(
-                            input_slot,
-                            &mut slot_meta,
-                            &mut producer_by_slot,
-                            &mut conj_cache,
-                            &mut new_instructions,
-                            &mut program.n_slots,
-                            &mut redirect,
-                        );
+                        input_slots[input_idx] = ConjSinkingState {
+                            slot_meta: &mut slot_meta,
+                            producer_by_slot: &mut producer_by_slot,
+                            conj_cache: &mut conj_cache,
+                            new_instructions: &mut new_instructions,
+                            n_slots: &mut program.n_slots,
+                            redirect: &mut redirect,
+                        }
+                        .ensure_conj_slot(input_slot);
                     }
                     instr.op = producer.op;
                     instr.input_slots = input_slots;
@@ -455,47 +455,49 @@ fn collect_slot_meta(
     slot_meta
 }
 
-#[allow(clippy::too_many_arguments)]
-fn ensure_conj_slot(
-    slot: usize,
-    slot_meta: &mut Vec<Option<SlotMeta>>,
-    producer_by_slot: &mut ProducerMap,
-    conj_cache: &mut std::collections::HashMap<usize, usize>,
-    new_instructions: &mut Vec<ExecInstruction>,
-    n_slots: &mut usize,
-    redirect: &mut Vec<usize>,
-) -> usize {
-    let slot = resolve_slot_redirect(slot, redirect);
-    if let Some(producer) = producer_for_slot(producer_by_slot, slot) {
-        if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
-            return resolve_slot_redirect(producer.input_slots[0], redirect);
+struct ConjSinkingState<'a> {
+    slot_meta: &'a mut Vec<Option<SlotMeta>>,
+    producer_by_slot: &'a mut ProducerMap,
+    conj_cache: &'a mut std::collections::HashMap<usize, usize>,
+    new_instructions: &'a mut Vec<ExecInstruction>,
+    n_slots: &'a mut usize,
+    redirect: &'a mut Vec<usize>,
+}
+
+impl ConjSinkingState<'_> {
+    fn ensure_conj_slot(&mut self, slot: usize) -> usize {
+        let slot = resolve_slot_redirect(slot, self.redirect);
+        if let Some(producer) = producer_for_slot(self.producer_by_slot, slot) {
+            if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
+                return resolve_slot_redirect(producer.input_slots[0], self.redirect);
+            }
         }
-    }
-    if let Some(&conj_slot) = conj_cache.get(&slot) {
-        return conj_slot;
-    }
+        if let Some(&conj_slot) = self.conj_cache.get(&slot) {
+            return conj_slot;
+        }
 
-    let meta = slot_meta[slot]
-        .clone()
-        .unwrap_or_else(|| panic!("conj_sinking: missing metadata for slot {slot}"));
-    let output_slot = *n_slots;
-    *n_slots += 1;
-    redirect.push(output_slot);
-    slot_meta.push(Some(meta.clone()));
+        let meta = self.slot_meta[slot]
+            .clone()
+            .unwrap_or_else(|| panic!("conj_sinking: missing metadata for slot {slot}"));
+        let output_slot = *self.n_slots;
+        *self.n_slots += 1;
+        self.redirect.push(output_slot);
+        self.slot_meta.push(Some(meta.clone()));
 
-    let instr = ExecInstruction {
-        op: ExecOp::Conj,
-        input_slots: vec![slot],
-        output_slots: vec![output_slot],
-        dtype: meta.dtype,
-        output_shapes: vec![meta.shape],
-        output_extents: vec![meta.extents],
-        last_use: Vec::new(),
-    };
-    record_producer(producer_by_slot, &instr);
-    new_instructions.push(instr);
-    conj_cache.insert(slot, output_slot);
-    output_slot
+        let instr = ExecInstruction {
+            op: ExecOp::Conj,
+            input_slots: vec![slot],
+            output_slots: vec![output_slot],
+            dtype: meta.dtype,
+            output_shapes: vec![meta.shape],
+            output_extents: vec![meta.extents],
+            last_use: Vec::new(),
+        };
+        record_producer(self.producer_by_slot, &instr);
+        self.new_instructions.push(instr);
+        self.conj_cache.insert(slot, output_slot);
+        output_slot
+    }
 }
 
 fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) {
@@ -838,610 +840,9 @@ fn fold_transpose_into_dot(
     new_config
 }
 
-// ============================================================================
-// Pass 3: DotDecomposer
-// ============================================================================
-//
-// Canonicalize `ExecOp::DotGeneral` into a shape consumable by canonical
-// batched GEMM kernels. Runs after `transpose_folding` so that pre-existing
-// foldable transposes are already absorbed. Per-instruction `output_shapes`
-// (populated by `shape_infer`) gives the shapes needed to emit `Reshape`
-// instructions that merge free/contracting groups and restore the original
-// output shape.
-//
-// Canonical form (tenferro column-major with batch trailing):
-//
-//   LHS: [M?, K, B0, B1, ...]
-//     - lhs_contracting_dims = [|free_L|']
-//     - lhs_batch_dims       = [|free_L|' + 1, ..., |free_L|' + nb]
-//     where |free_L|' = 1 if the original LHS had any free dim, else 0.
-//
-//   RHS: [K, N?, B0, B1, ...]
-//     - rhs_contracting_dims = [0]
-//     - rhs_batch_dims       = [|free_R|' + 1, ..., |free_R|' + nb]
-//     where |free_R|' = 1 if the original RHS had any free dim, else 0.
-//
-// The XLA-style algorithm per non-canonical DotGeneral:
-//
-//   1. Transpose LHS to target order (free ++ contracting ++ batch).
-//   2. Reshape LHS to merge multiple free/contracting dims.
-//   3. Transpose RHS to target order (contracting ++ free ++ batch).
-//   4. Reshape RHS to merge multiple free/contracting dims.
-//   5. Emit canonical `DotGeneral`.
-//   6. Reshape output back to the original shape (required when either side
-//      had multiple free dims). Without this, downstream consumers would
-//      observe a rank-collapsed tensor.
-//
-// Only steps that are non-trivial for the specific operand are emitted.
+mod dot_decomposer;
 
-/// Canonicalize all non-canonical `DotGeneral` instructions in `program`.
-///
-/// `input_shapes` are the program-input shapes (matching `program.input_slots`).
-/// They are needed because `ExecProgram` does not otherwise carry input-slot
-/// shape metadata.
-pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) {
-    assert_eq!(
-        program.input_slots.len(),
-        input_shapes.len(),
-        "dot_decomposer: input shape count must match input slot count"
-    );
-
-    let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; program.n_slots];
-    let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; program.n_slots];
-    for (index, &slot) in program.input_slots.iter().enumerate() {
-        slot_shapes[slot] = Some(input_shapes[index].clone());
-        slot_extents[slot] = Some(exact_extents_from_shape(&input_shapes[index]));
-    }
-    for instr in &program.instructions {
-        for ((slot, shape), extents) in instr
-            .output_slots
-            .iter()
-            .zip(instr.output_shapes.iter())
-            .zip(instr.output_extents.iter())
-        {
-            slot_shapes[*slot] = Some(shape.clone());
-            slot_extents[*slot] = Some(extents.clone());
-        }
-    }
-
-    let mut new_instructions: Vec<ExecInstruction> = Vec::with_capacity(program.instructions.len());
-    let mut n_slots = program.n_slots;
-
-    for instr in &program.instructions {
-        let dot_config_and_conj = match &instr.op {
-            ExecOp::DotGeneral(config) => Some((config, false, false)),
-            ExecOp::DotGeneralWithConj {
-                config,
-                lhs_conj,
-                rhs_conj,
-            } => Some((config, *lhs_conj, *rhs_conj)),
-            _ => None,
-        };
-
-        if let Some((config, lhs_conj, rhs_conj)) = dot_config_and_conj {
-            if instr.input_slots.len() == 2 && !config.lhs_contracting_dims.is_empty() {
-                let lhs_slot = instr.input_slots[0];
-                let rhs_slot = instr.input_slots[1];
-                let lhs_shape = require_slot_shape(&slot_shapes, lhs_slot);
-                let rhs_shape = require_slot_shape(&slot_shapes, rhs_slot);
-                let lhs_extents = require_slot_extents(&slot_extents, lhs_slot);
-                let rhs_extents = require_slot_extents(&slot_extents, rhs_slot);
-                if !is_dot_canonical(config, lhs_shape.len(), rhs_shape.len()) {
-                    decompose_dot(
-                        instr,
-                        config,
-                        lhs_slot,
-                        rhs_slot,
-                        lhs_shape,
-                        rhs_shape,
-                        lhs_extents,
-                        rhs_extents,
-                        lhs_conj,
-                        rhs_conj,
-                        &mut n_slots,
-                        &mut new_instructions,
-                    );
-                    continue;
-                }
-            }
-        }
-        new_instructions.push(instr.clone());
-    }
-
-    program.instructions = new_instructions;
-    program.n_slots = n_slots;
-}
-
-fn require_slot_shape(slot_shapes: &[Option<Vec<DimExpr>>], slot: usize) -> &[DimExpr] {
-    slot_shapes[slot]
-        .as_ref()
-        .unwrap_or_else(|| panic!("dot_decomposer: missing shape for slot {slot}"))
-        .as_slice()
-}
-
-fn require_slot_extents(
-    slot_extents: &[Option<Vec<ShapeExtent<DimExpr>>>],
-    slot: usize,
-) -> &[ShapeExtent<DimExpr>] {
-    slot_extents[slot]
-        .as_ref()
-        .unwrap_or_else(|| panic!("dot_decomposer: missing extents for slot {slot}"))
-        .as_slice()
-}
-
-/// Canonical form predicate for a `DotGeneral` with the given operand ranks.
-fn is_dot_canonical(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> bool {
-    if config.lhs_contracting_dims.len() != 1 || config.rhs_contracting_dims.len() != 1 {
-        return false;
-    }
-    if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
-        return false;
-    }
-    let nb = config.lhs_batch_dims.len();
-
-    // LHS: [M?, K, B...]. free_L is 0 or 1 elems.
-    let lhs_has_free = match lhs_rank.checked_sub(nb + 1) {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return false,
-    };
-    let lhs_expected_contracting = if lhs_has_free { 1 } else { 0 };
-    let lhs_expected_batch: Vec<usize> =
-        ((lhs_expected_contracting + 1)..(lhs_expected_contracting + 1 + nb)).collect();
-    if config.lhs_contracting_dims != vec![lhs_expected_contracting]
-        || config.lhs_batch_dims != lhs_expected_batch
-    {
-        return false;
-    }
-
-    // RHS: [K, N?, B...]. free_R is 0 or 1 elems, contracting is always at 0.
-    let rhs_has_free = match rhs_rank.checked_sub(nb + 1) {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return false,
-    };
-    let rhs_free_count = usize::from(rhs_has_free);
-    let rhs_expected_batch: Vec<usize> =
-        ((rhs_free_count + 1)..(rhs_free_count + 1 + nb)).collect();
-    if config.rhs_contracting_dims != vec![0] || config.rhs_batch_dims != rhs_expected_batch {
-        return false;
-    }
-
-    true
-}
-
-fn free_axes_of(rank: usize, contracting: &[usize], batch: &[usize]) -> Vec<usize> {
-    (0..rank)
-        .filter(|axis| !contracting.contains(axis) && !batch.contains(axis))
-        .collect()
-}
-
-fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr {
-    assert!(end > start, "product_of_input_dims: empty range");
-    let mut result = DimExpr::InputDim {
-        input_idx,
-        axis: start,
-    };
-    for axis in (start + 1)..end {
-        result = DimExpr::mul(result, DimExpr::InputDim { input_idx, axis });
-    }
-    result
-}
-
-/// Emit decomposed instructions for a single non-canonical DotGeneral.
-#[allow(clippy::too_many_arguments)]
-fn decompose_dot(
-    instr: &ExecInstruction,
-    config: &DotGeneralConfig,
-    lhs_slot: usize,
-    rhs_slot: usize,
-    lhs_shape: &[DimExpr],
-    rhs_shape: &[DimExpr],
-    lhs_extents: &[ShapeExtent<DimExpr>],
-    rhs_extents: &[ShapeExtent<DimExpr>],
-    lhs_conj: bool,
-    rhs_conj: bool,
-    n_slots: &mut usize,
-    new_instructions: &mut Vec<ExecInstruction>,
-) {
-    let lhs_rank = lhs_shape.len();
-    let rhs_rank = rhs_shape.len();
-    let nb = config.lhs_batch_dims.len();
-    assert_eq!(
-        nb,
-        config.rhs_batch_dims.len(),
-        "dot_decomposer: mismatched batch dim count"
-    );
-
-    let lhs_free = free_axes_of(
-        lhs_rank,
-        &config.lhs_contracting_dims,
-        &config.lhs_batch_dims,
-    );
-    let rhs_free = free_axes_of(
-        rhs_rank,
-        &config.rhs_contracting_dims,
-        &config.rhs_batch_dims,
-    );
-    let fi_l = lhs_free.len();
-    let ci_l = config.lhs_contracting_dims.len();
-    let fi_r = rhs_free.len();
-    let ci_r = config.rhs_contracting_dims.len();
-
-    let lhs_target_perm: Vec<usize> = lhs_free
-        .iter()
-        .chain(config.lhs_contracting_dims.iter())
-        .chain(config.lhs_batch_dims.iter())
-        .copied()
-        .collect();
-    let (lhs_after_transpose_slot, lhs_after_transpose_shape, lhs_after_transpose_extents) =
-        emit_transpose_if_needed(
-            lhs_slot,
-            lhs_shape,
-            lhs_extents,
-            &lhs_target_perm,
-            instr.dtype,
-            n_slots,
-            new_instructions,
-        );
-
-    let (lhs_canon_slot, lhs_canon_shape, lhs_canon_extents) = if fi_l > 1 || ci_l > 1 {
-        emit_merge_reshape(
-            lhs_after_transpose_slot,
-            &lhs_after_transpose_shape,
-            &lhs_after_transpose_extents,
-            fi_l,
-            ci_l,
-            nb,
-            instr.dtype,
-            n_slots,
-            new_instructions,
-        )
-    } else {
-        (
-            lhs_after_transpose_slot,
-            lhs_after_transpose_shape,
-            lhs_after_transpose_extents,
-        )
-    };
-
-    let rhs_target_perm: Vec<usize> = config
-        .rhs_contracting_dims
-        .iter()
-        .chain(rhs_free.iter())
-        .chain(config.rhs_batch_dims.iter())
-        .copied()
-        .collect();
-    let (rhs_after_transpose_slot, rhs_after_transpose_shape, rhs_after_transpose_extents) =
-        emit_transpose_if_needed(
-            rhs_slot,
-            rhs_shape,
-            rhs_extents,
-            &rhs_target_perm,
-            instr.dtype,
-            n_slots,
-            new_instructions,
-        );
-
-    let (rhs_canon_slot, rhs_canon_shape, rhs_canon_extents) = if fi_r > 1 || ci_r > 1 {
-        // For RHS the transpose target puts contracting first, then free.
-        emit_merge_reshape_rhs(
-            rhs_after_transpose_slot,
-            &rhs_after_transpose_shape,
-            &rhs_after_transpose_extents,
-            fi_r,
-            ci_r,
-            nb,
-            instr.dtype,
-            n_slots,
-            new_instructions,
-        )
-    } else {
-        (
-            rhs_after_transpose_slot,
-            rhs_after_transpose_shape,
-            rhs_after_transpose_extents,
-        )
-    };
-
-    let lhs_free_count_canon = usize::from(fi_l > 0);
-    let rhs_free_count_canon = usize::from(fi_r > 0);
-    let canonical_config = DotGeneralConfig {
-        lhs_contracting_dims: vec![lhs_free_count_canon],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: ((lhs_free_count_canon + 1)..(lhs_free_count_canon + 1 + nb)).collect(),
-        rhs_batch_dims: ((rhs_free_count_canon + 1)..(rhs_free_count_canon + 1 + nb)).collect(),
-    };
-
-    let needs_output_reshape = fi_l > 1 || fi_r > 1;
-
-    let canonical_output_slot = if needs_output_reshape {
-        let s = *n_slots;
-        *n_slots += 1;
-        s
-    } else {
-        instr.output_slots[0]
-    };
-
-    // Compute canonical output shape directly: [M?, N?, batch...] referencing
-    // the canonical operand shapes we just built.
-    let mut canonical_output_shape: Vec<DimExpr> = Vec::new();
-    let mut canonical_output_extents: Vec<ShapeExtent<DimExpr>> = Vec::new();
-    if fi_l > 0 {
-        canonical_output_shape.push(lhs_canon_shape[0].clone());
-        canonical_output_extents.push(lhs_canon_extents[0].clone());
-    }
-    if fi_r > 0 {
-        canonical_output_shape.push(rhs_canon_shape[rhs_free_count_canon].clone());
-        canonical_output_extents.push(rhs_canon_extents[rhs_free_count_canon].clone());
-    }
-    for axis_offset in 0..nb {
-        canonical_output_shape
-            .push(lhs_canon_shape[lhs_free_count_canon + 1 + axis_offset].clone());
-        canonical_output_extents
-            .push(lhs_canon_extents[lhs_free_count_canon + 1 + axis_offset].clone());
-    }
-
-    new_instructions.push(ExecInstruction {
-        op: if lhs_conj || rhs_conj {
-            ExecOp::DotGeneralWithConj {
-                config: canonical_config,
-                lhs_conj,
-                rhs_conj,
-            }
-        } else {
-            ExecOp::DotGeneral(canonical_config)
-        },
-        input_slots: vec![lhs_canon_slot, rhs_canon_slot],
-        output_slots: vec![canonical_output_slot],
-        dtype: instr.dtype,
-        output_shapes: vec![canonical_output_shape.clone()],
-        output_extents: vec![canonical_output_extents],
-        last_use: Vec::new(),
-    });
-
-    if needs_output_reshape {
-        // Target output shape: original DotGeneral output =
-        //   [lhs_free_sizes..., rhs_free_sizes..., batch_sizes...]
-        // Expressed via `InputDim{1, axis}` (original LHS) and
-        // `InputDim{2, axis}` (original RHS) so the Reshape can evaluate
-        // dynamic sizes at runtime.
-        let mut to_shape: Vec<DimExpr> = Vec::new();
-        for &axis in &lhs_free {
-            to_shape.push(DimExpr::InputDim { input_idx: 1, axis });
-        }
-        for &axis in &rhs_free {
-            to_shape.push(DimExpr::InputDim { input_idx: 2, axis });
-        }
-        for &axis in &config.lhs_batch_dims {
-            to_shape.push(DimExpr::InputDim { input_idx: 1, axis });
-        }
-
-        // Metadata `output_shapes` uses the original DotGeneral output shape
-        // directly, which we cloned from `instr` above.
-        let metadata_shape = instr.output_shapes[0].clone();
-
-        new_instructions.push(ExecInstruction {
-            op: ExecOp::Reshape {
-                shape: to_shape.clone(),
-            },
-            input_slots: vec![canonical_output_slot, lhs_slot, rhs_slot],
-            output_slots: vec![instr.output_slots[0]],
-            dtype: instr.dtype,
-            output_shapes: vec![metadata_shape],
-            output_extents: instr.output_extents.clone(),
-            last_use: Vec::new(),
-        });
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn emit_transpose_if_needed(
-    input_slot: usize,
-    input_shape: &[DimExpr],
-    input_extents: &[ShapeExtent<DimExpr>],
-    target_perm: &[usize],
-    dtype: DType,
-    n_slots: &mut usize,
-    new_instructions: &mut Vec<ExecInstruction>,
-) -> (usize, Vec<DimExpr>, Vec<ShapeExtent<DimExpr>>) {
-    let is_identity = target_perm.iter().enumerate().all(|(i, &p)| i == p);
-    if is_identity {
-        return (input_slot, input_shape.to_vec(), input_extents.to_vec());
-    }
-    let transposed_shape: Vec<DimExpr> = target_perm
-        .iter()
-        .map(|&axis| input_shape[axis].clone())
-        .collect();
-    let transposed_extents: Vec<ShapeExtent<DimExpr>> = target_perm
-        .iter()
-        .map(|&axis| input_extents[axis].clone())
-        .collect();
-    let out_slot = *n_slots;
-    *n_slots += 1;
-    new_instructions.push(ExecInstruction {
-        op: ExecOp::Transpose {
-            perm: target_perm.to_vec(),
-        },
-        input_slots: vec![input_slot],
-        output_slots: vec![out_slot],
-        dtype,
-        output_shapes: vec![transposed_shape.clone()],
-        output_extents: vec![transposed_extents.clone()],
-        last_use: Vec::new(),
-    });
-    (out_slot, transposed_shape, transposed_extents)
-}
-
-/// LHS merge: [free..., contracting..., batch...] -> [M?, K, batch...].
-#[allow(clippy::too_many_arguments)]
-fn emit_merge_reshape(
-    input_slot: usize,
-    input_shape: &[DimExpr],
-    input_extents: &[ShapeExtent<DimExpr>],
-    fi: usize,
-    ci: usize,
-    nb: usize,
-    dtype: DType,
-    n_slots: &mut usize,
-    new_instructions: &mut Vec<ExecInstruction>,
-) -> (usize, Vec<DimExpr>, Vec<ShapeExtent<DimExpr>>) {
-    // Runtime `shape` (op parameter) uses `InputDim{0, axis}` referring to
-    // this Reshape's own input slot.
-    let mut to_shape: Vec<DimExpr> = Vec::new();
-    if fi > 0 {
-        if fi == 1 {
-            to_shape.push(DimExpr::InputDim {
-                input_idx: 0,
-                axis: 0,
-            });
-        } else {
-            to_shape.push(product_of_input_dims(0, 0, fi));
-        }
-    }
-    if ci == 1 {
-        to_shape.push(DimExpr::InputDim {
-            input_idx: 0,
-            axis: fi,
-        });
-    } else {
-        to_shape.push(product_of_input_dims(0, fi, fi + ci));
-    }
-    for k in 0..nb {
-        to_shape.push(DimExpr::InputDim {
-            input_idx: 0,
-            axis: fi + ci + k,
-        });
-    }
-
-    // Metadata `output_shapes` uses original-input DimExprs so downstream
-    // passes can reason about the resulting dims.
-    let mut output_shape_meta: Vec<DimExpr> = Vec::new();
-    let mut output_extents_meta: Vec<ShapeExtent<DimExpr>> = Vec::new();
-    if fi > 0 {
-        output_shape_meta.push(merge_span(input_shape, 0, fi));
-        output_extents_meta.push(merge_extent_span(input_shape, input_extents, 0, fi));
-    }
-    output_shape_meta.push(merge_span(input_shape, fi, fi + ci));
-    output_extents_meta.push(merge_extent_span(input_shape, input_extents, fi, fi + ci));
-    for k in 0..nb {
-        output_shape_meta.push(input_shape[fi + ci + k].clone());
-        output_extents_meta.push(input_extents[fi + ci + k].clone());
-    }
-
-    let out_slot = *n_slots;
-    *n_slots += 1;
-    new_instructions.push(ExecInstruction {
-        op: ExecOp::Reshape { shape: to_shape },
-        input_slots: vec![input_slot],
-        output_slots: vec![out_slot],
-        dtype,
-        output_shapes: vec![output_shape_meta.clone()],
-        output_extents: vec![output_extents_meta.clone()],
-        last_use: Vec::new(),
-    });
-    (out_slot, output_shape_meta, output_extents_meta)
-}
-
-/// RHS merge: [contracting..., free..., batch...] -> [K, N?, batch...].
-#[allow(clippy::too_many_arguments)]
-fn emit_merge_reshape_rhs(
-    input_slot: usize,
-    input_shape: &[DimExpr],
-    input_extents: &[ShapeExtent<DimExpr>],
-    fi: usize,
-    ci: usize,
-    nb: usize,
-    dtype: DType,
-    n_slots: &mut usize,
-    new_instructions: &mut Vec<ExecInstruction>,
-) -> (usize, Vec<DimExpr>, Vec<ShapeExtent<DimExpr>>) {
-    let mut to_shape: Vec<DimExpr> = Vec::new();
-    if ci == 1 {
-        to_shape.push(DimExpr::InputDim {
-            input_idx: 0,
-            axis: 0,
-        });
-    } else {
-        to_shape.push(product_of_input_dims(0, 0, ci));
-    }
-    if fi > 0 {
-        if fi == 1 {
-            to_shape.push(DimExpr::InputDim {
-                input_idx: 0,
-                axis: ci,
-            });
-        } else {
-            to_shape.push(product_of_input_dims(0, ci, ci + fi));
-        }
-    }
-    for k in 0..nb {
-        to_shape.push(DimExpr::InputDim {
-            input_idx: 0,
-            axis: ci + fi + k,
-        });
-    }
-
-    let mut output_shape_meta: Vec<DimExpr> = Vec::new();
-    let mut output_extents_meta: Vec<ShapeExtent<DimExpr>> = Vec::new();
-    output_shape_meta.push(merge_span(input_shape, 0, ci));
-    output_extents_meta.push(merge_extent_span(input_shape, input_extents, 0, ci));
-    if fi > 0 {
-        output_shape_meta.push(merge_span(input_shape, ci, ci + fi));
-        output_extents_meta.push(merge_extent_span(input_shape, input_extents, ci, ci + fi));
-    }
-    for k in 0..nb {
-        output_shape_meta.push(input_shape[ci + fi + k].clone());
-        output_extents_meta.push(input_extents[ci + fi + k].clone());
-    }
-
-    let out_slot = *n_slots;
-    *n_slots += 1;
-    new_instructions.push(ExecInstruction {
-        op: ExecOp::Reshape { shape: to_shape },
-        input_slots: vec![input_slot],
-        output_slots: vec![out_slot],
-        dtype,
-        output_shapes: vec![output_shape_meta.clone()],
-        output_extents: vec![output_extents_meta.clone()],
-        last_use: Vec::new(),
-    });
-    (out_slot, output_shape_meta, output_extents_meta)
-}
-
-fn merge_span(shape: &[DimExpr], start: usize, end: usize) -> DimExpr {
-    assert!(end > start, "merge_span: empty range");
-    let mut result = shape[start].clone();
-    for dim in shape.iter().take(end).skip(start + 1) {
-        result = DimExpr::mul(result, dim.clone());
-    }
-    result
-}
-
-fn merge_extent_span(
-    shape: &[DimExpr],
-    extents: &[ShapeExtent<DimExpr>],
-    start: usize,
-    end: usize,
-) -> ShapeExtent<DimExpr> {
-    assert!(end > start, "merge_extent_span: empty range");
-    let merged_dim = merge_span(shape, start, end);
-    let mut has_upper_bound = false;
-
-    for extent in &extents[start..end] {
-        match extent {
-            ShapeExtent::Exact(_) => {}
-            ShapeExtent::UpperBound(_) => has_upper_bound = true,
-            ShapeExtent::Unknown => return ShapeExtent::unknown(),
-        }
-    }
-
-    if has_upper_bound {
-        ShapeExtent::upper_bound(merged_dim)
-    } else {
-        ShapeExtent::exact(merged_dim)
-    }
-}
+pub use dot_decomposer::dot_decomposer;
 
 // ============================================================================
 // Pass 4: DotConjFolding

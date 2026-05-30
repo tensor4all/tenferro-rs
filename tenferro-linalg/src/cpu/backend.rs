@@ -717,6 +717,8 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
     }
 }
 
+// Used only by feature-disabled provider branches, so default feature builds
+// may not compile a direct call site.
 #[allow(dead_code)]
 fn unsupported_provider(op: &'static str, kind: CpuBackendKind) -> Error {
     Error::InvalidConfig {

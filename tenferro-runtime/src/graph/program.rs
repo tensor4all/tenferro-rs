@@ -102,6 +102,8 @@ pub struct GraphProgramInput {
     pub(crate) key: TensorInputKey,
     pub(crate) dtype: DType,
     pub(crate) shape: Vec<usize>,
+    // Preserved for symbolic-shape diagnostics and future graph-input metadata
+    // without exposing `DimExpr` through the stable input-spec accessor.
     #[allow(dead_code)]
     pub(crate) dim_expr_shape: Vec<DimExpr>,
     pub(crate) default_tensor: Option<Arc<Tensor>>,

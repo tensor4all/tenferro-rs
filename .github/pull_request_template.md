@@ -27,6 +27,13 @@ Fixes/Refs #
 
 <!-- What changed and why? -->
 
+## Work log
+
+<!-- Link docs/worklogs/<date>-<topic>.md when this PR is a nontrivial refactor,
+cleanup stream, AI-assisted implementation, or explicit design tradeoff. Include
+the context read, reference code, decisions, rejected/deferred options, and
+residual risks there instead of relying only on this PR body. -->
+
 ## Checklist
 
 - [ ] I read `CONTRIBUTING.md`.
@@ -35,3 +42,5 @@ Fixes/Refs #
       maintainers.
 - [ ] If this is an AI-assisted bug fix, I applied the bug-fix scope gate from
       `ai/contribution-workflows/bugfix-pr.md`.
+- [ ] If this PR needs a work log, I added one under `docs/worklogs/` and
+      linked it above.

@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
@@ -52,6 +53,48 @@ fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = traced_tensor::rsqrt(&x);
     let _ = traced_tensor::expm1(&x);
     let _ = traced_tensor::log1p(&x);
+}
+
+#[test]
+fn traced_unary_methods_forward_to_distinct_primal_ops() {
+    fn run(output: &TracedTensor) -> Tensor {
+        let mut compiler = GraphCompiler::new();
+        let program = compiler.compile(output).unwrap();
+        let mut executor = GraphExecutor::new(CpuBackend::new());
+        executor.run(&program).unwrap()
+    }
+
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
+    assert_eq!(run(&x.neg()).as_slice::<f64>().unwrap(), &[-1.0, -4.0]);
+    assert_eq!(run(&x.abs()).as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+    assert_eq!(run(&x.sign()).as_slice::<f64>().unwrap(), &[1.0, 1.0]);
+    assert_eq!(run(&x.sqrt()).as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    assert_eq!(run(&x.rsqrt()).as_slice::<f64>().unwrap(), &[1.0, 0.5]);
+
+    let analytic = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]);
+    let exp = run(&analytic.exp());
+    let log = run(&x.log());
+    let sin = run(&analytic.sin());
+    let cos = run(&analytic.cos());
+    let tanh = run(&analytic.tanh());
+    let expm1 = run(&analytic.expm1());
+    let log1p = run(&analytic.log1p());
+    assert_eq!(exp.as_slice::<f64>().unwrap(), &[1.0, std::f64::consts::E]);
+    assert_eq!(log.as_slice::<f64>().unwrap(), &[0.0, 4.0_f64.ln()]);
+    assert_eq!(sin.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.sin()]);
+    assert_eq!(cos.as_slice::<f64>().unwrap(), &[1.0, 1.0_f64.cos()]);
+    assert_eq!(tanh.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.tanh()]);
+    assert_eq!(expm1.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.exp_m1()]);
+    assert_eq!(log1p.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.ln_1p()]);
+
+    let z = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+    );
+    assert_eq!(
+        run(&z.conj()).as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
+    );
 }
 
 #[test]

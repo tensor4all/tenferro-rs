@@ -3741,6 +3741,8 @@ impl Tensor {
     }
 }
 
+// Kept for crate-local layout tests while tensor indexing helpers remain split
+// across tensor and CPU crates.
 #[allow(dead_code)]
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
     for i in 0..shape.len() {

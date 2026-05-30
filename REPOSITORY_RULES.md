@@ -37,6 +37,44 @@ rules from `tensor4all-agent-rules`.
   `transpose_view`, `slice_view`, or `reshape_view`. Do not use `_view` for
   operations that allocate, canonicalize, execute kernels, or transfer data.
 
+## Wrapper DRY And Codegen
+
+- Do not assume tensor, eager, traced, and extension wrapper surfaces are fully
+  isomorphic. Public wrapper layers often differ in dtype constraints, feature
+  gates, error ownership, shape metadata, AD behavior, or rustdoc examples.
+- Do not categorically avoid `macro_rules!`, build-time code generation, or
+  small descriptors for wrapper families. They are acceptable when the wrapper
+  family is genuinely same-shaped and the invocation remains easier to review
+  than the duplicated hand-written code.
+- Avoid opportunistic macro/codegen refactors that hide public semantics,
+  erase clear rustdoc, obscure feature gates, move errors to the wrong crate,
+  or force unlike wrappers into a generic parameter bag.
+- When macro/codegen is used for public wrappers, keep generated public names,
+  docs, feature gating, and error behavior obvious at the call site, and add
+  focused tests or doctests that would fail if one generated wrapper stops
+  forwarding correctly.
+
+## Work Logs And Design Records
+
+- Nontrivial refactors, cleanup streams, AI-assisted implementation, and PRs
+  that make explicit design tradeoffs must leave a curated work log under
+  `docs/worklogs/`. The work log should record the session summary, code and
+  documents read, reference implementations considered, decisions made,
+  alternatives rejected or deferred, verification performed, and remaining
+  risks.
+- Work logs are not raw transcripts and are not implementation plans. They are
+  reviewer-facing decision records for the completed work. Keep them concise
+  enough to review, but specific enough that a later reviewer can understand
+  why an abstraction, split, macro, descriptor, public API choice, or deferral
+  was selected.
+- PR bodies for work that requires a work log must link the relevant
+  `docs/worklogs/` file. Reviewers should read linked work logs before
+  challenging scope, abstraction choices, or design intent.
+- When a PR establishes or changes durable design intent, update the
+  appropriate document under `docs/design/` in the same PR. Use work logs for
+  session-level rationale and design docs for decisions future implementation
+  and review should continue to follow.
+
 ## External Contribution Intake
 
 - Bug-fix PRs may be reviewed as merge candidates when they fix behavior that
