@@ -75,6 +75,12 @@ operands.
 - `cargo test -p tenferro-einsum --test traced_correctness einsum_symbolic_explicit_path_matches_static_execution`
 - `cargo test -p tenferro-einsum --doc`
 - `cargo clippy -p tenferro-einsum --features autodiff --all-targets -- -D warnings`
+- `cargo test -p tenferro-tensor --release tensor_buffer_refs_cover_backend_metadata`
+- `cargo test --workspace --release`
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+- `python3 scripts/check-coverage.py coverage.json`
+- `cargo doc --workspace --no-deps`
+- `python3 scripts/check-docs-site.py`
 - `cargo fmt --all --check`
 - `git diff --check`
 
@@ -83,5 +89,3 @@ operands.
 - The VJP plan remapping preserves the primal tree structure where possible,
   but automatic optimizer plans for VJP still resolve independently from VJP
   shapes. That is intentional for `Auto`.
-- Full workspace verification and coverage checks still need to run before the
-  PR is pushed or merged.
