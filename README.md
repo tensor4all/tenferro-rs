@@ -79,6 +79,13 @@ The full guides, tutorials, API reference, architecture notes, and
 specifications live at <https://tensor4all.org/tenferro-rs/>. Start with
 Getting Started if you are using tenferro-rs for the first time.
 
+## Community
+
+The broader tensor4all community uses the
+[tensor4all mailing list](https://groups.google.com/g/tensor4all) for
+announcements and [Matrix](https://tensor4all.org/matrix.html) for real-time
+chat. The community entry point is <https://tensor4all.org/>.
+
 ## Project Status
 
 tenferro-rs is pre-1.0. Public APIs, crate boundaries, backend contracts,
