@@ -224,6 +224,148 @@ fn runtime_planned_einsum_reuses_extension_runtime_plan_cache() {
 }
 
 #[test]
+fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+
+    let left_to_right = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::False,
+    )
+    .unwrap();
+    let explicit_path = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let left_program = compiler
+        .compile_with_input_specs(
+            &left_to_right,
+            &[
+                (&a, DType::F64, &[2, 3]),
+                (&b, DType::F64, &[3, 4]),
+                (&c, DType::F64, &[4, 5]),
+            ],
+        )
+        .unwrap();
+    let path_program = compiler
+        .compile_with_input_specs(
+            &explicit_path,
+            &[
+                (&a, DType::F64, &[2, 3]),
+                (&b, DType::F64, &[3, 4]),
+                (&c, DType::F64, &[4, 5]),
+            ],
+        )
+        .unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    register_runtime(&mut executor);
+    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b_value = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    let c_value = Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+
+    let _ = executor
+        .run_with_inputs(
+            &left_program,
+            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
+        )
+        .unwrap();
+    let after_left = executor.cache_stats().extensions.entries;
+    let _ = executor
+        .run_with_inputs(
+            &path_program,
+            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
+        )
+        .unwrap();
+    let after_path = executor.cache_stats().extensions.entries;
+
+    assert!(
+        after_path > after_left,
+        "runtime plan cache should keep separate entries for different plan specs"
+    );
+}
+
+#[test]
+fn runtime_planned_einsum_honors_explicit_path_execution_order() {
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+
+    let left_to_right = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::False,
+    )
+    .unwrap();
+    let explicit_path = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    )
+    .unwrap();
+    let left_program = compiler
+        .compile_with_input_specs(
+            &left_to_right,
+            &[
+                (&a, DType::F64, &[1, 1]),
+                (&b, DType::F64, &[1, 1]),
+                (&c, DType::F64, &[1, 1]),
+            ],
+        )
+        .unwrap();
+    let path_program = compiler
+        .compile_with_input_specs(
+            &explicit_path,
+            &[
+                (&a, DType::F64, &[1, 1]),
+                (&b, DType::F64, &[1, 1]),
+                (&c, DType::F64, &[1, 1]),
+            ],
+        )
+        .unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    register_runtime(&mut executor);
+    let a_value = Tensor::from_vec_col_major(vec![1, 1], vec![1.0e308_f64]);
+    let b_value = Tensor::from_vec_col_major(vec![1, 1], vec![1.0e308_f64]);
+    let c_value = Tensor::from_vec_col_major(vec![1, 1], vec![1.0e-308_f64]);
+
+    let left_result = executor
+        .run_with_inputs(
+            &left_program,
+            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
+        )
+        .unwrap();
+    let path_result = executor
+        .run_with_inputs(
+            &path_program,
+            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
+        )
+        .unwrap();
+
+    let left_value = left_result.as_slice::<f64>().unwrap()[0];
+    let path_value = path_result.as_slice::<f64>().unwrap()[0];
+    assert!(
+        left_value.is_infinite(),
+        "left-to-right path should overflow, got {left_value}"
+    );
+    assert!(
+        path_value.is_finite(),
+        "explicit B*C-first path should avoid overflow, got {path_value}"
+    );
+}
+
+#[test]
 fn extension_runtime_cache_limits_bound_runtime_planned_einsum_entries() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
     register_runtime(&mut executor);

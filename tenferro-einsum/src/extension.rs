@@ -38,7 +38,7 @@ use crate::cache::{
 };
 #[cfg(any(feature = "autodiff", test))]
 use crate::optimize::default_auto_options;
-use crate::optimize::{hash_einsum_plan_spec, plan_specs_equal, EinsumPlanSpec};
+use crate::optimize::{hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec, EinsumPlanSpec};
 use crate::{
     ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
 };
@@ -523,8 +523,8 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let tree = if let Some(tree) = op.static_tree() {
         Arc::clone(tree)
     } else {
-        cached_runtime_tree(ctx, op.subscripts(), &shapes, || {
-            ContractionTree::optimize(&subs, &shape_refs)
+        cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
+            resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
         })?
     };
 
@@ -604,10 +604,13 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
 fn cached_runtime_tree<B: TensorBackend>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
     subscripts: &EinsumSubscripts,
+    plan_spec: &EinsumPlanSpec,
     shapes: &[Vec<usize>],
     build: impl FnOnce() -> EinsumResult<ContractionTree>,
 ) -> tenferro_tensor::Result<Arc<ContractionTree>> {
-    let key_data = (subscripts.clone(), shapes.to_vec());
+    let mut plan_hasher = std::collections::hash_map::DefaultHasher::new();
+    hash_einsum_plan_spec(plan_spec, &mut plan_hasher);
+    let key_data = (subscripts.clone(), shapes.to_vec(), plan_hasher.finish());
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_RUNTIME_PLANS_CACHE,
@@ -623,6 +626,7 @@ fn cached_runtime_tree<B: TensorBackend>(
             .iter()
             .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
             .sum::<usize>()
+        + std::mem::size_of::<u64>()
         + tree.retained_bytes_for_cache_stats();
     ctx.caches_mut().put(key, Arc::clone(&tree), retained_bytes);
     Ok(tree)
