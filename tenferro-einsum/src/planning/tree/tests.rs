@@ -107,6 +107,38 @@ fn optimize_with_options_rejects_zero_trials() {
 }
 
 #[test]
+fn optimizer_options_reject_nan_betas() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let options = ContractionOptimizerOptions {
+        betas: vec![f64::NAN],
+        ..ContractionOptimizerOptions::default()
+    };
+
+    let err = match ContractionTree::optimize_with_options(&subs, &shapes, &options) {
+        Ok(_) => panic!("expected NaN betas to be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("NaN")));
+}
+
+#[test]
+fn optimizer_options_reject_nan_score_fields() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let options = ContractionOptimizerOptions {
+        score: ScoreFunction::new(1.0, f64::NAN, 0.0, f64::INFINITY),
+        ..ContractionOptimizerOptions::default()
+    };
+
+    let err = match ContractionTree::optimize_with_options(&subs, &shapes, &options) {
+        Ok(_) => panic!("expected NaN score fields to be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("NaN")));
+}
+
+#[test]
 fn single_operand_tree_reports_no_steps() {
     let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
     let tree = ContractionTree::optimize(&subs, &[&[2, 3][..]]).unwrap();

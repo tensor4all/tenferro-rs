@@ -55,10 +55,24 @@ impl ContractionOptimizerOptions {
         )
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.ntrials == 0 {
             return Err(Error::InvalidArgument(
                 "contraction optimizer ntrials must be at least 1".into(),
+            ));
+        }
+        if self.betas.iter().any(|value| value.is_nan()) {
+            return Err(Error::InvalidArgument(
+                "contraction optimizer betas must not contain NaN".into(),
+            ));
+        }
+        if self.score.tc_weight.is_nan()
+            || self.score.sc_weight.is_nan()
+            || self.score.rw_weight.is_nan()
+            || self.score.sc_target.is_nan()
+        {
+            return Err(Error::InvalidArgument(
+                "contraction optimizer score fields must not contain NaN".into(),
             ));
         }
         Ok(())
