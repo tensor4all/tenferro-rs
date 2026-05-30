@@ -22,7 +22,7 @@ use crate::{
     Error as EinsumError, Result as EinsumResult, Subscripts,
 };
 
-/// N-ary einsum with default FLOPS-first optimization.
+/// N-ary einsum with default time-optimized automatic planning.
 ///
 /// The default optimizer is resolved into a shape-independent plan
 /// specification stored in the extension payload. That payload identity

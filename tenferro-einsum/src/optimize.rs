@@ -10,8 +10,9 @@ use crate::{
 ///
 /// The traced API resolves this enum into a shape-independent plan
 /// specification and stores that specification in the einsum extension
-/// payload. Concrete input shapes are used later to build a [`ContractionTree`]
-/// from that payload when the graph is compiled or executed.
+/// payload. Concrete traced inputs can resolve a [`ContractionTree`] while the
+/// op is built; symbolic traced inputs carry the plan specification until the
+/// extension runtime sees concrete execution shapes.
 ///
 /// Planner options and explicit paths are part of the extension payload
 /// identity. Two otherwise identical traced einsum ops with different
@@ -42,7 +43,7 @@ pub enum EinsumOptimize {
 }
 
 impl Default for EinsumOptimize {
-    /// Default: FLOPS-first automatic optimization.
+    /// Default: time-optimized automatic planning.
     fn default() -> Self {
         Self::Auto(default_auto_options())
     }
