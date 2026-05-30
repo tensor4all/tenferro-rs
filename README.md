@@ -12,9 +12,9 @@ general-purpose tensor workflows.
 - [Traced Execution](#traced-execution)
 - [Documentation](#documentation)
 - [Development Model](#development-model)
-- [Project Status](#project-status)
-- [Agentic AI Engineering](#agentic-ai-engineering)
-- [Contributions Welcome](#contributions-welcome)
+  - [Project Status](#project-status)
+  - [Agentic AI Engineering](#agentic-ai-engineering)
+  - [Contributions Welcome](#contributions-welcome)
 
 It is inspired by JAX and PyTorch: eager and traced execution, automatic
 differentiation, GPU backends, and extensible operation families. At the same
@@ -255,9 +255,10 @@ non-trivial upgrades, AI-assisted migration is recommended.
 
 AI agents are a first-class development and review tool in this repository, but
 not a final trust boundary. They help with implementation, documentation,
-issue triage, migration, verification, and repository-rule-based review; human
-maintainers remain responsible for design direction, review outcomes, and merge
-decisions.
+issue triage, migration, verification, and repository-rule-based review. The
+trust boundary is the combination of explicit repository rules, CI,
+oracle-based validation, reproducible benchmarks, provenance checks, and
+maintainer merge decisions.
 
 In practice:
 
@@ -267,9 +268,10 @@ In practice:
   checks, residuals, invariants, and regression tests.
 - Base performance claims on reproducible release-mode benchmarks, and avoid
   broad replacement claims for BLAS/LAPACK, NumPy, PyTorch, Julia, or JAX.
-- Use existing ecosystem components where they fit (`faer`, BLAS/LAPACK
-  provider features, CubeCL/CUDA, `num-traits`, `num-complex`) and keep
-  interoperability boundaries explicit.
+- Use existing ecosystem components and conventions where they fit:
+  column-major layouts compatible with Fortran, Julia, and MATLAB conventions,
+  `faer`, BLAS/LAPACK provider features, CubeCL/CUDA, `num-traits`, and
+  `num-complex`. Keep interoperability boundaries explicit.
 - Record important decisions in issues, pull requests, design documents, or
   work logs, and keep license/provenance clear.
 
