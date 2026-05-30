@@ -156,6 +156,8 @@ impl CpuBackendKind {
         }
     }
 
+    // Used by feature-specific diagnostics; some feature combinations leave
+    // the formatter path inactive.
     #[allow(dead_code)]
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -197,6 +199,8 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
     }
 }
 
+// Used by feature-disabled backend paths; a given feature build may compile no
+// direct call site for one provider.
 #[allow(dead_code)]
 pub(super) fn unavailable_cpu_backend_kind(kind: CpuBackendKind, op: &'static str) -> crate::Error {
     crate::Error::InvalidConfig {
@@ -565,6 +569,8 @@ impl CpuBackend {
         result
     }
 
+    // Selected when the BLAS provider is active; default Faer-only builds keep
+    // it dormant.
     #[allow(dead_code)]
     fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
@@ -596,6 +602,8 @@ impl CpuBackend {
         Arc::clone(&self.ctx)
     }
 
+    // Selected when the Faer provider handles cached GEMM execution; some
+    // feature combinations compile only the uncached or BLAS path.
     #[allow(dead_code)]
     fn install_with_pool_and_gemm_cache<R>(
         &mut self,
@@ -608,6 +616,8 @@ impl CpuBackend {
         result
     }
 
+    // Selected when the BLAS provider handles cached GEMM execution; default
+    // Faer-only builds keep it dormant.
     #[allow(dead_code)]
     fn run_with_pool_and_gemm_cache<R>(
         &mut self,

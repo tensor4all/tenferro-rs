@@ -107,7 +107,10 @@ log "branch: ${branch}"
 log "base:   ${BASE_REF} (${base_short})"
 log "head:   ${head_short}"
 
-mapfile -t changed_files < <(
+changed_files=()
+while IFS= read -r path; do
+  changed_files+=("$path")
+done < <(
   {
     git diff --name-only "${BASE_REF}...HEAD"
     git diff --cached --name-only
@@ -116,7 +119,10 @@ mapfile -t changed_files < <(
   } | awk 'NF' | sort -u
 )
 
-mapfile -t untracked_files < <(git ls-files --others --exclude-standard | awk 'NF' | sort -u)
+untracked_files=()
+while IFS= read -r path; do
+  untracked_files+=("$path")
+done < <(git ls-files --others --exclude-standard | awk 'NF' | sort -u)
 
 if [[ "${#changed_files[@]}" -eq 0 ]]; then
   log "changed files: none"

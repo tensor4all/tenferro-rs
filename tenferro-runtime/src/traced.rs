@@ -575,6 +575,10 @@ impl TracedTensor {
         )
     }
 
+    fn apply_same_shape_unary(&self, op: StdTensorOp) -> TracedTensor {
+        apply_unary(op, self, self.rank, self.shape_hint.clone())
+    }
+
     /// Elementwise negation.
     ///
     /// Prefer using the unary `-` operator when it reads naturally.
@@ -588,7 +592,7 @@ impl TracedTensor {
     /// let y2 = -&x;
     /// ```
     pub fn neg(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Neg, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Neg)
     }
 
     /// Elementwise complex conjugate.
@@ -605,7 +609,7 @@ impl TracedTensor {
     /// let y = x.conj();
     /// ```
     pub fn conj(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Conj, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Conj)
     }
 
     /// Elementwise absolute value.
@@ -618,7 +622,7 @@ impl TracedTensor {
     /// let y = x.abs();
     /// ```
     pub fn abs(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Abs, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Abs)
     }
 
     /// Elementwise sign.
@@ -631,7 +635,7 @@ impl TracedTensor {
     /// let y = x.sign();
     /// ```
     pub fn sign(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Sign, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Sign)
     }
 
     /// Scale by a real scalar: `y = factor * x`.
@@ -697,7 +701,7 @@ impl TracedTensor {
     /// let y = x.exp();
     /// ```
     pub fn exp(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Exp, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Exp)
     }
 
     /// Elementwise natural logarithm.
@@ -710,7 +714,7 @@ impl TracedTensor {
     /// let y = x.log();
     /// ```
     pub fn log(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Log, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Log)
     }
 
     /// Elementwise sine.
@@ -723,7 +727,7 @@ impl TracedTensor {
     /// let y = x.sin();
     /// ```
     pub fn sin(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Sin, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Sin)
     }
 
     /// Elementwise cosine.
@@ -736,7 +740,7 @@ impl TracedTensor {
     /// let y = x.cos();
     /// ```
     pub fn cos(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Cos, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Cos)
     }
 
     /// Elementwise hyperbolic tangent.
@@ -749,7 +753,7 @@ impl TracedTensor {
     /// let y = x.tanh();
     /// ```
     pub fn tanh(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Tanh, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Tanh)
     }
 
     /// Elementwise square root.
@@ -762,7 +766,7 @@ impl TracedTensor {
     /// let y = x.sqrt();
     /// ```
     pub fn sqrt(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Sqrt, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Sqrt)
     }
 
     /// Elementwise reciprocal square root.
@@ -775,7 +779,7 @@ impl TracedTensor {
     /// let y = x.rsqrt();
     /// ```
     pub fn rsqrt(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Rsqrt, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Rsqrt)
     }
 
     /// Elementwise power with NumPy-style broadcasting.
@@ -809,7 +813,7 @@ impl TracedTensor {
     /// let y = x.expm1();
     /// ```
     pub fn expm1(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Expm1, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Expm1)
     }
 
     /// Elementwise `log(1 + x)`.
@@ -822,7 +826,7 @@ impl TracedTensor {
     /// let y = x.log1p();
     /// ```
     pub fn log1p(&self) -> TracedTensor {
-        apply_unary(StdTensorOp::Log1p, self, self.rank, self.shape_hint.clone())
+        self.apply_same_shape_unary(StdTensorOp::Log1p)
     }
 
     /// Convert the tensor to a different dtype.

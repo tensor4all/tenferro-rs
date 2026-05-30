@@ -96,6 +96,20 @@ tenferro-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS
 
 See [`docs/design/`](docs/design/) for architecture and design documents.
 
+### Work Logs And Review Intent
+
+For nontrivial refactors, cleanup streams, AI-assisted implementation, or
+changes that make explicit design tradeoffs, check [`docs/worklogs/`](docs/worklogs/)
+before reviewing the code. Work logs record the session summary, context read,
+reference code, chosen design, rejected alternatives, and residual risks. A
+review that challenges scope, abstraction, or design intent should engage with
+the linked work log instead of treating the diff as context-free.
+
+When a PR establishes or changes durable design intent, update the appropriate
+document under [`docs/design/`](docs/design/) in the same PR. Work logs explain
+why a session made a decision; design docs record decisions future work should
+continue to follow.
+
 **Note**: Files under `docs/plans/` are historical records of past design discussions and decisions. They may contradict the current API or design — do not update them to match the current state.
 
 ## Performance, Layout, And Backend Rules
@@ -174,6 +188,7 @@ Additionally, verify the following before pushing:
 - **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`. Stale documentation is worse than no documentation.
+- **Work log updates**: For nontrivial refactors, cleanup streams, AI-assisted implementation, or explicit tradeoff decisions, add or update a work log under `docs/worklogs/` and link it from the PR body.
 
 ### PR Creation Rules
 

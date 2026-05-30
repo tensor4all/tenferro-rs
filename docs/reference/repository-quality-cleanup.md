@@ -56,6 +56,12 @@ duplication, but they are near public API boundaries. DRY refactors here must
 preserve public names, feature gates, rustdoc clarity, error ownership, and
 behavior. Prefer one narrow wrapper family per PR.
 
+Do not assume these wrapper surfaces are fully isomorphic. Macro/codegen is
+allowed only when the chosen wrapper family is genuinely same-shaped and the
+invocation keeps public names, docs, feature gating, and error behavior obvious.
+For mixed wrapper families, prefer explicit public wrappers plus small private
+helpers or descriptors.
+
 ### Performance TODOs
 
 Einsum v2 performance items such as transpose folding, dot decomposition,
@@ -79,3 +85,8 @@ correctness tests and should not be mixed into lint or file-organization PRs.
 Each PR should cover one debt class or one module family. Numeric behavior,
 backend dispatch, tensor layout semantics, and AD semantics must stay unchanged
 unless a separate accepted issue explicitly scopes that change.
+
+Cleanup PRs should link a work log under `docs/worklogs/` when they make
+nontrivial abstraction, module-split, macro/codegen, or deferral decisions. If
+the cleanup establishes durable design intent, update `docs/design/` in the
+same PR.

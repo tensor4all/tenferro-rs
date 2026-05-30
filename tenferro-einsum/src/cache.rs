@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::{EinsumSubscripts, Subscripts};
+use crate::EinsumSubscripts;
 
 /// Stable family identifier for the standard tenferro einsum extension.
 pub const EINSUM_EXTENSION_FAMILY_ID: &str = "tenferro.einsum.v1";
@@ -30,13 +30,4 @@ fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
 
 fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
     values.iter().map(vec_retained_bytes).sum()
-}
-
-fn subscripts_retained_bytes(subscripts: &Subscripts) -> usize {
-    vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
-}
-
-#[allow(dead_code)]
-fn subscripts_cache_key_retained_bytes(key: &(Subscripts, Vec<Vec<usize>>)) -> usize {
-    subscripts_retained_bytes(&key.0) + vec_of_vec_retained_bytes(&key.1)
 }

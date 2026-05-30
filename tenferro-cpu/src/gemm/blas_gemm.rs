@@ -4,6 +4,8 @@ use num_complex::{Complex32, Complex64};
 use crate::Error;
 
 pub(crate) trait BlasGemm: Sized {
+    // Kept as a provider-local contiguous BLAS entry point for direct BLAS
+    // validation even when the optimized path uses explicit strides.
     #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     fn contiguous_gemm(

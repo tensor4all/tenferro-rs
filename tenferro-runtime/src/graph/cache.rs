@@ -10,6 +10,8 @@ use tenferro_tensor::CacheStats;
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 
 /// Default capacity for compiled graph programs retained by a [`GraphCompiler`](super::GraphCompiler).
+// Public constant kept as the documented default; the crate-local alias below
+// is what current implementation paths consume.
 #[allow(dead_code)]
 pub const DEFAULT_GRAPH_COMPILE_CACHE_CAPACITY: usize = 256;
 
