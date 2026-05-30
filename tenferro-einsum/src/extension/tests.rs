@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use super::*;
+use crate::optimize::EinsumPlanSpec;
 use tenferro_ops::ext_op::ExtensionOp;
 
 #[test]
@@ -28,11 +29,22 @@ fn payload_identity_ignores_static_tree_execution_hint() {
         Arc::new(ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(0, 1), (3, 2)]).unwrap());
     let right_first =
         Arc::new(ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(1, 2), (0, 3)]).unwrap());
+    let plan_spec = EinsumPlanSpec::LeftToRight;
 
-    let without_hint = EinsumExtensionOp::new(subscripts.clone());
-    let hinted_left = EinsumExtensionOp::with_static_tree(subscripts.clone(), left_first);
-    let hinted_right = EinsumExtensionOp::with_static_tree(subscripts, right_first);
+    let default_without_hint = EinsumExtensionOp::new(subscripts.clone());
+    let default_hinted =
+        EinsumExtensionOp::with_static_tree(subscripts.clone(), Arc::clone(&left_first));
+    let without_hint = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
+    let hinted_left = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone())
+        .with_static_tree_hint(left_first);
+    let hinted_right =
+        EinsumExtensionOp::with_plan_spec(subscripts, plan_spec).with_static_tree_hint(right_first);
 
+    assert!(default_without_hint.payload_eq(&default_hinted));
+    assert_eq!(
+        payload_hash(&default_without_hint),
+        payload_hash(&default_hinted)
+    );
     assert!(without_hint.payload_eq(&hinted_left));
     assert!(hinted_left.payload_eq(&hinted_right));
     assert_eq!(payload_hash(&without_hint), payload_hash(&hinted_left));
@@ -40,12 +52,26 @@ fn payload_identity_ignores_static_tree_execution_hint() {
 }
 
 #[test]
+fn payload_identity_includes_plan_spec() {
+    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let left_to_right =
+        EinsumExtensionOp::with_plan_spec(subscripts.clone(), EinsumPlanSpec::LeftToRight);
+    let explicit_path =
+        EinsumExtensionOp::with_plan_spec(subscripts, EinsumPlanSpec::Path(vec![(1, 2), (0, 1)]));
+
+    assert!(!left_to_right.payload_eq(&explicit_path));
+    assert_ne!(payload_hash(&left_to_right), payload_hash(&explicit_path));
+}
+
+#[test]
 fn payload_identity_includes_output_shape_hint() {
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-    let without_hint = EinsumExtensionOp::new(subscripts.clone());
+    let plan_spec = EinsumPlanSpec::LeftToRight;
+    let without_hint = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
     let with_hint = EinsumExtensionOp::with_output_shape_hint(
         subscripts,
         vec![SymDim::from(2usize), SymDim::from(4usize)],
+        plan_spec,
     );
 
     assert!(!without_hint.payload_eq(&with_hint));

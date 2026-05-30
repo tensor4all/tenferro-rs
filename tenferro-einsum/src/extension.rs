@@ -36,6 +36,9 @@ use crate::builder::build_einsum_fragment;
 use crate::cache::{
     einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
 };
+#[cfg(any(feature = "autodiff", test))]
+use crate::optimize::default_auto_options;
+use crate::optimize::{hash_einsum_plan_spec, plan_specs_equal, EinsumPlanSpec};
 use crate::{
     ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
 };
@@ -48,9 +51,10 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,
+    plan_spec: EinsumPlanSpec,
     /// Optional execution hint. This is intentionally excluded from
-    /// `ExtensionOp` identity: contraction order affects performance, not the
-    /// mathematical value of a fixed einsum.
+    /// `ExtensionOp` identity: the shape-independent `plan_spec` carries
+    /// user planning policy, while this tree is a resolved cacheable hint.
     static_tree: Option<Arc<ContractionTree>>,
     output_shape_hint: Option<Vec<SymDim>>,
 }
@@ -59,6 +63,7 @@ impl std::fmt::Debug for EinsumExtensionOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EinsumExtensionOp")
             .field("subscripts", &self.subscripts)
+            .field("plan_spec", &self.plan_spec)
             .field("has_static_tree", &self.static_tree.is_some())
             .field("output_shape_hint", &self.output_shape_hint)
             .finish()
@@ -70,8 +75,14 @@ impl EinsumExtensionOp {
     #[must_use]
     #[cfg(any(feature = "autodiff", test))]
     pub(crate) fn new(subscripts: EinsumSubscripts) -> Self {
+        Self::with_plan_spec(subscripts, EinsumPlanSpec::Auto(default_auto_options()))
+    }
+
+    #[must_use]
+    pub(crate) fn with_plan_spec(subscripts: EinsumSubscripts, plan_spec: EinsumPlanSpec) -> Self {
         Self {
             subscripts,
+            plan_spec,
             static_tree: None,
             output_shape_hint: None,
         }
@@ -84,11 +95,7 @@ impl EinsumExtensionOp {
         subscripts: EinsumSubscripts,
         tree: Arc<ContractionTree>,
     ) -> Self {
-        Self {
-            subscripts,
-            static_tree: Some(tree),
-            output_shape_hint: None,
-        }
+        Self::new(subscripts).with_static_tree_hint(tree)
     }
 
     /// Create an einsum extension payload with an explicit output shape hint.
@@ -96,12 +103,11 @@ impl EinsumExtensionOp {
     pub(crate) fn with_output_shape_hint(
         subscripts: EinsumSubscripts,
         output_shape_hint: Vec<SymDim>,
+        plan_spec: EinsumPlanSpec,
     ) -> Self {
-        Self {
-            subscripts,
-            static_tree: None,
-            output_shape_hint: Some(output_shape_hint),
-        }
+        let mut op = Self::with_plan_spec(subscripts, plan_spec);
+        op.output_shape_hint = Some(output_shape_hint);
+        op
     }
 
     /// Attach a precomputed contraction tree as an execution hint.
@@ -115,6 +121,12 @@ impl EinsumExtensionOp {
     #[must_use]
     pub(crate) fn subscripts(&self) -> &EinsumSubscripts {
         &self.subscripts
+    }
+
+    /// Return the shape-independent planning policy.
+    #[must_use]
+    pub(crate) fn plan_spec(&self) -> &EinsumPlanSpec {
+        &self.plan_spec
     }
 
     /// Return the precomputed contraction tree, if present.
@@ -141,6 +153,7 @@ impl ExtensionOp for EinsumExtensionOp {
         for label in &self.subscripts.output {
             hasher.write_u32(*label);
         }
+        hash_einsum_plan_spec(self.plan_spec(), hasher);
         if let Some(shape) = &self.output_shape_hint {
             hasher.write_usize(shape.len());
             for dim in shape {
@@ -159,7 +172,9 @@ impl ExtensionOp for EinsumExtensionOp {
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other.as_any().downcast_ref::<Self>().is_some_and(|that| {
-            self.subscripts == that.subscripts && self.output_shape_hint == that.output_shape_hint
+            self.subscripts == that.subscripts
+                && plan_specs_equal(self.plan_spec(), that.plan_spec())
+                && self.output_shape_hint == that.output_shape_hint
         })
     }
 
@@ -366,6 +381,7 @@ impl ExtensionAdRule for EinsumAdRule {
                     output: vjp_output_labels.clone(),
                 },
                 output_shape_hint.clone(),
+                op.plan_spec().clone(),
             );
             let out = emitter.add_op(
                 StdTensorOp::Extension(Arc::new(vjp_op)),

@@ -134,13 +134,6 @@ pub(crate) fn resolve_plan_spec(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by extension payload identity in the next integration step"
-    )
-)]
 pub(crate) fn hash_einsum_plan_spec(spec: &EinsumPlanSpec, state: &mut dyn Hasher) {
     match spec {
         EinsumPlanSpec::Auto(options) => {
@@ -159,13 +152,6 @@ pub(crate) fn hash_einsum_plan_spec(spec: &EinsumPlanSpec, state: &mut dyn Hashe
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by extension payload identity in the next integration step"
-    )
-)]
 pub(crate) fn plan_specs_equal(lhs: &EinsumPlanSpec, rhs: &EinsumPlanSpec) -> bool {
     match (lhs, rhs) {
         (EinsumPlanSpec::Auto(lhs), EinsumPlanSpec::Auto(rhs)) => {

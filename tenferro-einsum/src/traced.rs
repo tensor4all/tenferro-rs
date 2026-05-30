@@ -13,7 +13,9 @@ use crate::cache::{
 #[cfg(feature = "autodiff")]
 use crate::extension::ensure_einsum_extension_rule_registered;
 use crate::extension::EinsumExtensionOp;
-use crate::optimize::{is_default_auto_options, resolve_einsum_strategy};
+use crate::optimize::{
+    default_auto_options, is_default_auto_options, resolve_einsum_strategy, EinsumPlanSpec,
+};
 use crate::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
     Error as EinsumError, Result as EinsumResult, Subscripts,
@@ -72,7 +74,11 @@ pub fn einsum_subscripts_with(
     }
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
-    let mut op = EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint);
+    let mut op = EinsumExtensionOp::with_output_shape_hint(
+        subscripts.clone(),
+        output_shape_hint,
+        EinsumPlanSpec::Auto(default_auto_options()),
+    );
 
     if let Some(shapes) = concrete_shapes(inputs) {
         let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
