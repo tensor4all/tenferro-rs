@@ -6,8 +6,8 @@ use num_complex::{Complex32, Complex64};
 use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
     ConjElem, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
-    StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorView,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
+    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorRank,
+    TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use crate::Error;
 
@@ -527,6 +527,24 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     assert!(row_err
         .to_string()
         .contains("backend buffers cannot be exported"));
+}
+
+#[test]
+fn tensor_buffer_refs_cover_backend_metadata() {
+    let read_handle: Arc<dyn crate::types::BackendBuffer<f64>> =
+        Arc::new(BufferHandle::<f64>::new_with_len(7, 0));
+    let read_ref = TensorBufferRef::Backend(Arc::clone(&read_handle));
+    let cloned_read_ref = read_ref.clone();
+
+    assert_eq!(cloned_read_ref.len(), 0);
+    assert!(cloned_read_ref.is_empty());
+
+    let write_handle: Arc<dyn crate::types::BackendBuffer<i32>> =
+        Arc::new(BufferHandle::<i32>::new_with_len(8, 2));
+    let write_ref = TensorBufferRefMut::Backend(write_handle);
+
+    assert_eq!(write_ref.len(), 2);
+    assert!(!write_ref.is_empty());
 }
 
 #[test]
