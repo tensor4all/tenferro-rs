@@ -531,7 +531,7 @@ pub fn transpose_slice(
         let selected_len = if limit == start {
             0
         } else {
-            (limit - start + stride - 1) / stride
+            (limit - start).div_ceil(stride)
         };
         let covered = if selected_len == 0 {
             0

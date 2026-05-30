@@ -41,6 +41,8 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
+    // Mirrors triangular-solve math flags directly at the scalar backend boundary.
+    #[allow(clippy::too_many_arguments)]
     fn triangular_solve_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -2260,6 +2262,8 @@ pub(crate) fn solve<T: FaerLinalg>(
     })
 }
 
+// Keeps triangular-solve operands and flags explicit at the CPU backend boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn triangular_solve<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,

@@ -17,7 +17,7 @@ pub(crate) fn reachable_offset_range(
     strides: &[isize],
     offset: isize,
 ) -> Result<Option<(isize, isize)>> {
-    if shape.iter().any(|&extent| extent == 0) {
+    if shape.contains(&0) {
         return Ok(None);
     }
 
@@ -307,7 +307,7 @@ impl<R: TensorRank> TensorLayout<R> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn validate_mutable_no_overlap(&self) -> Result<()> {
-        if self.shape().iter().any(|&extent| extent == 0) {
+        if self.shape().contains(&0) {
             return Ok(());
         }
 

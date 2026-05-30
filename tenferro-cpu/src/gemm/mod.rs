@@ -236,6 +236,8 @@ impl GemmAnalysisCache {
             .map(|plan| plan.dims.clone())
     }
 
+    // Cache entries mirror the full analyzed GEMM key to avoid rebuilding a temporary key object.
+    #[allow(clippy::too_many_arguments)]
     fn store(
         &mut self,
         slot: usize,
@@ -697,22 +699,6 @@ where
 }
 
 #[cfg(feature = "cpu-faer")]
-#[allow(dead_code)]
-pub(crate) fn dot_general_faer<T>(
-    buffers: &mut BufferPool,
-    cache: &mut GemmAnalysisCache,
-    ctx: &crate::CpuContext,
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    config: &DotGeneralConfig,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
-{
-    dot_general_faer_cached(buffers, cache, None, ctx, lhs, rhs, config)
-}
-
-#[cfg(feature = "cpu-faer")]
 pub(crate) fn dot_general_faer_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -731,26 +717,8 @@ where
 }
 
 #[cfg(feature = "cpu-faer")]
-#[allow(dead_code)]
-pub(crate) fn dot_general_faer_with_conj<T>(
-    buffers: &mut BufferPool,
-    cache: &mut GemmAnalysisCache,
-    ctx: &crate::CpuContext,
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    config: &DotGeneralConfig,
-    lhs_conj: bool,
-    rhs_conj: bool,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
-{
-    dot_general_faer_with_conj_cached(
-        buffers, cache, None, ctx, lhs, rhs, config, lhs_conj, rhs_conj,
-    )
-}
-
-#[cfg(feature = "cpu-faer")]
+// Matches the public dot-general parameters plus cache metadata and conjugation flags.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_general_faer_with_conj_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -918,6 +886,8 @@ pub(crate) fn dot_general_faer_read_cached(
 }
 
 #[cfg(feature = "cpu-faer")]
+// Internal GEMM fast path needs cache metadata, backend context, operands, and conjugation flags together.
+#[allow(clippy::too_many_arguments)]
 fn typed_faer_gemm<L, R, T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -1022,21 +992,6 @@ where
 }
 
 #[cfg(feature = "cpu-blas")]
-#[allow(dead_code)]
-pub(crate) fn dot_general_blas<T>(
-    buffers: &mut BufferPool,
-    cache: &mut GemmAnalysisCache,
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    config: &DotGeneralConfig,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
-{
-    dot_general_blas_cached(buffers, cache, None, lhs, rhs, config)
-}
-
-#[cfg(feature = "cpu-blas")]
 pub(crate) fn dot_general_blas_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -1086,23 +1041,6 @@ where
             "CPU GEMM requires host-backed canonical inputs",
         )
     })
-}
-
-#[cfg(feature = "cpu-blas")]
-#[allow(dead_code)]
-pub(crate) fn dot_general_blas_with_conj<T>(
-    buffers: &mut BufferPool,
-    cache: &mut GemmAnalysisCache,
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    config: &DotGeneralConfig,
-    lhs_conj: bool,
-    rhs_conj: bool,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem + 'static,
-{
-    dot_general_blas_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
 }
 
 #[cfg(feature = "cpu-blas")]

@@ -97,7 +97,7 @@ struct BinaryDotFastPlan {
 }
 
 fn small_contains(labels: &[u32], label: u32) -> bool {
-    labels.iter().any(|candidate| *candidate == label)
+    labels.contains(&label)
 }
 
 fn labels_are_unique(labels: &[u32]) -> bool {
@@ -709,7 +709,7 @@ fn eager_einsum_exec(
     record_eager_einsum_profile("exec.enter", Duration::ZERO);
     let values = inputs
         .iter()
-        .map(|tensor| TensorValue::Borrowed(*tensor))
+        .map(|tensor| TensorValue::Borrowed(tensor))
         .collect();
     eager_einsum_exec_values(exec, values, tree)
 }
@@ -724,7 +724,7 @@ fn eager_einsum_exec_read(
     let values = inputs
         .iter()
         .map(|input| match input {
-            TensorRead::Tensor(tensor) => TensorValue::Borrowed(*tensor),
+            TensorRead::Tensor(tensor) => TensorValue::Borrowed(tensor),
             TensorRead::View(view) => TensorValue::View(view.clone()),
         })
         .collect();

@@ -102,6 +102,7 @@ jobs:
           script: |
             const required = [
               "rustfmt",
+              "clippy",
               "cargo test (blas inject)",
               "tensor core dependency boundary",
               "coverage",

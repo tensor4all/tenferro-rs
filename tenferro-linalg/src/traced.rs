@@ -466,7 +466,7 @@ pub fn norm(
                 None => frobenius_norm(&abs, &axes),
                 Some(p) if p == f64::INFINITY => abs.reduce_max(&axes),
                 Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes),
-                Some(p) if p == 0.0 => count_nonzero(&abs, &axes),
+                Some(0.0) => count_nonzero(&abs, &axes),
                 Some(p) => p_norm(&abs, &axes, p),
             }
         }
@@ -652,7 +652,7 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor 
     let abs = a.abs();
     match ord {
         None => frobenius_norm(&abs, &[axis]),
-        Some(p) if p == 0.0 => count_nonzero(&abs, &[axis]),
+        Some(0.0) => count_nonzero(&abs, &[axis]),
         Some(p) if p == f64::INFINITY => abs.reduce_max(&[axis]),
         Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&[axis]),
         Some(p) => p_norm(&abs, &[axis], p),
@@ -666,17 +666,17 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
         None => frobenius_norm(&abs, &[0, 1]),
         Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
         Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(&abs, false),
-        Some(p) if p == 1.0 => matrix_col_sum_norm(&abs, true),
-        Some(p) if p == -1.0 => matrix_col_sum_norm(&abs, false),
-        Some(p) if p == 2.0 => {
+        Some(1.0) => matrix_col_sum_norm(&abs, true),
+        Some(-1.0) => matrix_col_sum_norm(&abs, false),
+        Some(2.0) => {
             let singular_values = svd(&matrix)?.1.abs();
             singular_values.reduce_max(&[0])
         }
-        Some(p) if p == -2.0 => {
+        Some(-2.0) => {
             let singular_values = svd(&matrix)?.1.abs();
             singular_values.reduce_min(&[0])
         }
-        Some(p) if p == 0.0 => count_nonzero(&abs, &[0, 1]),
+        Some(0.0) => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
     })
 }
@@ -716,8 +716,8 @@ fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> TracedTensor {
 
     let mut perm = Vec::with_capacity(tensor.rank);
     perm.extend_from_slice(axes);
-    for axis in 0..tensor.rank {
-        if !selected[axis] {
+    for (axis, is_selected) in selected.iter().enumerate().take(tensor.rank) {
+        if !*is_selected {
             perm.push(axis);
         }
     }

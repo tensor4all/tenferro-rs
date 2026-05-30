@@ -1399,7 +1399,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         let placement = self.placement.clone();
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(&mut *data),
+                buffer: TensorBufferRefMut::Host(data),
                 layout,
                 placement,
             }),
@@ -1612,7 +1612,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         let placement = self.placement.clone();
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(&mut *data),
+                buffer: TensorBufferRefMut::Host(data),
                 layout,
                 placement,
             }),
@@ -2073,6 +2073,8 @@ pub enum TensorView<'a> {
 /// assert_eq!(read.dtype(), DType::F64);
 /// assert_eq!(read.shape(), &[2]);
 /// ```
+// Keep borrowed views inline to avoid allocation on read-only tensor dispatch paths.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum TensorRead<'a> {
     Tensor(&'a Tensor),
@@ -2601,7 +2603,7 @@ fn for_each_layout_offset_col_major(
         });
     }
 
-    if shape.iter().any(|&dim| dim == 0) {
+    if shape.contains(&0) {
         return Ok(());
     }
 
@@ -2677,7 +2679,7 @@ fn reachable_layout_span(
     strides: &[isize],
     offset: isize,
 ) -> crate::Result<Option<(usize, usize)>> {
-    if shape.iter().any(|&extent| extent == 0) {
+    if shape.contains(&0) {
         return Ok(None);
     }
 
@@ -3023,7 +3025,7 @@ fn for_each_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
         f(&[]);
         return;
     }
-    if shape.iter().any(|&dim| dim == 0) {
+    if shape.contains(&0) {
         return;
     }
 
@@ -3050,7 +3052,7 @@ fn for_each_row_major_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
         f(&[]);
         return;
     }
-    if shape.iter().any(|&dim| dim == 0) {
+    if shape.contains(&0) {
         return;
     }
 

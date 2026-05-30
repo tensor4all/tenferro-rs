@@ -68,11 +68,9 @@ pub fn compile_std_to_exec(
                 })
                 .collect();
 
-            let (output_dtype, output_shapes, output_extents): (
-                DType,
-                Vec<Vec<DimExpr>>,
-                Vec<Vec<ShapeExtent<DimExpr>>>,
-            ) = if let StdTensorOp::Extension(ext) = &instr.op {
+            let (output_dtype, output_shapes, output_extents) = if let StdTensorOp::Extension(ext) =
+                &instr.op
+            {
                 let metas =
                     infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shapes_refs);
                 assert_eq!(
@@ -1414,8 +1412,8 @@ fn emit_merge_reshape_rhs(
 fn merge_span(shape: &[DimExpr], start: usize, end: usize) -> DimExpr {
     assert!(end > start, "merge_span: empty range");
     let mut result = shape[start].clone();
-    for axis in (start + 1)..end {
-        result = DimExpr::mul(result, shape[axis].clone());
+    for dim in shape.iter().take(end).skip(start + 1) {
+        result = DimExpr::mul(result, dim.clone());
     }
     result
 }
@@ -1604,9 +1602,7 @@ fn find_dot_operand_conj_fold(
     let mut layout_chain = Vec::new();
     let mut seen = std::collections::HashSet::new();
     while seen.insert(slot) {
-        let Some(producer_idx) = producer_by_slot.get(slot).copied().flatten() else {
-            return None;
-        };
+        let producer_idx = producer_by_slot.get(slot).copied().flatten()?;
         let producer = &program.instructions[producer_idx];
 
         if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {

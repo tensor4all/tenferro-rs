@@ -1049,14 +1049,6 @@ where
     Ok(tensor_from_array(out))
 }
 
-#[allow(dead_code)]
-pub(crate) fn typed_abs<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Tier2Elem + PoolScalar,
-{
-    with_local_pool(|buffers| typed_abs_with_pool(buffers, input))
-}
-
 pub(crate) fn typed_abs_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -1073,14 +1065,6 @@ where
     Ok(tensor_from_array(out))
 }
 
-#[allow(dead_code)]
-pub(crate) fn typed_sign<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Tier2Elem + PoolScalar,
-{
-    with_local_pool(|buffers| typed_sign_with_pool(buffers, input))
-}
-
 pub(crate) fn typed_sign_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -1095,17 +1079,6 @@ where
     })
     .map_err(|err| crate::Error::backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
-}
-
-#[allow(dead_code)]
-pub(crate) fn typed_maximum<T>(
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Tier2Elem + PoolScalar,
-{
-    with_local_pool(|buffers| typed_maximum_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn typed_maximum_with_pool<T>(
@@ -1135,17 +1108,6 @@ where
     Ok(tensor_from_array(out))
 }
 
-#[allow(dead_code)]
-pub(crate) fn typed_minimum<T>(
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Tier2Elem + PoolScalar,
-{
-    with_local_pool(|buffers| typed_minimum_with_pool(buffers, lhs, rhs))
-}
-
 pub(crate) fn typed_minimum_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -1171,18 +1133,6 @@ where
     )
     .map_err(|err| crate::Error::backend_failure("minimum", err))?;
     Ok(tensor_from_array(out))
-}
-
-#[allow(dead_code)]
-pub(crate) fn typed_compare<T>(
-    lhs: &TypedTensor<T>,
-    rhs: &TypedTensor<T>,
-    dir: &CompareDir,
-) -> crate::Result<TypedTensor<bool>>
-where
-    T: CompareElem,
-{
-    with_local_pool(|buffers| typed_compare_with_pool(buffers, lhs, rhs, dir))
 }
 
 pub(crate) fn typed_compare_with_pool<T>(

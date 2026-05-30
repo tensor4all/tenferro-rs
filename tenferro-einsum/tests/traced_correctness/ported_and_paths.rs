@@ -610,10 +610,10 @@ fn einsum_binary_diag_ii_jk_to_ijk() {
 
     assert_eq!(result.shape(), &[3, 2, 2]);
     let diag_a = [1.0, 2.0, 3.0];
-    for i in 0..3 {
+    for (i, &diag) in diag_a.iter().enumerate() {
         for j in 0..2 {
             for k in 0..2 {
-                let expected = diag_a[i] * get_v2(&b, &[j, k]);
+                let expected = diag * get_v2(&b, &[j, k]);
                 assert_close(
                     get_v2(&result, &[i, j, k]),
                     expected,
@@ -683,11 +683,11 @@ fn einsum_binary_diag_ii_jj_to_ij() {
     assert_eq!(result.shape(), &[3, 2]);
     let diag_a = [1.0, 2.0, 3.0];
     let diag_b = [10.0, 20.0];
-    for i in 0..3 {
-        for j in 0..2 {
+    for (i, &diag_left) in diag_a.iter().enumerate() {
+        for (j, &diag_right) in diag_b.iter().enumerate() {
             assert_close(
                 get_v2(&result, &[i, j]),
-                diag_a[i] * diag_b[j],
+                diag_left * diag_right,
                 &format!("ii_jj_ij[{i},{j}]"),
             );
         }

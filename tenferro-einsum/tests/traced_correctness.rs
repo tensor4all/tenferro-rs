@@ -109,7 +109,7 @@ fn row_major_to_column_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
     if rank <= 1 {
         return data.to_vec();
     }
-    for rm_flat in 0..n {
+    for (rm_flat, value) in data.iter().copied().enumerate().take(n) {
         let mut idx = vec![0usize; rank];
         let mut rem = rm_flat;
         for d in (0..rank).rev() {
@@ -122,7 +122,7 @@ fn row_major_to_column_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
             cm_flat += idx[d] * stride;
             stride *= shape[d];
         }
-        col_data[cm_flat] = data[rm_flat];
+        col_data[cm_flat] = value;
     }
     col_data
 }

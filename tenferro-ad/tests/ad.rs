@@ -35,7 +35,7 @@ use tidu::{differentiate, transpose, LinearFragment};
 
 const TOL: f64 = 1e-6;
 
-fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], idx: usize, h: f64) -> f64 {
+fn finite_diff_scalar(f: &impl Fn(&[f64]) -> f64, x: &[f64], idx: usize, h: f64) -> f64 {
     let mut xp = x.to_vec();
     let mut xm = x.to_vec();
     xp[idx] += h;
@@ -44,7 +44,7 @@ fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], idx: usize, h: f64) 
 }
 
 fn finite_diff_scalar_lhs(
-    f: impl Fn(&[f64], &[f64]) -> f64,
+    f: &impl Fn(&[f64], &[f64]) -> f64,
     lhs: &[f64],
     rhs: &[f64],
     idx: usize,
@@ -58,7 +58,7 @@ fn finite_diff_scalar_lhs(
 }
 
 fn finite_diff_scalar_rhs(
-    f: impl Fn(&[f64], &[f64]) -> f64,
+    f: &impl Fn(&[f64], &[f64]) -> f64,
     lhs: &[f64],
     rhs: &[f64],
     idx: usize,
@@ -540,12 +540,12 @@ fn assert_jvp_matches_finite_diff(
 
 fn assert_grad_matches_finite_diff(actual: &[f64], base: &[f64], f: impl Fn(&[f64]) -> f64) {
     assert_eq!(actual.len(), base.len());
-    for index in 0..base.len() {
+    for (index, &actual_value) in actual.iter().enumerate().take(base.len()) {
         let expected = finite_diff_scalar(&f, base, index, 1e-6);
         assert!(
-            (actual[index] - expected).abs() <= TOL,
+            (actual_value - expected).abs() <= TOL,
             "index {index}: expected {expected}, got {}",
-            actual[index]
+            actual_value
         );
     }
 }
@@ -557,12 +557,12 @@ fn assert_grad_matches_finite_diff_lhs(
     f: &impl Fn(&[f64], &[f64]) -> f64,
 ) {
     assert_eq!(actual.len(), lhs.len());
-    for index in 0..lhs.len() {
+    for (index, &actual_value) in actual.iter().enumerate().take(lhs.len()) {
         let expected = finite_diff_scalar_lhs(&f, lhs, rhs, index, 1e-6);
         assert!(
-            (actual[index] - expected).abs() <= TOL,
+            (actual_value - expected).abs() <= TOL,
             "lhs index {index}: expected {expected}, got {}",
-            actual[index]
+            actual_value
         );
     }
 }
@@ -574,12 +574,12 @@ fn assert_grad_matches_finite_diff_rhs(
     f: &impl Fn(&[f64], &[f64]) -> f64,
 ) {
     assert_eq!(actual.len(), rhs.len());
-    for index in 0..rhs.len() {
+    for (index, &actual_value) in actual.iter().enumerate().take(rhs.len()) {
         let expected = finite_diff_scalar_rhs(&f, lhs, rhs, index, 1e-6);
         assert!(
-            (actual[index] - expected).abs() <= TOL,
+            (actual_value - expected).abs() <= TOL,
             "rhs index {index}: expected {expected}, got {}",
-            actual[index]
+            actual_value
         );
     }
 }
@@ -683,12 +683,12 @@ fn grad_matmul_sum() {
         eval_scalar(matmul(&a, &b).sum(&[0, 1]))
     };
 
-    for index in 0..a_data.len() {
+    for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
         let expected = finite_diff_scalar(&f, &a_data, index, 1e-6);
         assert!(
-            (grad_data[index] - expected).abs() <= TOL,
+            (grad_value - expected).abs() <= TOL,
             "index {index}: expected {expected}, got {}",
-            grad_data[index]
+            grad_value
         );
     }
 }
@@ -716,12 +716,12 @@ fn grad_matmul_sum_wrt_rhs() {
         eval_scalar(loss)
     };
 
-    for index in 0..b_data.len() {
+    for (index, &grad_value) in grad_data.iter().enumerate().take(b_data.len()) {
         let expected = finite_diff_scalar(&f, &b_data, index, 1e-6);
         assert!(
-            (grad_data[index] - expected).abs() <= TOL,
+            (grad_value - expected).abs() <= TOL,
             "index {index}: expected {expected}, got {}",
-            grad_data[index]
+            grad_value
         );
     }
 }
@@ -745,12 +745,12 @@ fn grad_matmul_sum_shared_input() {
         eval_scalar(loss)
     };
 
-    for index in 0..a_data.len() {
+    for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
         let expected = finite_diff_scalar(&f, &a_data, index, 1e-6);
         assert!(
-            (grad_data[index] - expected).abs() <= TOL,
+            (grad_value - expected).abs() <= TOL,
             "index {index}: expected {expected}, got {}",
-            grad_data[index]
+            grad_value
         );
     }
 }
@@ -780,12 +780,12 @@ fn grad_batched_matmul_sum() {
         eval_scalar(loss)
     };
 
-    for index in 0..a_data.len() {
+    for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
         let expected = finite_diff_scalar(&f, &a_data, index, 1e-6);
         assert!(
-            (grad_data[index] - expected).abs() <= TOL,
+            (grad_value - expected).abs() <= TOL,
             "index {index}: expected {expected}, got {}",
-            grad_data[index]
+            grad_value
         );
     }
 }

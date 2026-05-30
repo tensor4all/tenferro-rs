@@ -13,7 +13,7 @@ use crate::shape_infer::promote_dtype_for_binary_op;
 
 enum PromotedTensor<'a> {
     Borrowed(&'a Tensor),
-    Owned(Tensor),
+    Owned(Box<Tensor>),
 }
 
 impl<'a> PromotedTensor<'a> {
@@ -33,9 +33,9 @@ fn promote_to_dtype<'a>(
     if tensor.dtype() == promoted {
         Ok(PromotedTensor::Borrowed(tensor))
     } else {
-        Ok(PromotedTensor::Owned(
+        Ok(PromotedTensor::Owned(Box::new(
             exec.convert(tensor, promoted).map_err(Error::from)?,
-        ))
+        )))
     }
 }
 

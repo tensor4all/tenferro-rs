@@ -374,7 +374,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
                 });
             }
             let span = limit - start;
-            Ok((span + stride - 1) / stride)
+            Ok(span.div_ceil(stride))
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
@@ -1325,17 +1325,17 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     }
 
     let mut out_shape = Vec::with_capacity(input_shape.len());
-    for axis in 0..input_shape.len() {
+    for (axis, &input_extent) in input_shape.iter().enumerate() {
         if config.interior_padding[axis] < 0 {
             return Err(crate::Error::InvalidConfig {
                 op: "pad",
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
-        let base = if input_shape[axis] == 0 {
+        let base = if input_extent == 0 {
             0
         } else {
-            (input_shape[axis] as i64 - 1) * (config.interior_padding[axis] + 1) + 1
+            (input_extent as i64 - 1) * (config.interior_padding[axis] + 1) + 1
         };
         let dim = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
         out_shape.push(
