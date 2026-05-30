@@ -3,6 +3,19 @@
 tenferro-rs is a modular Rust tensor stack for scientific computing and
 general-purpose tensor workflows.
 
+## Contents
+
+- [Direct Tensor Execution](#direct-tensor-execution)
+- [If You Know ndarray](#if-you-know-ndarray)
+- [Standard Operation Crates](#standard-operation-crates)
+- [EagerTensor Execution](#eagertensor-execution)
+- [Traced Execution](#traced-execution)
+- [Documentation](#documentation)
+- [Development Model](#development-model)
+- [Project Status](#project-status)
+- [Agentic AI Engineering](#agentic-ai-engineering)
+- [Contributions Welcome](#contributions-welcome)
+
 It is inspired by JAX and PyTorch: eager and traced execution, automatic
 differentiation, GPU backends, and extensible operation families. At the same
 time, it is designed to remain usable in lightweight settings. If you only need
@@ -227,22 +240,47 @@ standard operation crate and register its runtime on the `GraphExecutor`.
 
 ## Development Model
 
-tenferro-rs is pre-1.0 and intentionally evolves quickly. Public APIs, crate
-boundaries, backend contracts, and feature flags may change while the design
-stabilizes.
+### Project Status
 
-Agentic AI workflows are a first-class development path for this repository.
-The project uses AI agents for implementation, documentation, review, issue
-triage, migration, and verification. Human maintainers own design decisions,
-review outcomes, and merge decisions.
+tenferro-rs is pre-1.0. Public APIs, crate boundaries, backend contracts,
+feature flags, and internal architecture are still evolving. The stack is
+dogfooded in [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and
+related tensor4all projects, with changes driven by real scientific-computing
+workloads, tests, oracle data, benchmarks, and design records.
 
 If you build against `main`, pin commits and expect breaking changes. For
 non-trivial upgrades, AI-assisted migration is recommended.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy.
-Bug-fix pull requests are welcome. New features must start as feature request
-issues before implementation PRs are opened.
+### Agentic AI Engineering
 
-Repository-local AI workflows are available for issue intake and scoped
-bug-fix PR preparation across Codex CLI, Claude Code, and OpenCode; see
-`CONTRIBUTING.md` for the supported entry points.
+AI agents are a first-class development and review tool in this repository, but
+not a final trust boundary. They help with implementation, documentation,
+issue triage, migration, verification, and repository-rule-based review; human
+maintainers remain responsible for design direction, review outcomes, and merge
+decisions.
+
+In practice:
+
+- Keep the public API small; new features require accepted issues or design
+  records.
+- Validate numerical code with operation-appropriate oracles, finite-difference
+  checks, residuals, invariants, and regression tests.
+- Base performance claims on reproducible release-mode benchmarks, and avoid
+  broad replacement claims for BLAS/LAPACK, NumPy, PyTorch, Julia, or JAX.
+- Use existing ecosystem components where they fit (`faer`, BLAS/LAPACK
+  provider features, CubeCL/CUDA, `num-traits`, `num-complex`) and keep
+  interoperability boundaries explicit.
+- Record important decisions in issues, pull requests, design documents, or
+  work logs, and keep license/provenance clear.
+
+### Contributions Welcome
+
+Bug-fix pull requests, feature requests, design discussions, documentation
+improvements, and benchmark reports are welcome. New feature ideas are welcome
+too; implementation PRs for new features must start from accepted feature
+request issues, so API, backend, AD, dependency, and testing implications can
+be reviewed first.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy and
+the supported AI-assisted issue-intake and bug-fix PR workflows across Codex
+CLI, Claude Code, and OpenCode.
