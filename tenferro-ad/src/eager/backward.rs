@@ -180,7 +180,7 @@ impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
                     panic!("eager forward exec failed for {:?}: {}", op_node.op, err)
                 });
 
-            for (output_id, output) in op_node.outputs.iter().zip(outputs.into_iter()) {
+            for (output_id, output) in op_node.outputs.iter().zip(outputs) {
                 let key = fragment.vals()[*output_id].key.clone();
                 all_values.insert(key, Arc::new(output));
             }

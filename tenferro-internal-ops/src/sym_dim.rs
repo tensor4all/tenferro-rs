@@ -159,11 +159,7 @@ fn raw_constant_value(raw: &RawSymDim) -> Option<usize> {
         RawSymDim::Mul(lhs, rhs) => raw_constant_value(lhs)?.checked_mul(raw_constant_value(rhs)?),
         RawSymDim::FloorDiv(lhs, rhs) => {
             let rhs = raw_constant_value(rhs)?;
-            if rhs == 0 {
-                None
-            } else {
-                Some(raw_constant_value(lhs)? / rhs)
-            }
+            raw_constant_value(lhs)?.checked_div(rhs)
         }
         RawSymDim::Min(lhs, rhs) => Some(raw_constant_value(lhs)?.min(raw_constant_value(rhs)?)),
         RawSymDim::Max(lhs, rhs) => Some(raw_constant_value(lhs)?.max(raw_constant_value(rhs)?)),

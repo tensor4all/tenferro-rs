@@ -380,7 +380,7 @@ fn execute_extension_instruction<B: TensorBackend + 'static>(
             },
         ));
     }
-    for (slot, tensor) in inst.output_slots.iter().copied().zip(outputs.into_iter()) {
+    for (slot, tensor) in inst.output_slots.iter().copied().zip(outputs) {
         slots[slot] = Some(tensor);
     }
     Ok(())
