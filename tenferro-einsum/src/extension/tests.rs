@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use super::*;
-use crate::optimize::{plan_specs_equal, EinsumPlanSpec};
+use crate::optimize::EinsumPlanSpec;
 use tenferro_ops::ext_op::ExtensionOp;
 
 #[test]
@@ -97,14 +97,55 @@ fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
 
     let op = vjp_einsum_op_with_inherited_plan(
         &primal_op,
+        0,
         vjp_subscripts,
         vec![SymDim::from(2usize), SymDim::from(3usize)],
         &vjp_shapes,
     )
     .unwrap();
 
-    assert!(plan_specs_equal(op.plan_spec(), primal_op.plan_spec()));
-    assert!(op.static_tree().is_some());
+    assert!(matches!(
+        op.plan_spec(),
+        EinsumPlanSpec::FixedPairs(pairs) if pairs == &vec![(1, 2), (0, 3)]
+    ));
+    let tree = op.static_tree().expect("expected concrete VJP tree");
+    assert_eq!(tree.step_pair(0), Some((1, 2)));
+    assert_eq!(tree.step_pair(1), Some((0, 3)));
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
+    let primal_op = EinsumExtensionOp::with_plan_spec(
+        EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
+        EinsumPlanSpec::Path(vec![(1, 2), (0, 1)]),
+    );
+    let vjp_subscripts = EinsumSubscripts {
+        inputs: vec![vec![0, 3], vec![0, 1], vec![2, 3]],
+        output: vec![1, 2],
+    };
+    let vjp_shapes = vec![
+        vec![SymDim::from(2usize), SymDim::from(5usize)],
+        vec![SymDim::from(2usize), SymDim::from(3usize)],
+        vec![SymDim::from(4usize), SymDim::from(5usize)],
+    ];
+
+    let op = vjp_einsum_op_with_inherited_plan(
+        &primal_op,
+        1,
+        vjp_subscripts,
+        vec![SymDim::from(3usize), SymDim::from(4usize)],
+        &vjp_shapes,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        op.plan_spec(),
+        EinsumPlanSpec::FixedPairs(pairs) if pairs == &vec![(0, 1), (3, 2)]
+    ));
+    let tree = op.static_tree().expect("expected concrete VJP tree");
+    assert_eq!(tree.step_pair(0), Some((0, 1)));
+    assert_eq!(tree.step_pair(1), Some((3, 2)));
 }
 
 fn payload_hash(op: &EinsumExtensionOp) -> u64 {

@@ -38,6 +38,8 @@ use crate::cache::{
 };
 #[cfg(any(feature = "autodiff", test))]
 use crate::optimize::default_auto_options;
+#[cfg(feature = "autodiff")]
+use crate::optimize::jax_path_to_v1_pairs;
 use crate::optimize::{hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec, EinsumPlanSpec};
 use crate::{
     ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
@@ -342,8 +344,12 @@ impl ExtensionAdRule for EinsumAdRule {
             .iter()
             .map(|input| ctx.shape_of(input).to_vec())
             .collect();
-        let primal_output_shape =
-            infer_einsum_output_shape(input_labels, output_labels, &primal_input_shapes)?;
+        let cotangent_shape = op.output_shape_hint.clone().ok_or_else(|| {
+            ADRuleError::unsupported(
+                "einsum VJP requires an output shape hint for cotangent planning",
+                ADRuleKind::Transpose,
+            )
+        })?;
 
         let mut result = Vec::with_capacity(n_inputs);
         for active_idx in 0..n_inputs {
@@ -368,7 +374,7 @@ impl ExtensionAdRule for EinsumAdRule {
             let mut vjp_input_shapes = Vec::with_capacity(n_inputs);
             vjp_input_labels.push(output_labels.clone());
             vjp_inputs.push(ValRef::Local(ct));
-            vjp_input_shapes.push(primal_output_shape.clone());
+            vjp_input_shapes.push(cotangent_shape.clone());
 
             for input_idx in 0..n_inputs {
                 if input_idx == active_idx {
@@ -386,6 +392,7 @@ impl ExtensionAdRule for EinsumAdRule {
             let output_shape_hint = primal_input_shapes[active_idx].clone();
             let vjp_op = vjp_einsum_op_with_inherited_plan(
                 op,
+                active_idx,
                 EinsumSubscripts {
                     inputs: vjp_input_labels,
                     output: vjp_output_labels.clone(),
@@ -421,67 +428,316 @@ impl ExtensionAdRule for EinsumAdRule {
 }
 
 #[cfg(feature = "autodiff")]
-fn infer_einsum_output_shape(
-    input_labels: &[Vec<u32>],
-    output_labels: &[u32],
-    input_shapes: &[Vec<SymDim>],
-) -> ADRuleResult<Vec<SymDim>> {
-    let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
-    for (labels, shape) in input_labels.iter().zip(input_shapes.iter()) {
-        if labels.len() != shape.len() {
-            return Err(ADRuleError::unsupported(
-                format!(
-                    "einsum VJP input rank mismatch: labels={}, shape={}",
-                    labels.len(),
-                    shape.len()
-                ),
-                ADRuleKind::Transpose,
-            ));
-        }
-        for (&label, dim) in labels.iter().zip(shape.iter()) {
-            label_dims.entry(label).or_insert_with(|| dim.clone());
-        }
-    }
-
-    output_labels
-        .iter()
-        .map(|label| {
-            label_dims.get(label).cloned().ok_or_else(|| {
-                ADRuleError::unsupported(
-                    format!("einsum VJP output label {label} is missing from inputs"),
-                    ADRuleKind::Transpose,
-                )
-            })
-        })
-        .collect()
-}
-
-#[cfg(feature = "autodiff")]
 fn vjp_einsum_op_with_inherited_plan(
     primal_op: &EinsumExtensionOp,
+    active_idx: usize,
     subscripts: EinsumSubscripts,
     output_shape_hint: Vec<SymDim>,
     input_shapes: &[Vec<SymDim>],
 ) -> ADRuleResult<EinsumExtensionOp> {
+    let plan_spec =
+        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.n_inputs(), active_idx)?;
     let mut op = EinsumExtensionOp::with_output_shape_hint(
         subscripts.clone(),
         output_shape_hint,
-        primal_op.plan_spec().clone(),
+        plan_spec.clone(),
     );
     if let Some(concrete_shapes) = concrete_sym_shapes(input_shapes) {
         let shape_refs: Vec<&[usize]> = concrete_shapes.iter().map(Vec::as_slice).collect();
         let raw_subscripts = Subscripts::from(&subscripts);
-        let tree = resolve_plan_spec(primal_op.plan_spec(), &raw_subscripts, &shape_refs).map_err(
-            |err| {
+        let tree =
+            resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs).map_err(|err| {
                 ADRuleError::unsupported(
-                    format!("failed to resolve inherited einsum VJP plan: {err}"),
+                    format!(
+                        "failed to resolve inherited einsum VJP plan for active input {active_idx}: {err}"
+                    ),
                     ADRuleKind::Transpose,
                 )
-            },
-        )?;
+            })?;
         op = op.with_static_tree_hint(Arc::new(tree));
     }
     Ok(op)
+}
+
+#[cfg(feature = "autodiff")]
+fn vjp_plan_spec_for_active(
+    primal_plan: &EinsumPlanSpec,
+    n_inputs: usize,
+    active_idx: usize,
+) -> ADRuleResult<EinsumPlanSpec> {
+    if active_idx >= n_inputs {
+        return Err(ADRuleError::unsupported(
+            format!("einsum VJP active input {active_idx} is outside {n_inputs} inputs"),
+            ADRuleKind::Transpose,
+        ));
+    }
+
+    match primal_plan {
+        EinsumPlanSpec::Auto(options) => Ok(EinsumPlanSpec::Auto(options.clone())),
+        EinsumPlanSpec::LeftToRight => Ok(EinsumPlanSpec::LeftToRight),
+        EinsumPlanSpec::Path(path) => {
+            let pairs = jax_path_to_v1_pairs(path, n_inputs).map_err(|err| {
+                ADRuleError::unsupported(
+                    format!(
+                        "failed to inherit einsum Path plan for VJP active input {active_idx}: {err}"
+                    ),
+                    ADRuleKind::Transpose,
+                )
+            })?;
+            derive_vjp_fixed_pairs(&pairs, n_inputs, active_idx).map(EinsumPlanSpec::FixedPairs)
+        }
+        EinsumPlanSpec::FixedPairs(pairs) => {
+            derive_vjp_fixed_pairs(pairs, n_inputs, active_idx).map(EinsumPlanSpec::FixedPairs)
+        }
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn derive_vjp_fixed_pairs(
+    primal_pairs: &[(usize, usize)],
+    n_inputs: usize,
+    active_idx: usize,
+) -> ADRuleResult<Vec<(usize, usize)>> {
+    if n_inputs == 0 {
+        return Err(ADRuleError::unsupported(
+            "einsum VJP cannot derive a plan for zero primal inputs",
+            ADRuleKind::Transpose,
+        ));
+    }
+    if active_idx >= n_inputs {
+        return Err(ADRuleError::unsupported(
+            format!("einsum VJP active input {active_idx} is outside {n_inputs} inputs"),
+            ADRuleKind::Transpose,
+        ));
+    }
+    let required_steps = n_inputs.saturating_sub(1);
+    if primal_pairs.len() != required_steps {
+        return Err(ADRuleError::unsupported(
+            format!(
+                "einsum VJP cannot inherit explicit plan for active input {active_idx}: \
+                 expected {required_steps} primal steps for {n_inputs} inputs, got {}",
+                primal_pairs.len()
+            ),
+            ADRuleKind::Transpose,
+        ));
+    }
+    if n_inputs == 1 {
+        return Ok(Vec::new());
+    }
+
+    let children = fixed_pair_children(primal_pairs, n_inputs, active_idx)?;
+    let mut primal_to_vjp = vec![None; n_inputs];
+    let mut next_vjp_input = 1;
+    for (input_idx, slot) in primal_to_vjp.iter_mut().enumerate() {
+        if input_idx != active_idx {
+            *slot = Some(next_vjp_input);
+            next_vjp_input += 1;
+        }
+    }
+
+    let root = n_inputs + primal_pairs.len() - 1;
+    let mut pairs = Vec::with_capacity(required_steps);
+    let final_id = emit_vjp_adjoint(
+        root,
+        0,
+        &children,
+        n_inputs,
+        active_idx,
+        &primal_to_vjp,
+        &mut pairs,
+    )?;
+    let expected_final = n_inputs + pairs.len() - 1;
+    if final_id != expected_final || pairs.len() != required_steps {
+        return Err(ADRuleError::unsupported(
+            format!(
+                "einsum VJP plan derivation for active input {active_idx} produced an invalid \
+                 tree: final id {final_id}, expected {expected_final}, steps {}",
+                pairs.len()
+            ),
+            ADRuleKind::Transpose,
+        ));
+    }
+    Ok(pairs)
+}
+
+#[cfg(feature = "autodiff")]
+fn fixed_pair_children(
+    pairs: &[(usize, usize)],
+    n_inputs: usize,
+    active_idx: usize,
+) -> ADRuleResult<Vec<Option<(usize, usize)>>> {
+    let mut live = vec![false; n_inputs + pairs.len()];
+    for slot in live.iter_mut().take(n_inputs) {
+        *slot = true;
+    }
+    let mut children = vec![None; n_inputs + pairs.len()];
+
+    for (step_idx, &(left, right)) in pairs.iter().enumerate() {
+        let next_idx = n_inputs + step_idx;
+        if left == right {
+            return Err(invalid_vjp_plan_error(
+                active_idx,
+                format!("pair ({left}, {right}) references the same operand"),
+            ));
+        }
+        if left >= next_idx || right >= next_idx {
+            return Err(invalid_vjp_plan_error(
+                active_idx,
+                format!("pair ({left}, {right}) references a non-existent operand"),
+            ));
+        }
+        if !live[left] || !live[right] {
+            return Err(invalid_vjp_plan_error(
+                active_idx,
+                format!("pair ({left}, {right}) references an operand that is no longer live"),
+            ));
+        }
+
+        live[left] = false;
+        live[right] = false;
+        live[next_idx] = true;
+        children[next_idx] = Some((left, right));
+    }
+
+    let live_count = live.iter().filter(|&&is_live| is_live).count();
+    if live_count != 1 {
+        return Err(invalid_vjp_plan_error(
+            active_idx,
+            format!("explicit plan leaves {live_count} live operands"),
+        ));
+    }
+
+    Ok(children)
+}
+
+#[cfg(feature = "autodiff")]
+fn emit_vjp_adjoint(
+    node: usize,
+    cotangent_id: usize,
+    children: &[Option<(usize, usize)>],
+    n_inputs: usize,
+    active_idx: usize,
+    primal_to_vjp: &[Option<usize>],
+    pairs: &mut Vec<(usize, usize)>,
+) -> ADRuleResult<usize> {
+    if node < n_inputs {
+        return if node == active_idx {
+            Ok(cotangent_id)
+        } else {
+            Err(invalid_vjp_plan_error(
+                active_idx,
+                format!("adjoint walk reached inactive leaf {node}"),
+            ))
+        };
+    }
+
+    let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
+        invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
+    })?;
+    let left_has_active = subtree_contains_active(left, children, n_inputs, active_idx)?;
+    let right_has_active = subtree_contains_active(right, children, n_inputs, active_idx)?;
+    match (left_has_active, right_has_active) {
+        (true, false) => {
+            let sibling_id =
+                emit_vjp_subtree(right, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
+            let next = push_vjp_pair(cotangent_id, sibling_id, n_inputs, pairs);
+            emit_vjp_adjoint(
+                left,
+                next,
+                children,
+                n_inputs,
+                active_idx,
+                primal_to_vjp,
+                pairs,
+            )
+        }
+        (false, true) => {
+            let sibling_id =
+                emit_vjp_subtree(left, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
+            let next = push_vjp_pair(cotangent_id, sibling_id, n_inputs, pairs);
+            emit_vjp_adjoint(
+                right,
+                next,
+                children,
+                n_inputs,
+                active_idx,
+                primal_to_vjp,
+                pairs,
+            )
+        }
+        (true, true) => Err(invalid_vjp_plan_error(
+            active_idx,
+            format!("both children of node {node} contain the active input"),
+        )),
+        (false, false) => Err(invalid_vjp_plan_error(
+            active_idx,
+            format!("neither child of node {node} contains the active input"),
+        )),
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn emit_vjp_subtree(
+    node: usize,
+    children: &[Option<(usize, usize)>],
+    n_inputs: usize,
+    active_idx: usize,
+    primal_to_vjp: &[Option<usize>],
+    pairs: &mut Vec<(usize, usize)>,
+) -> ADRuleResult<usize> {
+    if node < n_inputs {
+        return primal_to_vjp[node].ok_or_else(|| {
+            invalid_vjp_plan_error(
+                active_idx,
+                format!("sibling subtree unexpectedly reached active leaf {node}"),
+            )
+        });
+    }
+
+    let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
+        invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
+    })?;
+    let left_id = emit_vjp_subtree(left, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
+    let right_id = emit_vjp_subtree(right, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
+    Ok(push_vjp_pair(left_id, right_id, n_inputs, pairs))
+}
+
+#[cfg(feature = "autodiff")]
+fn push_vjp_pair(
+    left: usize,
+    right: usize,
+    n_vjp_inputs: usize,
+    pairs: &mut Vec<(usize, usize)>,
+) -> usize {
+    pairs.push((left, right));
+    n_vjp_inputs + pairs.len() - 1
+}
+
+#[cfg(feature = "autodiff")]
+fn subtree_contains_active(
+    node: usize,
+    children: &[Option<(usize, usize)>],
+    n_inputs: usize,
+    active_idx: usize,
+) -> ADRuleResult<bool> {
+    if node < n_inputs {
+        return Ok(node == active_idx);
+    }
+    let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
+        invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
+    })?;
+    Ok(
+        subtree_contains_active(left, children, n_inputs, active_idx)?
+            || subtree_contains_active(right, children, n_inputs, active_idx)?,
+    )
+}
+
+#[cfg(feature = "autodiff")]
+fn invalid_vjp_plan_error(active_idx: usize, reason: String) -> ADRuleError {
+    ADRuleError::unsupported(
+        format!("einsum VJP cannot inherit explicit plan for active input {active_idx}: {reason}"),
+        ADRuleKind::Transpose,
+    )
 }
 
 #[cfg(feature = "autodiff")]
