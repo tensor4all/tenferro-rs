@@ -39,7 +39,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "fe7fb27cf34338d3214fa9f1cc56ce4d0691626e" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "6551e2de955c83a1c8c84b3bca0b037954559617" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }

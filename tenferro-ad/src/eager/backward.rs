@@ -7,7 +7,8 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
 use tenferro_tensor::{Tensor, TensorBackend};
-use tidu::{BackwardCallbacks, LinearFragment};
+use tidu::eager::BackwardExecutor;
+use tidu::LinearFragment;
 
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
@@ -118,7 +119,7 @@ fn linear_op_depends_on_tangents(mode: &OpMode) -> bool {
     matches!(mode, OpMode::Linear { active_mask } if active_mask.iter().any(|is_active| *is_active))
 }
 
-impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
+impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
     for TenferroBackwardCallbacks<'_, B>
 {
     fn execute_forward(
@@ -193,36 +194,7 @@ impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
         all_values
     }
 
-    fn eager_transpose(
-        &mut self,
-        linear: &LinearFragment<StdTensorOp>,
-        cotangent_out: &[Option<Arc<Tensor>>],
-        external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
-        ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<Arc<Tensor>>> {
-        let mut emitter = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-            EagerEmitter::with_extension_executor(self.backend, extension_executor)
-        } else {
-            EagerEmitter::new(self.backend)
-        };
-        emitter.external_data = external_data.clone();
-        let cotangent_seed_ids = cotangent_out
-            .iter()
-            .map(|maybe_seed| {
-                maybe_seed
-                    .as_ref()
-                    .map(|seed| emitter.push_tensor(Arc::clone(seed)))
-            })
-            .collect::<Vec<_>>();
-
-        ctx.refresh_global_metadata();
-        tidu::eager_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx)
-            .into_iter()
-            .map(|maybe_id| maybe_id.map(|id| emitter.tensor(id)))
-            .collect()
-    }
-
-    fn try_eager_transpose(
+    fn execute_transpose(
         &mut self,
         linear: &LinearFragment<StdTensorOp>,
         cotangent_out: &[Option<Arc<Tensor>>],
@@ -245,7 +217,7 @@ impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
             .collect::<Vec<_>>();
 
         ctx.refresh_global_metadata();
-        tidu::try_eager_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
+        tidu::emit::try_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
             |cotangent_ids| {
                 cotangent_ids
                     .into_iter()
