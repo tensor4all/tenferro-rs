@@ -1,8 +1,8 @@
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_core_ops::PrimitiveOpKind;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use super::context::ShapeGuardContext;
 use super::{

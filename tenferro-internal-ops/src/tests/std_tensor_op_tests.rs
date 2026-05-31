@@ -3,7 +3,6 @@ use crate::dim_expr::DimExpr;
 use crate::ext_op::{register_extension_rule, ExtensionAdRule, ExtensionOp};
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
-use chainrules_core::{ADRuleKind, ADRuleResult, PrimitiveOp};
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::{GraphOp, OpEmitter};
@@ -14,6 +13,7 @@ use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
+use tidu::{ADRuleKind, ADRuleResult, PrimitiveOp};
 
 use crate::input_key::TensorInputKey;
 

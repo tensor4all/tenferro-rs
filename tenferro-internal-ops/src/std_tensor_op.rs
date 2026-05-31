@@ -2,8 +2,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleResult, PrimitiveOp};
-#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
@@ -11,6 +9,8 @@ use computegraph::GraphOp;
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
 use num_complex::{Complex32, Complex64};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleResult, PrimitiveOp};
 
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};

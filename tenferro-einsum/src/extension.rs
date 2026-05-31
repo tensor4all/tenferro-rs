@@ -5,8 +5,6 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::materialize::materialize_merge;
@@ -31,6 +29,8 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_tensor::{DType, Tensor, TensorBackend};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::builder::build_einsum_fragment;
 use crate::cache::{

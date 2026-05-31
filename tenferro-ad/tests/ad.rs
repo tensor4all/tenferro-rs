@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use support::{run_many_traced_with, RunTraced};
 
-use chainrules_core::ADKey;
 use computegraph::compile::compile;
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::materialize::materialize_merge;
@@ -31,7 +30,7 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
     TensorReduction, TypedTensor,
 };
-use tidu::{differentiate, transpose, LinearFragment};
+use tidu::{differentiate, transpose, ADKey, LinearFragment};
 
 const TOL: f64 = 1e-6;
 

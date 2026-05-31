@@ -25,14 +25,14 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
-#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
 use tenferro_tensor::{DType, Tensor};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 #[cfg(feature = "autodiff")]
 use crate::ad::context::ShapeGuardContext;
@@ -276,7 +276,7 @@ impl ExtensionRuleSet {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use chainrules_core::ADRuleResult;
+    /// use tidu::ADRuleResult;
     /// use computegraph::fragment::FragmentBuilder;
     /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
     /// use computegraph::OpEmitter;
@@ -334,7 +334,7 @@ impl ExtensionRuleSet {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use chainrules_core::ADRuleResult;
+    /// use tidu::ADRuleResult;
     /// use computegraph::fragment::FragmentBuilder;
     /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
     /// use computegraph::OpEmitter;

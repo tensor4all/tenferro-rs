@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADKey, DiffPassId};
+use tidu::{ADKey, DiffPassId};
 
 use crate::input_key::TensorInputKey;
 

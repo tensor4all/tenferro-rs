@@ -4,10 +4,10 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use chainrules_core::{ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
+use tidu::{ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ext_op::{

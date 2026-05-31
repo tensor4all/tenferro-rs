@@ -12,7 +12,7 @@ default = ["cpu-faer"]
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
 autodiff = [
-    "chainrules-core",
+    "dep:tidu",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
@@ -25,7 +25,7 @@ tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = tr
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
-chainrules-core = { workspace = true, optional = true }
+tidu = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true

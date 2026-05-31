@@ -37,8 +37,6 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
-#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
@@ -60,6 +58,8 @@ use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOpTrait};
 use tenferro_runtime::{Error, Result, TracedTensor};
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 /// Extension family id used by the tenferro FFT extension.
 ///

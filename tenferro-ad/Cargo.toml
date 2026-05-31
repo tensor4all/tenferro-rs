@@ -27,7 +27,6 @@ tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = 
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
-chainrules-core.workspace = true
 computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true

@@ -22,7 +22,6 @@
 
 use std::sync::Arc;
 
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
@@ -32,6 +31,7 @@ use tenferro_ad::extension::{
 };
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad_support::{LinalgExtensionOp, LinalgOp};
 use crate::LINALG_EXTENSION_FAMILY_ID;

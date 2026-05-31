@@ -24,7 +24,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 use support::RunTraced;
 
-use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
@@ -40,6 +39,7 @@ use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TypedTensor};
+use tidu::ADRuleResult;
 
 // ----------------------------------------------------------------------
 // Test-only AD rule registration guard. Integration tests may share a process,
