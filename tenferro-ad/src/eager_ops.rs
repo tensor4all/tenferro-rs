@@ -728,7 +728,7 @@ impl EagerTensor {
                 trace.key,
                 output,
                 trace.requires_grad,
-                trace.node,
+                trace.trace,
                 metadata_scopes,
             )
         });

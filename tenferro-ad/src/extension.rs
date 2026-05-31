@@ -112,7 +112,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
                 trace.key,
                 output.as_ref().clone(),
                 trace.requires_grad,
-                trace.node,
+                trace.trace,
                 metadata_scopes.clone(),
             )
         })

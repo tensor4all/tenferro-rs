@@ -16,7 +16,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorElementwise, TypedTensor};
-use tidu::{topo_sort_grad_dag, try_backward_dag, EagerOutput, EagerValue, GradNode};
+use tidu::eager::{self, Input as EagerInput, KeySource, Output as EagerOutput, Recorder, Trace};
 
 use self::backward::TenferroBackwardCallbacks;
 use crate::eager_backend::EagerBackend;
@@ -515,7 +515,7 @@ impl EagerRuntime {
 pub struct EagerTensor {
     pub(crate) data: Arc<Tensor>,
     pub(crate) key: GlobalValKey<StdTensorOp>,
-    pub(crate) grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+    pub(crate) trace: Option<Trace<StdTensorOp>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
@@ -593,7 +593,7 @@ impl EagerTensor {
         Self {
             data: Arc::new(tensor),
             key,
-            grad_node: None,
+            trace: None,
             requires_grad,
             grad_slot,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
@@ -606,7 +606,7 @@ impl EagerTensor {
         key: GlobalValKey<StdTensorOp>,
         tensor: Tensor,
         requires_grad: bool,
-        grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+        trace: Option<Trace<StdTensorOp>>,
         metadata_scopes: Vec<Arc<MetadataScope>>,
     ) -> Self {
         Self::new_result_arc(
@@ -614,7 +614,7 @@ impl EagerTensor {
             key,
             Arc::new(tensor),
             requires_grad,
-            grad_node,
+            trace,
             metadata_scopes,
         )
     }
@@ -624,7 +624,7 @@ impl EagerTensor {
         key: GlobalValKey<StdTensorOp>,
         tensor: Arc<Tensor>,
         requires_grad: bool,
-        grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+        trace: Option<Trace<StdTensorOp>>,
         metadata_scopes: Vec<Arc<MetadataScope>>,
     ) -> Self {
         let grad_slot = Arc::new(Mutex::new(None));
@@ -635,7 +635,7 @@ impl EagerTensor {
         Self {
             data: tensor,
             key,
-            grad_node,
+            trace,
             requires_grad,
             grad_slot,
             metadata_scopes,
@@ -848,7 +848,6 @@ impl EagerTensor {
             });
         }
 
-        let sorted = topo_sort_grad_dag(&self.grad_node);
         let mut backend = self.ctx.backend.lock().unwrap();
         let mut extension_executor = self.ctx.extension_executor.lock().unwrap();
         let seed = Arc::new(one_like_tensor(self.data.as_ref(), &mut *backend));
@@ -861,8 +860,14 @@ impl EagerTensor {
         if let Some(extension_rules) = &self.ctx.extension_rules {
             ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
         }
-        let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)
-            .map_err(|err| Error::Internal(err.to_string()))?;
+        let cotangents = eager::try_backward(
+            &self.key,
+            self.trace.as_ref(),
+            seed,
+            &mut callbacks,
+            &mut ad_ctx,
+        )
+        .map_err(|err| Error::Internal(err.to_string()))?;
         drop(callbacks);
         self.ctx.store_grads(&cotangents, &mut backend)?;
         Ok(cotangents)
@@ -875,16 +880,16 @@ pub(crate) fn eager_val_key() -> GlobalValKey<StdTensorOp> {
 
 pub(crate) struct EagerTensorKeySource;
 
-impl tidu::EagerKeySource<StdTensorOp> for EagerTensorKeySource {
+impl KeySource<StdTensorOp> for EagerTensorKeySource {
     fn fresh_input_key(&mut self) -> TensorInputKey {
         next_input_key()
     }
 }
 
-pub(crate) fn eager_value(tensor: &EagerTensor) -> EagerValue<StdTensorOp> {
-    EagerValue {
+pub(crate) fn eager_value(tensor: &EagerTensor) -> EagerInput<StdTensorOp> {
+    EagerInput {
         key: tensor.key.clone(),
-        node: tensor.grad_node.clone(),
+        trace: tensor.trace.clone(),
         requires_grad: tensor.requires_grad,
         data: Arc::clone(&tensor.data),
     }
@@ -901,8 +906,8 @@ pub(crate) fn record_eager_outputs(
     inputs: &[&EagerTensor],
 ) -> RecordedEagerOutputs {
     let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(tensor)).collect();
-    let mut key_source = EagerTensorKeySource;
-    let traces = tidu::record_eager_op(&mut key_source, op.clone(), &input_values, outputs);
+    let mut recorder = Recorder::new(EagerTensorKeySource);
+    let traces = recorder.record(op.clone(), &input_values, outputs);
 
     let mut registrations = Vec::new();
     for trace in &traces {
@@ -911,8 +916,8 @@ pub(crate) fn record_eager_outputs(
         }
     }
 
-    if let Some(node) = traces.iter().find_map(|trace| trace.node.as_ref()) {
-        for (key, value) in node.saved_data() {
+    if let Some(trace) = traces.iter().find_map(|output| output.trace.as_ref()) {
+        for (key, value) in trace.saved_values() {
             registrations.push((key.clone(), tensor_meta_from_tensor(value.as_ref())));
         }
     }

@@ -31,7 +31,7 @@ tenferro-internal-ops = { path = "../../tenferro-internal-ops", default-features
 tenferro-runtime = { path = "../../tenferro-runtime" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc", optional = true }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "fe7fb27cf34338d3214fa9f1cc56ce4d0691626e", optional = true }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "6551e2de955c83a1c8c84b3bca0b037954559617", optional = true }
 num-traits = "0.2"
 tropical-gemm = { version = "0.2", default-features = false, optional = true }
 
