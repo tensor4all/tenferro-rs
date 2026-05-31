@@ -39,9 +39,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "2d7662140d92f0dd73b2402aefc2272feafc9270", package = "chainrules" }
-chainrules = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "2d7662140d92f0dd73b2402aefc2272feafc9270" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "1694275361d2f16abfb3f25ad7941407c88b7c09" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "fe7fb27cf34338d3214fa9f1cc56ce4d0691626e" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }

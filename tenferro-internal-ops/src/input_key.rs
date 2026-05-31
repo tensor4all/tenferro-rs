@@ -1,5 +1,5 @@
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADKey, DiffPassId};
+use tidu::{ADKey, DiffPassId};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum TensorInputKey {

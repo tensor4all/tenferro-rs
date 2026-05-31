@@ -228,7 +228,7 @@ impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
         cotangent_out: &[Option<Arc<Tensor>>],
         external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
-    ) -> chainrules_core::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
+    ) -> tidu::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
         let mut emitter = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
             EagerEmitter::with_extension_executor(self.backend, extension_executor)
         } else {

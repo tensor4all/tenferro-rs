@@ -1,9 +1,9 @@
 //! Unit tests for the `Gather` / `Scatter` AD rules in `ad::indexing`.
 
-use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
+use tidu::PrimitiveOp;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;

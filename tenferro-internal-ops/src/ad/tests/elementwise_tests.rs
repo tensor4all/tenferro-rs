@@ -1,9 +1,9 @@
 //! Unit tests for elementwise AD helper rules.
 
-use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use tenferro_tensor::{CompareDir, DType};
+use tidu::PrimitiveOp;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::input_key::TensorInputKey;

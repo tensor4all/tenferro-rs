@@ -10,7 +10,7 @@ description = "Subscripts, contraction planning, traced/eager einsum APIs, exten
 [features]
 default = ["cpu-faer"]
 autodiff = [
-    "chainrules-core",
+    "dep:tidu",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
@@ -33,7 +33,7 @@ tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = 
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 computegraph.workspace = true
-chainrules-core = { workspace = true, optional = true }
+tidu = { workspace = true, optional = true }
 lru.workspace = true
 omeco.workspace = true
 thiserror.workspace = true

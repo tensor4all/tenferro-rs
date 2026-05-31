@@ -19,8 +19,8 @@ path = "src/lib.rs"
 [features]
 default = []
 autodiff = [
-    "dep:chainrules-core",
     "dep:computegraph",
+    "dep:tidu",
     "tenferro-internal-ops/autodiff",
 ]
 tropical-gemm = ["dep:tropical-gemm"]
@@ -30,8 +30,8 @@ tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-internal-ops = { path = "../../tenferro-internal-ops", default-features = false }
 tenferro-runtime = { path = "../../tenferro-runtime" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "2d7662140d92f0dd73b2402aefc2272feafc9270", package = "chainrules", optional = true }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc", optional = true }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "fe7fb27cf34338d3214fa9f1cc56ce4d0691626e", optional = true }
 num-traits = "0.2"
 tropical-gemm = { version = "0.2", default-features = false, optional = true }
 

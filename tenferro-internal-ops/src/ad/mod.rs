@@ -38,7 +38,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleKind, ADRuleResult};
+use tidu::{ADRuleKind, ADRuleResult};
 
 #[cfg(feature = "autodiff")]
 use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};

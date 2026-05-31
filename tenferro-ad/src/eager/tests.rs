@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chainrules_core::ADKey;
 use computegraph::types::GlobalValKey;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::SymDim;
 use tenferro_tensor::Tensor;
+use tidu::ADKey;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,

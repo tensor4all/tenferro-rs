@@ -4,7 +4,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 #[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
