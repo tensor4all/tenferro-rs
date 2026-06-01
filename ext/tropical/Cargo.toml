@@ -30,8 +30,8 @@ tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-internal-ops = { path = "../../tenferro-internal-ops", default-features = false }
 tenferro-runtime = { path = "../../tenferro-runtime" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc", optional = true }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "f0d91566edb2ea08fac9d61ef26f9cd1754f02df", optional = true }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", optional = true }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "9934d8b775fcfbbad8e2daf3f9af54477da63e35", optional = true }
 num-traits = "0.2"
 tropical-gemm = { version = "0.2", default-features = false, optional = true }
 

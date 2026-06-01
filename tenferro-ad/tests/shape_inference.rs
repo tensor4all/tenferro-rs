@@ -246,7 +246,7 @@ fn test_structural_indexing_and_dynamic_shapes() {
 
     let concat = StdTensorOp::Concatenate {
         axis: 1,
-        n_inputs: 2,
+        input_count: 2,
     };
     let rhs = vec![cst(4), cst(7)];
     assert_eq!(

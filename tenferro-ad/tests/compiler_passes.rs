@@ -77,7 +77,7 @@ fn make_std_instr(
     outputs: Vec<usize>,
 ) -> Instruction<StdTensorOp> {
     Instruction {
-        op,
+        operation: op,
         inputs,
         outputs,
     }

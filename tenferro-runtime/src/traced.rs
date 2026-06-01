@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use computegraph::fragment::{Fragment, FragmentBuilder};
-use computegraph::types::{GlobalValKey, OpMode, ValRef};
-use computegraph::LocalValId;
+use computegraph::graph::{Graph, GraphBuilder};
+use computegraph::types::{OperationRole, ValueKey, ValueRef};
+use computegraph::LocalValueId;
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_ops::dim_expr::DimExpr;
@@ -17,7 +17,7 @@ use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
     concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new, push_metadata_scope,
-    register_scoped_fragment_metadata, register_scoped_value_metadata, symbolic_input_meta,
+    register_scoped_graph_metadata, register_scoped_value_metadata, symbolic_input_meta,
     tensor_meta, MetadataScope,
 };
 use crate::scalar_semantics::round_real_to_i64;
@@ -42,12 +42,12 @@ pub struct TracedTensor {
     pub id: TracedTensorId,
     pub rank: usize,
     pub dtype: DType,
-    pub fragment: Arc<Fragment<StdTensorOp>>,
-    pub val: LocalValId,
+    pub graph: Arc<Graph<StdTensorOp>>,
+    pub val: LocalValueId,
     pub data: Option<Arc<Tensor>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
-    pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
+    pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
 }
@@ -218,12 +218,12 @@ impl TracedTensor {
         let id = next_traced_id();
         let data = Arc::new(tensor);
 
-        let mut builder = FragmentBuilder::new();
+        let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
-        let fragment = Arc::new(builder.build());
+        let graph = Arc::new(builder.build());
         let metadata_scope = register_scoped_value_metadata(
-            fragment.vals()[val].key.clone(),
+            graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         );
 
@@ -234,7 +234,7 @@ impl TracedTensor {
             id,
             rank,
             dtype,
-            fragment,
+            graph,
             val,
             data: Some(data),
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
@@ -271,12 +271,12 @@ impl TracedTensor {
         let id = next_traced_id();
         let data = Arc::new(tensor);
 
-        let mut builder = FragmentBuilder::new();
+        let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
-        let fragment = Arc::new(builder.build());
+        let graph = Arc::new(builder.build());
         let metadata_scope = register_scoped_value_metadata(
-            fragment.vals()[val].key.clone(),
+            graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         );
 
@@ -287,7 +287,7 @@ impl TracedTensor {
             id,
             rank,
             dtype,
-            fragment,
+            graph,
             val,
             data: Some(data),
             shape_hint: None,
@@ -320,12 +320,12 @@ impl TracedTensor {
         let key = next_input_key();
         let id = next_traced_id();
 
-        let mut builder = FragmentBuilder::new();
+        let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
-        let fragment = Arc::new(builder.build());
+        let graph = Arc::new(builder.build());
         let metadata_scope = register_scoped_value_metadata(
-            fragment.vals()[val].key.clone(),
+            graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         );
 
@@ -333,7 +333,7 @@ impl TracedTensor {
             id,
             rank,
             dtype,
-            fragment,
+            graph,
             val,
             data: None,
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
@@ -364,12 +364,12 @@ impl TracedTensor {
         let key = next_input_key();
         let id = next_traced_id();
 
-        let mut builder = FragmentBuilder::new();
+        let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
-        let fragment = Arc::new(builder.build());
+        let graph = Arc::new(builder.build());
         let metadata_scope = register_scoped_value_metadata(
-            fragment.vals()[val].key.clone(),
+            graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         );
 
@@ -377,7 +377,7 @@ impl TracedTensor {
             id,
             rank,
             dtype,
-            fragment,
+            graph,
             val,
             data: None,
             shape_hint: None,
@@ -482,11 +482,11 @@ impl TracedTensor {
         concrete_shape(self)
     }
 
-    /// If this `TracedTensor` is a leaf (single-node input fragment),
+    /// If this `TracedTensor` is a leaf (single-node input graph),
     /// return its input key. Computed tensors return `None`.
     pub fn input_key(&self) -> Option<TensorInputKey> {
-        match &self.fragment.vals()[self.val].key {
-            GlobalValKey::Input(key) => Some(key.clone()),
+        match &self.graph.values()[self.val].key {
+            ValueKey::Input(key) => Some(key.clone()),
             _ => None,
         }
     }
@@ -1520,20 +1520,20 @@ pub(crate) fn apply_unary_with_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> TracedTensor {
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(input.fragment.clone());
-    let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
-    let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(input.graph.clone());
+    let input_ref = ValueRef::External(input.graph.values()[input.val].key.clone());
+    let outputs = builder.add_operation(op, vec![input_ref], OperationRole::Primary);
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
+    let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
     TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
@@ -1562,27 +1562,23 @@ pub(crate) fn apply_unary_with_shape_refs(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(input.fragment.clone());
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(input.graph.clone());
     for t in shape_refs {
-        builder.add_parent(t.fragment.clone());
+        builder.add_parent(t.graph.clone());
     }
-    let mut op_inputs: Vec<ValRef<StdTensorOp>> = Vec::with_capacity(1 + shape_refs.len());
-    op_inputs.push(ValRef::External(
-        input.fragment.vals()[input.val].key.clone(),
+    let mut op_inputs: Vec<ValueRef<StdTensorOp>> = Vec::with_capacity(1 + shape_refs.len());
+    op_inputs.push(ValueRef::External(
+        input.graph.values()[input.val].key.clone(),
     ));
     for t in shape_refs {
-        op_inputs.push(ValRef::External(t.fragment.vals()[t.val].key.clone()));
+        op_inputs.push(ValueRef::External(t.graph.values()[t.val].key.clone()));
     }
-    let outputs = builder.add_op(op, op_inputs, OpMode::Primal);
+    let outputs = builder.add_operation(op, op_inputs, OperationRole::Primary);
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
-    let metadata_scope = register_single_output_metadata(
-        fragment.as_ref(),
-        outputs[0],
-        input.dtype,
-        &out_shape_hint,
-    );
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], input.dtype, &out_shape_hint);
 
     let mut merged = (*input.inputs_map).clone();
     for t in shape_refs {
@@ -1604,7 +1600,7 @@ pub(crate) fn apply_unary_with_shape_refs(
         id: next_traced_id(),
         rank: out_rank,
         dtype: input.dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
@@ -1630,18 +1626,18 @@ pub(crate) fn apply_nullary(
     dtype: DType,
     shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let mut builder = FragmentBuilder::new();
-    let outputs = builder.add_op(op, vec![], OpMode::Primal);
+    let mut builder = GraphBuilder::new();
+    let outputs = builder.add_operation(op, vec![], OperationRole::Primary);
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
+    let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(fragment.as_ref(), outputs[0], dtype, &shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], dtype, &shape_hint);
 
     TracedTensor {
         id: next_traced_id(),
         rank,
         dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint,
@@ -1779,17 +1775,17 @@ fn apply_binary_with_output_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> TracedTensor {
-    let lhs_ref = ValRef::External(lhs.fragment.vals()[lhs.val].key.clone());
-    let rhs_ref = ValRef::External(rhs.fragment.vals()[rhs.val].key.clone());
+    let lhs_ref = ValueRef::External(lhs.graph.values()[lhs.val].key.clone());
+    let rhs_ref = ValueRef::External(rhs.graph.values()[rhs.val].key.clone());
 
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(lhs.fragment.clone());
-    builder.add_parent(rhs.fragment.clone());
-    let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(lhs.graph.clone());
+    builder.add_parent(rhs.graph.clone());
+    let outputs = builder.add_operation(op, vec![lhs_ref, rhs_ref], OperationRole::Primary);
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
+    let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1800,7 +1796,7 @@ fn apply_binary_with_output_dtype(
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
@@ -1829,19 +1825,23 @@ fn apply_ternary_with_output_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> TracedTensor {
-    let first_ref = ValRef::External(first.fragment.vals()[first.val].key.clone());
-    let second_ref = ValRef::External(second.fragment.vals()[second.val].key.clone());
-    let third_ref = ValRef::External(third.fragment.vals()[third.val].key.clone());
+    let first_ref = ValueRef::External(first.graph.values()[first.val].key.clone());
+    let second_ref = ValueRef::External(second.graph.values()[second.val].key.clone());
+    let third_ref = ValueRef::External(third.graph.values()[third.val].key.clone());
 
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(first.fragment.clone());
-    builder.add_parent(second.fragment.clone());
-    builder.add_parent(third.fragment.clone());
-    let outputs = builder.add_op(op, vec![first_ref, second_ref, third_ref], OpMode::Primal);
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(first.graph.clone());
+    builder.add_parent(second.graph.clone());
+    builder.add_parent(third.graph.clone());
+    let outputs = builder.add_operation(
+        op,
+        vec![first_ref, second_ref, third_ref],
+        OperationRole::Primary,
+    );
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
+    let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
     let mut merged = (*first.inputs_map).clone();
     merged.extend(
@@ -1868,7 +1868,7 @@ fn apply_ternary_with_output_dtype(
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
@@ -1887,25 +1887,25 @@ fn apply_ternary_with_output_dtype(
 }
 
 fn register_single_output_metadata(
-    fragment: &Fragment<StdTensorOp>,
-    output: LocalValId,
+    graph: &Graph<StdTensorOp>,
+    output: LocalValueId,
     dtype: DType,
     shape_hint: &Option<Vec<SymDim>>,
 ) -> MetadataScope {
     if let Some(shape) = shape_hint {
         register_scoped_value_metadata(
-            fragment.vals()[output].key.clone(),
+            graph.values()[output].key.clone(),
             tensor_meta(dtype, shape.clone()),
         )
     } else {
-        register_scoped_fragment_metadata(fragment, std::iter::empty())
+        register_scoped_graph_metadata(graph, std::iter::empty())
     }
 }
 
 impl TracedTensor {
-    pub(crate) fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
+    pub(crate) fn resolve_roots(&self) -> Vec<Arc<Graph<StdTensorOp>>> {
         let mut roots = Vec::with_capacity(1 + self.extra_roots.len());
-        roots.push(self.fragment.clone());
+        roots.push(self.graph.clone());
         roots.extend(self.extra_roots.iter().cloned());
         roots
     }

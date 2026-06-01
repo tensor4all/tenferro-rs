@@ -5,7 +5,7 @@ use std::sync::Arc;
 use computegraph::compile::compile;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
-use computegraph::types::GlobalValKey;
+use computegraph::types::ValueKey;
 use lru::LruCache;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
@@ -305,7 +305,7 @@ impl GraphCompiler {
         let mut output_keys = Vec::with_capacity(outputs.len());
         for output in outputs {
             roots.extend(output.resolve_roots());
-            output_keys.push(output.fragment.vals()[output.val].key.clone());
+            output_keys.push(output.graph.values()[output.val].key.clone());
         }
 
         let view = resolve(roots);
@@ -316,7 +316,7 @@ impl GraphCompiler {
         let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
         let mut input_shapes = Vec::with_capacity(graph.inputs.len());
         for key in &graph.inputs {
-            let GlobalValKey::Input(input_key) = key else {
+            let ValueKey::Input(input_key) = key else {
                 return Err(Error::Internal(
                     "expected Input key in graph inputs".to_string(),
                 ));

@@ -21,7 +21,7 @@
 mod context;
 mod eager;
 mod eager_backend;
-mod eager_emitter;
+mod eager_builder;
 pub mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
@@ -49,8 +49,8 @@ pub mod error {
 pub mod metadata {
     pub use tenferro_runtime::ad_support::{
         metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
-        push_metadata_scope, register_scoped_fragment_metadata,
-        register_scoped_live_fragment_metadata, register_scoped_metadata_batch,
-        register_scoped_value_metadata, tensor_meta_from_tensor, MetadataScope,
+        push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
+        register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
+        MetadataScope,
     };
 }

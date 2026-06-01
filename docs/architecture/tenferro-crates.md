@@ -2,7 +2,7 @@
 
 **Repo:** tenferro-rs
 **Parent:** `../index.md`
-**Related:** `computegraph.md`, `chainrules.md`, `tidu.md`,
+**Related:** `computegraph.md`, `primitive-ad.md`, `tidu.md`,
 `../spec/backend-contract.md`, `../spec/primitive-catalog.md`,
 `../spec/extension-op.md`
 
@@ -163,9 +163,9 @@ See [`../guides/custom-operations.md`](../guides/custom-operations.md) and
 
 ## VI. AD Boundary
 
-`chainrules-rs` owns the generic `PrimitiveOp` contract. `tidu-rs` owns the
-generic graph transforms such as `differentiate` and `transpose`. Neither crate
-is tied to tenferro's concrete tensor types.
+`tidu-rs` owns the generic `Primitive` contract and graph transforms such as
+`linearize` and `linear_transpose`. It is not tied to tenferro's concrete
+tensor types.
 
 tenferro supplies one concrete graph vocabulary, `StdTensorOp`, plus
 operation-family extension carriers. Core primitive AD rule implementations
@@ -176,8 +176,7 @@ the operation family that owns the semantics, for example `tenferro-einsum` or
 This is the current split:
 
 ```text
-chainrules-rs          PrimitiveOp contract
-tidu-rs                generic AD graph transforms
+tidu-rs                Primitive contract and generic AD graph transforms
 tenferro-internal-ops  StdTensorOp AD rules
 tenferro-ad            public eager/traced AD APIs
 operation crates       optional extension-family AD rules

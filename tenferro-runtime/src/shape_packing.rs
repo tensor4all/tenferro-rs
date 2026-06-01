@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{OpMode, ValRef};
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
-use crate::metadata::{metadata_scopes_with_new, register_scoped_fragment_metadata};
+use crate::metadata::{metadata_scopes_with_new, register_scoped_graph_metadata};
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{apply_binary_preserve_input_dtypes, next_traced_id, try_concrete_shape};
@@ -226,25 +226,25 @@ fn apply_nary_concatenate(
         })
         .collect::<Vec<_>>();
 
-    let mut builder = FragmentBuilder::new();
+    let mut builder = GraphBuilder::new();
     for tensor in &tensors {
-        builder.add_parent(tensor.fragment.clone());
+        builder.add_parent(tensor.graph.clone());
     }
     let input_refs = tensors
         .iter()
-        .map(|tensor| ValRef::External(tensor.fragment.vals()[tensor.val].key.clone()))
+        .map(|tensor| ValueRef::External(tensor.graph.values()[tensor.val].key.clone()))
         .collect::<Vec<_>>();
-    let outputs = builder.add_op(
+    let outputs = builder.add_operation(
         StdTensorOp::Concatenate {
             axis,
-            n_inputs: tensors.len(),
+            input_count: tensors.len(),
         },
         input_refs,
-        OpMode::Primal,
+        OperationRole::Primary,
     );
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
-    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let graph = Arc::new(builder.build());
+    let metadata_scope = register_scoped_graph_metadata(graph.as_ref(), std::iter::empty());
 
     let mut inputs_map = HashMap::new();
     let mut extra_roots = Vec::new();
@@ -269,7 +269,7 @@ fn apply_nary_concatenate(
         id: next_traced_id(),
         rank: out_shape.len(),
         dtype: out_dtype,
-        fragment,
+        graph,
         val: outputs[0],
         data: None,
         shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),

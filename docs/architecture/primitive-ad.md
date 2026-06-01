@@ -1,6 +1,6 @@
-# chainrules-rs Design
+# Primitive AD Contract
 
-**Repo:** chainrules-rs
+**Repo:** tidu-rs
 **Parent:** `../index.md`
 **Depends on:** `computegraph-rs`
 
@@ -8,10 +8,9 @@
 
 ## I. Purpose
 
-`chainrules-rs` defines the AD trait (`PrimitiveOp`) that extends
-`computegraph::GraphOp` with a cotangent-accumulation constructor plus
-linearization and transpose rules. It contains no graph infrastructure and no
-concrete primitives.
+`tidu-rs` defines the AD trait (`Primitive`) that extends
+`computegraph::GraphOperation` with a cotangent-accumulation constructor plus
+JVP and transpose rules. It contains no concrete primitives.
 
 This is the counterpart of the AD behavior that JAX stores in
 `primitive_jvps` and `primitive_transposes`. The information is the same kind
@@ -22,16 +21,16 @@ of information, but the representation is different:
 
 ---
 
-## II. PrimitiveOp Trait
+## II. Primitive Trait
 
-`PrimitiveOp` extends `GraphOp` with `add()` (cotangent accumulation
+`Primitive` extends `GraphOperation` with `add()` (cotangent accumulation
 constructor), `linearize` (JVP rule), and `transpose_rule` (VJP rule).
 
 Canonical trait signature: [`../spec/ad-contract.md`](../spec/ad-contract.md).
 
-`add()` returns the primitive used by `tidu::transpose` when multiple
-cotangent contributions flow to the same `GlobalValKey`. This keeps fan-out
-accumulation inside the generic transpose pass without requiring a separate
+`add()` returns the primitive used by `tidu::linear_transpose` when multiple
+cotangent contributions flow to the same `ValueKey`. This keeps fan-out
+accumulation inside the generic linear_transpose pass without requiring a separate
 built-in `Dup` or `Add` primitive in `tidu`.
 
 ---
@@ -40,9 +39,9 @@ built-in `Dup` or `Add` primitive in `tidu`.
 
 A primitive's `linearize` must be linear in tangent inputs. It may:
 
-- reference primal inputs or outputs through `External(GlobalValKey)`
-- emit primitives in `OpMode::Linear`
-- emit `Conj` when required by transpose semantics
+- reference primal inputs or outputs through `External(ValueKey)`
+- add primitives in `OperationRole::Linearized`
+- add `Conj` when required by linear_transpose semantics
 
 It must not introduce nonlinear dependence on tangent inputs.
 
@@ -50,19 +49,19 @@ The intended mental model is close to JAX `linearize`:
 
 - JAX `linearize` applies a primitive's JVP rule and emits a new composition of
   JAX primitives in a jaxpr
-- `PrimitiveOp::linearize` emits a new composition of downstream concrete
-  primitives into a fragment
+- `Primitive::jvp_rule` emits a new composition of downstream concrete
+  primitives into a graph
 
 ---
 
 ## IV. Transpose Rules
 
 A primitive's `transpose_rule` receives cotangent outputs and produces
-cotangent inputs. It must only emit primitives that themselves implement
-`PrimitiveOp`.
+cotangent inputs. It must only add primitives that themselves implement
+`Primitive`.
 
-When transpose encounters fan-out, `tidu` accumulates multiple reverse
-contributions by emitting `PrimitiveOp::add()` nodes. So every downstream
+When linear_transpose encounters fan-out, `tidu` accumulates multiple reverse
+contributions by emitting `Primitive::add()` nodes. So every downstream
 primitive set used with `tidu` must provide an addition primitive suitable for
 cotangent accumulation.
 
@@ -70,23 +69,23 @@ cotangent accumulation.
 
 ## V. ADKey Trait
 
-`chainrules-rs` defines the `ADKey` trait that constrains `InputKey` for AD
+`tidu-rs` defines the `ADKey` trait that constrains `InputKey` for AD
 use. `tidu-rs` uses this trait to generate tangent input keys during
-`differentiate`.
+`linearize`.
 
 ```rust
 pub type DiffPassId = u64;
 
 pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
     /// Create a tangent input key derived from this key.
-    /// `pass` is a unique identifier for the `differentiate` call.
+    /// `pass` is a unique identifier for the `linearize` call.
     fn tangent_of(&self, pass: DiffPassId) -> Self;
 }
 ```
 
-`PrimitiveOp` requires `Self::InputKey: ADKey`
+`Primitive` requires `Self::InputKey: ADKey`
 (see [`../spec/ad-contract.md`](../spec/ad-contract.md) for the canonical
-`PrimitiveOp` trait signature).
+`Primitive` trait signature).
 
 The concrete implementation of `ADKey` is the downstream implementor's
 choice. A typical pattern is a recursive enum:
@@ -107,21 +106,21 @@ higher-order AD.
 
 ## VI. Closure Responsibility
 
-`chainrules-rs` defines the contract but does not enforce closure. The
+`tidu-rs` defines the contract but does not enforce closure. The
 downstream implementor (e.g. tenferro-rs) is responsible for ensuring that
 the set of primitives reachable through `linearize` and `transpose_rule`
-is closed — i.e., every emitted op also implements `PrimitiveOp`.
+is closed — i.e., every emitted op also implements `Primitive`.
 
 ---
 
 ## VII. Design Boundaries
 
 ```text
-chainrules-rs owns:
-  - PrimitiveOp trait (`add` + `linearize` + `transpose_rule`)
+tidu-rs owns:
+  - Primitive trait (`add` + `jvp_rule` + `transpose_rule`)
+  - AD transforms (`linearize`, `linear_transpose`)
 
-chainrules-rs does NOT own:
+tidu-rs does NOT own:
   - graph infrastructure → computegraph-rs
-  - AD transforms (differentiate, transpose) → tidu-rs
   - concrete primitives → downstream (tenferro-rs)
 ```

@@ -2,8 +2,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode};
-use computegraph::GraphOp;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey};
+use computegraph::GraphOperation;
 use num_complex::{Complex32, Complex64};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleResult, Primitive, PrimitiveBuilder, PrimitiveValue};
@@ -247,11 +247,11 @@ impl PartialEq for StdTensorOp {
             (
                 Self::Concatenate {
                     axis: a,
-                    n_inputs: na,
+                    input_count: na,
                 },
                 Self::Concatenate {
                     axis: b,
-                    n_inputs: nb,
+                    input_count: nb,
                 },
             ) => a == b && na == nb,
             (Self::ShapeOf { axis: a }, Self::ShapeOf { axis: b })
@@ -337,9 +337,9 @@ impl Hash for StdTensorOp {
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
             Self::DynamicUpdateSlice => {}
             Self::Pad(config) => config.hash(state),
-            Self::Concatenate { axis, n_inputs } => {
+            Self::Concatenate { axis, input_count } => {
                 axis.hash(state);
-                n_inputs.hash(state);
+                input_count.hash(state);
             }
             Self::Reverse { axes } => axes.hash(state),
             Self::ShapeOf { axis } | Self::DynamicTruncate { axis } | Self::PadToMatch { axis } => {
@@ -363,12 +363,12 @@ fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
     max_idx.max(min_inputs)
 }
 
-impl GraphOp for StdTensorOp {
+impl GraphOperation for StdTensorOp {
     type Operand = tenferro_tensor::Tensor;
     type Context = ();
     type InputKey = TensorInputKey;
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         match self {
             Self::Add | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
             Self::GatherDynamicSliceSizes { slice_sizes, .. } => {
@@ -396,7 +396,7 @@ impl GraphOp for StdTensorOp {
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
-            Self::Concatenate { n_inputs, .. } => *n_inputs,
+            Self::Concatenate { input_count, .. } => *input_count,
             Self::Abs
             | Self::Sign
             | Self::Exp
@@ -410,11 +410,11 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Extension(op) => ExtensionOp::n_inputs(op.as_ref()),
+            Self::Extension(op) => ExtensionOp::input_count(op.as_ref()),
         }
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         match self {
             Self::Add
             | Self::Mul
@@ -464,7 +464,7 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
             Self::Concatenate { .. } => 1,
-            Self::Extension(op) => ExtensionOp::n_outputs(op.as_ref()),
+            Self::Extension(op) => ExtensionOp::output_count(op.as_ref()),
         }
     }
 }
@@ -480,51 +480,47 @@ impl Primitive for StdTensorOp {
     fn jvp_rule(
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
+        primal_in: &[ValueKey<Self>],
+        primal_out: &[ValueKey<Self>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut Self::ADContext,
-    ) -> Vec<Option<LocalValId>> {
-        let mut emitter = crate::ad::PrimitiveBuilderEmitter::new(builder);
-        crate::ad::linearize(self, &mut emitter, primal_in, primal_out, tangent_in, ctx)
+    ) -> Vec<Option<LocalValueId>> {
+        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     fn try_jvp_rule(
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
+        primal_in: &[ValueKey<Self>],
+        primal_out: &[ValueKey<Self>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let mut emitter = crate::ad::PrimitiveBuilderEmitter::new(builder);
-        crate::ad::try_linearize(self, &mut emitter, primal_in, primal_out, tangent_in, ctx)
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        crate::ad::try_linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     fn transpose_rule(
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
-        cotangent_out: &[Option<LocalValId>],
+        cotangent_out: &[Option<LocalValueId>],
         inputs: &[PrimitiveValue<Self>],
-        mode: &OpMode,
+        mode: &OperationRole,
         ctx: &mut Self::ADContext,
-    ) -> Vec<Option<LocalValId>> {
+    ) -> Vec<Option<LocalValueId>> {
         let inputs = inputs.iter().cloned().map(Into::into).collect::<Vec<_>>();
-        let mut emitter = crate::ad::PrimitiveBuilderEmitter::new(builder);
-        crate::ad::transpose_rule(self, &mut emitter, cotangent_out, &inputs, mode, ctx)
+        crate::ad::transpose_rule(self, builder, cotangent_out, &inputs, mode, ctx)
     }
 
     fn try_linear_transpose_rule(
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
-        cotangent_out: &[Option<LocalValId>],
+        cotangent_out: &[Option<LocalValueId>],
         inputs: &[PrimitiveValue<Self>],
-        mode: &OpMode,
+        mode: &OperationRole,
         ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let inputs = inputs.iter().cloned().map(Into::into).collect::<Vec<_>>();
-        let mut emitter = crate::ad::PrimitiveBuilderEmitter::new(builder);
-        crate::ad::try_transpose_rule(self, &mut emitter, cotangent_out, &inputs, mode, ctx)
+        crate::ad::try_transpose_rule(self, builder, cotangent_out, &inputs, mode, ctx)
     }
 }
 
@@ -532,45 +528,45 @@ impl Primitive for StdTensorOp {
 impl StdTensorOp {
     pub(crate) fn jvp_rule(
         &self,
-        builder: &mut computegraph::fragment::FragmentBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut computegraph::graph::GraphBuilder<Self>,
+        primal_in: &[ValueKey<Self>],
+        primal_out: &[ValueKey<Self>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
+    ) -> Vec<Option<LocalValueId>> {
         crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     pub(crate) fn try_jvp_rule(
         &self,
-        builder: &mut computegraph::fragment::FragmentBuilder<Self>,
-        primal_in: &[GlobalValKey<Self>],
-        primal_out: &[GlobalValKey<Self>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut computegraph::graph::GraphBuilder<Self>,
+        primal_in: &[ValueKey<Self>],
+        primal_out: &[ValueKey<Self>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         crate::ad::try_linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     pub(crate) fn transpose_rule(
         &self,
-        emitter: &mut impl computegraph::OpEmitter<Self>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[computegraph::ValRef<Self>],
-        mode: &OpMode,
+        builder: &mut impl crate::ad::PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[computegraph::ValueRef<Self>],
+        mode: &OperationRole,
         ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        crate::ad::transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
+    ) -> Vec<Option<LocalValueId>> {
+        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
     }
 
     pub(crate) fn try_linear_transpose_rule(
         &self,
-        emitter: &mut impl computegraph::OpEmitter<Self>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[computegraph::ValRef<Self>],
-        mode: &OpMode,
+        builder: &mut impl crate::ad::PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[computegraph::ValueRef<Self>],
+        mode: &OperationRole,
         ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        crate::ad::try_transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        crate::ad::try_transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
     }
 }

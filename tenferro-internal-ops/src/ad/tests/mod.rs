@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{GlobalValKey, OpMode, ValRef};
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 use crate::ad::context::{resolve_and_guard, resolve_dim, ShapeGuard, ShapeGuardContext};
@@ -22,8 +22,8 @@ fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
 }
 
-fn input_key(id: u64) -> GlobalValKey<StdTensorOp> {
-    GlobalValKey::Input(tensor_input(id))
+fn input_key(id: u64) -> ValueKey<StdTensorOp> {
+    ValueKey::Input(tensor_input(id))
 }
 
 fn meta(dtype: DType, shape: &[usize]) -> TensorMeta {
@@ -96,7 +96,7 @@ fn shape_and_dtype_queries_work_for_concrete_input_values() {
     let key = input_key(1);
     ctx.insert_metadata(key.clone(), meta(DType::F64, &[2, 3]));
 
-    let val = ValRef::External(key);
+    let val = ValueRef::External(key);
     assert_eq!(ctx.dtype_of(&val), DType::F64);
     assert_eq!(
         ctx.shape_of(&val),
@@ -115,7 +115,7 @@ fn shape_queries_work_for_symbolic_input_values() {
     );
 
     assert_eq!(
-        ctx.shape_of(&ValRef::External(key)),
+        ctx.shape_of(&ValueRef::External(key)),
         symbolic_shape.as_slice()
     );
 }
@@ -127,7 +127,7 @@ fn metadata_exposes_exact_extents() {
     let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
     ctx.insert_metadata(key.clone(), meta.clone());
 
-    let val = ValRef::External(key);
+    let val = ValueRef::External(key);
     assert_eq!(ctx.extents_of(&val), meta.extents());
     assert_eq!(ctx.exact_shape_of(&val), Some(meta.shape.clone()));
 }
@@ -143,29 +143,29 @@ fn metadata_exact_shape_rejects_upper_bound() {
     };
     ctx.insert_metadata(key.clone(), meta);
 
-    assert_eq!(ctx.exact_shape_of(&ValRef::External(key)), None);
+    assert_eq!(ctx.exact_shape_of(&ValueRef::External(key)), None);
 }
 
 #[test]
-fn metadata_queries_resolve_local_values_through_attached_fragment() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+fn metadata_queries_resolve_local_values_through_attached_graph() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let lhs = builder.add_input(tensor_input(10));
     let rhs = builder.add_input(tensor_input(11));
-    let sum = builder.add_op(
+    let sum = builder.add_operation(
         StdTensorOp::Add,
-        vec![ValRef::Local(lhs), ValRef::Local(rhs)],
-        OpMode::Primal,
+        vec![ValueRef::Local(lhs), ValueRef::Local(rhs)],
+        OperationRole::Primary,
     )[0];
     builder.set_outputs(vec![sum]);
-    let fragment = builder.build();
+    let graph = builder.build();
 
     let mut ctx = ShapeGuardContext::default();
-    ctx.attach_fragment(&fragment);
-    ctx.insert_metadata(fragment.vals()[lhs].key.clone(), meta(DType::F64, &[2, 3]));
-    ctx.insert_metadata(fragment.vals()[rhs].key.clone(), meta(DType::F64, &[2, 3]));
-    ctx.insert_metadata(fragment.vals()[sum].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.attach_graph(&graph);
+    ctx.insert_metadata(graph.values()[lhs].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(graph.values()[rhs].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(graph.values()[sum].key.clone(), meta(DType::F64, &[2, 3]));
 
-    let local_sum = ValRef::Local(sum);
+    let local_sum = ValueRef::Local(sum);
     assert_eq!(ctx.dtype_of(&local_sum), DType::F64);
     assert_eq!(
         ctx.shape_of(&local_sum),
@@ -174,22 +174,22 @@ fn metadata_queries_resolve_local_values_through_attached_fragment() {
 }
 
 #[test]
-fn representative_fragment_values_all_have_queryable_tensor_metadata() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+fn representative_graph_values_all_have_queryable_tensor_metadata() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let lhs = builder.add_input(tensor_input(20));
     let rhs = builder.add_input(tensor_input(21));
-    let add = builder.add_op(
+    let add = builder.add_operation(
         StdTensorOp::Add,
-        vec![ValRef::Local(lhs), ValRef::Local(rhs)],
-        OpMode::Primal,
+        vec![ValueRef::Local(lhs), ValueRef::Local(rhs)],
+        OperationRole::Primary,
     )[0];
-    let mul = builder.add_op(
+    let mul = builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValRef::Local(add), ValRef::Local(rhs)],
-        OpMode::Primal,
+        vec![ValueRef::Local(add), ValueRef::Local(rhs)],
+        OperationRole::Primary,
     )[0];
     let dot_rhs = builder.add_input(tensor_input(22));
-    let dot = builder.add_op(
+    let dot = builder.add_operation(
         StdTensorOp::DotGeneral {
             config: DotGeneralConfig {
                 lhs_contracting_dims: vec![1],
@@ -198,55 +198,55 @@ fn representative_fragment_values_all_have_queryable_tensor_metadata() {
                 rhs_batch_dims: vec![],
             },
         },
-        vec![ValRef::Local(mul), ValRef::Local(dot_rhs)],
-        OpMode::Primal,
+        vec![ValueRef::Local(mul), ValueRef::Local(dot_rhs)],
+        OperationRole::Primary,
     )[0];
-    let reduce = builder.add_op(
+    let reduce = builder.add_operation(
         StdTensorOp::ReduceSum { axes: vec![1] },
-        vec![ValRef::Local(dot)],
-        OpMode::Primal,
+        vec![ValueRef::Local(dot)],
+        OperationRole::Primary,
     )[0];
-    let reshape = builder.add_op(
+    let reshape = builder.add_operation(
         StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(&[1, 2]),
         },
-        vec![ValRef::Local(reduce)],
-        OpMode::Primal,
+        vec![ValueRef::Local(reduce)],
+        OperationRole::Primary,
     )[0];
-    let broadcast = builder.add_op(
+    let broadcast = builder.add_operation(
         StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(&[3, 1, 2]),
             dims: vec![1, 2],
         },
-        vec![ValRef::Local(reshape)],
-        OpMode::Primal,
+        vec![ValueRef::Local(reshape)],
+        OperationRole::Primary,
     )[0];
     builder.set_outputs(vec![broadcast]);
-    let fragment = builder.build();
+    let graph = builder.build();
 
     let mut ctx = ShapeGuardContext::default();
-    ctx.attach_fragment(&fragment);
-    ctx.insert_metadata(fragment.vals()[lhs].key.clone(), meta(DType::F64, &[2, 3]));
-    ctx.insert_metadata(fragment.vals()[rhs].key.clone(), meta(DType::F64, &[2, 3]));
-    ctx.insert_metadata(fragment.vals()[add].key.clone(), meta(DType::F64, &[2, 3]));
-    ctx.insert_metadata(fragment.vals()[mul].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.attach_graph(&graph);
+    ctx.insert_metadata(graph.values()[lhs].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(graph.values()[rhs].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(graph.values()[add].key.clone(), meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(graph.values()[mul].key.clone(), meta(DType::F64, &[2, 3]));
     ctx.insert_metadata(
-        fragment.vals()[dot_rhs].key.clone(),
+        graph.values()[dot_rhs].key.clone(),
         meta(DType::F64, &[3, 4]),
     );
-    ctx.insert_metadata(fragment.vals()[dot].key.clone(), meta(DType::F64, &[2, 4]));
-    ctx.insert_metadata(fragment.vals()[reduce].key.clone(), meta(DType::F64, &[2]));
+    ctx.insert_metadata(graph.values()[dot].key.clone(), meta(DType::F64, &[2, 4]));
+    ctx.insert_metadata(graph.values()[reduce].key.clone(), meta(DType::F64, &[2]));
     ctx.insert_metadata(
-        fragment.vals()[reshape].key.clone(),
+        graph.values()[reshape].key.clone(),
         meta(DType::F64, &[1, 2]),
     );
     ctx.insert_metadata(
-        fragment.vals()[broadcast].key.clone(),
+        graph.values()[broadcast].key.clone(),
         meta(DType::F64, &[3, 1, 2]),
     );
 
-    for local_id in 0..fragment.vals().len() {
-        let value = ValRef::Local(local_id);
+    for local_id in 0..graph.values().len() {
+        let value = ValueRef::Local(local_id);
         let metadata = ctx.metadata_of(&value);
         assert_eq!(metadata.dtype, DType::F64);
         assert!(

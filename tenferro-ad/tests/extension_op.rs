@@ -24,13 +24,13 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 use support::RunTraced;
 
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use num_complex::{Complex32, Complex64};
 use tenferro_ad::extension::{
     apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionRuleSet,
 };
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -91,11 +91,11 @@ impl ExtensionOp for TestScaleBy2 {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -145,18 +145,18 @@ impl ExtensionAdRuleTrait for TestScaleBy2Rule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         match tangent_in[0] {
             Some(dx) => {
-                let sum = builder.add_op(
+                let sum = builder.add_operation(
                     StdTensorOp::Add,
-                    vec![ValRef::Local(dx), ValRef::Local(dx)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(dx), ValueRef::Local(dx)],
+                    OperationRole::Linearized {
                         active_mask: vec![true, true],
                     },
                 );
@@ -169,18 +169,18 @@ impl ExtensionAdRuleTrait for TestScaleBy2Rule {
     fn transpose_rule(
         &self,
         _op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         match cotangent_out[0] {
             Some(ct) => {
-                let sum = emitter.add_op(
+                let sum = builder.add_operation(
                     StdTensorOp::Add,
-                    vec![ValRef::Local(ct), ValRef::Local(ct)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(ct), ValueRef::Local(ct)],
+                    OperationRole::Linearized {
                         active_mask: vec![true, true],
                     },
                 );
@@ -217,11 +217,11 @@ impl ExtensionOp for TestSwap {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         2
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         2
     }
 
@@ -262,24 +262,24 @@ impl ExtensionAdRuleTrait for TestSwapRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[1], tangent_in[0]])
     }
 
     fn transpose_rule(
         &self,
         _op: &dyn ExtensionOp,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[1], cotangent_out[0]])
     }
 }
@@ -310,11 +310,11 @@ impl ExtensionOp for TestNoAd {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -362,11 +362,11 @@ impl ExtensionOp for TestProbeIdentity {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         2
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -409,11 +409,11 @@ impl ExtensionOp for TestProbeLinear {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         2
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -446,12 +446,12 @@ impl ExtensionAdRuleTrait for TestProbeIdentityRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = op
             .as_any()
             .downcast_ref::<TestProbeIdentity>()
@@ -463,12 +463,12 @@ impl ExtensionAdRuleTrait for TestProbeIdentityRule {
             return Ok(vec![Some(dx)]);
         };
 
-        let out = builder.add_op(
+        let out = builder.add_operation(
             StdTensorOp::Extension(Arc::new(TestProbeLinear {
                 probe_shape: op.probe_shape.clone(),
             })),
-            vec![ValRef::Local(dx), ValRef::Local(dprobe)],
-            OpMode::Linear {
+            vec![ValueRef::Local(dx), ValueRef::Local(dprobe)],
+            OperationRole::Linearized {
                 active_mask: vec![true, true],
             },
         );
@@ -478,12 +478,12 @@ impl ExtensionAdRuleTrait for TestProbeIdentityRule {
     fn transpose_rule(
         &self,
         _op: &dyn ExtensionOp,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[0], None])
     }
 }
@@ -499,24 +499,24 @@ impl ExtensionAdRuleTrait for TestProbeLinearRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[0]])
     }
 
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let Some(ct) = cotangent_out[0] else {
             return Ok(vec![None, None]);
         };
@@ -524,12 +524,12 @@ impl ExtensionAdRuleTrait for TestProbeLinearRule {
             .as_any()
             .downcast_ref::<TestProbeLinear>()
             .expect("TestProbeLinearRule received a different op");
-        let _probe_value = emitter.add_op(
+        let _probe_value = builder.add_operation(
             StdTensorOp::Reshape {
                 to_shape: DimExpr::from_concrete(&op.probe_shape),
             },
             vec![inputs[1].clone()],
-            OpMode::Primal,
+            OperationRole::Primary,
         );
         Ok(vec![Some(ct), None])
     }
@@ -564,11 +564,11 @@ impl ExtensionOp for TestBadOutputCount {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         2
     }
 

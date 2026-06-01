@@ -14,7 +14,7 @@ mod support;
 use std::collections::HashSet;
 use support::{run_many_traced_with, RunTraced};
 
-use computegraph::fragment::Fragment;
+use computegraph::graph::Graph;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::traced::TracedTensor;
@@ -35,28 +35,28 @@ fn get_f64_scalar(t: &Tensor) -> f64 {
     }
 }
 
-/// Count total ops across all fragments in the fragment tree, deduplicating
-/// by pointer identity (the same `Arc<Fragment>` may appear multiple times).
-fn total_ops(fragment: &Fragment<StdTensorOp>) -> usize {
+/// Count total ops across all graphs in the graph tree, deduplicating
+/// by pointer identity (the same `Arc<Graph>` may appear multiple times).
+fn total_ops(graph: &Graph<StdTensorOp>) -> usize {
     let mut visited = HashSet::new();
     let mut count = 0;
-    count_ops_recursive(fragment, &mut visited, &mut count);
+    count_ops_recursive(graph, &mut visited, &mut count);
     count
 }
 
-// Deduplication uses raw pointer identity, which works because Fragment
+// Deduplication uses raw pointer identity, which works because Graph
 // parents share the same Arc allocation (not cloned data).
 fn count_ops_recursive(
-    fragment: &Fragment<StdTensorOp>,
-    visited: &mut HashSet<*const Fragment<StdTensorOp>>,
+    graph: &Graph<StdTensorOp>,
+    visited: &mut HashSet<*const Graph<StdTensorOp>>,
     count: &mut usize,
 ) {
-    let ptr: *const Fragment<StdTensorOp> = fragment;
+    let ptr: *const Graph<StdTensorOp> = graph;
     if !visited.insert(ptr) {
         return;
     }
-    *count += fragment.ops().len();
-    for parent in fragment.parents() {
+    *count += graph.operations().len();
+    for parent in graph.parents() {
         count_ops_recursive(parent, visited, count);
     }
 }
@@ -178,7 +178,7 @@ fn eval_all_evaluates_primal_and_gradient() {
     let primal = x_final.clone();
     let grad = x_final.grad(&a).unwrap();
 
-    // run_many_traced_with merges fragments and deduplicates shared subexpressions.
+    // run_many_traced_with merges graphs and deduplicates shared subexpressions.
     // If this panics or returns wrong values, deduplication is broken.
     let results = run_many_traced_with(&mut engine, &[&primal, &grad]).unwrap();
     assert_eq!(results.len(), 2);
@@ -207,14 +207,14 @@ fn eval_all_evaluates_primal_and_gradient() {
 #[test]
 fn graph_size_grows_linearly() {
     // Run with a fixed number of iterations (no convergence check)
-    // and measure fragment op count.
+    // and measure graph op count.
     fn ops_for_k_iters(k: usize) -> usize {
         let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
         let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5));
         for _ in 0..k {
             x = &a * &x.cos();
         }
-        total_ops(&x.fragment)
+        total_ops(&x.graph)
     }
 
     let ops_10 = ops_for_k_iters(10);

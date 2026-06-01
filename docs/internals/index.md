@@ -8,7 +8,7 @@ Design rationale for each subsystem — *what* each layer does and *why*.
 
 - [Crate structure](../architecture/tenferro-crates.md)
 - [Computation graph](../architecture/computegraph.md)
-- [ChainRules AD traits](../architecture/chainrules.md)
+- [Primitive AD traits](../architecture/primitive-ad.md)
 - [tidu AD engine](../architecture/tidu.md)
 - [End-to-end AD pipeline](../architecture/ad-pipeline.md)
 

@@ -6,19 +6,19 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use computegraph::compile::compile;
-use computegraph::fragment::FragmentBuilder;
+use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
-use computegraph::types::{GlobalValKey, ValRef};
 #[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValId, OpMode};
-#[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole};
+use computegraph::types::{ValueKey, ValueRef};
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_extension_macros::define_idempotent_rule_registration;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
 #[cfg(feature = "autodiff")]
@@ -32,7 +32,7 @@ use tenferro_tensor::{DType, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
-use crate::builder::build_einsum_fragment;
+use crate::builder::build_einsum_graph;
 use crate::cache::{
     einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
 };
@@ -188,11 +188,11 @@ impl ExtensionOp for EinsumExtensionOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         self.subscripts.inputs.len()
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -283,12 +283,12 @@ impl ExtensionAdRule for EinsumAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
         let mut terms = Vec::new();
 
@@ -300,16 +300,16 @@ impl ExtensionAdRule for EinsumAdRule {
             let mut inputs = Vec::with_capacity(primal_in.len());
             for (input_idx, key) in primal_in.iter().enumerate() {
                 if input_idx == active_idx {
-                    inputs.push(ValRef::Local(*dt));
+                    inputs.push(ValueRef::Local(*dt));
                 } else {
-                    inputs.push(ValRef::External(key.clone()));
+                    inputs.push(ValueRef::External(key.clone()));
                 }
             }
 
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Extension(Arc::new(op.clone())),
                 inputs,
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: (0..primal_in.len()).map(|idx| idx == active_idx).collect(),
                 },
             );
@@ -322,23 +322,23 @@ impl ExtensionAdRule for EinsumAdRule {
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
         let input_labels = &op.subscripts.inputs;
         let output_labels = &op.subscripts.output;
-        let n_inputs = input_labels.len();
+        let input_count = input_labels.len();
 
         let Some(ct) = cotangent_out.first().copied().flatten() else {
-            return Ok(vec![None; n_inputs]);
+            return Ok(vec![None; input_count]);
         };
         let active_mask = match mode {
-            OpMode::Linear { active_mask } => active_mask,
-            OpMode::Primal => return Ok(vec![None; n_inputs]),
+            OperationRole::Linearized { active_mask } => active_mask,
+            OperationRole::Primary => return Ok(vec![None; input_count]),
         };
         let primal_input_shapes: Vec<Vec<SymDim>> = inputs
             .iter()
@@ -351,8 +351,8 @@ impl ExtensionAdRule for EinsumAdRule {
             )
         })?;
 
-        let mut result = Vec::with_capacity(n_inputs);
-        for active_idx in 0..n_inputs {
+        let mut result = Vec::with_capacity(input_count);
+        for active_idx in 0..input_count {
             if !active_mask.get(active_idx).copied().unwrap_or(false) {
                 result.push(None);
                 continue;
@@ -369,21 +369,21 @@ impl ExtensionAdRule for EinsumAdRule {
                 .copied()
                 .filter(|label| available_labels.contains(label))
                 .collect();
-            let mut vjp_input_labels = Vec::with_capacity(n_inputs);
-            let mut vjp_inputs = Vec::with_capacity(n_inputs);
-            let mut vjp_input_shapes = Vec::with_capacity(n_inputs);
+            let mut vjp_input_labels = Vec::with_capacity(input_count);
+            let mut vjp_inputs = Vec::with_capacity(input_count);
+            let mut vjp_input_shapes = Vec::with_capacity(input_count);
             vjp_input_labels.push(output_labels.clone());
-            vjp_inputs.push(ValRef::Local(ct));
+            vjp_inputs.push(ValueRef::Local(ct));
             vjp_input_shapes.push(cotangent_shape.clone());
 
-            for input_idx in 0..n_inputs {
+            for input_idx in 0..input_count {
                 if input_idx == active_idx {
                     continue;
                 }
                 vjp_input_labels.push(input_labels[input_idx].clone());
                 vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
                 vjp_inputs.push(conjugate_primal_if_complex(
-                    emitter,
+                    builder,
                     inputs[input_idx].clone(),
                     ctx,
                 ));
@@ -400,19 +400,19 @@ impl ExtensionAdRule for EinsumAdRule {
                 output_shape_hint.clone(),
                 &vjp_input_shapes,
             )?;
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Extension(Arc::new(vjp_op)),
                 vjp_inputs,
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: std::iter::once(true)
-                        .chain(std::iter::repeat_n(false, n_inputs.saturating_sub(1)))
+                        .chain(std::iter::repeat_n(false, input_count.saturating_sub(1)))
                         .collect(),
                 },
             );
             let mut cotangent = out[0];
             if vjp_output_labels != input_labels[active_idx] {
                 cotangent = broadcast_einsum_vjp_to_input_shape(
-                    emitter,
+                    builder,
                     cotangent,
                     &vjp_output_labels,
                     &input_labels[active_idx],
@@ -436,7 +436,7 @@ fn vjp_einsum_op_with_inherited_plan(
     input_shapes: &[Vec<SymDim>],
 ) -> ADRuleResult<EinsumExtensionOp> {
     let plan_spec =
-        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.n_inputs(), active_idx)?;
+        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)?;
     let mut op = EinsumExtensionOp::with_output_shape_hint(
         subscripts.clone(),
         output_shape_hint,
@@ -462,12 +462,12 @@ fn vjp_einsum_op_with_inherited_plan(
 #[cfg(feature = "autodiff")]
 fn vjp_plan_spec_for_active(
     primal_plan: &EinsumPlanSpec,
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
 ) -> ADRuleResult<EinsumPlanSpec> {
-    if active_idx >= n_inputs {
+    if active_idx >= input_count {
         return Err(ADRuleError::unsupported(
-            format!("einsum VJP active input {active_idx} is outside {n_inputs} inputs"),
+            format!("einsum VJP active input {active_idx} is outside {input_count} inputs"),
             ADRuleKind::Transpose,
         ));
     }
@@ -476,7 +476,7 @@ fn vjp_plan_spec_for_active(
         EinsumPlanSpec::Auto(options) => Ok(EinsumPlanSpec::Auto(options.clone())),
         EinsumPlanSpec::LeftToRight => Ok(EinsumPlanSpec::LeftToRight),
         EinsumPlanSpec::Path(path) => {
-            let pairs = jax_path_to_v1_pairs(path, n_inputs).map_err(|err| {
+            let pairs = jax_path_to_v1_pairs(path, input_count).map_err(|err| {
                 ADRuleError::unsupported(
                     format!(
                         "failed to inherit einsum Path plan for VJP active input {active_idx}: {err}"
@@ -484,10 +484,10 @@ fn vjp_plan_spec_for_active(
                     ADRuleKind::Transpose,
                 )
             })?;
-            derive_vjp_fixed_pairs(&pairs, n_inputs, active_idx).map(EinsumPlanSpec::FixedPairs)
+            derive_vjp_fixed_pairs(&pairs, input_count, active_idx).map(EinsumPlanSpec::FixedPairs)
         }
         EinsumPlanSpec::FixedPairs(pairs) => {
-            derive_vjp_fixed_pairs(pairs, n_inputs, active_idx).map(EinsumPlanSpec::FixedPairs)
+            derive_vjp_fixed_pairs(pairs, input_count, active_idx).map(EinsumPlanSpec::FixedPairs)
         }
     }
 }
@@ -495,38 +495,38 @@ fn vjp_plan_spec_for_active(
 #[cfg(feature = "autodiff")]
 fn derive_vjp_fixed_pairs(
     primal_pairs: &[(usize, usize)],
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
 ) -> ADRuleResult<Vec<(usize, usize)>> {
-    if n_inputs == 0 {
+    if input_count == 0 {
         return Err(ADRuleError::unsupported(
             "einsum VJP cannot derive a plan for zero primal inputs",
             ADRuleKind::Transpose,
         ));
     }
-    if active_idx >= n_inputs {
+    if active_idx >= input_count {
         return Err(ADRuleError::unsupported(
-            format!("einsum VJP active input {active_idx} is outside {n_inputs} inputs"),
+            format!("einsum VJP active input {active_idx} is outside {input_count} inputs"),
             ADRuleKind::Transpose,
         ));
     }
-    let required_steps = n_inputs.saturating_sub(1);
+    let required_steps = input_count.saturating_sub(1);
     if primal_pairs.len() != required_steps {
         return Err(ADRuleError::unsupported(
             format!(
                 "einsum VJP cannot inherit explicit plan for active input {active_idx}: \
-                 expected {required_steps} primal steps for {n_inputs} inputs, got {}",
+                 expected {required_steps} primal steps for {input_count} inputs, got {}",
                 primal_pairs.len()
             ),
             ADRuleKind::Transpose,
         ));
     }
-    if n_inputs == 1 {
+    if input_count == 1 {
         return Ok(Vec::new());
     }
 
-    let children = fixed_pair_children(primal_pairs, n_inputs, active_idx)?;
-    let mut primal_to_vjp = vec![None; n_inputs];
+    let children = fixed_pair_children(primal_pairs, input_count, active_idx)?;
+    let mut primal_to_vjp = vec![None; input_count];
     let mut next_vjp_input = 1;
     for (input_idx, slot) in primal_to_vjp.iter_mut().enumerate() {
         if input_idx != active_idx {
@@ -535,18 +535,18 @@ fn derive_vjp_fixed_pairs(
         }
     }
 
-    let root = n_inputs + primal_pairs.len() - 1;
+    let root = input_count + primal_pairs.len() - 1;
     let mut pairs = Vec::with_capacity(required_steps);
     let final_id = emit_vjp_adjoint(
         root,
         0,
         &children,
-        n_inputs,
+        input_count,
         active_idx,
         &primal_to_vjp,
         &mut pairs,
     )?;
-    let expected_final = n_inputs + pairs.len() - 1;
+    let expected_final = input_count + pairs.len() - 1;
     if final_id != expected_final || pairs.len() != required_steps {
         return Err(ADRuleError::unsupported(
             format!(
@@ -563,17 +563,17 @@ fn derive_vjp_fixed_pairs(
 #[cfg(feature = "autodiff")]
 fn fixed_pair_children(
     pairs: &[(usize, usize)],
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
 ) -> ADRuleResult<Vec<Option<(usize, usize)>>> {
-    let mut live = vec![false; n_inputs + pairs.len()];
-    for slot in live.iter_mut().take(n_inputs) {
+    let mut live = vec![false; input_count + pairs.len()];
+    for slot in live.iter_mut().take(input_count) {
         *slot = true;
     }
-    let mut children = vec![None; n_inputs + pairs.len()];
+    let mut children = vec![None; input_count + pairs.len()];
 
     for (step_idx, &(left, right)) in pairs.iter().enumerate() {
-        let next_idx = n_inputs + step_idx;
+        let next_idx = input_count + step_idx;
         if left == right {
             return Err(invalid_vjp_plan_error(
                 active_idx,
@@ -615,12 +615,12 @@ fn emit_vjp_adjoint(
     node: usize,
     cotangent_id: usize,
     children: &[Option<(usize, usize)>],
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
     primal_to_vjp: &[Option<usize>],
     pairs: &mut Vec<(usize, usize)>,
 ) -> ADRuleResult<usize> {
-    if node < n_inputs {
+    if node < input_count {
         return if node == active_idx {
             Ok(cotangent_id)
         } else {
@@ -634,32 +634,44 @@ fn emit_vjp_adjoint(
     let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
         invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
     })?;
-    let left_has_active = subtree_contains_active(left, children, n_inputs, active_idx)?;
-    let right_has_active = subtree_contains_active(right, children, n_inputs, active_idx)?;
+    let left_has_active = subtree_contains_active(left, children, input_count, active_idx)?;
+    let right_has_active = subtree_contains_active(right, children, input_count, active_idx)?;
     match (left_has_active, right_has_active) {
         (true, false) => {
-            let sibling_id =
-                emit_vjp_subtree(right, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
-            let next = push_vjp_pair(cotangent_id, sibling_id, n_inputs, pairs);
+            let sibling_id = emit_vjp_subtree(
+                right,
+                children,
+                input_count,
+                active_idx,
+                primal_to_vjp,
+                pairs,
+            )?;
+            let next = push_vjp_pair(cotangent_id, sibling_id, input_count, pairs);
             emit_vjp_adjoint(
                 left,
                 next,
                 children,
-                n_inputs,
+                input_count,
                 active_idx,
                 primal_to_vjp,
                 pairs,
             )
         }
         (false, true) => {
-            let sibling_id =
-                emit_vjp_subtree(left, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
-            let next = push_vjp_pair(cotangent_id, sibling_id, n_inputs, pairs);
+            let sibling_id = emit_vjp_subtree(
+                left,
+                children,
+                input_count,
+                active_idx,
+                primal_to_vjp,
+                pairs,
+            )?;
+            let next = push_vjp_pair(cotangent_id, sibling_id, input_count, pairs);
             emit_vjp_adjoint(
                 right,
                 next,
                 children,
-                n_inputs,
+                input_count,
                 active_idx,
                 primal_to_vjp,
                 pairs,
@@ -680,12 +692,12 @@ fn emit_vjp_adjoint(
 fn emit_vjp_subtree(
     node: usize,
     children: &[Option<(usize, usize)>],
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
     primal_to_vjp: &[Option<usize>],
     pairs: &mut Vec<(usize, usize)>,
 ) -> ADRuleResult<usize> {
-    if node < n_inputs {
+    if node < input_count {
         return primal_to_vjp[node].ok_or_else(|| {
             invalid_vjp_plan_error(
                 active_idx,
@@ -697,9 +709,23 @@ fn emit_vjp_subtree(
     let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
         invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
     })?;
-    let left_id = emit_vjp_subtree(left, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
-    let right_id = emit_vjp_subtree(right, children, n_inputs, active_idx, primal_to_vjp, pairs)?;
-    Ok(push_vjp_pair(left_id, right_id, n_inputs, pairs))
+    let left_id = emit_vjp_subtree(
+        left,
+        children,
+        input_count,
+        active_idx,
+        primal_to_vjp,
+        pairs,
+    )?;
+    let right_id = emit_vjp_subtree(
+        right,
+        children,
+        input_count,
+        active_idx,
+        primal_to_vjp,
+        pairs,
+    )?;
+    Ok(push_vjp_pair(left_id, right_id, input_count, pairs))
 }
 
 #[cfg(feature = "autodiff")]
@@ -717,18 +743,18 @@ fn push_vjp_pair(
 fn subtree_contains_active(
     node: usize,
     children: &[Option<(usize, usize)>],
-    n_inputs: usize,
+    input_count: usize,
     active_idx: usize,
 ) -> ADRuleResult<bool> {
-    if node < n_inputs {
+    if node < input_count {
         return Ok(node == active_idx);
     }
     let (left, right) = children.get(node).and_then(|child| *child).ok_or_else(|| {
         invalid_vjp_plan_error(active_idx, format!("missing children for node {node}"))
     })?;
     Ok(
-        subtree_contains_active(left, children, n_inputs, active_idx)?
-            || subtree_contains_active(right, children, n_inputs, active_idx)?,
+        subtree_contains_active(left, children, input_count, active_idx)?
+            || subtree_contains_active(right, children, input_count, active_idx)?,
     )
 }
 
@@ -750,31 +776,31 @@ fn concrete_sym_shapes(shapes: &[Vec<SymDim>]) -> Option<Vec<Vec<usize>>> {
 
 #[cfg(feature = "autodiff")]
 fn broadcast_einsum_vjp_to_input_shape(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent: LocalValueId,
     cotangent_labels: &[u32],
     input_labels: &[u32],
-    shape_source: ValRef<StdTensorOp>,
+    shape_source: ValueRef<StdTensorOp>,
     input_shape: &[SymDim],
-) -> LocalValId {
+) -> LocalValueId {
     let shape: Vec<DimExpr> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, _)| DimExpr::InputDim { input_idx: 1, axis })
         .collect();
     let dims = map_label_occurrences(cotangent_labels, input_labels);
-    let mut inputs = vec![ValRef::Local(cotangent)];
+    let mut inputs = vec![ValueRef::Local(cotangent)];
     if !shape.is_empty() {
         inputs.push(shape_source);
     }
-    let broadcast = emitter.add_op(
+    let broadcast = builder.add_operation(
         StdTensorOp::BroadcastInDim { shape, dims },
         inputs,
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![true, false],
         },
     )[0];
-    project_repeated_labels_to_diagonal(emitter, broadcast, input_labels)
+    project_repeated_labels_to_diagonal(builder, broadcast, input_labels)
 }
 
 #[cfg(feature = "autodiff")]
@@ -796,10 +822,10 @@ fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Vec<us
 
 #[cfg(feature = "autodiff")]
 fn project_repeated_labels_to_diagonal(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent: LocalValueId,
     labels: &[u32],
-) -> LocalValId {
+) -> LocalValueId {
     let mut result = cotangent;
     let mut seen = HashSet::new();
     for (axis_a, label) in labels.iter().copied().enumerate() {
@@ -814,17 +840,17 @@ fn project_repeated_labels_to_diagonal(
         else {
             continue;
         };
-        let extracted = emitter.add_op(
+        let extracted = builder.add_operation(
             StdTensorOp::ExtractDiag { axis_a, axis_b },
-            vec![ValRef::Local(result)],
-            OpMode::Linear {
+            vec![ValueRef::Local(result)],
+            OperationRole::Linearized {
                 active_mask: vec![true],
             },
         )[0];
-        result = emitter.add_op(
+        result = builder.add_operation(
             StdTensorOp::EmbedDiag { axis_a, axis_b },
-            vec![ValRef::Local(extracted)],
-            OpMode::Linear {
+            vec![ValueRef::Local(extracted)],
+            OperationRole::Linearized {
                 active_mask: vec![true],
             },
         )[0];
@@ -866,20 +892,20 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         })?
     };
 
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut input_vals = Vec::with_capacity(inputs.len());
     for input_idx in 0..inputs.len() {
         let local = builder.add_input(TensorInputKey::User {
             id: input_idx as u64,
         });
-        input_vals.push(ValRef::Local(local));
+        input_vals.push(ValueRef::Local(local));
     }
 
-    let result_ref = build_einsum_fragment(&mut builder, tree.as_ref(), &input_vals, &shapes)
+    let result_ref = build_einsum_graph(&mut builder, tree.as_ref(), &input_vals, &shapes)
         .map_err(einsum_runtime_error)?;
     let result_local = match result_ref {
-        ValRef::Local(local) => local,
-        ValRef::External(_) => {
+        ValueRef::Local(local) => local,
+        ValueRef::External(_) => {
             return Err(tenferro_tensor::Error::backend_failure(
                 "einsum_extension",
                 "einsum builder returned an external value at runtime",
@@ -887,10 +913,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         }
     };
     builder.set_outputs(vec![result_local]);
-    let fragment = Arc::new(builder.build());
-    let output_key = fragment.vals()[result_local].key.clone();
+    let graph = Arc::new(builder.build());
+    let output_key = graph.values()[result_local].key.clone();
 
-    let view = resolve(vec![fragment]);
+    let view = resolve(vec![graph]);
     let graph = materialize_merge(&view, &[output_key]);
     let compiled = compile(&graph);
 
@@ -899,7 +925,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     for key in &graph.inputs {
         match key {
-            GlobalValKey::Input(TensorInputKey::User { id }) => {
+            ValueKey::Input(TensorInputKey::User { id }) => {
                 let input_idx = *id as usize;
                 let tensor = inputs.get(input_idx).ok_or_else(|| {
                     tenferro_tensor::Error::backend_failure(
@@ -989,19 +1015,19 @@ fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&Einsu
 
 #[cfg(feature = "autodiff")]
 fn sum_terms(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    terms: Vec<LocalValId>,
-) -> Option<LocalValId> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    terms: Vec<LocalValueId>,
+) -> Option<LocalValueId> {
     match terms.as_slice() {
         [] => None,
         [only] => Some(*only),
         [head, tail @ ..] => {
             let mut result = *head;
             for &term in tail {
-                let sum = builder.add_op(
+                let sum = builder.add_operation(
                     StdTensorOp::Add,
-                    vec![ValRef::Local(result), ValRef::Local(term)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(result), ValueRef::Local(term)],
+                    OperationRole::Linearized {
                         active_mask: vec![true, true],
                     },
                 );
@@ -1014,15 +1040,15 @@ fn sum_terms(
 
 #[cfg(feature = "autodiff")]
 fn conjugate_primal_if_complex(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
-) -> ValRef<StdTensorOp> {
+) -> ValueRef<StdTensorOp> {
     match ctx.dtype_of(&input) {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => input,
-        DType::C32 | DType::C64 => {
-            ValRef::Local(emitter.add_op(StdTensorOp::Conj, vec![input], OpMode::Primal)[0])
-        }
+        DType::C32 | DType::C64 => ValueRef::Local(
+            builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
+        ),
     }
 }
 

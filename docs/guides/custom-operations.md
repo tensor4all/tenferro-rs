@@ -92,7 +92,7 @@ When porting Julia `frule` / `rrule` code:
 - map `NoTangent` / `ZeroTangent` to `None` when the tangent slot is inactive,
 - represent scalar parameters as tensor inputs when users need to vary them,
 - use `reduce_sum_all` for broadcasted scalar inputs,
-- emit only built-in tensor operations or extension ops whose AD rules are
+- add only built-in tensor operations or extension ops whose AD rules are
   registered before a later AD pass reaches them.
 
 The lower-level adapter API remains available for specialized extension

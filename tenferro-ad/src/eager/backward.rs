@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use computegraph::fragment::Fragment;
-use computegraph::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::graph::Graph;
+use computegraph::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
@@ -10,11 +10,11 @@ use tenferro_tensor::{Tensor, TensorBackend};
 use tidu::eager::BackwardExecutor;
 use tidu::{LinearizedGraph, PrimitiveGraph};
 
-use crate::eager_emitter::EagerEmitter;
+use crate::eager_builder::EagerPrimitiveBuilder;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 use crate::extension_runtime::ExtensionExecutor;
 use crate::metadata::{
-    push_metadata_scope, register_scoped_live_fragment_metadata, tensor_meta_from_tensor,
+    push_metadata_scope, register_scoped_live_graph_metadata, tensor_meta_from_tensor,
     MetadataScope,
 };
 
@@ -41,20 +41,20 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
 }
 
 pub(super) fn missing_tangent_base_key(
-    key: &GlobalValKey<StdTensorOp>,
-) -> Option<GlobalValKey<StdTensorOp>> {
-    let GlobalValKey::Input(tangent_key) = key else {
+    key: &ValueKey<StdTensorOp>,
+) -> Option<ValueKey<StdTensorOp>> {
+    let ValueKey::Input(tangent_key) = key else {
         return None;
     };
     let TensorInputKey::Tangent { of, .. } = tangent_key else {
         return None;
     };
-    Some(GlobalValKey::Input((**of).clone()))
+    Some(ValueKey::Input((**of).clone()))
 }
 
 pub(super) fn eager_forward_input_metadata(
-    key: &GlobalValKey<StdTensorOp>,
-    initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+    key: &ValueKey<StdTensorOp>,
+    initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
 ) -> TensorMeta {
     if let Some(value) = initial_data.get(key) {
         return tensor_meta_from_tensor(value.as_ref());
@@ -69,9 +69,9 @@ pub(super) fn eager_forward_input_metadata(
 }
 
 pub(super) fn eager_forward_value<B: TensorBackend>(
-    all_values: &mut HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
-    key: &GlobalValKey<StdTensorOp>,
-    initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+    all_values: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    key: &ValueKey<StdTensorOp>,
+    initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
 ) -> Arc<Tensor> {
     if let Some(value) = all_values.get(key) {
@@ -88,16 +88,16 @@ pub(super) fn eager_forward_value<B: TensorBackend>(
     value
 }
 
-fn live_fragment_values(fragment: &Fragment<StdTensorOp>) -> HashSet<LocalValId> {
+fn live_graph_values(graph: &Graph<StdTensorOp>) -> HashSet<LocalValueId> {
     let mut producers = HashMap::new();
-    for (op_index, op_node) in fragment.ops().iter().enumerate() {
+    for (op_index, op_node) in graph.operations().iter().enumerate() {
         for &output_id in &op_node.outputs {
             producers.insert(output_id, op_index);
         }
     }
 
     let mut live = HashSet::new();
-    let mut stack = fragment.outputs().to_vec();
+    let mut stack = graph.outputs().to_vec();
     while let Some(local_id) = stack.pop() {
         if !live.insert(local_id) {
             continue;
@@ -105,8 +105,8 @@ fn live_fragment_values(fragment: &Fragment<StdTensorOp>) -> HashSet<LocalValId>
         let Some(&op_index) = producers.get(&local_id) else {
             continue;
         };
-        for input in &fragment.ops()[op_index].inputs {
-            if let ValRef::Local(input_id) = input {
+        for input in &graph.operations()[op_index].inputs {
+            if let ValueRef::Local(input_id) = input {
                 stack.push(*input_id);
             }
         }
@@ -115,8 +115,8 @@ fn live_fragment_values(fragment: &Fragment<StdTensorOp>) -> HashSet<LocalValId>
     live
 }
 
-fn linear_op_depends_on_tangents(mode: &OpMode) -> bool {
-    matches!(mode, OpMode::Linear { active_mask } if active_mask.iter().any(|is_active| *is_active))
+fn linear_op_depends_on_tangents(mode: &OperationRole) -> bool {
+    matches!(mode, OperationRole::Linearized { active_mask } if active_mask.iter().any(|is_active| *is_active))
 }
 
 impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
@@ -125,23 +125,23 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
     fn execute_forward(
         &mut self,
         graph: PrimitiveGraph<'_, StdTensorOp>,
-        initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
-    ) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
-        let fragment = graph.as_graph();
+        initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
+        let graph = graph.as_graph();
         let mut all_values = initial_data.clone();
-        let live_values = live_fragment_values(fragment);
-        let input_metadata = fragment
+        let live_values = live_graph_values(graph);
+        let input_metadata = graph
             .inputs()
             .iter()
             .map(|&input_id| {
-                let key = fragment.vals()[input_id].key.clone();
+                let key = graph.values()[input_id].key.clone();
                 let meta = eager_forward_input_metadata(&key, initial_data);
                 (key, meta)
             })
             .collect::<Vec<_>>();
 
-        for op_node in fragment.ops() {
-            if linear_op_depends_on_tangents(&op_node.mode) {
+        for op_node in graph.operations() {
+            if linear_op_depends_on_tangents(&op_node.role) {
                 continue;
             }
             if !op_node
@@ -156,11 +156,11 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
                 .inputs
                 .iter()
                 .map(|input| match input {
-                    ValRef::Local(local_id) => {
-                        let key = &fragment.vals()[*local_id].key;
+                    ValueRef::Local(local_id) => {
+                        let key = &graph.values()[*local_id].key;
                         eager_forward_value(&mut all_values, key, initial_data, self.backend)
                     }
-                    ValRef::External(key) => {
+                    ValueRef::External(key) => {
                         eager_forward_value(&mut all_values, key, initial_data, self.backend)
                     }
                 })
@@ -170,26 +170,29 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             let outputs =
                 if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
                     exec_op_on_tensors_with_extension_executor(
-                        &op_node.op,
+                        &op_node.operation,
                         &resolved_inputs,
                         self.backend,
                         Some(extension_executor),
                     )
                 } else {
-                    exec_op_on_tensors(&op_node.op, &resolved_inputs, self.backend)
+                    exec_op_on_tensors(&op_node.operation, &resolved_inputs, self.backend)
                 }
                 .unwrap_or_else(|err| {
-                    panic!("eager forward exec failed for {:?}: {}", op_node.op, err)
+                    panic!(
+                        "eager forward exec failed for {:?}: {}",
+                        op_node.operation, err
+                    )
                 });
 
             for (output_id, output) in op_node.outputs.iter().zip(outputs) {
-                let key = fragment.vals()[*output_id].key.clone();
+                let key = graph.values()[*output_id].key.clone();
                 all_values.insert(key, Arc::new(output));
             }
         }
 
         let metadata_scope =
-            register_scoped_live_fragment_metadata(fragment, &live_values, input_metadata);
+            register_scoped_live_graph_metadata(graph, &live_values, input_metadata);
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
 
         all_values
@@ -199,30 +202,30 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         &mut self,
         linear: &LinearizedGraph<StdTensorOp>,
         cotangent_out: &[Option<Arc<Tensor>>],
-        external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+        external_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
     ) -> tidu::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
-        let mut emitter = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-            EagerEmitter::with_extension_executor(self.backend, extension_executor)
+        let mut builder = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+            EagerPrimitiveBuilder::with_extension_executor(self.backend, extension_executor)
         } else {
-            EagerEmitter::new(self.backend)
+            EagerPrimitiveBuilder::new(self.backend)
         };
-        emitter.external_data = external_data.clone();
+        builder.external_data = external_data.clone();
         let cotangent_seed_ids = cotangent_out
             .iter()
             .map(|maybe_seed| {
                 maybe_seed
                     .as_ref()
-                    .map(|seed| emitter.push_tensor(Arc::clone(seed)))
+                    .map(|seed| builder.push_tensor(Arc::clone(seed)))
             })
             .collect::<Vec<_>>();
 
         ctx.refresh_global_metadata();
-        tidu::try_linear_transpose_with_builder(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
+        tidu::try_linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx).map(
             |cotangent_ids| {
                 cotangent_ids
                     .into_iter()
-                    .map(|maybe_id| maybe_id.map(|id| emitter.tensor(id)))
+                    .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)))
                     .collect()
             },
         )

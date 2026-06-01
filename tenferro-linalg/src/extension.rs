@@ -222,11 +222,11 @@ impl ExtensionOpTrait for LinalgExtensionOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         self.op.input_count()
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         self.op.output_count()
     }
 
@@ -235,14 +235,14 @@ impl ExtensionOpTrait for LinalgExtensionOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(input_dtypes.len(), self.n_inputs());
-        assert_eq!(input_shapes.len(), self.n_inputs());
+        assert_eq!(input_dtypes.len(), self.input_count());
+        assert_eq!(input_shapes.len(), self.input_count());
         match self.op {
             LinalgOp::Cholesky
             | LinalgOp::FullPivLuSolve { .. }
             | LinalgOp::Solve { .. }
             | LinalgOp::TriangularSolve { .. } => {
-                let output_shape = if self.n_inputs() == 1 {
+                let output_shape = if self.input_count() == 1 {
                     input_shapes[0].to_vec()
                 } else {
                     input_shapes[1].to_vec()
@@ -259,7 +259,7 @@ impl ExtensionOpTrait for LinalgExtensionOp {
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let expected = self.n_inputs();
+        let expected = self.input_count();
         if inputs.len() != expected {
             return Err(Error::InvalidConfig {
                 op: "linalg_eager_execute",

@@ -27,7 +27,7 @@ different senses. For readability, this document separates them explicitly:
 | Layer | Example | Meaning |
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
-| Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; fragment construction, AD, einsum decomposition |
+| Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Graph`; graph construction, AD, einsum decomposition |
 | Core primitive catalog | `PrimitiveOpKind`, descriptors | internal metadata in `tenferro-core-ops` used by graph, runtime, and backend dispatch |
 | Execution IR | `ExecOp` variants | output of the optimizing compiler; input to runtime/backend dispatch |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
@@ -38,7 +38,7 @@ different senses. For readability, this document separates them explicitly:
 ┌─────────────────────────────────────────┐
 │ Tenferro IR                             │
 │ (StdTensorOp)                           │
-│ Fragment construction, AD, einsum        │
+│ Graph construction, AD, einsum          │
 └──────────────┬──────────────────────────┘
                │ compile_std_to_exec()
 ┌──────────────▼──────────────────────────┐
@@ -59,7 +59,7 @@ This document uses **three orthogonal classifications**:
 
 Important distinctions:
 
-- `differentiate`, `transpose`, `resolve`, and `compile` are **transforms**, not
+- `linearize`, `linear_transpose`, `resolve`, and `compile` are **transforms**, not
   primitives.
 - `einsum` is **surface syntax**, not a final persistent Tenferro IR primitive.
   It is lowered into Tenferro IR primitives such as `DotGeneral`, `Mul`,
@@ -77,7 +77,7 @@ Important distinctions:
 
 Responsibility boundary:
 
-- `chainrules-rs` owns the `PrimitiveOp` contract
+- `tidu-rs` owns the `Primitive` contract
 - `tidu-rs` owns generic AD transforms that call `linearize` and
   `transpose_rule`
 - tenferro owns the **concrete per-op derivative rules**
@@ -101,10 +101,10 @@ downstream tenferro design/implementation concern.
 Elementwise primitives such as `Add` and `Mul` do **not** silently broadcast.
 If shapes differ, the graph must contain an explicit `BroadcastInDim`.
 
-### `Transpose` vs AD transpose
+### `Transpose` vs AD linear_transpose
 
 `Transpose(perm)` is the tensor operation "permute axes".
-It is unrelated to the AD transform `transpose(linear_fragment)`.
+It is unrelated to the AD transform `linear_transpose(linear_graph)`.
 
 ### Multi-output primitives
 
@@ -114,7 +114,7 @@ Some primitives produce multiple outputs:
 - `QR(A) -> (Q, R)`
 
 The output ordering must be part of the primitive definition because
-`GlobalValKey` includes `output_slot`.
+`ValueKey` includes `output_slot`.
 
 ### Column-major (Fortran) convention
 
@@ -155,19 +155,19 @@ Key relationships:
 
 ## IV. Core Traits (canonical signatures)
 
-### GraphOp
+### GraphOperation
 
-`GraphOp` is the operation node trait. computegraph-rs is fully generic over
+`GraphOperation` is the operation node trait. computegraph-rs is fully generic over
 it and never references specific primitives.
 
 ```rust
-trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
+trait GraphOperation: Clone + Debug + Hash + Eq + Send + Sync + 'static {
     type Operand: Operand;
     type Context;
     type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
 
-    fn n_inputs(&self) -> usize;
-    fn n_outputs(&self) -> usize;
+    fn input_count(&self) -> usize;
+    fn output_count(&self) -> usize;
     fn eval(&self, ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
 }
 ```
@@ -208,7 +208,7 @@ through the runtime tensor and backend APIs described in
 ## V. Tenferro IR Vocabulary
 
 This section is about the graph-level vocabulary that `computegraph-rs`,
-`chainrules-rs`, `tidu-rs`, and tenferro's `StdTensorOp` layer talk about.
+`tidu-rs`, and tenferro's `StdTensorOp` layer talk about.
 
 These ops define the **Tenferro IR**. Core primitives map to
 `PrimitiveOpKind` descriptors in `tenferro-core-ops`; extension payloads are
@@ -223,9 +223,9 @@ These are the tensor primitives needed to express:
 - general contractions (including repeated-index patterns like trace/diagonal)
 - reverse-mode accumulation without hidden fan-out
 
-Every op in this table is expected to implement `PrimitiveOp` directly
+Every op in this table is expected to implement `Primitive` directly
 (for `StdTensorOp`). The set is **AD-closed**: `linearize` and
-`transpose_rule` of any op in this table emit only ops from this table.
+`transpose_rule` of any op in this table add only ops from this table.
 
 **Implementation note:** the boundary between this core set and the
 "Additional dense numeric primitives" (Section V) is primarily an
@@ -363,7 +363,7 @@ and symbolic-shape AD. The remaining indexing ops are dense tensor primitives:
 | `Slice` | Read a static rectangular subregion | Start/limit/stride known in the op |
 | `DynamicSlice` | Read a slice whose start index is data-dependent | Dynamic counterpart of `Slice` |
 | `DynamicUpdateSlice` | Write an update tensor into an operand at data-dependent start indices | Transpose counterpart of `DynamicSlice`; start indices are adjusted with StableHLO `dynamic_update_slice` semantics. |
-| `Pad` | Extend a tensor with edge/interior padding values | Needed for transpose of slicing-like ops |
+| `Pad` | Extend a tensor with edge/interior padding values | Needed by transpose rules for slicing-like ops |
 | `Concatenate` | Join tensors along one axis | Rank-preserving shape change |
 | `Reverse` | Reverse the order of elements along selected axes | Useful for convolutions and sequence models |
 
@@ -391,7 +391,7 @@ primitive catalog.
 | `Eigh` | `(eigenvalues, eigenvectors)` | Hermitian / symmetric eigendecomposition |
 | `Solve` | `(X)` | Solve `A X = B` for `X` |
 
-Linalg derivative rules emit core graph primitives and, where needed, other
+Linalg derivative rules add core graph primitives and, where needed, other
 registered extension operations.
 
 ### Future control-flow primitives
@@ -435,10 +435,10 @@ than as distinct graph primitives.
 ### Constants and literals
 
 Constants (scalar or tensor literals) are **not** Tenferro IR primitives.
-They enter the graph as `Fragment` input nodes with attached data
+They enter the graph as `Graph` input nodes with attached data
 (`TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(...))`).
 Canonical lowerings that reference literal values (e.g., `1 / n` in `mean`,
-`1` in `reciprocal`) construct these as `Fragment` inputs.
+`1` in `reciprocal`) construct these as `Graph` inputs.
 
 ### Lowering table
 
@@ -471,7 +471,7 @@ This catalog defines the **semantic vocabulary at all IR levels** that the
 graph, AD stack, and execution engine talk about.
 
 - The **Tenferro IR** (Section IV) defines the graph-level vocabulary for
-  fragment construction, AD, and einsum decomposition.
+  graph construction, AD, and einsum decomposition.
 - The **core primitive catalog** (`tenferro-core-ops`) defines primitive
   identity and metadata used by graph, runtime, and backend dispatch.
 - The **Execution IR** is the interface between the optimizing

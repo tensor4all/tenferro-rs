@@ -24,8 +24,8 @@ where
     address_type.register(&mut builder.scope);
 
     let item = T::as_type(&builder.scope);
-    let mut input_arrays = Vec::with_capacity(plan.n_inputs);
-    for _ in 0..plan.n_inputs {
+    let mut input_arrays = Vec::with_capacity(plan.input_count);
+    for _ in 0..plan.input_count {
         input_arrays.push(builder.input_array(item.clone()));
     }
     let mut output_arrays = Vec::with_capacity(plan.outputs.len());
@@ -76,7 +76,7 @@ fn build_body<T>(
 where
     T: CubeElement + CubePrimitive + Clone,
 {
-    let mut values = Vec::with_capacity(plan.n_inputs + plan.ops.len());
+    let mut values = Vec::with_capacity(plan.input_count + plan.ops.len());
     for array in input_arrays {
         values.push(load_array_element(
             scope,

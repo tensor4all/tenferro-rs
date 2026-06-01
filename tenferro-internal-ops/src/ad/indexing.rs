@@ -24,12 +24,12 @@
 //! Closing the core op vocabulary under AD is a Stage 7 prerequisite (the
 //! tropical fused backward emits `Gather` / `Scatter` on this vocabulary).
 
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{GatherConfig, ScatterConfig};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::zeros::build_zero_like;
+use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -40,20 +40,20 @@ use crate::sym_dim::SymDim;
 /// is ignored. The output tangent is the same gather applied to the
 /// operand's tangent, reusing the primal indices.
 pub fn linearize_gather(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     config: &GatherConfig,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(d_operand) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Gather(config.clone()),
                 vec![
-                    ValRef::Local(d_operand),
-                    ValRef::External(primal_in[1].clone()),
+                    ValueRef::Local(d_operand),
+                    ValueRef::External(primal_in[1].clone()),
                 ],
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             );
@@ -69,25 +69,25 @@ pub fn linearize_gather(
 /// shape-source inputs are non-differentiable and are reused from the primal.
 #[allow(clippy::too_many_arguments)]
 pub fn linearize_gather_dynamic_slice_sizes(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     offset_dims: &[usize],
     collapsed_slice_dims: &[usize],
     start_index_map: &[usize],
     index_vector_dim: usize,
     slice_sizes: &[DimExpr],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(d_operand) => {
             let mut inputs = Vec::with_capacity(primal_in.len());
-            inputs.push(ValRef::Local(d_operand));
-            inputs.extend(primal_in.iter().skip(1).cloned().map(ValRef::External));
+            inputs.push(ValueRef::Local(d_operand));
+            inputs.extend(primal_in.iter().skip(1).cloned().map(ValueRef::External));
 
             let mut active_mask = vec![false; primal_in.len()];
             active_mask[0] = true;
 
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::GatherDynamicSliceSizes {
                     offset_dims: offset_dims.to_vec(),
                     collapsed_slice_dims: collapsed_slice_dims.to_vec(),
@@ -96,7 +96,7 @@ pub fn linearize_gather_dynamic_slice_sizes(
                     slice_sizes: slice_sizes.to_vec(),
                 },
                 inputs,
-                OpMode::Linear { active_mask },
+                OperationRole::Linearized { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -109,22 +109,22 @@ pub fn linearize_gather_dynamic_slice_sizes(
 /// The source tensor tangent flows through the same dynamic slice. Runtime
 /// start indices are integer-valued and non-differentiable.
 pub fn linearize_dynamic_slice(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     slice_sizes: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(d_operand) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::DynamicSlice {
                     slice_sizes: slice_sizes.to_vec(),
                 },
                 vec![
-                    ValRef::Local(d_operand),
-                    ValRef::External(primal_in[1].clone()),
+                    ValueRef::Local(d_operand),
+                    ValueRef::External(primal_in[1].clone()),
                 ],
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             );
@@ -139,17 +139,17 @@ pub fn linearize_dynamic_slice(
 /// The operand and update inputs are differentiable. Runtime start indices are
 /// integer-valued and non-differentiable.
 pub fn linearize_dynamic_update_slice(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
         return vec![None];
     }
 
-    let operand = ValRef::External(primal_in[0].clone());
-    let update = ValRef::External(primal_in[1].clone());
+    let operand = ValueRef::External(primal_in[0].clone());
+    let update = ValueRef::External(primal_in[1].clone());
     let d_operand = tangent_in[0].unwrap_or_else(|| {
         let meta = ctx.metadata_of(&operand);
         build_zero_like(builder, meta.dtype, operand, meta.shape.len())
@@ -159,14 +159,14 @@ pub fn linearize_dynamic_update_slice(
         build_zero_like(builder, meta.dtype, update, meta.shape.len())
     });
 
-    let out = builder.add_op(
+    let out = builder.add_operation(
         StdTensorOp::DynamicUpdateSlice,
         vec![
-            ValRef::Local(d_operand),
-            ValRef::Local(d_update),
-            ValRef::External(primal_in[2].clone()),
+            ValueRef::Local(d_operand),
+            ValueRef::Local(d_update),
+            ValueRef::External(primal_in[2].clone()),
         ],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![tangent_in[0].is_some(), tangent_in[1].is_some(), false],
         },
     );
@@ -184,21 +184,21 @@ pub fn linearize_dynamic_update_slice(
 /// use a zero operand so the operand cotangent is only the sum over
 /// gather reads, not `original operand + sum over gather reads`.
 pub fn transpose_gather(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     config: &GatherConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask.clone(),
-        OpMode::Primal => return vec![None, None],
+        OperationRole::Linearized { active_mask } => active_mask.clone(),
+        OperationRole::Primary => return vec![None, None],
     };
 
     if !active_mask.first().copied().unwrap_or(false) {
@@ -215,16 +215,16 @@ pub fn transpose_gather(
     let operand_meta = ctx.metadata_of(&inputs[0]);
     let operand_rank = operand_meta.shape.len();
     let operand_dtype = operand_meta.dtype;
-    let zero_operand = build_zero_like(emitter, operand_dtype, inputs[0].clone(), operand_rank);
+    let zero_operand = build_zero_like(builder, operand_dtype, inputs[0].clone(), operand_rank);
 
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::Scatter(inverse_config),
         vec![
-            ValRef::Local(zero_operand),
+            ValueRef::Local(zero_operand),
             inputs[1].clone(),
-            ValRef::Local(ct),
+            ValueRef::Local(ct),
         ],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false, false, true],
         },
     );
@@ -239,16 +239,16 @@ pub fn transpose_gather(
 /// their cotangents are always inactive.
 #[allow(clippy::too_many_arguments)]
 pub fn transpose_gather_dynamic_slice_sizes(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     offset_dims: &[usize],
     collapsed_slice_dims: &[usize],
     start_index_map: &[usize],
     index_vector_dim: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let mut result = vec![None; inputs.len()];
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -256,8 +256,8 @@ pub fn transpose_gather_dynamic_slice_sizes(
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return result,
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return result,
     };
 
     if !active_mask.first().copied().unwrap_or(false) {
@@ -274,16 +274,16 @@ pub fn transpose_gather_dynamic_slice_sizes(
     let operand_meta = ctx.metadata_of(&inputs[0]);
     let operand_rank = operand_meta.shape.len();
     let operand_dtype = operand_meta.dtype;
-    let zero_operand = build_zero_like(emitter, operand_dtype, inputs[0].clone(), operand_rank);
+    let zero_operand = build_zero_like(builder, operand_dtype, inputs[0].clone(), operand_rank);
 
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::Scatter(inverse_config),
         vec![
-            ValRef::Local(zero_operand),
+            ValueRef::Local(zero_operand),
             inputs[1].clone(),
-            ValRef::Local(ct),
+            ValueRef::Local(ct),
         ],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false, false, true],
         },
     );
@@ -297,20 +297,20 @@ pub fn transpose_gather_dynamic_slice_sizes(
 /// The transpose of `DynamicSlice(x, starts, sizes)` writes the cotangent back
 /// into a zero tensor shaped like `x` using the same start-adjustment semantics.
 pub fn transpose_dynamic_slice(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None, None],
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return vec![None, None],
     };
     if !active_mask.first().copied().unwrap_or(false) {
         return vec![None, None];
@@ -318,19 +318,19 @@ pub fn transpose_dynamic_slice(
 
     let operand_meta = ctx.metadata_of(&inputs[0]);
     let zero_operand = build_zero_like(
-        emitter,
+        builder,
         operand_meta.dtype,
         inputs[0].clone(),
         operand_meta.shape.len(),
     );
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::DynamicUpdateSlice,
         vec![
-            ValRef::Local(zero_operand),
-            ValRef::Local(ct),
+            ValueRef::Local(zero_operand),
+            ValueRef::Local(ct),
             inputs[1].clone(),
         ],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false, true, false],
         },
     );
@@ -343,39 +343,39 @@ pub fn transpose_dynamic_slice(
 /// zeros the updated window. Update cotangent is the matching dynamic slice of
 /// the output cotangent.
 pub fn transpose_dynamic_update_slice(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None, None, None],
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return vec![None, None, None],
     };
 
     let mut result = vec![None, None, None];
     if active_mask.first().copied().unwrap_or(false) {
         let update_meta = ctx.metadata_of(&inputs[1]);
         let zero_update = build_zero_like(
-            emitter,
+            builder,
             update_meta.dtype,
             inputs[1].clone(),
             update_meta.shape.len(),
         );
-        let operand_ct = emitter.add_op(
+        let operand_ct = builder.add_operation(
             StdTensorOp::DynamicUpdateSlice,
             vec![
-                ValRef::Local(ct),
-                ValRef::Local(zero_update),
+                ValueRef::Local(ct),
+                ValueRef::Local(zero_update),
                 inputs[2].clone(),
             ],
-            OpMode::Linear {
+            OperationRole::Linearized {
                 active_mask: vec![true, false, false],
             },
         )[0];
@@ -384,12 +384,12 @@ pub fn transpose_dynamic_update_slice(
 
     if active_mask.get(1).copied().unwrap_or(false) {
         let update_shape = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose");
-        let update_ct = emitter.add_op(
+        let update_ct = builder.add_operation(
             StdTensorOp::DynamicSlice {
                 slice_sizes: update_shape,
             },
-            vec![ValRef::Local(ct), inputs[2].clone()],
-            OpMode::Linear {
+            vec![ValueRef::Local(ct), inputs[2].clone()],
+            OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
         )[0];
@@ -419,12 +419,12 @@ pub fn transpose_dynamic_update_slice(
 ///   `Scatter(operand_dot, indices, updates_dot, config)`; by linearity
 ///   this captures both contributions in a single scatter.
 pub fn linearize_scatter(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     config: &ScatterConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let d_operand = tangent_in[0];
     let d_updates = tangent_in[2];
 
@@ -432,34 +432,34 @@ pub fn linearize_scatter(
         (None, None) => vec![None],
         (Some(d_op), None) => vec![Some(d_op)],
         (None, Some(d_up)) => {
-            let operand_key = ValRef::External(primal_in[0].clone());
+            let operand_key = ValueRef::External(primal_in[0].clone());
             let operand_meta = ctx.metadata_of(&operand_key);
             let operand_rank = operand_meta.shape.len();
             let operand_dtype = operand_meta.dtype;
             let zero_operand =
                 build_zero_like(builder, operand_dtype, operand_key.clone(), operand_rank);
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Scatter(config.clone()),
                 vec![
-                    ValRef::Local(zero_operand),
-                    ValRef::External(primal_in[1].clone()),
-                    ValRef::Local(d_up),
+                    ValueRef::Local(zero_operand),
+                    ValueRef::External(primal_in[1].clone()),
+                    ValueRef::Local(d_up),
                 ],
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: vec![false, false, true],
                 },
             );
             vec![Some(out[0])]
         }
         (Some(d_op), Some(d_up)) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Scatter(config.clone()),
                 vec![
-                    ValRef::Local(d_op),
-                    ValRef::External(primal_in[1].clone()),
-                    ValRef::Local(d_up),
+                    ValueRef::Local(d_op),
+                    ValueRef::External(primal_in[1].clone()),
+                    ValueRef::Local(d_up),
                 ],
-                OpMode::Linear {
+                OperationRole::Linearized {
                     active_mask: vec![true, false, true],
                 },
             );
@@ -482,21 +482,21 @@ pub fn linearize_scatter(
 ///   with `slice_sizes` derived from the primal `updates`' shape. The
 ///   third entry of the active mask gates whether it is returned.
 pub fn transpose_scatter(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     config: &ScatterConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask.clone(),
-        OpMode::Primal => return vec![None, None, None],
+        OperationRole::Linearized { active_mask } => active_mask.clone(),
+        OperationRole::Primary => return vec![None, None, None],
     };
 
     let operand_active = active_mask.first().copied().unwrap_or(false);
@@ -514,10 +514,10 @@ pub fn transpose_scatter(
         let inverse = compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2]);
 
         let out = match inverse {
-            InverseGather::Concrete(config) => emitter.add_op(
+            InverseGather::Concrete(config) => builder.add_operation(
                 StdTensorOp::Gather(config),
-                vec![ValRef::Local(ct), inputs[1].clone()],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct), inputs[1].clone()],
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             ),
@@ -529,13 +529,13 @@ pub fn transpose_scatter(
                 slice_sizes,
                 shape_sources,
             } => {
-                let mut gather_inputs = vec![ValRef::Local(ct), inputs[1].clone()];
+                let mut gather_inputs = vec![ValueRef::Local(ct), inputs[1].clone()];
                 let mut active_mask = vec![true, false];
                 for shape_source in shape_sources {
                     gather_inputs.push(shape_source);
                     active_mask.push(false);
                 }
-                emitter.add_op(
+                builder.add_operation(
                     StdTensorOp::GatherDynamicSliceSizes {
                         offset_dims,
                         collapsed_slice_dims,
@@ -544,7 +544,7 @@ pub fn transpose_scatter(
                         slice_sizes,
                     },
                     gather_inputs,
-                    OpMode::Linear { active_mask },
+                    OperationRole::Linearized { active_mask },
                 )
             }
         };
@@ -562,7 +562,7 @@ enum InverseGather {
         start_index_map: Vec<usize>,
         index_vector_dim: usize,
         slice_sizes: Vec<DimExpr>,
-        shape_sources: Vec<ValRef<StdTensorOp>>,
+        shape_sources: Vec<ValueRef<StdTensorOp>>,
     },
 }
 
@@ -578,7 +578,7 @@ fn compute_inverse_gather(
     operand_shape: &[SymDim],
     updates_shape: &[SymDim],
     config: &ScatterConfig,
-    updates_ref: &ValRef<StdTensorOp>,
+    updates_ref: &ValueRef<StdTensorOp>,
 ) -> InverseGather {
     let rank = operand_shape.len();
     let operand_window_dims: Vec<usize> = (0..rank)
@@ -639,7 +639,7 @@ fn compute_inverse_gather(
 
 fn exact_usize_shape(
     ctx: &mut ShapeGuardContext,
-    value: &ValRef<StdTensorOp>,
+    value: &ValueRef<StdTensorOp>,
     op_name: &'static str,
 ) -> Vec<usize> {
     ctx.exact_shape_of(value)

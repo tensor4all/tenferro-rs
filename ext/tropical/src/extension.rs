@@ -4,13 +4,10 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
-#[cfg(feature = "autodiff")]
-#[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-#[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_einsum::Subscripts;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::{register_extension_rule, ExtensionAdRule};
@@ -29,6 +26,8 @@ use tenferro_tensor::TensorBackend;
 use tenferro_tensor::{DType, Tensor};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::{TensorBackend, TensorScalar};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
 #[cfg(feature = "autodiff")]
@@ -140,11 +139,11 @@ impl ExtensionOp for TropicalEinsumOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         2
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -212,11 +211,11 @@ impl ExtensionOp for TropicalEinsumJvpOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         2 + self.active_inputs.len()
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -227,16 +226,16 @@ impl ExtensionOp for TropicalEinsumJvpOp {
     ) -> Vec<(DType, Vec<SymDim>)> {
         assert_eq!(
             input_dtypes.len(),
-            self.n_inputs(),
+            self.input_count(),
             "tropical einsum JVP expects {} inputs, got {}",
-            self.n_inputs(),
+            self.input_count(),
             input_dtypes.len()
         );
         assert_eq!(
             input_shapes.len(),
-            self.n_inputs(),
+            self.input_count(),
             "tropical einsum JVP expects {} input shapes, got {}",
-            self.n_inputs(),
+            self.input_count(),
             input_shapes.len()
         );
         let primal =
@@ -256,10 +255,14 @@ impl ExtensionOp for TropicalEinsumJvpOp {
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        if inputs.len() != self.n_inputs() {
+        if inputs.len() != self.input_count() {
             return Err(invalid_config(
                 "tropical_einsum_jvp",
-                format!("expected {} inputs, got {}", self.n_inputs(), inputs.len()),
+                format!(
+                    "expected {} inputs, got {}",
+                    self.input_count(),
+                    inputs.len()
+                ),
             ));
         }
         let primal = tropical_einsum_subscripts_with_argmax(
@@ -328,11 +331,11 @@ impl ExtensionOp for TropicalEinsumVjpOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         3
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -410,12 +413,12 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_primal_op(op, ADRuleKind::Jvp)?;
         validate_ad_supported(&op.subscripts, ADRuleKind::Jvp)?;
         let active_inputs: Vec<usize> = tangent_in
@@ -428,25 +431,25 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
         }
 
         let mut inputs = vec![
-            ValRef::External(primal_in[0].clone()),
-            ValRef::External(primal_in[1].clone()),
+            ValueRef::External(primal_in[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
         ];
         for &active in &active_inputs {
-            inputs.push(ValRef::Local(
+            inputs.push(ValueRef::Local(
                 tangent_in[active].expect("active tangent is present"),
             ));
         }
         let active_mask = std::iter::repeat_n(false, 2)
             .chain(std::iter::repeat_n(true, active_inputs.len()))
             .collect();
-        let out = builder.add_op(
+        let out = builder.add_operation(
             StdTensorOp::Extension(Arc::new(TropicalEinsumJvpOp::new(
                 op.kind,
                 op.subscripts.clone(),
                 active_inputs,
             ))),
             inputs,
-            OpMode::Linear { active_mask },
+            OperationRole::Linearized { active_mask },
         );
         Ok(vec![Some(out[0])])
     }
@@ -454,12 +457,12 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
     fn transpose_rule(
         &self,
         _op: &dyn ExtensionOp,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        _cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Err(ADRuleError::unsupported(
             "tropical einsum transpose is supported via its linearized JVP op",
             ADRuleKind::Transpose,
@@ -480,12 +483,12 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        _tangent_in: &[Option<LocalValId>],
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        _tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Err(ADRuleError::unsupported(
             TROPICAL_EINSUM_JVP_FAMILY_ID,
             ADRuleKind::Jvp,
@@ -495,36 +498,36 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
         validate_ad_supported(&op.subscripts, ADRuleKind::Transpose)?;
         let Some(ct) = cotangent_out.first().copied().flatten() else {
-            return Ok(vec![None; op.n_inputs()]);
+            return Ok(vec![None; op.input_count()]);
         };
         let active_mask = match mode {
-            OpMode::Linear { active_mask } => active_mask,
-            OpMode::Primal => return Ok(vec![None; op.n_inputs()]),
+            OperationRole::Linearized { active_mask } => active_mask,
+            OperationRole::Primary => return Ok(vec![None; op.input_count()]),
         };
 
-        let mut result = vec![None; op.n_inputs()];
+        let mut result = vec![None; op.input_count()];
         for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
             let tangent_input_idx = 2 + active_pos;
             if !active_mask.get(tangent_input_idx).copied().unwrap_or(false) {
                 continue;
             }
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Extension(Arc::new(TropicalEinsumVjpOp::new(
                     op.kind,
                     op.subscripts.clone(),
                     active_input,
                 ))),
-                vec![inputs[0].clone(), inputs[1].clone(), ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![inputs[0].clone(), inputs[1].clone(), ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![false, false, true],
                 },
             );

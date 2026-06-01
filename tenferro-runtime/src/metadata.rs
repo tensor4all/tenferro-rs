@@ -1,5 +1,5 @@
-use computegraph::fragment::Fragment;
-use computegraph::types::{GlobalValKey, LocalValId, ValRef};
+use computegraph::graph::Graph;
+use computegraph::types::{LocalValueId, ValueKey, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -38,37 +38,37 @@ pub fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
 }
 
 pub fn register_scoped_value_metadata(
-    key: GlobalValKey<StdTensorOp>,
+    key: ValueKey<StdTensorOp>,
     meta: TensorMeta,
 ) -> MetadataScope {
     register_scoped_global_metadata_batch([(key, meta)])
 }
 
 pub fn register_scoped_metadata_batch(
-    entries: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+    entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
     register_scoped_global_metadata_batch(entries)
 }
 
-pub fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
+pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> TensorMeta {
     lookup_global_metadata(key)
         .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
 }
 
-pub fn register_scoped_fragment_metadata(
-    fragment: &Fragment<StdTensorOp>,
-    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+pub fn register_scoped_graph_metadata(
+    graph: &Graph<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(fragment_metadata_registrations(fragment, None, seeded))
+    register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded))
 }
 
-pub fn register_scoped_live_fragment_metadata(
-    fragment: &Fragment<StdTensorOp>,
-    live_values: &HashSet<LocalValId>,
-    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+pub fn register_scoped_live_graph_metadata(
+    graph: &Graph<StdTensorOp>,
+    live_values: &HashSet<LocalValueId>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(fragment_metadata_registrations(
-        fragment,
+    register_scoped_global_metadata_batch(graph_metadata_registrations(
+        graph,
         Some(live_values),
         seeded,
     ))
@@ -125,23 +125,22 @@ fn extend_metadata_scopes<'a>(
     }
 }
 
-fn fragment_metadata_registrations(
-    fragment: &Fragment<StdTensorOp>,
-    live_values: Option<&HashSet<LocalValId>>,
-    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
-) -> Vec<(GlobalValKey<StdTensorOp>, TensorMeta)> {
+fn graph_metadata_registrations(
+    graph: &Graph<StdTensorOp>,
+    live_values: Option<&HashSet<LocalValueId>>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+) -> Vec<(ValueKey<StdTensorOp>, TensorMeta)> {
     let seeded: Vec<_> = seeded.into_iter().collect();
     // Start from just the seeded inputs. External keys not in `seeded` are
     // resolved on demand via a single-key lookup against the global
     // registry — crucially, we do NOT clone the entire global map. The
     // global registry grows monotonically across a process, so a full-map
-    // snapshot per fragment construction is quadratic in the total number
+    // snapshot per graph construction is quadratic in the total number
     // of registered ops and dominated oracle_replay runtime.
-    let mut known: HashMap<GlobalValKey<StdTensorOp>, TensorMeta> =
-        seeded.iter().cloned().collect();
+    let mut known: HashMap<ValueKey<StdTensorOp>, TensorMeta> = seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
-    for op_node in fragment.ops() {
+    for op_node in graph.operations() {
         if let Some(live_values) = live_values {
             if !op_node
                 .outputs
@@ -157,8 +156,8 @@ fn fragment_metadata_registrations(
             .iter()
             .map(|input| {
                 let key = match input {
-                    ValRef::Local(local_id) => &fragment.vals()[*local_id].key,
-                    ValRef::External(key) => key,
+                    ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                    ValueRef::External(key) => key,
                 };
                 known
                     .get(key)
@@ -173,9 +172,9 @@ fn fragment_metadata_registrations(
             })
             .collect();
 
-        let output_metas = infer_output_metas(&op_node.op, &input_metas);
+        let output_metas = infer_output_metas(&op_node.operation, &input_metas);
         for (&output_id, meta) in op_node.outputs.iter().zip(output_metas) {
-            let key = fragment.vals()[output_id].key.clone();
+            let key = graph.values()[output_id].key.clone();
             known.insert(key.clone(), meta.clone());
             registrations.push((key, meta));
         }

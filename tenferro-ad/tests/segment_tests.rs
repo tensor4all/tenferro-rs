@@ -15,9 +15,9 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn scalar_extents(
-    n_outputs: usize,
+    output_count: usize,
 ) -> Vec<Vec<tenferro_ops::ShapeExtent<tenferro_ops::dim_expr::DimExpr>>> {
-    vec![Vec::new(); n_outputs]
+    vec![Vec::new(); output_count]
 }
 
 fn matmul_config() -> DotGeneralConfig {

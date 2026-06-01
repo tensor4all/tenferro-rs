@@ -19,14 +19,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{OpMode, ValRef};
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 
 use crate::checkpoint::CheckpointNode;
-use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
+use crate::metadata::{push_metadata_scope, register_scoped_graph_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
@@ -47,7 +47,7 @@ pub use crate::extension_runtime::{
 /// output slot of the extension. Output shapes are inferred via
 /// [`ExtensionOp::infer_output_meta`] using the input shape hints.
 ///
-/// `inputs.len()` must equal `op.n_inputs()`, and each input's
+/// `inputs.len()` must equal `op.input_count()`, and each input's
 /// `shape_hint` must be present (i.e. the extension must be used on
 /// tensors whose rank is known at graph-build time). For symbolic-shape
 /// composition, bind the placeholder tensors via
@@ -71,8 +71,8 @@ pub use crate::extension_runtime::{
 /// #     }
 /// #     fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> { Arc::new(self.clone()) }
 /// #     fn as_any(&self) -> &dyn Any { self }
-/// #     fn n_inputs(&self) -> usize { 1 }
-/// #     fn n_outputs(&self) -> usize { 1 }
+/// #     fn input_count(&self) -> usize { 1 }
+/// #     fn output_count(&self) -> usize { 1 }
 /// #     fn infer_output_meta(
 /// #         &self,
 /// #         dtypes: &[DType],
@@ -92,10 +92,10 @@ pub use crate::extension_runtime::{
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTensor> {
     assert_eq!(
         inputs.len(),
-        op.n_inputs(),
+        op.input_count(),
         "extension::apply: op family {:?} expects {} inputs, got {}",
         op.family_id(),
-        op.n_inputs(),
+        op.input_count(),
         inputs.len()
     );
 
@@ -122,29 +122,29 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     let output_metas = op.infer_output_meta(&input_dtypes, &input_shape_refs);
     assert_eq!(
         output_metas.len(),
-        op.n_outputs(),
+        op.output_count(),
         "extension::apply: op family {:?} declared {} outputs but \
          infer_output_meta returned {}",
         op.family_id(),
-        op.n_outputs(),
+        op.output_count(),
         output_metas.len()
     );
 
-    // Build the fragment that carries the Extension op.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    // Build the graph that carries the Extension op.
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     for input in inputs {
-        builder.add_parent(input.fragment.clone());
+        builder.add_parent(input.graph.clone());
     }
-    let op_inputs: Vec<ValRef<StdTensorOp>> = inputs
+    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
         .iter()
-        .map(|t| ValRef::External(t.fragment.vals()[t.val].key.clone()))
+        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
         .collect();
     let carrier = StdTensorOp::Extension(op.clone());
-    let outputs = builder.add_op(carrier, op_inputs, OpMode::Primal);
+    let outputs = builder.add_operation(carrier, op_inputs, OperationRole::Primary);
     builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
-    let metadata_scope = Arc::new(register_scoped_fragment_metadata(
-        fragment.as_ref(),
+    let graph = Arc::new(builder.build());
+    let metadata_scope = Arc::new(register_scoped_graph_metadata(
+        graph.as_ref(),
         std::iter::empty(),
     ));
 
@@ -187,7 +187,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
                 id: next_traced_id(),
                 rank: shape.len(),
                 dtype,
-                fragment: fragment.clone(),
+                graph: graph.clone(),
                 val,
                 data: None,
                 shape_hint,

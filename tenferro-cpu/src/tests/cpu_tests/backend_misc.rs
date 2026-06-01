@@ -690,7 +690,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     let fusion_plan = tenferro_tensor::ElementwiseFusionPlan {
         dtype: DType::F64,
-        n_inputs: 0,
+        input_count: 0,
         outputs: vec![],
         ops: vec![],
     };

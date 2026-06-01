@@ -97,7 +97,7 @@ pub struct ContractionTree {
     pub(crate) steps: Vec<ContractionStep>,
     /// Label → dimension size mapping.
     pub(crate) size_dict: HashMap<u32, usize>,
-    /// Subscripts for each operand (0..n_inputs from input, then intermediates).
+    /// Subscripts for each operand (0..input_count from input, then intermediates).
     pub(crate) operand_subs: Vec<Vec<u32>>,
     /// Pre-compiled step plans (cached to avoid recomputation per execute call).
     pub(crate) step_plans: Vec<StepPlan>,
@@ -137,8 +137,8 @@ impl ContractionTree {
         options: &ContractionOptimizerOptions,
     ) -> Result<Self> {
         options.validate()?;
-        let n_inputs = subscripts.inputs.len();
-        if n_inputs <= 1 {
+        let input_count = subscripts.inputs.len();
+        if input_count <= 1 {
             return Self::from_pairs(subscripts, shapes, &[]);
         }
 
@@ -188,25 +188,25 @@ impl ContractionTree {
         shapes: &[&[usize]],
         pairs: &[(usize, usize)],
     ) -> Result<Self> {
-        let n_inputs = subscripts.inputs.len();
-        let required_steps = n_inputs.saturating_sub(1);
+        let input_count = subscripts.inputs.len();
+        let required_steps = input_count.saturating_sub(1);
         if pairs.len() != required_steps {
             return Err(Error::InvalidArgument(format!(
-                "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+                "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
                 pairs.len()
             )));
         }
         let size_dict = build_size_dict(subscripts, shapes, None)?;
 
         let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
-        let mut live = vec![false; n_inputs + pairs.len()];
-        for slot in live.iter_mut().take(n_inputs) {
+        let mut live = vec![false; input_count + pairs.len()];
+        for slot in live.iter_mut().take(input_count) {
             *slot = true;
         }
         let mut steps = Vec::new();
 
         for (step_idx, &(left, right)) in pairs.iter().enumerate() {
-            let next_idx = n_inputs + step_idx;
+            let next_idx = input_count + step_idx;
             if left == right {
                 return Err(Error::InvalidArgument(format!(
                     "pair ({left}, {right}) must reference two distinct live operands"
@@ -280,8 +280,8 @@ impl ContractionTree {
 
     /// Return the operand indices for a pairwise contraction step.
     ///
-    /// The returned indices refer to the original inputs (`0..n_inputs`) and
-    /// then to intermediates (`n_inputs..`) produced by earlier steps.
+    /// The returned indices refer to the original inputs (`0..input_count`) and
+    /// then to intermediates (`input_count..`) produced by earlier steps.
     ///
     /// # Examples
     ///
@@ -326,9 +326,9 @@ impl ContractionTree {
     /// ```
     #[must_use]
     pub fn step_subscripts(&self, step_idx: usize) -> Option<(&[u32], &[u32], &[u32])> {
-        let n_inputs = self.subscripts.inputs.len();
+        let input_count = self.subscripts.inputs.len();
         let step = self.steps.get(step_idx)?;
-        let result_idx = n_inputs + step_idx;
+        let result_idx = input_count + step_idx;
         let output_subs = if step_idx + 1 == self.steps.len() {
             &self.subscripts.output
         } else {
@@ -480,8 +480,8 @@ fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
 ) -> Result<Vec<(usize, usize)>> {
-    let n_inputs = subscripts.inputs.len();
-    let mut available: Vec<usize> = (0..n_inputs).collect();
+    let input_count = subscripts.inputs.len();
+    let mut available: Vec<usize> = (0..input_count).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
     let mut pairs: Vec<(usize, usize)> = Vec::new();
 

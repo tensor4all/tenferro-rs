@@ -196,22 +196,22 @@ fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn validate_fixed_pairs(pairs: &[(usize, usize)], n_inputs: usize) -> Result<()> {
-    let required_steps = n_inputs.saturating_sub(1);
+fn validate_fixed_pairs(pairs: &[(usize, usize)], input_count: usize) -> Result<()> {
+    let required_steps = input_count.saturating_sub(1);
     if pairs.len() != required_steps {
         return Err(Error::InvalidArgument(format!(
-            "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+            "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
             pairs.len()
         )));
     }
 
-    let mut live = vec![false; n_inputs + pairs.len()];
-    for slot in live.iter_mut().take(n_inputs) {
+    let mut live = vec![false; input_count + pairs.len()];
+    for slot in live.iter_mut().take(input_count) {
         *slot = true;
     }
 
     for (step_idx, &(left, right)) in pairs.iter().enumerate() {
-        let next_idx = n_inputs + step_idx;
+        let next_idx = input_count + step_idx;
         if left == right {
             return Err(Error::InvalidArgument(format!(
                 "pair ({left}, {right}) must reference two distinct live operands"
@@ -278,8 +278,8 @@ fn optimizer_options_equal_by_bits(
 ///
 /// JAX format: each pair `(i, j)` refers to positions in a shrinking list.
 /// After contraction, the two operands are removed and the result is appended.
-/// Fixed-ID format keeps original operands at `0..n_inputs` and gives
-/// intermediate at step `k` the ID `n_inputs + k`.
+/// Fixed-ID format keeps original operands at `0..input_count` and gives
+/// intermediate at step `k` the ID `input_count + k`.
 ///
 /// # Errors
 ///
@@ -287,17 +287,17 @@ fn optimizer_options_equal_by_bits(
 /// position outside the current shrinking list.
 pub(crate) fn jax_path_to_v1_pairs(
     jax_path: &[(usize, usize)],
-    n_inputs: usize,
+    input_count: usize,
 ) -> Result<Vec<(usize, usize)>> {
-    let required_steps = n_inputs.saturating_sub(1);
+    let required_steps = input_count.saturating_sub(1);
     if jax_path.len() != required_steps {
         return Err(Error::InvalidArgument(format!(
-            "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+            "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
             jax_path.len()
         )));
     }
 
-    let mut positions: Vec<usize> = (0..n_inputs).collect();
+    let mut positions: Vec<usize> = (0..input_count).collect();
     let mut v1_pairs = Vec::with_capacity(jax_path.len());
 
     for (step, &(pos_a, pos_b)) in jax_path.iter().enumerate() {
@@ -324,7 +324,7 @@ pub(crate) fn jax_path_to_v1_pairs(
 
         positions.remove(hi);
         positions.remove(lo);
-        positions.push(n_inputs + step);
+        positions.push(input_count + step);
     }
 
     Ok(v1_pairs)
@@ -334,16 +334,16 @@ pub(crate) fn jax_path_to_v1_pairs(
 ///
 /// # Errors
 ///
-/// Returns an error if a leaf references an input outside `0..n_inputs` or if
+/// Returns an error if a leaf references an input outside `0..input_count` or if
 /// a node has no children.
 pub(crate) fn nested_to_v1_pairs(
     nested: &NestedEinsum,
-    n_inputs: usize,
+    input_count: usize,
 ) -> Result<Vec<(usize, usize)>> {
-    let mut pairs = Vec::with_capacity(n_inputs.saturating_sub(1));
-    let mut next_id = n_inputs;
-    let root_id = walk_nested(nested, n_inputs, &mut pairs, &mut next_id)?;
-    if n_inputs == 0 || root_id >= next_id {
+    let mut pairs = Vec::with_capacity(input_count.saturating_sub(1));
+    let mut next_id = input_count;
+    let root_id = walk_nested(nested, input_count, &mut pairs, &mut next_id)?;
+    if input_count == 0 || root_id >= next_id {
         return Err(Error::InvalidArgument(
             "nested einsum did not produce a valid root operand".into(),
         ));
@@ -353,15 +353,15 @@ pub(crate) fn nested_to_v1_pairs(
 
 fn walk_nested(
     nested: &NestedEinsum,
-    n_inputs: usize,
+    input_count: usize,
     pairs: &mut Vec<(usize, usize)>,
     next_id: &mut usize,
 ) -> Result<usize> {
     match nested {
         NestedEinsum::Leaf(idx) => {
-            if *idx >= n_inputs {
+            if *idx >= input_count {
                 return Err(Error::InvalidArgument(format!(
-                    "nested einsum leaf {idx} is outside 0..{n_inputs}"
+                    "nested einsum leaf {idx} is outside 0..{input_count}"
                 )));
             }
             Ok(*idx)
@@ -372,9 +372,9 @@ fn walk_nested(
                     "nested einsum node must have at least one child".into(),
                 ));
             };
-            let mut result_id = walk_nested(first, n_inputs, pairs, next_id)?;
+            let mut result_id = walk_nested(first, input_count, pairs, next_id)?;
             for child in &children[1..] {
-                let child_id = walk_nested(child, n_inputs, pairs, next_id)?;
+                let child_id = walk_nested(child, input_count, pairs, next_id)?;
                 pairs.push((result_id, child_id));
                 result_id = *next_id;
                 *next_id += 1;

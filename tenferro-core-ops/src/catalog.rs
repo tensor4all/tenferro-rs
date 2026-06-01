@@ -321,7 +321,7 @@ macro_rules! define_std_tensor_op {
             Pad(PadConfig),
             Concatenate {
                 axis: usize,
-                n_inputs: usize,
+                input_count: usize,
             },
             Reverse {
                 axes: Vec<usize>,
@@ -524,7 +524,7 @@ macro_rules! define_std_tensor_op {
                     }),
                     $crate::PrimitiveOpKind::Concatenate => Self::Concatenate {
                         axis: 0,
-                        n_inputs: 1,
+                        input_count: 1,
                     },
                     $crate::PrimitiveOpKind::Reverse => Self::Reverse { axes: vec![0] },
                     $crate::PrimitiveOpKind::ShapeOf => Self::ShapeOf { axis: 0 },

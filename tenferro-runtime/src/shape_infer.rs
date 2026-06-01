@@ -335,7 +335,7 @@ pub fn infer_output_extents(
 /// [`infer_output_dtype`] only returns the first slot's dtype. Prefer this
 /// when populating `ExecInstruction` fields.
 ///
-/// `input_dtypes` must have length `op.n_inputs()` and be consistent with
+/// `input_dtypes` must have length `op.input_count()` and be consistent with
 /// `input_shapes`. `input_shapes` uses [`DimExpr`] expressions so shape
 /// inference can flow through composed symbolic graphs.
 pub fn infer_extension_output_meta(
@@ -406,7 +406,7 @@ fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) ->
     // unknown to the caller. Extensions whose dtype depends on shape must
     // be handled through [`infer_extension_output_meta`], which
     // `compile_std_to_exec` prefers for the `Extension` arm.
-    let empty_rows: Vec<&[SymDim]> = (0..op.n_inputs()).map(|_| [].as_slice()).collect();
+    let empty_rows: Vec<&[SymDim]> = (0..op.input_count()).map(|_| [].as_slice()).collect();
     let metas = op.infer_output_meta(input_dtypes, &empty_rows);
     if metas.is_empty() {
         panic!(

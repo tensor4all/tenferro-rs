@@ -7,7 +7,7 @@ op semantics), see [Specification](../spec/).
 | Document | Covers |
 |----------|--------|
 | [tenferro-crates.md](./tenferro-crates.md) | Current crate structure, dependency boundaries, extension boundary, AD boundary |
-| [computegraph.md](./computegraph.md) | GraphOp, Operand, Fragment, resolve/materialize/compile/eval pipeline |
-| [chainrules.md](./chainrules.md) | PrimitiveOp trait, AD rule structure |
-| [tidu.md](./tidu.md) | differentiate, transpose, LinearFragment, higher-order AD |
+| [computegraph.md](./computegraph.md) | GraphOperation, Graph, resolve/materialize/compile/eval pipeline |
+| [primitive-ad.md](./primitive-ad.md) | Primitive AD contract and rule structure |
+| [tidu.md](./tidu.md) | linearize, linear_transpose, LinearizedGraph, higher-order AD |
 | [ad-pipeline.md](./ad-pipeline.md) | End-to-end AD pipeline, scalar/vector examples, golden tests |

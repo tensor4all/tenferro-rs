@@ -37,10 +37,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-#[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-#[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{FftNum, FftPlanner};
@@ -49,6 +46,8 @@ use tenferro_ad::extension::ExtensionAdRuleTrait;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_extension_macros::define_idempotent_rule_registration;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -174,11 +173,11 @@ impl ExtensionOpTrait for FftOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -323,12 +322,12 @@ impl ExtensionAdRuleTrait for FftAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOpTrait,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
@@ -339,10 +338,10 @@ impl ExtensionAdRuleTrait for FftAdRule {
 
         match tangent_in[0] {
             Some(dx) => {
-                let outputs = builder.add_op(
+                let outputs = builder.add_operation(
                     StdTensorOp::Extension(Arc::new(fft_op.clone())),
-                    vec![ValRef::Local(dx)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(dx)],
+                    OperationRole::Linearized {
                         active_mask: vec![true],
                     },
                 );
@@ -355,12 +354,12 @@ impl ExtensionAdRuleTrait for FftAdRule {
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOpTrait,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
@@ -371,10 +370,10 @@ impl ExtensionAdRuleTrait for FftAdRule {
 
         match cotangent_out[0] {
             Some(ct) => {
-                let outputs = emitter.add_op(
+                let outputs = builder.add_operation(
                     StdTensorOp::Extension(Arc::new(fft_op.clone())),
-                    vec![ValRef::Local(ct)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(ct)],
+                    OperationRole::Linearized {
                         active_mask: vec![true],
                     },
                 );

@@ -12,7 +12,7 @@ use super::{
 fn add_mul_plan() -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype: crate::DType::F64,
-        n_inputs: 2,
+        input_count: 2,
         outputs: vec![3], // value index of final result
         ops: vec![
             ElementwiseFusionInst {
@@ -54,7 +54,7 @@ fn test_fused_add_mul_matches_cpu() {
 fn complex_add_conj_mul_plan(dtype: crate::DType) -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype,
-        n_inputs: 2,
+        input_count: 2,
         outputs: vec![4],
         ops: vec![
             ElementwiseFusionInst {
@@ -115,7 +115,7 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
 fn complex_div_neg_plan(dtype: crate::DType) -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype,
-        n_inputs: 2,
+        input_count: 2,
         outputs: vec![3],
         ops: vec![
             ElementwiseFusionInst {
@@ -172,7 +172,7 @@ fn test_fused_complex_c32_div_neg_matches_cpu() {
 fn add_neg_plan() -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype: crate::DType::F64,
-        n_inputs: 2,
+        input_count: 2,
         outputs: vec![3],
         ops: vec![
             ElementwiseFusionInst {
@@ -214,7 +214,7 @@ fn test_fused_add_neg() {
 fn multi_output_plan() -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype: crate::DType::F64,
-        n_inputs: 2,
+        input_count: 2,
         outputs: vec![2, 3], // sum and neg(sum)
         ops: vec![
             ElementwiseFusionInst {
@@ -257,7 +257,7 @@ fn test_fused_multi_output() {
 fn unary_chain_plan() -> ElementwiseFusionPlan {
     ElementwiseFusionPlan {
         dtype: crate::DType::F64,
-        n_inputs: 1,
+        input_count: 1,
         outputs: vec![3],
         ops: vec![
             ElementwiseFusionInst {

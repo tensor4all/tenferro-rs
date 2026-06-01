@@ -1,5 +1,5 @@
-use computegraph::types::{LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueRef};
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
@@ -9,184 +9,189 @@ use crate::ad_support::LinalgOp;
 use super::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex, linalg_std_op};
 
 pub(super) fn solve_matrix_cotangent(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    rhs_cotangent: LocalValId,
-    solution: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    rhs_cotangent: LocalValueId,
+    solution: ValueRef<StdTensorOp>,
     left_side: bool,
     transpose_a: bool,
     rank: usize,
     dtype: DType,
-) -> LocalValId {
-    let negative_rhs_cotangent = linear_neg(emitter, rhs_cotangent);
-    let solution_h = adjoint_matrix_fixed(emitter, solution, rank, dtype);
+) -> LocalValueId {
+    let negative_rhs_cotangent = linear_neg(builder, rhs_cotangent);
+    let solution_h = adjoint_matrix_fixed(builder, solution, rank, dtype);
     let op_matrix_cotangent = if left_side {
         matmul_linear(
-            emitter,
-            ValRef::Local(negative_rhs_cotangent),
-            ValRef::Local(solution_h),
+            builder,
+            ValueRef::Local(negative_rhs_cotangent),
+            ValueRef::Local(solution_h),
             vec![true, false],
             rank,
         )
     } else {
         matmul_linear(
-            emitter,
-            ValRef::Local(solution_h),
-            ValRef::Local(negative_rhs_cotangent),
+            builder,
+            ValueRef::Local(solution_h),
+            ValueRef::Local(negative_rhs_cotangent),
             vec![false, true],
             rank,
         )
     };
     if transpose_a {
-        transpose_matrix_linear(emitter, op_matrix_cotangent, rank)
+        transpose_matrix_linear(builder, op_matrix_cotangent, rank)
     } else {
         op_matrix_cotangent
     }
 }
 
 pub(super) fn solve_in_graph(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    a: ValRef<StdTensorOp>,
-    b: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    a: ValueRef<StdTensorOp>,
+    b: ValueRef<StdTensorOp>,
     rank: usize,
-) -> LocalValId {
-    let lu_outputs = builder.add_op(linalg_std_op(LinalgOp::Lu), vec![a], OpMode::Primal);
+) -> LocalValueId {
+    let lu_outputs =
+        builder.add_operation(linalg_std_op(LinalgOp::Lu), vec![a], OperationRole::Primary);
     let p = lu_outputs[0];
     let l = lu_outputs[1];
     let u = lu_outputs[2];
-    let pb = matmul_linear(builder, ValRef::Local(p), b, vec![false, true], rank);
-    let z = builder.add_op(
+    let pb = matmul_linear(builder, ValueRef::Local(p), b, vec![false, true], rank);
+    let z = builder.add_operation(
         linalg_std_op(LinalgOp::TriangularSolve {
             left_side: true,
             lower: true,
             transpose_a: false,
             unit_diagonal: true,
         }),
-        vec![ValRef::Local(l), ValRef::Local(pb)],
-        OpMode::Linear {
+        vec![ValueRef::Local(l), ValueRef::Local(pb)],
+        OperationRole::Linearized {
             active_mask: vec![false, true],
         },
     )[0];
-    builder.add_op(
+    builder.add_operation(
         linalg_std_op(LinalgOp::TriangularSolve {
             left_side: true,
             lower: false,
             transpose_a: false,
             unit_diagonal: false,
         }),
-        vec![ValRef::Local(u), ValRef::Local(z)],
-        OpMode::Linear {
+        vec![ValueRef::Local(u), ValueRef::Local(z)],
+        OperationRole::Linearized {
             active_mask: vec![false, true],
         },
     )[0]
 }
 
 pub(super) fn fixed_unary(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    input: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emitter.add_op(op, vec![input], OpMode::Primal)[0]
+    input: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(op, vec![input], OperationRole::Primary)[0]
 }
 
 pub(super) fn fixed_binary(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
-    builder.add_op(op, vec![lhs, rhs], OpMode::Primal)[0]
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(op, vec![lhs, rhs], OperationRole::Primary)[0]
 }
 
 pub(super) fn linear_unary(
-    builder: &mut impl OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    input: LocalValId,
-) -> LocalValId {
-    builder.add_op(
+    input: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         op,
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0]
 }
 
 pub(super) fn linear_binary(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    lhs: LocalValId,
-    rhs: LocalValId,
-) -> LocalValId {
-    builder.add_op(
+    lhs: LocalValueId,
+    rhs: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         op,
-        vec![ValRef::Local(lhs), ValRef::Local(rhs)],
-        OpMode::Linear {
+        vec![ValueRef::Local(lhs), ValueRef::Local(rhs)],
+        OperationRole::Linearized {
             active_mask: vec![true, true],
         },
     )[0]
 }
 
 pub(super) fn fixed_add(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     fixed_binary(builder, StdTensorOp::Add, lhs, rhs)
 }
 
 pub(super) fn fixed_mul(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     fixed_binary(builder, StdTensorOp::Mul, lhs, rhs)
 }
 
 pub(super) fn fixed_div(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
 }
 
 pub(super) fn fixed_scale(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     factor: f64,
-) -> LocalValId {
-    let constant = builder.add_op(StdTensorOp::constant_f64(factor), vec![], OpMode::Primal);
-    builder.add_op(
+) -> LocalValueId {
+    let constant = builder.add_operation(
+        StdTensorOp::constant_f64(factor),
+        vec![],
+        OperationRole::Primary,
+    );
+    builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValRef::Local(constant[0]), input],
-        OpMode::Primal,
+        vec![ValueRef::Local(constant[0]), input],
+        OperationRole::Primary,
     )[0]
 }
 
 pub(super) fn broadcast_in_dim_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     shape: Vec<DimExpr>,
     dims: Vec<usize>,
-) -> LocalValId {
+) -> LocalValueId {
     fixed_unary(builder, StdTensorOp::BroadcastInDim { shape, dims }, input)
 }
 
 pub(super) fn reduce_sum_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     axes: Vec<usize>,
-) -> LocalValId {
+) -> LocalValueId {
     fixed_unary(builder, StdTensorOp::ReduceSum { axes }, input)
 }
 
 pub(super) fn pad_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     rank: usize,
     edge_padding_low: Vec<i64>,
     edge_padding_high: Vec<i64>,
-) -> LocalValId {
+) -> LocalValueId {
     fixed_unary(
         builder,
         StdTensorOp::Pad(PadConfig {
@@ -199,125 +204,129 @@ pub(super) fn pad_fixed(
 }
 
 pub(super) fn fixed_sub(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     let neg_rhs = fixed_unary(builder, StdTensorOp::Neg, rhs);
-    fixed_add(builder, lhs, ValRef::Local(neg_rhs))
+    fixed_add(builder, lhs, ValueRef::Local(neg_rhs))
 }
 
 pub(super) fn linear_add(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: LocalValId,
-    rhs: LocalValId,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: LocalValueId,
+    rhs: LocalValueId,
+) -> LocalValueId {
     linear_binary(builder, StdTensorOp::Add, lhs, rhs)
 }
 
 pub(super) fn linear_neg(
-    builder: &mut impl OpEmitter<StdTensorOp>,
-    input: LocalValId,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+) -> LocalValueId {
     linear_unary(builder, StdTensorOp::Neg, input)
 }
 
 pub(super) fn linear_scale(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     factor: f64,
-) -> LocalValId {
-    let constant = builder.add_op(StdTensorOp::constant_f64(factor), vec![], OpMode::Primal);
-    builder.add_op(
+) -> LocalValueId {
+    let constant = builder.add_operation(
+        StdTensorOp::constant_f64(factor),
+        vec![],
+        OperationRole::Primary,
+    );
+    builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValRef::Local(constant[0]), ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(constant[0]), ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![false, true],
         },
     )[0]
 }
 
 pub(super) fn linear_sub(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: LocalValId,
-    rhs: LocalValId,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: LocalValueId,
+    rhs: LocalValueId,
+) -> LocalValueId {
     let neg_rhs = linear_neg(builder, rhs);
     linear_add(builder, lhs, neg_rhs)
 }
 
 pub(super) fn linear_div_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: LocalValId,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
-    builder.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: LocalValueId,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::Div,
-        vec![ValRef::Local(lhs), rhs],
-        OpMode::Linear {
+        vec![ValueRef::Local(lhs), rhs],
+        OperationRole::Linearized {
             active_mask: vec![true, false],
         },
     )[0]
 }
 
 pub(super) fn hadamard_fixed_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    fixed: ValRef<StdTensorOp>,
-    active: LocalValId,
-) -> LocalValId {
-    builder.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    fixed: ValueRef<StdTensorOp>,
+    active: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::Mul,
-        vec![fixed, ValRef::Local(active)],
-        OpMode::Linear {
+        vec![fixed, ValueRef::Local(active)],
+        OperationRole::Linearized {
             active_mask: vec![false, true],
         },
     )[0]
 }
 
 pub(super) fn one_like_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    anchor: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    anchor: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     let zero = fixed_sub(builder, anchor.clone(), anchor);
-    fixed_unary(builder, StdTensorOp::Exp, ValRef::Local(zero))
+    fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(zero))
 }
 
 pub(super) fn extract_diag_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
-) -> LocalValId {
-    builder.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::ExtractDiag {
             axis_a: 0,
             axis_b: 1,
         },
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0]
 }
 
 pub(super) fn embed_diag_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
-) -> LocalValId {
-    builder.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
             axis_b: 1,
         },
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0]
 }
 
 pub(super) fn embed_diag_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
-) -> LocalValId {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+) -> LocalValueId {
     fixed_unary(
         builder,
         StdTensorOp::EmbedDiag {
@@ -329,12 +338,12 @@ pub(super) fn embed_diag_fixed(
 }
 
 pub(super) fn transpose_matrix_fixed(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     rank: usize,
-) -> LocalValId {
+) -> LocalValueId {
     fixed_unary(
-        emitter,
+        builder,
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
         },
@@ -343,55 +352,55 @@ pub(super) fn transpose_matrix_fixed(
 }
 
 pub(super) fn adjoint_matrix_fixed(
-    builder: &mut impl OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     rank: usize,
     dtype: DType,
-) -> LocalValId {
+) -> LocalValueId {
     let input = conjugate_primal_if_dtype_complex(builder, input, dtype);
     transpose_matrix_fixed(builder, input, rank)
 }
 
 pub(super) fn adjoint_matrix_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     rank: usize,
     dtype: DType,
-) -> LocalValId {
+) -> LocalValueId {
     let conjugated = conjugate_linear_if_dtype_complex(builder, input, dtype);
-    builder.add_op(
+    builder.add_operation(
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
         },
-        vec![ValRef::Local(conjugated)],
-        OpMode::Linear {
+        vec![ValueRef::Local(conjugated)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0]
 }
 
 pub(super) fn transpose_matrix_linear(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     rank: usize,
-) -> LocalValId {
-    emitter.add_op(
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
         },
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0]
 }
 
 pub(super) fn project_triangular_operand_linear(
-    builder: &mut impl OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     lower: bool,
     unit_diagonal: bool,
-) -> LocalValId {
+) -> LocalValueId {
     let op = if lower {
         StdTensorOp::Tril {
             k: if unit_diagonal { -1 } else { 0 },
@@ -405,15 +414,15 @@ pub(super) fn project_triangular_operand_linear(
 }
 
 pub(super) fn self_adjoint_from_lower_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     rank: usize,
     dtype: DType,
-) -> LocalValId {
-    let strict_lower = builder.add_op(
+) -> LocalValueId {
+    let strict_lower = builder.add_operation(
         StdTensorOp::Tril { k: -1 },
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0];
@@ -433,33 +442,33 @@ pub(super) fn self_adjoint_from_lower_linear(
 }
 
 pub(super) fn matmul_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
     rank: usize,
-) -> LocalValId {
-    builder.add_op(
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
         },
         vec![lhs, rhs],
-        OpMode::Primal,
+        OperationRole::Primary,
     )[0]
 }
 
 pub(super) fn matmul_linear(
-    builder: &mut impl OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
     active_mask: Vec<bool>,
     rank: usize,
-) -> LocalValId {
-    builder.add_op(
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
         },
         vec![lhs, rhs],
-        OpMode::Linear { active_mask },
+        OperationRole::Linearized { active_mask },
     )[0]
 }
 
@@ -513,18 +522,18 @@ pub(super) fn vector_to_matrix_broadcast_dims(batch_ndim: usize) -> Vec<usize> {
 }
 
 pub(super) fn leading_column_selector_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     leading_cols: usize,
     total_cols: usize,
     batch_shape: &[DimExpr],
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
-) -> LocalValId {
+) -> LocalValueId {
     let eye = identity_matrix_fixed(builder, leading_cols, batch_shape, anchor, anchor_shape);
     let rank = 2 + batch_shape.len();
     pad_fixed(
         builder,
-        ValRef::Local(eye),
+        ValueRef::Local(eye),
         rank,
         vec![0; rank],
         pad_vec(rank, 1, (total_cols - leading_cols) as i64),
@@ -532,18 +541,18 @@ pub(super) fn leading_column_selector_fixed(
 }
 
 pub(super) fn trailing_column_selector_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     leading_cols: usize,
     trailing_cols: usize,
     batch_shape: &[DimExpr],
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
-) -> LocalValId {
+) -> LocalValueId {
     let eye = identity_matrix_fixed(builder, trailing_cols, batch_shape, anchor, anchor_shape);
     let rank = 2 + batch_shape.len();
     pad_fixed(
         builder,
-        ValRef::Local(eye),
+        ValueRef::Local(eye),
         rank,
         pad_vec(rank, 1, leading_cols as i64),
         vec![0; rank],
@@ -551,38 +560,38 @@ pub(super) fn trailing_column_selector_fixed(
 }
 
 pub(super) fn identity_matrix_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     size: usize,
     batch_shape: &[DimExpr],
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
-) -> LocalValId {
+) -> LocalValueId {
     let one_scalar = scalar_one_fixed(builder, anchor, anchor_shape);
     let ones = broadcast_in_dim_fixed(
         builder,
-        ValRef::Local(one_scalar),
+        ValueRef::Local(one_scalar),
         vector_shape(size, batch_shape),
         vec![],
     );
-    embed_diag_fixed(builder, ValRef::Local(ones))
+    embed_diag_fixed(builder, ValueRef::Local(ones))
 }
 
 pub(super) fn scalar_one_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    anchor: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
-) -> LocalValId {
+) -> LocalValueId {
     let zero = fixed_sub(builder, anchor.clone(), anchor);
     let zero_scalar = if anchor_shape.is_empty() {
         zero
     } else {
         reduce_sum_fixed(
             builder,
-            ValRef::Local(zero),
+            ValueRef::Local(zero),
             (0..anchor_shape.len()).collect(),
         )
     };
-    fixed_unary(builder, StdTensorOp::Exp, ValRef::Local(zero_scalar))
+    fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(zero_scalar))
 }
 
 pub(super) fn pad_vec(rank: usize, axis: usize, amount: i64) -> Vec<i64> {
@@ -599,19 +608,19 @@ pub(super) fn pad_matrix_low(rank: usize, row_amount: i64, col_amount: i64) -> V
 }
 
 pub(super) fn augment_unit_lower_to_square_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    l: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    l: ValueRef<StdTensorOp>,
     rows: usize,
     cols: usize,
     batch_shape: &[DimExpr],
     l_shape: &[DimExpr],
     rank: usize,
-) -> LocalValId {
+) -> LocalValueId {
     let strict_lower = fixed_unary(builder, StdTensorOp::Tril { k: -1 }, l.clone());
     let strict_lower_square = if cols < rows {
         pad_fixed(
             builder,
-            ValRef::Local(strict_lower),
+            ValueRef::Local(strict_lower),
             rank,
             vec![0; rank],
             pad_vec(rank, 1, (rows - cols) as i64),
@@ -622,20 +631,20 @@ pub(super) fn augment_unit_lower_to_square_fixed(
     let identity = identity_matrix_fixed(builder, rows, batch_shape, l, l_shape);
     fixed_add(
         builder,
-        ValRef::Local(strict_lower_square),
-        ValRef::Local(identity),
+        ValueRef::Local(strict_lower_square),
+        ValueRef::Local(identity),
     )
 }
 
 pub(super) fn augment_upper_to_square_fixed(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    u: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    u: ValueRef<StdTensorOp>,
     rows: usize,
     cols: usize,
     batch_shape: &[DimExpr],
     u_shape: &[DimExpr],
     rank: usize,
-) -> LocalValId {
+) -> LocalValueId {
     let upper = fixed_unary(builder, StdTensorOp::Triu { k: 0 }, u.clone());
     if rows == cols {
         return upper;
@@ -643,7 +652,7 @@ pub(super) fn augment_upper_to_square_fixed(
 
     let upper_square = pad_fixed(
         builder,
-        ValRef::Local(upper),
+        ValueRef::Local(upper),
         rank,
         vec![0; rank],
         pad_vec(rank, 0, (cols - rows) as i64),
@@ -651,56 +660,56 @@ pub(super) fn augment_upper_to_square_fixed(
     let trailing_eye = identity_matrix_fixed(builder, cols - rows, batch_shape, u, u_shape);
     let trailing_eye = pad_fixed(
         builder,
-        ValRef::Local(trailing_eye),
+        ValueRef::Local(trailing_eye),
         rank,
         pad_matrix_low(rank, rows as i64, rows as i64),
         vec![0; rank],
     );
     fixed_add(
         builder,
-        ValRef::Local(upper_square),
-        ValRef::Local(trailing_eye),
+        ValueRef::Local(upper_square),
+        ValueRef::Local(trailing_eye),
     )
 }
 
 pub(super) fn take_leading_cols_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     cols: usize,
     total_cols: usize,
     batch_shape: &[DimExpr],
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
     rank: usize,
-) -> LocalValId {
+) -> LocalValueId {
     let selector =
         leading_column_selector_fixed(builder, cols, total_cols, batch_shape, anchor, anchor_shape);
-    let selector_t = transpose_matrix_fixed(builder, ValRef::Local(selector), rank);
+    let selector_t = transpose_matrix_fixed(builder, ValueRef::Local(selector), rank);
     matmul_linear(
         builder,
-        ValRef::Local(input),
-        ValRef::Local(selector_t),
+        ValueRef::Local(input),
+        ValueRef::Local(selector_t),
         vec![true, false],
         rank,
     )
 }
 
 pub(super) fn take_leading_rows_linear(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     rows: usize,
     total_rows: usize,
     batch_shape: &[DimExpr],
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
     rank: usize,
-) -> LocalValId {
+) -> LocalValueId {
     let selector =
         leading_column_selector_fixed(builder, rows, total_rows, batch_shape, anchor, anchor_shape);
     matmul_linear(
         builder,
-        ValRef::Local(selector),
-        ValRef::Local(input),
+        ValueRef::Local(selector),
+        ValueRef::Local(input),
         vec![false, true],
         rank,
     )

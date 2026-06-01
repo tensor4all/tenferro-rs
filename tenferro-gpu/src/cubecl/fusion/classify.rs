@@ -18,7 +18,7 @@ pub(crate) fn classify<'a, T>(
 where
     T: FusionElement,
 {
-    if plan.dtype != T::DTYPE || plan.n_inputs != inputs.len() || plan.outputs.is_empty() {
+    if plan.dtype != T::DTYPE || plan.input_count != inputs.len() || plan.outputs.is_empty() {
         return Ok(None);
     }
     if !plan.ops.iter().all(|inst| T::supports_op(&inst.op)) {
