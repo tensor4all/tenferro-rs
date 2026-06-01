@@ -1,11 +1,10 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_extract_diag(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,
@@ -27,7 +26,7 @@ pub fn linearize_extract_diag(
 }
 
 pub fn linearize_embed_diag(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,

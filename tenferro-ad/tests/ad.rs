@@ -30,7 +30,7 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
     TensorReduction, TypedTensor,
 };
-use tidu::{differentiate, transpose, ADKey, LinearFragment};
+use tidu::{linear_transpose, linearize, ADKey};
 
 const TOL: f64 = 1e-6;
 
@@ -275,7 +275,7 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     );
     let view = resolve(vec![fragment.clone()]);
     let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-    let linear = differentiate(
+    let linear = linearize(
         &view,
         std::slice::from_ref(&loss_key),
         std::slice::from_ref(&input_key),
@@ -284,7 +284,7 @@ fn grad_from_fragment_with_inputs_and_cotangent(
         &HashMap::new(),
     );
     let _linear_metadata_scope = register_fragment_metadata_for_test(
-        &linear.fragment,
+        linear.as_graph(),
         vec![(
             GlobalValKey::Input(input_key.tangent_of(0)),
             tensor_meta_from_tensor(inputs_map.get(&input_key).expect("missing input tensor")),
@@ -292,21 +292,21 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     );
     ad_ctx.refresh_global_metadata();
     let linear_tangent_input_ids: Vec<LocalValId> = linear
-        .tangent_inputs
+        .tangent_inputs()
         .iter()
         .map(|(_, local_id)| *local_id)
         .collect();
-    let transposed = transpose(&linear, &mut ad_ctx);
-    let linear_fragment = Arc::new(linear.fragment);
-    let grad_key = transposed.tangent_outputs[0]
-        .map(|id| transposed.fragment.vals()[id].key.clone())
+    let transposed = linear_transpose(&linear, &mut ad_ctx);
+    let linear_fragment = Arc::new(linear.into_graph());
+    let grad_key = transposed.tangent_outputs()[0]
+        .map(|id| transposed.as_graph().vals()[id].key.clone())
         .expect("expected active gradient output");
-    let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key
-    {
-        GlobalValKey::Input(key) => key.clone(),
-        _ => panic!("expected cotangent input"),
-    };
-    let transposed_fragment = Arc::new(transposed.fragment);
+    let cotangent_input_key =
+        match &transposed.as_graph().vals()[transposed.tangent_inputs()[0].1].key {
+            GlobalValKey::Input(key) => key.clone(),
+            _ => panic!("expected cotangent input"),
+        };
+    let transposed_fragment = Arc::new(transposed.into_graph());
 
     inputs_map.insert(cotangent_input_key, cotangent);
 
@@ -388,7 +388,7 @@ fn jvp_from_fragment_with_inputs(
     );
     let view = resolve(vec![fragment.clone()]);
     let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-    let linear = differentiate(
+    let linear = linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&input_key),
@@ -397,20 +397,20 @@ fn jvp_from_fragment_with_inputs(
         &HashMap::new(),
     );
     let _linear_metadata_scope = register_fragment_metadata_for_test(
-        &linear.fragment,
+        linear.as_graph(),
         vec![(
             GlobalValKey::Input(input_key.tangent_of(0)),
             tensor_meta_from_tensor(&tangent),
         )],
     );
-    let tangent_key = linear.tangent_outputs[0]
-        .map(|id| linear.fragment.vals()[id].key.clone())
+    let tangent_key = linear.tangent_outputs()[0]
+        .map(|id| linear.as_graph().vals()[id].key.clone())
         .expect("expected active tangent output");
-    let tangent_input_key = match &linear.fragment.vals()[linear.tangent_inputs[0].1].key {
+    let tangent_input_key = match &linear.as_graph().vals()[linear.tangent_inputs()[0].1].key {
         GlobalValKey::Input(key) => key.clone(),
         _ => panic!("expected tangent input"),
     };
-    let linear_fragment = Arc::new(linear.fragment);
+    let linear_fragment = Arc::new(linear.into_graph());
 
     inputs_map.insert(tangent_input_key, tangent);
 
@@ -462,43 +462,58 @@ fn transpose_primal_unary_op_with_inputs(
     input: Tensor,
     cotangent: Tensor,
 ) -> Tensor {
-    let tangent_input_key = input_key.tangent_of(90_000);
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let tangent_input = builder.add_input(tangent_input_key.clone());
-    let output = builder.add_op(op, vec![ValRef::Local(tangent_input)], OpMode::Primal)[0];
+    let input_id = builder.add_input(input_key.clone());
+    let output = builder.add_op(op, vec![ValRef::Local(input_id)], OpMode::Primal)[0];
     builder.set_outputs(vec![output]);
 
-    let linear = LinearFragment {
-        fragment: builder.build(),
-        tangent_inputs: vec![(input_key, tangent_input)],
-        tangent_outputs: vec![Some(output)],
-    };
+    let fragment = Arc::new(builder.build());
+    let output_key = fragment.vals()[output].key.clone();
+    let _primal_metadata_scope = register_fragment_metadata_for_test(
+        &fragment,
+        vec![(
+            GlobalValKey::Input(input_key.clone()),
+            tensor_meta_from_tensor(&input),
+        )],
+    );
+    let view = resolve(vec![fragment.clone()]);
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
+    let linear = linearize(
+        &view,
+        std::slice::from_ref(&output_key),
+        std::slice::from_ref(&input_key),
+        90_000,
+        &mut ad_ctx,
+        &HashMap::new(),
+    );
+    let tangent_input_key = input_key.tangent_of(90_000);
     let _linear_metadata_scope = register_fragment_metadata_for_test(
-        &linear.fragment,
+        linear.as_graph(),
         vec![(
             GlobalValKey::Input(tangent_input_key.clone()),
             tensor_meta_from_tensor(&input),
         )],
     );
-    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-    let transposed = transpose(&linear, &mut ad_ctx);
-    let linear_fragment = Arc::new(linear.fragment);
-    let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key
-    {
-        GlobalValKey::Input(key) => key.clone(),
-        _ => panic!("expected cotangent seed input"),
-    };
-    let output_key = transposed.tangent_outputs[0]
-        .map(|id| transposed.fragment.vals()[id].key.clone())
+    ad_ctx.refresh_global_metadata();
+    let transposed = linear_transpose(&linear, &mut ad_ctx);
+    let linear_fragment = Arc::new(linear.into_graph());
+    let cotangent_input_key =
+        match &transposed.as_graph().vals()[transposed.tangent_inputs()[0].1].key {
+            GlobalValKey::Input(key) => key.clone(),
+            _ => panic!("expected cotangent seed input"),
+        };
+    let output_key = transposed.tangent_outputs()[0]
+        .map(|id| transposed.as_graph().vals()[id].key.clone())
         .expect("expected active transpose output");
-    let transposed_fragment = Arc::new(transposed.fragment);
+    let transposed_fragment = Arc::new(transposed.into_graph());
 
     let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key, input.clone());
     inputs_map.insert(tangent_input_key, input);
     inputs_map.insert(cotangent_input_key, cotangent);
 
     eval_fragment_outputs(
-        vec![linear_fragment, transposed_fragment],
+        vec![fragment, linear_fragment, transposed_fragment],
         &[output_key],
         &inputs_map,
     )

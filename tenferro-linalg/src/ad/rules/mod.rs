@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 
 use crate::ad_support::{LinalgExtensionOp, LinalgOp};
@@ -50,7 +49,7 @@ fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
 }
 
 pub(crate) fn linearize_lu(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -166,7 +165,7 @@ pub(crate) fn linearize_lu(
 }
 
 pub(crate) fn linearize_full_piv_lu(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -234,7 +233,7 @@ pub(crate) fn linearize_full_piv_lu(
 }
 
 pub(crate) fn linearize_eig(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -281,7 +280,7 @@ pub(crate) fn linearize_eig(
 }
 
 pub(crate) fn linearize_svd(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -454,7 +453,7 @@ pub(crate) fn linearize_svd(
 }
 
 pub(crate) fn linearize_eigh(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -522,7 +521,7 @@ pub(crate) fn linearize_eigh(
 }
 
 pub(crate) fn linearize_cholesky(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -588,7 +587,7 @@ pub(crate) fn linearize_cholesky(
 }
 
 pub(crate) fn linearize_qr(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],

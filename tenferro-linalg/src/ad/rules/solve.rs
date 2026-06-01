@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_ops::ad::context::ShapeGuardContext;
@@ -10,7 +9,7 @@ use super::support::*;
 use super::{conjugate_primal_if_dtype_complex, linalg_std_op};
 
 pub(crate) fn linearize_triangular_solve(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -93,7 +92,7 @@ fn linear_solve_op_name(kind: LinearSolveOp) -> &'static str {
 }
 
 fn linearize_linear_solve(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -148,7 +147,7 @@ fn linearize_linear_solve(
 }
 
 pub(crate) fn linearize_solve(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -167,7 +166,7 @@ pub(crate) fn linearize_solve(
 }
 
 pub(crate) fn linearize_full_piv_lu_solve(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -186,7 +185,7 @@ pub(crate) fn linearize_full_piv_lu_solve(
 }
 
 fn triangular_solve_rhs_tangent(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     left_side: bool,

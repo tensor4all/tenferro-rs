@@ -85,13 +85,13 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOpTrait,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Linearize)?;
+        let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
         let tangents = match op.op() {
             LinalgOp::Lu => rules::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
             LinalgOp::FullPivLu => {

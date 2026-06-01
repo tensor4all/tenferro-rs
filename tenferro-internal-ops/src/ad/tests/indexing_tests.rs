@@ -3,7 +3,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
-use tidu::PrimitiveOp;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
@@ -66,7 +65,7 @@ fn linearize_gather_reuses_primal_indices_and_emits_gather() {
     let primal_in = vec![operand_key.clone(), indices_key.clone()];
     let tangent_in = [Some(operand_tangent), None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -98,7 +97,7 @@ fn linearize_gather_inactive_tangent_returns_none() {
     let primal_in = vec![operand_key, indices_key];
     let tangent_in: [Option<LocalValId>; 2] = [None, None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result, vec![None]);
     assert!(builder.build().ops().is_empty());
 }
@@ -129,7 +128,7 @@ fn linearize_dynamic_gather_reuses_primal_indices_and_shape_sources() {
     let primal_in = vec![operand_key, indices_key.clone(), shape_source_key.clone()];
     let tangent_in = [Some(operand_tangent), None, None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -165,7 +164,7 @@ fn linearize_dynamic_slice_reuses_primal_starts() {
     let primal_in = vec![operand_key, starts_key.clone()];
     let tangent_in = [Some(operand_tangent), None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -198,7 +197,7 @@ fn linearize_dynamic_slice_inactive_tangent_returns_none() {
     let primal_in = vec![operand_key, starts_key];
     let tangent_in: [Option<LocalValId>; 2] = [None, None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result, vec![None]);
     assert!(builder.build().ops().is_empty());
 }
@@ -217,7 +216,7 @@ fn linearize_dynamic_update_slice_reuses_primal_starts() {
     let primal_in = vec![operand_key, update_key, starts_key.clone()];
     let tangent_in = [Some(operand_tangent), Some(update_tangent), None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");

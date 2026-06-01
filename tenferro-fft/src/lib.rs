@@ -37,7 +37,6 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
@@ -324,17 +323,17 @@ impl ExtensionAdRuleTrait for FftAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOpTrait,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let fft_op = fft_payload(op, ADRuleKind::Linearize)?;
+        let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
                 FFT_EXTENSION_FAMILY_ID,
-                ADRuleKind::Linearize,
+                ADRuleKind::Jvp,
             ));
         }
 

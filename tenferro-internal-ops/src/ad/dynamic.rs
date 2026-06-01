@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::SliceConfig;
@@ -7,7 +6,7 @@ use crate::ad::context::ShapeGuardContext;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_dynamic_truncate(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -71,7 +70,7 @@ pub fn transpose_dynamic_truncate(
 }
 
 pub fn linearize_pad_to_match(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axis: usize,

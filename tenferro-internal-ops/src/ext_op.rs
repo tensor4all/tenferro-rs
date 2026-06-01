@@ -25,7 +25,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
@@ -197,7 +196,7 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -292,7 +291,7 @@ impl ExtensionRuleSet {
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut FragmentBuilder<StdTensorOp>,
+    ///         _builder: &mut dyn OpEmitter<StdTensorOp>,
     ///         _primal_in: &[GlobalValKey<StdTensorOp>],
     ///         _primal_out: &[GlobalValKey<StdTensorOp>],
     ///         tangent_in: &[Option<LocalValId>],
@@ -350,7 +349,7 @@ impl ExtensionRuleSet {
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut FragmentBuilder<StdTensorOp>,
+    ///         _builder: &mut dyn OpEmitter<StdTensorOp>,
     ///         _primal_in: &[GlobalValKey<StdTensorOp>],
     ///         _primal_out: &[GlobalValKey<StdTensorOp>],
     ///         tangent_in: &[Option<LocalValId>],
@@ -531,7 +530,7 @@ pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>
 #[cfg(feature = "autodiff")]
 pub fn linearize_extension_rule(
     op: &dyn ExtensionOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -539,10 +538,7 @@ pub fn linearize_extension_rule(
 ) -> ADRuleResult<Vec<Option<LocalValId>>> {
     match ctx.lookup_extension_rule(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
-        None => Err(ADRuleError::unsupported(
-            op.family_id(),
-            ADRuleKind::Linearize,
-        )),
+        None => Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp)),
     }
 }
 

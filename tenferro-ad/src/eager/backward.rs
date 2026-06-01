@@ -8,7 +8,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
 use tenferro_tensor::{Tensor, TensorBackend};
 use tidu::eager::BackwardExecutor;
-use tidu::LinearFragment;
+use tidu::{LinearizedGraph, PrimitiveGraph};
 
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
@@ -124,9 +124,10 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
 {
     fn execute_forward(
         &mut self,
-        fragment: &Fragment<StdTensorOp>,
+        graph: PrimitiveGraph<'_, StdTensorOp>,
         initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
+        let fragment = graph.as_graph();
         let mut all_values = initial_data.clone();
         let live_values = live_fragment_values(fragment);
         let input_metadata = fragment
@@ -194,9 +195,9 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         all_values
     }
 
-    fn execute_transpose(
+    fn run_transposed_linear(
         &mut self,
-        linear: &LinearFragment<StdTensorOp>,
+        linear: &LinearizedGraph<StdTensorOp>,
         cotangent_out: &[Option<Arc<Tensor>>],
         external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
@@ -217,7 +218,7 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             .collect::<Vec<_>>();
 
         ctx.refresh_global_metadata();
-        tidu::emit::try_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
+        tidu::try_linear_transpose_with_builder(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
             |cotangent_ids| {
                 cotangent_ids
                     .into_iter()

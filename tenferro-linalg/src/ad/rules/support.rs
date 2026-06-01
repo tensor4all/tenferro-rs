@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_ops::dim_expr::DimExpr;
@@ -45,7 +44,7 @@ pub(super) fn solve_matrix_cotangent(
 }
 
 pub(super) fn solve_in_graph(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     a: ValRef<StdTensorOp>,
     b: ValRef<StdTensorOp>,
     rank: usize,
@@ -90,7 +89,7 @@ pub(super) fn fixed_unary(
 }
 
 pub(super) fn fixed_binary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
@@ -113,7 +112,7 @@ pub(super) fn linear_unary(
 }
 
 pub(super) fn linear_binary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     lhs: LocalValId,
     rhs: LocalValId,
@@ -128,7 +127,7 @@ pub(super) fn linear_binary(
 }
 
 pub(super) fn fixed_add(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -136,7 +135,7 @@ pub(super) fn fixed_add(
 }
 
 pub(super) fn fixed_mul(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -144,7 +143,7 @@ pub(super) fn fixed_mul(
 }
 
 pub(super) fn fixed_div(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -152,7 +151,7 @@ pub(super) fn fixed_div(
 }
 
 pub(super) fn fixed_scale(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     factor: f64,
 ) -> LocalValId {
@@ -165,7 +164,7 @@ pub(super) fn fixed_scale(
 }
 
 pub(super) fn broadcast_in_dim_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     shape: Vec<DimExpr>,
     dims: Vec<usize>,
@@ -174,7 +173,7 @@ pub(super) fn broadcast_in_dim_fixed(
 }
 
 pub(super) fn reduce_sum_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     axes: Vec<usize>,
 ) -> LocalValId {
@@ -182,7 +181,7 @@ pub(super) fn reduce_sum_fixed(
 }
 
 pub(super) fn pad_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     rank: usize,
     edge_padding_low: Vec<i64>,
@@ -200,7 +199,7 @@ pub(super) fn pad_fixed(
 }
 
 pub(super) fn fixed_sub(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -209,7 +208,7 @@ pub(super) fn fixed_sub(
 }
 
 pub(super) fn linear_add(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: LocalValId,
     rhs: LocalValId,
 ) -> LocalValId {
@@ -224,7 +223,7 @@ pub(super) fn linear_neg(
 }
 
 pub(super) fn linear_scale(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     factor: f64,
 ) -> LocalValId {
@@ -239,7 +238,7 @@ pub(super) fn linear_scale(
 }
 
 pub(super) fn linear_sub(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: LocalValId,
     rhs: LocalValId,
 ) -> LocalValId {
@@ -248,7 +247,7 @@ pub(super) fn linear_sub(
 }
 
 pub(super) fn linear_div_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: LocalValId,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -262,7 +261,7 @@ pub(super) fn linear_div_fixed(
 }
 
 pub(super) fn hadamard_fixed_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     fixed: ValRef<StdTensorOp>,
     active: LocalValId,
 ) -> LocalValId {
@@ -276,7 +275,7 @@ pub(super) fn hadamard_fixed_linear(
 }
 
 pub(super) fn one_like_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     anchor: ValRef<StdTensorOp>,
 ) -> LocalValId {
     let zero = fixed_sub(builder, anchor.clone(), anchor);
@@ -284,7 +283,7 @@ pub(super) fn one_like_fixed(
 }
 
 pub(super) fn extract_diag_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
 ) -> LocalValId {
     builder.add_op(
@@ -300,7 +299,7 @@ pub(super) fn extract_diag_linear(
 }
 
 pub(super) fn embed_diag_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
 ) -> LocalValId {
     builder.add_op(
@@ -316,7 +315,7 @@ pub(super) fn embed_diag_linear(
 }
 
 pub(super) fn embed_diag_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
     fixed_unary(
@@ -354,7 +353,7 @@ pub(super) fn adjoint_matrix_fixed(
 }
 
 pub(super) fn adjoint_matrix_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     rank: usize,
     dtype: DType,
@@ -406,7 +405,7 @@ pub(super) fn project_triangular_operand_linear(
 }
 
 pub(super) fn self_adjoint_from_lower_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     rank: usize,
     dtype: DType,
@@ -434,7 +433,7 @@ pub(super) fn self_adjoint_from_lower_linear(
 }
 
 pub(super) fn matmul_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
     rank: usize,
@@ -514,7 +513,7 @@ pub(super) fn vector_to_matrix_broadcast_dims(batch_ndim: usize) -> Vec<usize> {
 }
 
 pub(super) fn leading_column_selector_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     leading_cols: usize,
     total_cols: usize,
     batch_shape: &[DimExpr],
@@ -533,7 +532,7 @@ pub(super) fn leading_column_selector_fixed(
 }
 
 pub(super) fn trailing_column_selector_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     leading_cols: usize,
     trailing_cols: usize,
     batch_shape: &[DimExpr],
@@ -552,7 +551,7 @@ pub(super) fn trailing_column_selector_fixed(
 }
 
 pub(super) fn identity_matrix_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     size: usize,
     batch_shape: &[DimExpr],
     anchor: ValRef<StdTensorOp>,
@@ -569,7 +568,7 @@ pub(super) fn identity_matrix_fixed(
 }
 
 pub(super) fn scalar_one_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     anchor: ValRef<StdTensorOp>,
     anchor_shape: &[DimExpr],
 ) -> LocalValId {
@@ -600,7 +599,7 @@ pub(super) fn pad_matrix_low(rank: usize, row_amount: i64, col_amount: i64) -> V
 }
 
 pub(super) fn augment_unit_lower_to_square_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     l: ValRef<StdTensorOp>,
     rows: usize,
     cols: usize,
@@ -629,7 +628,7 @@ pub(super) fn augment_unit_lower_to_square_fixed(
 }
 
 pub(super) fn augment_upper_to_square_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     u: ValRef<StdTensorOp>,
     rows: usize,
     cols: usize,
@@ -665,7 +664,7 @@ pub(super) fn augment_upper_to_square_fixed(
 }
 
 pub(super) fn take_leading_cols_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     cols: usize,
     total_cols: usize,
@@ -687,7 +686,7 @@ pub(super) fn take_leading_cols_linear(
 }
 
 pub(super) fn take_leading_rows_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     rows: usize,
     total_rows: usize,

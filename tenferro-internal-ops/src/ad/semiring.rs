@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
@@ -7,7 +6,7 @@ use crate::ad::support::{conjugate_linear_if_dtype_complex, conjugate_primal_if_
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_add(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match (tangent_in[0], tangent_in[1]) {
@@ -28,7 +27,7 @@ pub fn linearize_add(
 }
 
 pub fn linearize_mul(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -74,7 +73,7 @@ pub fn linearize_mul(
 }
 
 pub fn linearize_neg(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
@@ -93,7 +92,7 @@ pub fn linearize_neg(
 }
 
 pub fn linearize_conj(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     ctx: &mut ShapeGuardContext,

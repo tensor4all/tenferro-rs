@@ -24,7 +24,6 @@
 //! Closing the core op vocabulary under AD is a Stage 7 prerequisite (the
 //! tropical fused backward emits `Gather` / `Scatter` on this vocabulary).
 
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::{GatherConfig, ScatterConfig};
@@ -41,7 +40,7 @@ use crate::sym_dim::SymDim;
 /// is ignored. The output tangent is the same gather applied to the
 /// operand's tangent, reusing the primal indices.
 pub fn linearize_gather(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &GatherConfig,
@@ -70,7 +69,7 @@ pub fn linearize_gather(
 /// shape-source inputs are non-differentiable and are reused from the primal.
 #[allow(clippy::too_many_arguments)]
 pub fn linearize_gather_dynamic_slice_sizes(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     offset_dims: &[usize],
@@ -110,7 +109,7 @@ pub fn linearize_gather_dynamic_slice_sizes(
 /// The source tensor tangent flows through the same dynamic slice. Runtime
 /// start indices are integer-valued and non-differentiable.
 pub fn linearize_dynamic_slice(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     slice_sizes: &[usize],
@@ -140,7 +139,7 @@ pub fn linearize_dynamic_slice(
 /// The operand and update inputs are differentiable. Runtime start indices are
 /// integer-valued and non-differentiable.
 pub fn linearize_dynamic_update_slice(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     ctx: &mut ShapeGuardContext,
@@ -420,7 +419,7 @@ pub fn transpose_dynamic_update_slice(
 ///   `Scatter(operand_dot, indices, updates_dot, config)`; by linearity
 ///   this captures both contributions in a single scatter.
 pub fn linearize_scatter(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &ScatterConfig,

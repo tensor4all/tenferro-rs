@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
@@ -109,7 +108,7 @@ fn unary_is_active(mode: &OpMode) -> bool {
 }
 
 pub fn linearize_exp(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -129,7 +128,7 @@ pub fn linearize_exp(
 }
 
 pub fn linearize_log(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -149,7 +148,7 @@ pub fn linearize_log(
 }
 
 pub fn linearize_sin(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -171,7 +170,7 @@ pub fn linearize_sin(
 }
 
 pub fn linearize_cos(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -194,7 +193,7 @@ pub fn linearize_cos(
 }
 
 pub fn linearize_tanh(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -216,7 +215,7 @@ pub fn linearize_tanh(
 }
 
 pub fn linearize_sqrt(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -235,7 +234,7 @@ pub fn linearize_sqrt(
 }
 
 pub fn linearize_rsqrt(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -257,7 +256,7 @@ pub fn linearize_rsqrt(
 }
 
 pub fn linearize_pow(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -310,7 +309,7 @@ pub fn linearize_pow(
 }
 
 pub fn linearize_expm1(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -330,7 +329,7 @@ pub fn linearize_expm1(
 }
 
 pub fn linearize_log1p(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
