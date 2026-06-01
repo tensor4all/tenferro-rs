@@ -5,6 +5,7 @@ use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
 use cubecl_cuda::{CudaDevice, CudaRuntime};
 use cudarc::driver::sys::{CUcontext, CUdevice};
+use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 
 /// Returns `true` if a CUDA device is available for CubeCL.
 ///
@@ -27,6 +28,8 @@ pub fn gpu_available() -> bool {
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
 /// let _stream: fn(&CubeclRuntime) -> tenferro_tensor::Result<u64> =
 ///     CubeclRuntime::raw_cuda_stream;
+/// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
+///     CubeclRuntime::synchronize;
 /// ```
 pub struct CubeclRuntime {
     client: ComputeClient<CudaRuntime>,
@@ -157,6 +160,25 @@ impl CubeclRuntime {
             .ok_or_else(|| {
                 crate::Error::backend_failure("raw_cuda_stream", "with_server returned None")
             })?
+    }
+
+    /// Block the current thread until work submitted to the current CUDA stream completes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cubecl::CubeclRuntime;
+    ///
+    /// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
+    ///     CubeclRuntime::synchronize;
+    /// ```
+    pub fn synchronize(&self) -> crate::Result<()> {
+        const OP: &str = "cubecl_runtime_synchronize";
+        self.set_current_cuda_context(OP)?;
+        let stream = self.raw_cuda_stream()? as usize as cudaStream_t;
+        unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
+            crate::Error::backend_failure(OP, format!("CUDA stream synchronize failed: {err:?}"))
+        })
     }
 }
 

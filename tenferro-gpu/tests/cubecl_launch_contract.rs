@@ -71,3 +71,10 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
         violations.join("\n")
     );
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cubecl_runtime_exposes_explicit_synchronize() {
+    let _sync: fn(&tenferro_gpu::CubeclRuntime) -> tenferro_tensor::Result<()> =
+        tenferro_gpu::CubeclRuntime::synchronize;
+}

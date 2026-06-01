@@ -30,13 +30,18 @@ memory, but tenferro does not use that copy as a hidden CPU/GPU transfer.
 ## Eager GPU Synchronization
 
 Eager CUDA execution submits work immediately and returns a CUDA-resident
-`Tensor` handle. It does not expose a user-visible ready flag, and normal
-kernel launches do not imply host synchronization after every op. Subsequent
-CUDA ops can consume the returned handle on the same backend stream.
+`Tensor` handle. Normal kernel launches do not imply host synchronization after
+every op. Subsequent CUDA ops can consume the returned handle on the same
+backend stream.
 
 The host waits when a value is downloaded or otherwise inspected on the host.
 Some library-backed operations also synchronize internally when they must read
 device-side status.
+
+Use `EagerRuntime::synchronize()` when code needs an explicit host-side barrier
+for the eager runtime. CPU runtimes return immediately; CUDA runtimes wait for
+the current backend stream. Direct GPU backend code can call
+`CubeclRuntime::synchronize()` through `backend.runtime()`.
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
