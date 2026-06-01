@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
-use computegraph::fragment::Fragment;
-use computegraph::types::{GlobalValKey, ValRef};
+use computegraph::graph::Graph;
+use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
@@ -25,9 +25,9 @@ use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
-type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
+type MetadataMap = HashMap<ValueKey<StdTensorOp>, TensorMeta>;
 
-type GlobalMetadataMap = HashMap<GlobalValKey<StdTensorOp>, GlobalMetadataEntry>;
+type GlobalMetadataMap = HashMap<ValueKey<StdTensorOp>, GlobalMetadataEntry>;
 
 #[derive(Clone, Debug)]
 struct GlobalMetadataEntry {
@@ -55,11 +55,11 @@ fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
 /// Lifetime token for graph-scoped global metadata.
 ///
 /// Dropping the last frontend owner of a traced graph drops this scope and
-/// releases the metadata keys that were registered for that graph fragment.
+/// releases the metadata keys that were registered for that graph graph.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct GlobalMetadataScope {
-    keys: Vec<GlobalValKey<StdTensorOp>>,
+    keys: Vec<ValueKey<StdTensorOp>>,
 }
 
 impl Drop for GlobalMetadataScope {
@@ -228,7 +228,7 @@ pub struct ShapeGuardContext {
     guards: Vec<ShapeGuard>,
     metadata: MetadataMap,
     use_global_registry: bool,
-    local_keys: Option<Vec<GlobalValKey<StdTensorOp>>>,
+    local_keys: Option<Vec<ValueKey<StdTensorOp>>>,
     #[cfg(feature = "autodiff")]
     extension_rules: Option<ExtensionRuleSet>,
 }
@@ -331,21 +331,21 @@ impl ShapeGuardContext {
     /// # Examples
     ///
     /// ```
-    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use computegraph::types::{ValueKey, ValueRef};
     /// use tenferro_ops::input_key::TensorInputKey;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
-    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
-    /// let value = ValRef::External(key.clone());
+    /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValueRef::External(key.clone());
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
     /// let shape = ctx.shape_of(&value);
     /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
-    pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
+    pub fn shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> &[SymDim] {
         &self.metadata_of(val).shape
     }
 
@@ -354,14 +354,14 @@ impl ShapeGuardContext {
     /// # Examples
     ///
     /// ```
-    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use computegraph::types::{ValueKey, ValueRef};
     /// use tenferro_ops::input_key::TensorInputKey;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
-    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
-    /// let value = ValRef::External(key.clone());
+    /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValueRef::External(key.clone());
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(
     ///     key,
@@ -371,7 +371,7 @@ impl ShapeGuardContext {
     /// let extents = ctx.extents_of(&value);
     /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
     /// ```
-    pub fn extents_of(&mut self, val: &ValRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
+    pub fn extents_of(&mut self, val: &ValueRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
         self.metadata_of(val).extents()
     }
 
@@ -380,14 +380,14 @@ impl ShapeGuardContext {
     /// # Examples
     ///
     /// ```
-    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use computegraph::types::{ValueKey, ValueRef};
     /// use tenferro_ops::input_key::TensorInputKey;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
-    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
-    /// let value = ValRef::External(key.clone());
+    /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValueRef::External(key.clone());
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(
     ///     key,
@@ -397,12 +397,12 @@ impl ShapeGuardContext {
     /// let maybe_shape = ctx.exact_shape_of(&value);
     /// assert_eq!(maybe_shape, None);
     /// ```
-    pub fn exact_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<Vec<SymDim>> {
+    pub fn exact_shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<Vec<SymDim>> {
         self.metadata_of(val).exact_shape()
     }
 
     #[doc(hidden)]
-    pub fn try_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<&[SymDim]> {
+    pub fn try_shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&[SymDim]> {
         self.try_metadata_of(val).map(|meta| meta.shape.as_slice())
     }
 
@@ -411,21 +411,21 @@ impl ShapeGuardContext {
     /// # Examples
     ///
     /// ```
-    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use computegraph::types::{ValueKey, ValueRef};
     /// use tenferro_ops::input_key::TensorInputKey;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
-    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
-    /// let value = ValRef::External(key.clone());
+    /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValueRef::External(key.clone());
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
     /// let dtype = ctx.dtype_of(&value);
     /// assert_eq!(dtype, DType::F64);
     /// ```
-    pub fn dtype_of(&mut self, val: &ValRef<StdTensorOp>) -> DType {
+    pub fn dtype_of(&mut self, val: &ValueRef<StdTensorOp>) -> DType {
         self.metadata_of(val).dtype
     }
 
@@ -434,21 +434,21 @@ impl ShapeGuardContext {
     /// # Examples
     ///
     /// ```
-    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use computegraph::types::{ValueKey, ValueRef};
     /// use tenferro_ops::input_key::TensorInputKey;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
-    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
-    /// let value = ValRef::External(key.clone());
+    /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValueRef::External(key.clone());
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
     /// let meta = ctx.metadata_of(&value);
     /// assert_eq!(meta.dtype, DType::F64);
     /// ```
-    pub fn metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
+    pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> &TensorMeta {
         let key = self.resolve_key(val).clone();
         if !self.metadata.contains_key(&key) && self.use_global_registry {
             if let Some(meta) = lookup_global_metadata(&key) {
@@ -461,7 +461,7 @@ impl ShapeGuardContext {
     }
 
     #[doc(hidden)]
-    pub fn try_metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<&TensorMeta> {
+    pub fn try_metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&TensorMeta> {
         let key = self.resolve_key(val).clone();
         if !self.metadata.contains_key(&key) && self.use_global_registry {
             if let Some(meta) = lookup_global_metadata(&key) {
@@ -472,38 +472,32 @@ impl ShapeGuardContext {
     }
 
     #[doc(hidden)]
-    pub fn attach_fragment(&mut self, fragment: &Fragment<StdTensorOp>) {
-        self.local_keys = Some(
-            fragment
-                .vals()
-                .iter()
-                .map(|node| node.key.clone())
-                .collect(),
-        );
+    pub fn attach_graph(&mut self, graph: &Graph<StdTensorOp>) {
+        self.local_keys = Some(graph.values().iter().map(|node| node.key.clone()).collect());
     }
 
     #[doc(hidden)]
-    pub fn insert_metadata(&mut self, key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
+    pub fn insert_metadata(&mut self, key: ValueKey<StdTensorOp>, meta: TensorMeta) {
         self.metadata.insert(key, meta);
     }
 
     #[doc(hidden)]
     pub fn extend_metadata<I>(&mut self, entries: I)
     where
-        I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+        I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
     {
         self.metadata.extend(entries);
     }
 
-    fn resolve_key<'a>(&'a self, val: &'a ValRef<StdTensorOp>) -> &'a GlobalValKey<StdTensorOp> {
+    fn resolve_key<'a>(&'a self, val: &'a ValueRef<StdTensorOp>) -> &'a ValueKey<StdTensorOp> {
         match val {
-            ValRef::External(key) => key,
-            ValRef::Local(local_id) => self
+            ValueRef::External(key) => key,
+            ValueRef::Local(local_id) => self
                 .local_keys
                 .as_ref()
                 .unwrap_or_else(|| {
                     panic!(
-                        "ShapeGuardContext: cannot resolve local value {local_id} without an attached fragment"
+                        "ShapeGuardContext: cannot resolve local value {local_id} without an attached graph"
                     )
                 })
                 .get(*local_id)
@@ -521,16 +515,16 @@ impl ShapeGuardContext {
 /// # Examples
 ///
 /// ```
-/// use computegraph::types::GlobalValKey;
+/// use computegraph::types::ValueKey;
 /// use tenferro_ops::ad::context::lookup_global_metadata;
 /// use tenferro_ops::input_key::TensorInputKey;
 /// use tenferro_ops::std_tensor_op::StdTensorOp;
 ///
-/// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 99 });
+/// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 99 });
 /// let meta = lookup_global_metadata(&key);
 /// assert!(meta.is_none());
 /// ```
-pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorMeta> {
+pub fn lookup_global_metadata(key: &ValueKey<StdTensorOp>) -> Option<TensorMeta> {
     let guard = global_metadata_registry()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -540,7 +534,7 @@ pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorM
 #[doc(hidden)]
 pub fn register_scoped_global_metadata_batch<I>(entries: I) -> GlobalMetadataScope
 where
-    I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+    I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 {
     let mut guard = global_metadata_registry()
         .lock()
@@ -558,7 +552,7 @@ where
     GlobalMetadataScope { keys }
 }
 
-fn release_scoped_global_metadata(keys: &[GlobalValKey<StdTensorOp>]) {
+fn release_scoped_global_metadata(keys: &[ValueKey<StdTensorOp>]) {
     let mut guard = global_metadata_registry()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

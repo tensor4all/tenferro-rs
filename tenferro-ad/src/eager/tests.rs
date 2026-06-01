@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use computegraph::types::GlobalValKey;
+use computegraph::types::ValueKey;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::SymDim;
@@ -35,8 +35,8 @@ fn eager_op_profile_helpers_cover_enabled_paths() {
 #[test]
 fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
     let user = TensorInputKey::User { id: 7 };
-    let base_key = GlobalValKey::Input(user.clone());
-    let tangent_key = GlobalValKey::Input(user.tangent_of(11));
+    let base_key = ValueKey::Input(user.clone());
+    let tangent_key = ValueKey::Input(user.tangent_of(11));
     let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]));
     let initial_data = HashMap::from([(base_key.clone(), Arc::clone(&base))]);
 

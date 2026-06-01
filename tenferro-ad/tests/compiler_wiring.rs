@@ -26,7 +26,7 @@ fn make_instr(
     outputs: Vec<usize>,
 ) -> Instruction<StdTensorOp> {
     Instruction {
-        op,
+        operation: op,
         inputs,
         outputs,
     }
@@ -52,7 +52,7 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         make_instr(
             StdTensorOp::Concatenate {
                 axis: 0,
-                n_inputs: 2,
+                input_count: 2,
             },
             vec![0, 1],
             vec![8],

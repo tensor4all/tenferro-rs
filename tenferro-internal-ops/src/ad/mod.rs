@@ -31,10 +31,9 @@ pub mod support;
 mod zeros;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::graph::GraphBuilder;
 #[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
-
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
@@ -43,36 +42,68 @@ use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 
+/// Builder interface used by tenferro AD rules.
+///
+/// # Examples
+///
+/// ```
+/// use computegraph::graph::GraphBuilder;
+/// use computegraph::{OperationRole, ValueRef};
+/// use tenferro_ops::ad::PrimitiveRuleBuilder;
+/// use tenferro_ops::input_key::TensorInputKey;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+///
+/// let mut builder = GraphBuilder::<StdTensorOp>::new();
+/// let x = builder.add_input(TensorInputKey::User { id: 1 });
+/// let out = PrimitiveRuleBuilder::add_operation(
+///     &mut builder,
+///     StdTensorOp::Neg,
+///     vec![ValueRef::Local(x)],
+///     OperationRole::Primary,
+/// );
+/// assert_eq!(out.len(), 1);
+/// ```
 #[cfg(feature = "autodiff")]
-pub(crate) struct PrimitiveBuilderEmitter<'a, B: ?Sized> {
-    inner: &'a mut B,
+pub trait PrimitiveRuleBuilder {
+    /// Add one primitive graph operation and return local ids for its outputs.
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        role: OperationRole,
+    ) -> Vec<LocalValueId>;
 }
 
 #[cfg(feature = "autodiff")]
-impl<'a, B: ?Sized> PrimitiveBuilderEmitter<'a, B> {
-    pub(crate) fn new(inner: &'a mut B) -> Self {
-        Self { inner }
+impl<B> PrimitiveRuleBuilder for B
+where
+    B: PrimitiveBuilder<StdTensorOp> + ?Sized,
+{
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        role: OperationRole,
+    ) -> Vec<LocalValueId> {
+        let inputs = inputs.into_iter().map(PrimitiveValue::from).collect();
+        PrimitiveBuilder::add_primitive(self, operation, inputs, role)
     }
 }
 
 #[cfg(feature = "autodiff")]
-impl<B> OpEmitter<StdTensorOp> for PrimitiveBuilderEmitter<'_, B>
-where
-    B: PrimitiveBuilder<StdTensorOp> + ?Sized,
-{
-    fn add_op(
+impl PrimitiveRuleBuilder for GraphBuilder<StdTensorOp> {
+    fn add_operation(
         &mut self,
-        op: StdTensorOp,
-        inputs: Vec<ValRef<StdTensorOp>>,
-        mode: OpMode,
-    ) -> Vec<LocalValId> {
-        let inputs = inputs.into_iter().map(PrimitiveValue::from).collect();
-        self.inner.add_primitive(op, inputs, mode)
+        operation: StdTensorOp,
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        role: OperationRole,
+    ) -> Vec<LocalValueId> {
+        GraphBuilder::add_operation(self, operation, inputs, role)
     }
 }
 
 /// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its
-/// tangent inputs, emit the linearized fragment into `builder` and return
+/// tangent inputs, emit the linearized graph into `builder` and return
 /// the output tangents.
 ///
 /// Rules per op live in the category submodules (`semiring`, `analytic`,
@@ -81,12 +112,12 @@ where
 #[cfg(feature = "autodiff")]
 pub fn linearize(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match try_linearize(op, builder, primal_in, primal_out, tangent_in, ctx) {
         Ok(tangents) => tangents,
         Err(err) => panic!("{err}"),
@@ -97,12 +128,12 @@ pub fn linearize(
 #[cfg(feature = "autodiff")]
 pub fn try_linearize(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut context::ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
         return linearize_extension_rule(
             ext.as_ref(),
@@ -123,7 +154,7 @@ pub fn try_linearize(
 }
 
 /// Reverse-mode AD (VJP) for `StdTensorOp`: given the primal op, its
-/// inputs, and the output cotangent, emit the transposed fragment and
+/// inputs, and the output cotangent, emit the transposed graph and
 /// return the input cotangents.
 ///
 /// See [`linearize`] for the category split; the same categories appear
@@ -131,13 +162,13 @@ pub fn try_linearize(
 #[cfg(feature = "autodiff")]
 pub fn transpose_rule(
     op: &StdTensorOp,
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut impl PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
-    match try_transpose_rule(op, emitter, cotangent_out, inputs, mode, ctx) {
+) -> Vec<Option<LocalValueId>> {
+    match try_transpose_rule(op, builder, cotangent_out, inputs, mode, ctx) {
         Ok(cotangents) => cotangents,
         Err(err) => panic!("{err}"),
     }
@@ -147,17 +178,17 @@ pub fn transpose_rule(
 #[cfg(feature = "autodiff")]
 pub fn try_transpose_rule(
     op: &StdTensorOp,
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut impl PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut context::ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
-        let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
+        let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;
         return transpose_extension_rule(
             ext.as_ref(),
-            emitter_dyn,
+            builder_dyn,
             cotangent_out,
             inputs,
             mode,
@@ -170,8 +201,8 @@ pub fn try_transpose_rule(
         .expect("non-extension StdTensorOp must have a primitive kind");
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Transpose))?;
-    let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
-    rule.transpose_rule(op, emitter_dyn, cotangent_out, inputs, mode, ctx)
+    let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;
+    rule.transpose_rule(op, builder_dyn, cotangent_out, inputs, mode, ctx)
 }
 
 #[cfg(test)]

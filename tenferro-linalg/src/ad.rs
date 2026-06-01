@@ -22,13 +22,12 @@
 
 use std::sync::Arc;
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ad::extension::{
     is_extension_rule_registered, register_extension_rule as register_rule, ExtensionAdRuleTrait,
     ExtensionOpTrait, ExtensionRegistryError, ExtensionRuleSet,
 };
+use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
@@ -85,12 +84,12 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOpTrait,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
         let tangents = match op.op() {
             LinalgOp::Lu => rules::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
@@ -144,14 +143,14 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOpTrait,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
-        let mut emitter = DynEmitter(emitter);
+        let mut builder = DynBuilder(builder);
         let cotangents = match op.op() {
             LinalgOp::TriangularSolve {
                 left_side,
@@ -159,7 +158,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 transpose_a,
                 unit_diagonal,
             } => rules::transpose_triangular_solve(
-                &mut emitter,
+                &mut builder,
                 cotangent_out,
                 inputs,
                 mode,
@@ -170,10 +169,10 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 ctx,
             ),
             LinalgOp::Solve { transpose_a } => {
-                rules::transpose_solve(&mut emitter, cotangent_out, inputs, mode, transpose_a, ctx)
+                rules::transpose_solve(&mut builder, cotangent_out, inputs, mode, transpose_a, ctx)
             }
             LinalgOp::FullPivLuSolve { transpose_a } => rules::transpose_full_piv_lu_solve(
-                &mut emitter,
+                &mut builder,
                 cotangent_out,
                 inputs,
                 mode,
@@ -186,22 +185,22 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             | LinalgOp::Svd { .. }
             | LinalgOp::Qr
             | LinalgOp::Eigh { .. }
-            | LinalgOp::Eig { .. } => vec![None; op.n_inputs()],
+            | LinalgOp::Eig { .. } => vec![None; op.input_count()],
         };
         Ok(cotangents)
     }
 }
 
-struct DynEmitter<'a>(&'a mut dyn OpEmitter<StdTensorOp>);
+struct DynBuilder<'a>(&'a mut dyn PrimitiveRuleBuilder);
 
-impl OpEmitter<StdTensorOp> for DynEmitter<'_> {
-    fn add_op(
+impl PrimitiveRuleBuilder for DynBuilder<'_> {
+    fn add_operation(
         &mut self,
         op: StdTensorOp,
-        inputs: Vec<ValRef<StdTensorOp>>,
-        mode: OpMode,
-    ) -> Vec<LocalValId> {
-        self.0.add_op(op, inputs, mode)
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        mode: OperationRole,
+    ) -> Vec<LocalValueId> {
+        self.0.add_operation(op, inputs, mode)
     }
 }
 

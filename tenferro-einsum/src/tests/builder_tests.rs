@@ -1,10 +1,10 @@
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::ValRef;
+use computegraph::graph::GraphBuilder;
+use computegraph::types::ValueRef;
 
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
-use crate::builder::build_einsum_fragment;
+use crate::builder::build_einsum_graph;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
 use crate::{Error, Result};
@@ -18,10 +18,10 @@ fn make_tree(notation: &str, shapes: &[&[usize]]) -> ContractionTree {
     ContractionTree::optimize(&subscripts, shapes).expect("optimize failed")
 }
 
-fn unwrap_local(result: Result<ValRef<StdTensorOp>>) -> usize {
+fn unwrap_local(result: Result<ValueRef<StdTensorOp>>) -> usize {
     match result.expect("builder should succeed") {
-        ValRef::Local(id) => id,
-        ValRef::External(_) => panic!("expected local"),
+        ValueRef::Local(id) => id,
+        ValueRef::External(_) => panic!("expected local"),
     }
 }
 
@@ -29,11 +29,11 @@ fn unwrap_local(result: Result<ValRef<StdTensorOp>>) -> usize {
 fn builder_reports_missing_output_label_instead_of_panicking() {
     let mut tree = make_tree("i->i", &[&[3]]);
     tree.subscripts.output = vec![b'j' as u32];
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
 
     let err =
-        build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3]]).unwrap_err();
+        build_einsum_graph(&mut builder, &tree, &[ValueRef::Local(a)], &[vec![3]]).unwrap_err();
 
     assert!(matches!(
         err,
@@ -43,124 +43,129 @@ fn builder_reports_missing_output_label_instead_of_panicking() {
 }
 
 #[test]
-fn fragment_matmul_ij_jk_ik() {
+fn graph_matmul_ij_jk_ik() {
     let tree = make_tree("ij,jk->ik", &[&[2, 3], &[3, 4]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
     let b = builder.add_input(input_key(1));
 
-    let result = build_einsum_fragment(
+    let result = build_einsum_graph(
         &mut builder,
         &tree,
-        &[ValRef::Local(a), ValRef::Local(b)],
+        &[ValueRef::Local(a), ValueRef::Local(b)],
         &[vec![2, 3], vec![3, 4]],
     );
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    assert!(!fragment.ops().is_empty());
+    let graph = builder.build();
+    assert!(!graph.operations().is_empty());
 }
 
 #[test]
-fn fragment_row_sum_ij_i() {
+fn graph_row_sum_ij_i() {
     let tree = make_tree("ij->i", &[&[3, 4]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
 
-    let result = build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3, 4]]);
+    let result = build_einsum_graph(&mut builder, &tree, &[ValueRef::Local(a)], &[vec![3, 4]]);
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
+    let graph = builder.build();
     // Should have a reduce_sum op
-    assert!(!fragment.ops().is_empty());
+    assert!(!graph.operations().is_empty());
 }
 
 #[test]
-fn fragment_outer_product_i_j_ij() {
+fn graph_outer_product_i_j_ij() {
     let tree = make_tree("i,j->ij", &[&[3], &[4]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
     let b = builder.add_input(input_key(1));
 
-    let result = build_einsum_fragment(
+    let result = build_einsum_graph(
         &mut builder,
         &tree,
-        &[ValRef::Local(a), ValRef::Local(b)],
+        &[ValueRef::Local(a), ValueRef::Local(b)],
         &[vec![3], vec![4]],
     );
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    assert!(!fragment.ops().is_empty());
+    let graph = builder.build();
+    assert!(!graph.operations().is_empty());
 }
 
 #[test]
-fn fragment_inner_product_i_i() {
+fn graph_inner_product_i_i() {
     let tree = make_tree("i,i->", &[&[3], &[3]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
     let b = builder.add_input(input_key(1));
 
-    let result = build_einsum_fragment(
+    let result = build_einsum_graph(
         &mut builder,
         &tree,
-        &[ValRef::Local(a), ValRef::Local(b)],
+        &[ValueRef::Local(a), ValueRef::Local(b)],
         &[vec![3], vec![3]],
     );
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    assert!(!fragment.ops().is_empty());
+    let graph = builder.build();
+    assert!(!graph.operations().is_empty());
 }
 
 #[test]
-fn fragment_hadamard_ij_ij_ij() {
+fn graph_hadamard_ij_ij_ij() {
     let tree = make_tree("ij,ij->ij", &[&[3, 4], &[3, 4]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
     let b = builder.add_input(input_key(1));
 
-    let result = build_einsum_fragment(
+    let result = build_einsum_graph(
         &mut builder,
         &tree,
-        &[ValRef::Local(a), ValRef::Local(b)],
+        &[ValueRef::Local(a), ValueRef::Local(b)],
         &[vec![3, 4], vec![3, 4]],
     );
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    assert!(!fragment.ops().is_empty());
+    let graph = builder.build();
+    assert!(!graph.operations().is_empty());
 }
 
 #[test]
-fn fragment_batched_chain_avoids_intermediate_transpose() {
+fn graph_batched_chain_avoids_intermediate_transpose() {
     let subs = Subscripts::parse("bik,bkj,bjl->bil").expect("bad notation");
     let shapes = [&[2, 3, 4][..], &[2, 4, 5][..], &[2, 5, 6][..]];
     let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (3, 2)]).unwrap();
 
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
     let b = builder.add_input(input_key(1));
     let c = builder.add_input(input_key(2));
 
-    let result = build_einsum_fragment(
+    let result = build_einsum_graph(
         &mut builder,
         &tree,
-        &[ValRef::Local(a), ValRef::Local(b), ValRef::Local(c)],
+        &[ValueRef::Local(a), ValueRef::Local(b), ValueRef::Local(c)],
         &[vec![2, 3, 4], vec![2, 4, 5], vec![2, 5, 6]],
     );
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    let transpose_count = fragment
-        .ops()
+    let graph = builder.build();
+    let transpose_count = graph
+        .operations()
         .iter()
-        .filter(|node| matches!(node.op, StdTensorOp::Transpose { .. }))
+        .filter(|node| matches!(node.operation, StdTensorOp::Transpose { .. }))
         .count();
 
     assert_eq!(transpose_count, 1, "expected only the final transpose");
-    match &fragment.ops().last().expect("fragment should have ops").op {
-        StdTensorOp::Transpose { perm } => assert_eq!(perm, &vec![2, 0, 1]),
+    match &graph
+        .operations()
+        .last()
+        .expect("graph should have ops")
+        .operation
+    {
+        StdTensorOp::Transpose { perm } => assert_eq!(perm.as_slice(), &[2, 0, 1]),
         other => panic!("expected final transpose, got {other:?}"),
     }
 }
@@ -186,16 +191,16 @@ fn tree_ternary() {
 
 #[test]
 fn test_diagonalize_repeated() {
-    // "ii->i" should produce an ExtractDiag in the fragment
+    // "ii->i" should produce an ExtractDiag in the graph
     let tree = make_tree("ii->i", &[&[3, 3]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
 
-    let result = build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3, 3]]);
+    let result = build_einsum_graph(&mut builder, &tree, &[ValueRef::Local(a)], &[vec![3, 3]]);
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    let ops: Vec<_> = fragment.ops().iter().map(|n| &n.op).collect();
+    let graph = builder.build();
+    let ops: Vec<_> = graph.operations().iter().map(|n| &n.operation).collect();
     // Should contain exactly one ExtractDiag
     let extract_count = ops
         .iter()
@@ -214,17 +219,17 @@ fn test_diagonalize_repeated() {
 }
 
 #[test]
-fn test_trace_fragment() {
-    // "ii->" should produce ExtractDiag + ReduceSum in the fragment
+fn test_trace_graph() {
+    // "ii->" should produce ExtractDiag + ReduceSum in the graph
     let tree = make_tree("ii->", &[&[3, 3]]);
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key(0));
 
-    let result = build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3, 3]]);
+    let result = build_einsum_graph(&mut builder, &tree, &[ValueRef::Local(a)], &[vec![3, 3]]);
 
     builder.set_outputs(vec![unwrap_local(result)]);
-    let fragment = builder.build();
-    let ops: Vec<_> = fragment.ops().iter().map(|n| &n.op).collect();
+    let graph = builder.build();
+    let ops: Vec<_> = graph.operations().iter().map(|n| &n.operation).collect();
     // Should contain ExtractDiag followed by ReduceSum
     let extract_count = ops
         .iter()

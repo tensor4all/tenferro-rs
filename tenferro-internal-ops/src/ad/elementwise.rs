@@ -1,176 +1,183 @@
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use crate::ad::PrimitiveRuleBuilder;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::CompareDir;
 
 use crate::std_tensor_op::StdTensorOp;
 
 fn emit_fixed_unary(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    input: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emitter.add_op(
+    input: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(
         op,
         vec![input],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false],
         },
     )[0]
 }
 
 fn emit_fixed_binary(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     op: StdTensorOp,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emitter.add_op(
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(
         op,
         vec![lhs, rhs],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false, false],
         },
     )[0]
 }
 
 fn emit_fixed_neg(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emit_fixed_unary(emitter, StdTensorOp::Neg, input)
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    emit_fixed_unary(builder, StdTensorOp::Neg, input)
 }
 
 fn emit_fixed_div(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emit_fixed_binary(emitter, StdTensorOp::Div, lhs, rhs)
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    emit_fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
 }
 
 fn emit_fixed_compare(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     dir: CompareDir,
-    lhs: ValRef<StdTensorOp>,
-    rhs: ValRef<StdTensorOp>,
-) -> LocalValId {
-    emit_fixed_binary(emitter, StdTensorOp::Compare(dir), lhs, rhs)
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    emit_fixed_binary(builder, StdTensorOp::Compare(dir), lhs, rhs)
 }
 
 fn emit_linear_mul_fixed(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    fixed: ValRef<StdTensorOp>,
-    active: LocalValId,
-) -> LocalValId {
-    emitter.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    fixed: ValueRef<StdTensorOp>,
+    active: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::Mul,
-        vec![fixed, ValRef::Local(active)],
-        OpMode::Linear {
+        vec![fixed, ValueRef::Local(active)],
+        OperationRole::Linearized {
             active_mask: vec![false, true],
         },
     )[0]
 }
 
 fn emit_linear_select(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    condition: ValRef<StdTensorOp>,
-    on_true: LocalValId,
-    on_false: LocalValId,
-) -> LocalValId {
-    emitter.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    condition: ValueRef<StdTensorOp>,
+    on_true: LocalValueId,
+    on_false: LocalValueId,
+) -> LocalValueId {
+    builder.add_operation(
         StdTensorOp::Select,
-        vec![condition, ValRef::Local(on_true), ValRef::Local(on_false)],
-        OpMode::Linear {
+        vec![
+            condition,
+            ValueRef::Local(on_true),
+            ValueRef::Local(on_false),
+        ],
+        OperationRole::Linearized {
             active_mask: vec![false, true, true],
         },
     )[0]
 }
 
 fn emit_zero_from_active(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    active: LocalValId,
-) -> LocalValId {
-    let neg = emitter.add_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    active: LocalValueId,
+) -> LocalValueId {
+    let neg = builder.add_operation(
         StdTensorOp::Neg,
-        vec![ValRef::Local(active)],
-        OpMode::Linear {
+        vec![ValueRef::Local(active)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     );
-    emitter.add_op(
+    builder.add_operation(
         StdTensorOp::Add,
-        vec![ValRef::Local(active), ValRef::Local(neg[0])],
-        OpMode::Linear {
+        vec![ValueRef::Local(active), ValueRef::Local(neg[0])],
+        OperationRole::Linearized {
             active_mask: vec![true, true],
         },
     )[0]
 }
 
 fn select_tangents(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    condition: ValRef<StdTensorOp>,
-    on_true: Option<LocalValId>,
-    on_false: Option<LocalValId>,
-) -> Option<LocalValId> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    condition: ValueRef<StdTensorOp>,
+    on_true: Option<LocalValueId>,
+    on_false: Option<LocalValueId>,
+) -> Option<LocalValueId> {
     match (on_true, on_false) {
-        (Some(t), Some(f)) => Some(emit_linear_select(emitter, condition, t, f)),
+        (Some(t), Some(f)) => Some(emit_linear_select(builder, condition, t, f)),
         (Some(t), None) => {
-            let zero = emit_zero_from_active(emitter, t);
-            Some(emit_linear_select(emitter, condition, t, zero))
+            let zero = emit_zero_from_active(builder, t);
+            Some(emit_linear_select(builder, condition, t, zero))
         }
         (None, Some(f)) => {
-            let zero = emit_zero_from_active(emitter, f);
-            Some(emit_linear_select(emitter, condition, zero, f))
+            let zero = emit_zero_from_active(builder, f);
+            Some(emit_linear_select(builder, condition, zero, f))
         }
         (None, None) => None,
     }
 }
 
 fn split_cotangent_by_mask(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    condition: ValRef<StdTensorOp>,
-    cotangent: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    condition: ValueRef<StdTensorOp>,
+    cotangent: LocalValueId,
     true_active: bool,
     false_active: bool,
-) -> (Option<LocalValId>, Option<LocalValId>) {
+) -> (Option<LocalValueId>, Option<LocalValueId>) {
     if !true_active && !false_active {
         return (None, None);
     }
 
-    let zero = emit_zero_from_active(emitter, cotangent);
+    let zero = emit_zero_from_active(builder, cotangent);
     let true_ct =
-        true_active.then(|| emit_linear_select(emitter, condition.clone(), cotangent, zero));
-    let false_ct = false_active.then(|| emit_linear_select(emitter, condition, zero, cotangent));
+        true_active.then(|| emit_linear_select(builder, condition.clone(), cotangent, zero));
+    let false_ct = false_active.then(|| emit_linear_select(builder, condition, zero, cotangent));
     (true_ct, false_ct)
 }
 
-fn unary_is_active(mode: &OpMode) -> bool {
+fn unary_is_active(mode: &OperationRole) -> bool {
     match mode {
-        OpMode::Linear { active_mask } => active_mask[0],
-        OpMode::Primal => false,
+        OperationRole::Linearized { active_mask } => active_mask[0],
+        OperationRole::Primary => false,
     }
 }
 
-fn active_mask(mode: &OpMode, len: usize) -> Vec<bool> {
+fn active_mask(mode: &OperationRole, len: usize) -> Vec<bool> {
     match mode {
-        OpMode::Linear { active_mask } => active_mask.clone(),
-        OpMode::Primal => vec![false; len],
+        OperationRole::Linearized { active_mask } => active_mask.clone(),
+        OperationRole::Primary => vec![false; len],
     }
 }
 
 pub fn linearize_div(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
-        let out = builder.add_op(
+        let out = builder.add_operation(
             StdTensorOp::Div,
-            vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
-            OpMode::Linear {
+            vec![
+                ValueRef::Local(dx),
+                ValueRef::External(primal_in[1].clone()),
+            ],
+            OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
         );
@@ -180,21 +187,25 @@ pub fn linearize_div(
     if let Some(dy) = tangent_in[1] {
         let quotient_over_rhs = emit_fixed_div(
             builder,
-            ValRef::External(primal_out[0].clone()),
-            ValRef::External(primal_in[1].clone()),
+            ValueRef::External(primal_out[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
         );
-        let neg_coeff = emit_fixed_neg(builder, ValRef::Local(quotient_over_rhs));
-        terms.push(emit_linear_mul_fixed(builder, ValRef::Local(neg_coeff), dy));
+        let neg_coeff = emit_fixed_neg(builder, ValueRef::Local(quotient_over_rhs));
+        terms.push(emit_linear_mul_fixed(
+            builder,
+            ValueRef::Local(neg_coeff),
+            dy,
+        ));
     }
 
     match terms.as_slice() {
         [] => vec![None],
         [only] => vec![Some(*only)],
         [lhs, rhs] => {
-            let sum = builder.add_op(
+            let sum = builder.add_operation(
                 StdTensorOp::Add,
-                vec![ValRef::Local(*lhs), ValRef::Local(*rhs)],
-                OpMode::Linear {
+                vec![ValueRef::Local(*lhs), ValueRef::Local(*rhs)],
+                OperationRole::Linearized {
                     active_mask: vec![true, true],
                 },
             );
@@ -205,20 +216,20 @@ pub fn linearize_div(
 }
 
 pub fn linearize_abs(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
             let sign_x = emit_fixed_unary(
                 builder,
                 StdTensorOp::Sign,
-                ValRef::External(primal_in[0].clone()),
+                ValueRef::External(primal_in[0].clone()),
             );
             vec![Some(emit_linear_mul_fixed(
                 builder,
-                ValRef::Local(sign_x),
+                ValueRef::Local(sign_x),
                 dx,
             ))]
         }
@@ -227,9 +238,9 @@ pub fn linearize_abs(
 }
 
 pub fn linearize_sign(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => vec![Some(emit_zero_from_active(builder, dx))],
         None => vec![None],
@@ -237,10 +248,10 @@ pub fn linearize_sign(
 }
 
 pub fn linearize_maximum(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
         return vec![None];
     }
@@ -248,22 +259,22 @@ pub fn linearize_maximum(
     let mask = emit_fixed_compare(
         builder,
         CompareDir::Ge,
-        ValRef::External(primal_in[0].clone()),
-        ValRef::External(primal_in[1].clone()),
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::External(primal_in[1].clone()),
     );
     vec![select_tangents(
         builder,
-        ValRef::Local(mask),
+        ValueRef::Local(mask),
         tangent_in[0],
         tangent_in[1],
     )]
 }
 
 pub fn linearize_minimum(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
         return vec![None];
     }
@@ -271,35 +282,35 @@ pub fn linearize_minimum(
     let mask = emit_fixed_compare(
         builder,
         CompareDir::Le,
-        ValRef::External(primal_in[0].clone()),
-        ValRef::External(primal_in[1].clone()),
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::External(primal_in[1].clone()),
     );
     vec![select_tangents(
         builder,
-        ValRef::Local(mask),
+        ValueRef::Local(mask),
         tangent_in[0],
         tangent_in[1],
     )]
 }
 
 pub fn linearize_select(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     vec![select_tangents(
         builder,
-        ValRef::External(primal_in[0].clone()),
+        ValueRef::External(primal_in[0].clone()),
         tangent_in[1],
         tangent_in[2],
     )]
 }
 
 pub fn linearize_clamp(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     if tangent_in.iter().all(Option::is_none) {
         return vec![None];
     }
@@ -307,12 +318,12 @@ pub fn linearize_clamp(
     let upper_mask = emit_fixed_compare(
         builder,
         CompareDir::Le,
-        ValRef::External(primal_in[0].clone()),
-        ValRef::External(primal_in[2].clone()),
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::External(primal_in[2].clone()),
     );
     let inner_tangent = select_tangents(
         builder,
-        ValRef::Local(upper_mask),
+        ValueRef::Local(upper_mask),
         tangent_in[0],
         tangent_in[2],
     );
@@ -320,47 +331,47 @@ pub fn linearize_clamp(
     let inner_primal = emit_fixed_binary(
         builder,
         StdTensorOp::Minimum,
-        ValRef::External(primal_in[0].clone()),
-        ValRef::External(primal_in[2].clone()),
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::External(primal_in[2].clone()),
     );
     let lower_mask = emit_fixed_compare(
         builder,
         CompareDir::Ge,
-        ValRef::External(primal_in[1].clone()),
-        ValRef::Local(inner_primal),
+        ValueRef::External(primal_in[1].clone()),
+        ValueRef::Local(inner_primal),
     );
 
     vec![select_tangents(
         builder,
-        ValRef::Local(lower_mask),
+        ValueRef::Local(lower_mask),
         tangent_in[1],
         inner_tangent,
     )]
 }
 
 pub fn transpose_div(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None, None],
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return vec![None, None],
     };
 
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let out = emitter.add_op(
+        let out = builder.add_operation(
             StdTensorOp::Div,
-            vec![ValRef::Local(ct), inputs[1].clone()],
-            OpMode::Linear {
+            vec![ValueRef::Local(ct), inputs[1].clone()],
+            OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
         );
@@ -368,30 +379,30 @@ pub fn transpose_div(
     }
 
     if active_mask[1] {
-        let quotient = emit_fixed_div(emitter, inputs[0].clone(), inputs[1].clone());
-        let neg_quotient = emit_fixed_neg(emitter, ValRef::Local(quotient));
-        let coeff = emit_fixed_div(emitter, ValRef::Local(neg_quotient), inputs[1].clone());
-        result[1] = Some(emit_linear_mul_fixed(emitter, ValRef::Local(coeff), ct));
+        let quotient = emit_fixed_div(builder, inputs[0].clone(), inputs[1].clone());
+        let neg_quotient = emit_fixed_neg(builder, ValueRef::Local(quotient));
+        let coeff = emit_fixed_div(builder, ValueRef::Local(neg_quotient), inputs[1].clone());
+        result[1] = Some(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), ct));
     }
 
     result
 }
 
 pub fn transpose_abs(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let sign_x = emit_fixed_unary(emitter, StdTensorOp::Sign, inputs[0].clone());
+            let sign_x = emit_fixed_unary(builder, StdTensorOp::Sign, inputs[0].clone());
             vec![Some(emit_linear_mul_fixed(
-                emitter,
-                ValRef::Local(sign_x),
+                builder,
+                ValueRef::Local(sign_x),
                 ct,
             ))]
         }
@@ -400,25 +411,25 @@ pub fn transpose_abs(
 }
 
 pub fn transpose_sign(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
     }
     match cotangent_out[0] {
-        Some(ct) => vec![Some(emit_zero_from_active(emitter, ct))],
+        Some(ct) => vec![Some(emit_zero_from_active(builder, ct))],
         None => vec![None],
     }
 }
 
 pub fn transpose_maximum(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
     };
@@ -427,7 +438,7 @@ pub fn transpose_maximum(
         return vec![None, None];
     }
     let mask = emit_fixed_compare(
-        emitter,
+        builder,
         CompareDir::Ge,
         inputs[0].clone(),
         inputs[1].clone(),
@@ -435,16 +446,16 @@ pub fn transpose_maximum(
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
     let (lhs, rhs) =
-        split_cotangent_by_mask(emitter, ValRef::Local(mask), ct, lhs_active, rhs_active);
+        split_cotangent_by_mask(builder, ValueRef::Local(mask), ct, lhs_active, rhs_active);
     vec![lhs, rhs]
 }
 
 pub fn transpose_minimum(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
     };
@@ -453,7 +464,7 @@ pub fn transpose_minimum(
         return vec![None, None];
     }
     let mask = emit_fixed_compare(
-        emitter,
+        builder,
         CompareDir::Le,
         inputs[0].clone(),
         inputs[1].clone(),
@@ -461,16 +472,16 @@ pub fn transpose_minimum(
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
     let (lhs, rhs) =
-        split_cotangent_by_mask(emitter, ValRef::Local(mask), ct, lhs_active, rhs_active);
+        split_cotangent_by_mask(builder, ValueRef::Local(mask), ct, lhs_active, rhs_active);
     vec![lhs, rhs]
 }
 
 pub fn transpose_select(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None, None];
     };
@@ -481,16 +492,16 @@ pub fn transpose_select(
         return vec![None, None, None];
     }
     let (on_true, on_false) =
-        split_cotangent_by_mask(emitter, inputs[0].clone(), ct, true_active, false_active);
+        split_cotangent_by_mask(builder, inputs[0].clone(), ct, true_active, false_active);
     vec![None, on_true, on_false]
 }
 
 pub fn transpose_clamp(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None, None];
     };
@@ -503,20 +514,20 @@ pub fn transpose_clamp(
     let upper_active = active.get(2).copied().unwrap_or(false);
 
     let inner_primal = emit_fixed_binary(
-        emitter,
+        builder,
         StdTensorOp::Minimum,
         inputs[0].clone(),
         inputs[2].clone(),
     );
     let lower_mask = emit_fixed_compare(
-        emitter,
+        builder,
         CompareDir::Ge,
         inputs[1].clone(),
-        ValRef::Local(inner_primal),
+        ValueRef::Local(inner_primal),
     );
     let (lower_ct, inner_ct) = split_cotangent_by_mask(
-        emitter,
-        ValRef::Local(lower_mask),
+        builder,
+        ValueRef::Local(lower_mask),
         ct,
         lower_active,
         input_active || upper_active,
@@ -525,14 +536,14 @@ pub fn transpose_clamp(
     let (input_ct, upper_ct) = match inner_ct {
         Some(inner_ct) => {
             let upper_mask = emit_fixed_compare(
-                emitter,
+                builder,
                 CompareDir::Le,
                 inputs[0].clone(),
                 inputs[2].clone(),
             );
             split_cotangent_by_mask(
-                emitter,
-                ValRef::Local(upper_mask),
+                builder,
+                ValueRef::Local(upper_mask),
                 inner_ct,
                 input_active,
                 upper_active,

@@ -69,7 +69,7 @@ pub fn compile_std_to_exec(
                 .collect();
 
             let (output_dtype, output_shapes, output_extents) = if let StdTensorOp::Extension(ext) =
-                &instr.op
+                &instr.operation
             {
                 let metas =
                     infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shapes_refs);
@@ -100,14 +100,14 @@ pub fn compile_std_to_exec(
                 let extents = exact_extents_from_shapes(&shapes);
                 (dtype, shapes, extents)
             } else {
-                let dtype = infer_output_dtype(&instr.op, &input_dtypes);
-                let shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
-                let extents = infer_output_extents(&instr.op, &input_shapes_refs);
+                let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
+                let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs);
+                let extents = infer_output_extents(&instr.operation, &input_shapes_refs);
                 assert_eq!(
                     shapes.len(),
                     instr.outputs.len(),
                     "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                    instr.op,
+                    instr.operation,
                     shapes.len(),
                     instr.outputs.len()
                 );
@@ -115,7 +115,7 @@ pub fn compile_std_to_exec(
                     extents.len(),
                     instr.outputs.len(),
                     "compile_std_to_exec: {:?} inferred {} output extents for {} output slots",
-                    instr.op,
+                    instr.operation,
                     extents.len(),
                     instr.outputs.len()
                 );
@@ -136,7 +136,7 @@ pub fn compile_std_to_exec(
             }
 
             ExecInstruction {
-                op: ExecOp::from_std_tensor_op(&instr.op),
+                op: ExecOp::from_std_tensor_op(&instr.operation),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: output_dtype,

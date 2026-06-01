@@ -39,7 +39,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "f0d91566edb2ea08fac9d61ef26f9cd1754f02df" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "9934d8b775fcfbbad8e2daf3f9af54477da63e35" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }
@@ -61,4 +61,4 @@ cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec1
 cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc" }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }

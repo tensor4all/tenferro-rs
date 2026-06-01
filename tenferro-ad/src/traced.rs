@@ -2,13 +2,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use computegraph::resolve::resolve;
-use computegraph::types::GlobalValKey;
+use computegraph::types::ValueKey;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::{
     checkpoint_traced_tensor, leaf_input_key, linear_input_key, metadata_scopes_with_new,
-    ones_tensor, push_metadata_scope, register_scoped_fragment_metadata, registered_meta,
+    ones_tensor, push_metadata_scope, register_scoped_graph_metadata, registered_meta,
     tensor_meta_from_tensor, traced_checkpoint_chain, traced_extra_roots, traced_inputs_map,
     traced_metadata_scopes, traced_resolve_roots, traced_shape_hint, traced_tensor_from_parts,
     TracedTensorParts,
@@ -265,18 +265,18 @@ fn jvp_optional_result_with_rules(
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
-    let output_key = output.fragment.vals()[output.val].key.clone();
+    let output_key = output.graph.values()[output.val].key.clone();
     let checkpoint_chain = traced_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
         .map(|chain| chain.collect_aliases())
         .unwrap_or_default();
-    let checkpoint_fragments = checkpoint_chain
+    let checkpoint_graphs = checkpoint_chain
         .as_ref()
-        .map(|chain| chain.collect_fragments())
+        .map(|chain| chain.collect_graphs())
         .unwrap_or_default();
     let mut roots = traced_resolve_roots(output);
-    roots.extend(checkpoint_fragments.iter().cloned());
+    roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
     let linear = try_linearize(
@@ -292,10 +292,10 @@ fn jvp_optional_result_with_rules(
         return Ok(None);
     };
     let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
-    let metadata_scope = register_scoped_fragment_metadata(
+    let metadata_scope = register_scoped_graph_metadata(
         linear.as_graph(),
         vec![(
-            GlobalValKey::Input(tangent_input_key.clone()),
+            ValueKey::Input(tangent_input_key.clone()),
             tensor_meta_from_tensor(
                 tangent
                     .data
@@ -318,14 +318,14 @@ fn jvp_optional_result_with_rules(
             .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
     );
 
-    let mut extra_roots = vec![output.fragment.clone()];
-    extra_roots.extend(checkpoint_fragments);
+    let mut extra_roots = vec![output.graph.clone()];
+    extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(traced_extra_roots(output));
 
     Ok(Some(traced_tensor_from_parts(TracedTensorParts {
         rank: output.rank,
         dtype: output.dtype,
-        fragment: Arc::new(linear.into_graph()),
+        graph: Arc::new(linear.into_graph()),
         val: tangent_output,
         data: None,
         shape_hint: traced_shape_hint(output),
@@ -350,18 +350,18 @@ fn vjp_optional_result_with_rules(
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
-    let output_key = output.fragment.vals()[output.val].key.clone();
+    let output_key = output.graph.values()[output.val].key.clone();
     let checkpoint_chain = traced_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
         .map(|chain| chain.collect_aliases())
         .unwrap_or_default();
-    let checkpoint_fragments = checkpoint_chain
+    let checkpoint_graphs = checkpoint_chain
         .as_ref()
-        .map(|chain| chain.collect_fragments())
+        .map(|chain| chain.collect_graphs())
         .unwrap_or_default();
     let mut roots = traced_resolve_roots(output);
-    roots.extend(checkpoint_fragments.iter().cloned());
+    roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
     let linear = try_linearize(
@@ -377,11 +377,11 @@ fn vjp_optional_result_with_rules(
         return Ok(None);
     }
     let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
-    let linear_metadata_scope = register_scoped_fragment_metadata(
+    let linear_metadata_scope = register_scoped_graph_metadata(
         linear.as_graph(),
         vec![(
-            GlobalValKey::Input(linear_seed_key),
-            registered_meta(&wrt.fragment.vals()[wrt.val].key),
+            ValueKey::Input(linear_seed_key),
+            registered_meta(&wrt.graph.values()[wrt.val].key),
         )],
     );
     ad_ctx.refresh_global_metadata();
@@ -389,10 +389,10 @@ fn vjp_optional_result_with_rules(
         .map_err(|err| Error::Internal(err.to_string()))?;
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1);
-    let transposed_metadata_scope = register_scoped_fragment_metadata(
+    let transposed_metadata_scope = register_scoped_graph_metadata(
         transposed.as_graph(),
         vec![(
-            GlobalValKey::Input(cotangent_input_key.clone()),
+            ValueKey::Input(cotangent_input_key.clone()),
             tensor_meta_from_tensor(
                 cotangent
                     .data
@@ -402,7 +402,7 @@ fn vjp_optional_result_with_rules(
             ),
         )],
     );
-    let linear_fragment = Arc::new(linear.into_graph());
+    let linear_graph = Arc::new(linear.into_graph());
     let Some(cotangent_output) = transposed.tangent_outputs()[0] else {
         return Ok(None);
     };
@@ -419,14 +419,14 @@ fn vjp_optional_result_with_rules(
             .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
     );
 
-    let mut extra_roots = vec![output.fragment.clone(), linear_fragment];
-    extra_roots.extend(checkpoint_fragments);
+    let mut extra_roots = vec![output.graph.clone(), linear_graph];
+    extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(traced_extra_roots(output));
 
     Ok(Some(traced_tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
         dtype: wrt.dtype,
-        fragment: Arc::new(transposed.into_graph()),
+        graph: Arc::new(transposed.into_graph()),
         val: cotangent_output,
         data: None,
         shape_hint: traced_shape_hint(wrt),

@@ -11,7 +11,7 @@
 //! - Identity / hashing / equality are expressed on the trait so the
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
 //!   `Clone + Hash + Eq + Send + Sync + 'static` (computegraph's
-//!   `GraphOp` requirements).
+//!   `GraphOperation` requirements).
 //! - AD rules are registered separately through [`ExtensionAdRule`] and
 //!   [`register_extension_rule`]. A rule may emit core [`StdTensorOp`] values
 //!   and registered `Extension` values so out-of-tree operations remain in the
@@ -25,16 +25,16 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-#[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
 use tenferro_tensor::{DType, Tensor};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 #[cfg(feature = "autodiff")]
 use crate::ad::context::ShapeGuardContext;
+#[cfg(feature = "autodiff")]
+use crate::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -51,7 +51,7 @@ use std::sync::{OnceLock, RwLock};
 ///
 /// - identity via [`family_id`][Self::family_id] + [`payload_hash`][Self::payload_hash]
 ///   + [`payload_eq`][Self::payload_eq];
-/// - fixed arity via [`n_inputs`][Self::n_inputs] / [`n_outputs`][Self::n_outputs];
+/// - fixed arity via [`input_count`][Self::input_count] / [`output_count`][Self::output_count];
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
 /// - forward dispatch via [`eager_execute`][Self::eager_execute] (used by both
 ///   the eager and compiled paths);
@@ -85,8 +85,8 @@ use std::sync::{OnceLock, RwLock};
 ///     }
 ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
 ///     fn as_any(&self) -> &dyn Any { self }
-///     fn n_inputs(&self) -> usize { 1 }
-///     fn n_outputs(&self) -> usize { 1 }
+///     fn input_count(&self) -> usize { 1 }
+///     fn output_count(&self) -> usize { 1 }
 ///     fn infer_output_meta(
 ///         &self,
 ///         dtypes: &[DType],
@@ -100,7 +100,7 @@ use std::sync::{OnceLock, RwLock};
 /// }
 ///
 /// let op: Arc<dyn ExtensionOp> = Arc::new(IdentityExt);
-/// assert_eq!(op.n_inputs(), 1);
+/// assert_eq!(op.input_count(), 1);
 /// ```
 pub trait ExtensionOp: Debug + Send + Sync + 'static {
     // ----- Identity, hashing, equality (spec Section 5) -----
@@ -146,19 +146,19 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 
     /// Number of primal inputs. MUST be constant for any given
     /// `Arc<dyn ExtensionOp>` value.
-    fn n_inputs(&self) -> usize;
+    fn input_count(&self) -> usize;
 
     /// Number of outputs. MUST match the length of the vector returned by
     /// [`Self::infer_output_meta`].
-    fn n_outputs(&self) -> usize;
+    fn output_count(&self) -> usize;
 
     // ----- Shape and dtype inference (spec Section 7) -----
 
     /// Infer output dtypes and shapes for each output slot.
     ///
     /// `input_dtypes.len()` and `input_shapes.len()` both equal
-    /// `self.n_inputs()`. The returned vector MUST have length
-    /// `self.n_outputs()`, one `(dtype, shape)` entry per output slot.
+    /// `self.input_count()`. The returned vector MUST have length
+    /// `self.output_count()`, one `(dtype, shape)` entry per output slot.
     /// Shapes use [`SymDim`] so extension ops compose with graph-global
     /// symbolic metadata.
     fn infer_output_meta(
@@ -196,23 +196,23 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
     /// Emit the transpose (VJP) rule.
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
 
 /// Errors returned from extension registries.
@@ -276,9 +276,8 @@ impl ExtensionRuleSet {
     /// ```
     /// use std::sync::Arc;
     /// use tidu::ADRuleResult;
-    /// use computegraph::fragment::FragmentBuilder;
-    /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-    /// use computegraph::OpEmitter;
+    /// use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+    /// use tenferro_ops::ad::PrimitiveRuleBuilder;
     /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
     /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -291,23 +290,23 @@ impl ExtensionRuleSet {
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut dyn OpEmitter<StdTensorOp>,
-    ///         _primal_in: &[GlobalValKey<StdTensorOp>],
-    ///         _primal_out: &[GlobalValKey<StdTensorOp>],
-    ///         tangent_in: &[Option<LocalValId>],
+    ///         _builder: &mut dyn PrimitiveRuleBuilder,
+    ///         _primal_in: &[ValueKey<StdTensorOp>],
+    ///         _primal_out: &[ValueKey<StdTensorOp>],
+    ///         tangent_in: &[Option<LocalValueId>],
     ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(tangent_in.to_vec())
     ///     }
     ///     fn transpose_rule(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    ///         cotangent_out: &[Option<LocalValId>],
-    ///         _inputs: &[ValRef<StdTensorOp>],
-    ///         _mode: &OpMode,
+    ///         _builder: &mut dyn PrimitiveRuleBuilder,
+    ///         cotangent_out: &[Option<LocalValueId>],
+    ///         _inputs: &[ValueRef<StdTensorOp>],
+    ///         _mode: &OperationRole,
     ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(cotangent_out.to_vec())
     ///     }
     /// }
@@ -334,9 +333,8 @@ impl ExtensionRuleSet {
     /// ```
     /// use std::sync::Arc;
     /// use tidu::ADRuleResult;
-    /// use computegraph::fragment::FragmentBuilder;
-    /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-    /// use computegraph::OpEmitter;
+    /// use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+    /// use tenferro_ops::ad::PrimitiveRuleBuilder;
     /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
     /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -349,23 +347,23 @@ impl ExtensionRuleSet {
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut dyn OpEmitter<StdTensorOp>,
-    ///         _primal_in: &[GlobalValKey<StdTensorOp>],
-    ///         _primal_out: &[GlobalValKey<StdTensorOp>],
-    ///         tangent_in: &[Option<LocalValId>],
+    ///         _builder: &mut dyn PrimitiveRuleBuilder,
+    ///         _primal_in: &[ValueKey<StdTensorOp>],
+    ///         _primal_out: &[ValueKey<StdTensorOp>],
+    ///         tangent_in: &[Option<LocalValueId>],
     ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(tangent_in.to_vec())
     ///     }
     ///     fn transpose_rule(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
-    ///         _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    ///         cotangent_out: &[Option<LocalValId>],
-    ///         _inputs: &[ValRef<StdTensorOp>],
-    ///         _mode: &OpMode,
+    ///         _builder: &mut dyn PrimitiveRuleBuilder,
+    ///         cotangent_out: &[Option<LocalValueId>],
+    ///         _inputs: &[ValueRef<StdTensorOp>],
+    ///         _mode: &OperationRole,
     ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(cotangent_out.to_vec())
     ///     }
     /// }
@@ -530,12 +528,12 @@ pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>
 #[cfg(feature = "autodiff")]
 pub fn linearize_extension_rule(
     op: &dyn ExtensionOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match ctx.lookup_extension_rule(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
         None => Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp)),
@@ -546,14 +544,14 @@ pub fn linearize_extension_rule(
 #[cfg(feature = "autodiff")]
 pub fn transpose_extension_rule(
     op: &dyn ExtensionOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match ctx.lookup_extension_rule(op.family_id()) {
-        Some(rule) => rule.transpose_rule(op, emitter, cotangent_out, inputs, mode, ctx),
+        Some(rule) => rule.transpose_rule(op, builder, cotangent_out, inputs, mode, ctx),
         None => Err(ADRuleError::unsupported(
             op.family_id(),
             ADRuleKind::Transpose,

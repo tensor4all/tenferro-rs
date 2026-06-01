@@ -1,23 +1,23 @@
-use computegraph::types::{LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use crate::ad::PrimitiveRuleBuilder;
+use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 pub(super) fn build_zero_like(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
     dtype: DType,
-    anchor: ValRef<StdTensorOp>,
+    anchor: ValueRef<StdTensorOp>,
     anchor_rank: usize,
-) -> LocalValId {
-    let zero_scalar = emitter.add_op(
+) -> LocalValueId {
+    let zero_scalar = builder.add_operation(
         StdTensorOp::Constant {
             dtype,
             bytes: zero_bytes(dtype),
         },
         vec![],
-        OpMode::Primal,
+        OperationRole::Primary,
     )[0];
     if anchor_rank == 0 {
         return zero_scalar;
@@ -26,13 +26,13 @@ pub(super) fn build_zero_like(
     let shape: Vec<DimExpr> = (0..anchor_rank)
         .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
         .collect();
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::BroadcastInDim {
             shape,
             dims: vec![],
         },
-        vec![ValRef::Local(zero_scalar), anchor],
-        OpMode::Primal,
+        vec![ValueRef::Local(zero_scalar), anchor],
+        OperationRole::Primary,
     );
     out[0]
 }

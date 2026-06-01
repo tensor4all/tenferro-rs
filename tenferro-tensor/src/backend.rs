@@ -20,7 +20,7 @@ fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ElementwiseFusionPlan {
     pub dtype: crate::DType,
-    pub n_inputs: usize,
+    pub input_count: usize,
     pub outputs: Vec<usize>,
     pub ops: Vec<ElementwiseFusionInst>,
 }

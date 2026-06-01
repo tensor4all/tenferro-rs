@@ -1,21 +1,21 @@
-use computegraph::types::{LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use crate::ad::PrimitiveRuleBuilder;
+use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_extract_diag(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::ExtractDiag { axis_a, axis_b },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -26,18 +26,18 @@ pub fn linearize_extract_diag(
 }
 
 pub fn linearize_embed_diag(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::EmbedDiag { axis_a, axis_b },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -48,18 +48,18 @@ pub fn linearize_embed_diag(
 }
 
 pub fn transpose_extract_diag(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::EmbedDiag { axis_a, axis_b },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -70,18 +70,18 @@ pub fn transpose_extract_diag(
 }
 
 pub fn transpose_embed_diag(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::ExtractDiag { axis_a, axis_b },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );

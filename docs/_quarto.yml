@@ -70,7 +70,7 @@ website:
               - architecture/index.md
               - architecture/tenferro-crates.md
               - architecture/computegraph.md
-              - architecture/chainrules.md
+              - architecture/primitive-ad.md
               - architecture/tidu.md
               - architecture/ad-pipeline.md
           - section: "Specification"

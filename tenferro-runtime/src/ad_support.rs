@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use computegraph::fragment::Fragment;
-use computegraph::types::{GlobalValKey, LocalValId};
+use computegraph::graph::Graph;
+use computegraph::types::{LocalValueId, ValueKey};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
@@ -13,7 +13,7 @@ pub use crate::checkpoint::CheckpointNode;
 use crate::metadata::MetadataScope as RuntimeMetadataScope;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
-    push_metadata_scope, register_scoped_fragment_metadata, register_scoped_live_fragment_metadata,
+    push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
     register_scoped_metadata_batch, register_scoped_value_metadata, registered_meta,
     tensor_meta_from_tensor, MetadataScope,
 };
@@ -24,12 +24,12 @@ use crate::traced::{next_input_key, next_traced_id, TracedTensor};
 pub struct TracedTensorParts {
     pub rank: usize,
     pub dtype: DType,
-    pub fragment: Arc<Fragment<StdTensorOp>>,
-    pub val: LocalValId,
+    pub graph: Arc<Graph<StdTensorOp>>,
+    pub val: LocalValueId,
     pub data: Option<Arc<Tensor>>,
     pub shape_hint: Option<Vec<SymDim>>,
     pub inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
-    pub extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
+    pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub metadata_scopes: Vec<Arc<RuntimeMetadataScope>>,
 }
@@ -40,7 +40,7 @@ pub fn traced_tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
         id: next_traced_id(),
         rank: parts.rank,
         dtype: parts.dtype,
-        fragment: parts.fragment,
+        graph: parts.graph,
         val: parts.val,
         data: parts.data,
         shape_hint: parts.shape_hint,
@@ -59,7 +59,7 @@ pub fn traced_inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, A
     Arc::clone(&tensor.inputs_map)
 }
 
-pub fn traced_extra_roots(tensor: &TracedTensor) -> Vec<Arc<Fragment<StdTensorOp>>> {
+pub fn traced_extra_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.extra_roots.clone()
 }
 
@@ -71,34 +71,34 @@ pub fn traced_metadata_scopes(tensor: &TracedTensor) -> &[Arc<RuntimeMetadataSco
     &tensor.metadata_scopes
 }
 
-pub fn traced_resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Fragment<StdTensorOp>>> {
+pub fn traced_resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
 pub fn checkpoint_traced_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
-    let old_fragment = tensor.fragment.clone();
-    let old_output_key = old_fragment.vals()[tensor.val].key.clone();
+    let old_graph = tensor.graph.clone();
+    let old_output_key = old_graph.values()[tensor.val].key.clone();
     let old_inputs = (*tensor.inputs_map).clone();
     let concrete_meta = tensor_meta_from_tensor(data.as_ref());
     let new_key = next_input_key();
-    let mut builder = computegraph::fragment::FragmentBuilder::new();
+    let mut builder = computegraph::graph::GraphBuilder::new();
     let leaf_val = builder.add_input(new_key.clone());
     builder.set_outputs(vec![leaf_val]);
-    let new_fragment = Arc::new(builder.build());
+    let new_graph = Arc::new(builder.build());
     let new_metadata_scope = register_scoped_value_metadata(
-        new_fragment.vals()[leaf_val].key.clone(),
+        new_graph.values()[leaf_val].key.clone(),
         concrete_meta.clone(),
     );
     let old_output_metadata_scope =
         register_scoped_value_metadata(old_output_key.clone(), concrete_meta);
     let node = CheckpointNode {
-        fragment: old_fragment,
+        graph: old_graph,
         alias_key: new_key.clone(),
         alias_target: old_output_key,
         old_inputs,
         prev: tensor.checkpoint_chain.take(),
     };
-    tensor.fragment = new_fragment;
+    tensor.graph = new_graph;
     tensor.val = leaf_val;
     tensor.extra_roots.clear();
     tensor.data = Some(Arc::clone(&data));
@@ -127,16 +127,16 @@ pub fn fresh_input_key() -> TensorInputKey {
 }
 
 pub fn leaf_input_key(tensor: &TracedTensor) -> TensorInputKey {
-    match &tensor.fragment.vals()[tensor.val].key {
-        GlobalValKey::Input(key) => key.clone(),
+    match &tensor.graph.values()[tensor.val].key {
+        ValueKey::Input(key) => key.clone(),
         other => panic!("expected traced leaf input, got {:?}", other),
     }
 }
 
-pub fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
-    match &fragment.vals()[local_id].key {
-        GlobalValKey::Input(key) => key.clone(),
-        other => panic!("expected linear fragment input, got {:?}", other),
+pub fn linear_input_key(graph: &Graph<StdTensorOp>, local_id: LocalValueId) -> TensorInputKey {
+    match &graph.values()[local_id].key {
+        ValueKey::Input(key) => key.clone(),
+        other => panic!("expected linear graph input, got {:?}", other),
     }
 }
 

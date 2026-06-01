@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::extension_cache::ExtensionCacheLimits;
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
-use computegraph::GlobalValKey;
+use computegraph::ValueKey;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cubecl::CubeclBackend;
@@ -151,7 +151,7 @@ pub struct EagerRuntime {
     pub(crate) backend: Mutex<EagerBackend>,
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
     extension_rules: Option<ExtensionRuleSet>,
-    grad_slots: Mutex<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
+    grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
 }
 
 impl EagerRuntime {
@@ -380,7 +380,7 @@ impl EagerRuntime {
         })
     }
 
-    pub(crate) fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
+    pub(crate) fn register_grad_slot(&self, key: &ValueKey<StdTensorOp>, slot: &GradSlot) {
         self.grad_slots
             .lock()
             .unwrap()
@@ -468,7 +468,7 @@ impl EagerRuntime {
 
     fn store_grads(
         &self,
-        cotangents: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+        cotangents: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
         backend: &mut EagerBackend,
     ) -> Result<()> {
         let mut updates = Vec::new();
@@ -535,7 +535,7 @@ impl EagerRuntime {
 #[derive(Clone)]
 pub struct EagerTensor {
     pub(crate) data: Arc<Tensor>,
-    pub(crate) key: GlobalValKey<StdTensorOp>,
+    pub(crate) key: ValueKey<StdTensorOp>,
     pub(crate) trace: Option<Trace<StdTensorOp>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
@@ -624,7 +624,7 @@ impl EagerTensor {
 
     pub(crate) fn new_result(
         ctx: Arc<EagerRuntime>,
-        key: GlobalValKey<StdTensorOp>,
+        key: ValueKey<StdTensorOp>,
         tensor: Tensor,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
@@ -642,7 +642,7 @@ impl EagerTensor {
 
     pub(crate) fn new_result_arc(
         ctx: Arc<EagerRuntime>,
-        key: GlobalValKey<StdTensorOp>,
+        key: ValueKey<StdTensorOp>,
         tensor: Arc<Tensor>,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
@@ -862,7 +862,7 @@ impl EagerTensor {
     ///
     /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// ```
-    pub fn backward(&self) -> Result<HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>> {
+    pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
         if !self.data.shape().is_empty() {
             return Err(Error::NonScalarGrad {
                 shape: self.data.shape().to_vec(),
@@ -895,8 +895,8 @@ impl EagerTensor {
     }
 }
 
-pub(crate) fn eager_val_key() -> GlobalValKey<StdTensorOp> {
-    GlobalValKey::Input(next_input_key())
+pub(crate) fn eager_val_key() -> ValueKey<StdTensorOp> {
+    ValueKey::Input(next_input_key())
 }
 
 pub(crate) struct EagerTensorKeySource;

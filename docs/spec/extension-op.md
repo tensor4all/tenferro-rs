@@ -34,14 +34,14 @@ shape (arguments, return types, blanket bounds) of any signature fixed here.
 This spec extends the three normative contracts that already exist in
 `docs/spec/`:
 
-- [`ad-contract.md`](ad-contract.md) owns the `PrimitiveOp` trait. This
+- [`ad-contract.md`](ad-contract.md) owns the `Primitive` trait. This
   document extends it by specifying how an `ExtensionOp` participates in
-  AD **without** itself implementing `PrimitiveOp`: the dispatcher in
+  AD **without** itself implementing `Primitive`: the dispatcher in
   `tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
   rule for `op.family_id()` in the active `ExtensionRuleSet`. The rule emits
   tangents and cotangents expressed in the core `StdTensorOp` vocabulary, or
   in extension helper families covered by Section 10's AD-closure rules. The
-  ad-contract closure rule (emit only ops that implement `PrimitiveOp`) is
+  ad-contract closure rule (add only ops that implement `Primitive`) is
   preserved at the carrier level because the graph still contains only
   `StdTensorOp` values.
 - [`primitive-catalog.md`](primitive-catalog.md) owns the core op
@@ -158,17 +158,17 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
 
     /// Number of primal inputs. MUST be consistent with
     /// `infer_output_meta` (same input count).
-    fn n_inputs(&self) -> usize;
+    fn input_count(&self) -> usize;
 
     /// Number of outputs. MUST match the length of the returned
     /// `Vec` from `infer_output_meta`.
-    fn n_outputs(&self) -> usize;
+    fn output_count(&self) -> usize;
 
     // ----- Shape and dtype inference (Section 7) -----
 
     /// Infer output dtype and shape for each output slot.
     ///
-    /// Returned vector length MUST equal `self.n_outputs()`. Shapes use
+    /// Returned vector length MUST equal `self.output_count()`. Shapes use
     /// graph-global `SymDim` (symbolic dimensions), consistent with
     /// `TensorMeta::shape` in `tenferro-internal-ops/src/ad/context.rs`. Input
     /// metadata is given as slices of `SymDim` / `DType`; see Section 7
@@ -201,7 +201,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
 ### Carrier traits: how `StdTensorOp::Extension` gets `Clone + Hash + Eq`
 
 The core op enum requires `Clone + Debug + Hash + Eq + Send + Sync +
-'static` (per `computegraph::GraphOp`). `Arc<dyn ExtensionOp>` satisfies
+'static` (per `computegraph::GraphOperation`). `Arc<dyn ExtensionOp>` satisfies
 these through delegation:
 
 - `Clone` via `Arc::clone` (cheap, reference-counted). No deep clone
@@ -283,7 +283,7 @@ op interner, AD rule caching, and structural graph comparison.
 ### Failure signature
 
 - An implementer that does not supply a stable `family_id` breaks op
-  interning across graph builds. Symptom: every call to `builder.add_op`
+  interning across graph builds. Symptom: every call to `builder.add_operation`
   with the "same" extension creates a fresh node, exploding memory and
   defeating CSE.
 - An implementer whose `payload_hash` disagrees with `payload_eq`
@@ -408,24 +408,24 @@ default choice is to add `Any` via a method-based helper to keep
 
 ### Fixed-arity contract
 
-Every `ExtensionOp` MUST declare fixed `n_inputs` and `n_outputs` values
+Every `ExtensionOp` MUST declare fixed `input_count` and `output_count` values
 whose return is independent of runtime input sizes. This aligns with the
 `StdTensorOp` arity dispatcher in
-`tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `n_inputs` for `DotGeneral` is
+`tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `input_count` for `DotGeneral` is
 always `2`).
 
 The dispatcher integration in `tenferro-internal-ops/src/ad/mod.rs` MUST treat
-`StdTensorOp::Extension(op)` as having `op.n_inputs()` inputs and
-`op.n_outputs()` outputs. Validation:
+`StdTensorOp::Extension(op)` as having `op.input_count()` inputs and
+`op.output_count()` outputs. Validation:
 
 - The number of `primal_in` keys passed to `linearize` MUST equal
-  `op.n_inputs()`.
-- The number of `tangent_in` entries MUST equal `op.n_inputs()`.
-- The number of `primal_out` keys MUST equal `op.n_outputs()`.
+  `op.input_count()`.
+- The number of `tangent_in` entries MUST equal `op.input_count()`.
+- The number of `primal_out` keys MUST equal `op.output_count()`.
 - The returned tangent-output vector from `linearize` MUST have length
-  `op.n_outputs()`.
+  `op.output_count()`.
 - The returned cotangent-input vector from `transpose_rule` MUST have
-  length `op.n_inputs()`.
+  length `op.input_count()`.
 
 ### Variable-arity extensions (discouraged)
 
@@ -434,12 +434,12 @@ analogue) are discouraged because they force the dispatcher to
 re-derive arity per instance. If such an op is unavoidable, the
 implementer MUST:
 
-1. Store the arity in the payload (so `n_inputs` reads it from `self`,
+1. Store the arity in the payload (so `input_count` reads it from `self`,
    not from the arguments).
 2. Document in the extension's own doc comment that the arity is
    dynamic, together with the payload field that determines it.
 3. Preserve the invariant that for a given `Arc<dyn ExtensionOp>`
-   value, `n_inputs()` returns the same value every time.
+   value, `input_count()` returns the same value every time.
 
 Variable-arity extensions remain outside `StdTensorOp`'s own variable-arity
 branch. Core variants with dynamic arity, such as `StdTensorOp::Concatenate`,
@@ -447,9 +447,9 @@ store the arity in their payload and are handled by the core enum directly.
 
 ### Failure signature
 
-- `n_inputs` disagreeing with `linearize`'s `primal_in` length in the
+- `input_count` disagreeing with `linearize`'s `primal_in` length in the
   dispatcher causes `Error::InvalidConfig` (see Section 12).
-- `n_outputs` disagreeing with `eager_execute`'s returned vector
+- `output_count` disagreeing with `eager_execute`'s returned vector
   length causes `Error::InvalidConfig`.
 
 ---
@@ -474,9 +474,9 @@ extension.
 ### Contract
 
 - `input_dtypes.len()` and `input_shapes.len()` MUST both equal
-  `self.n_inputs()`. Callers (`compile_std_to_exec`, eager execution)
+  `self.input_count()`. Callers (`compile_std_to_exec`, eager execution)
   guarantee this.
-- The returned vector MUST have length `self.n_outputs()`.
+- The returned vector MUST have length `self.output_count()`.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>` to match
@@ -563,8 +563,8 @@ The compiled path runs through
   `StdTensorOp::Extension` variant to `ExecOp::Extension`, calling
   `infer_output_meta` for metadata population, and assigning
   `last_use` markers. It does not invoke backend kernels.
-- **`eager_exec` / `eager_emitter`** are responsible for: resolving
-  inputs from the emitter's tensor cache and calling the runtime-owned
+- **`eager_exec` / `eager_builder`** are responsible for: resolving
+  inputs from the builder's tensor cache and calling the runtime-owned
   extension executor when one is available.
 - **Extension runtime (`ExtensionRuntime<B>`)** is responsible for: actual
   forward computation, backend use, runtime cache entries, and device placement
@@ -676,8 +676,8 @@ from any thread; writes happen only during initialization.
 
 Extension AD is registered independently from the primal op. Extension crates
 implement `ExtensionAdRule` and add it to an `ExtensionRuleSet`. Rule
-signatures mirror `PrimitiveOp::try_linearize` and
-`PrimitiveOp::try_transpose_rule` and return `ADRuleResult<_>` so missing rules
+signatures mirror `Primitive::try_linearize` and
+`Primitive::try_transpose_rule` and return `ADRuleResult<_>` so missing rules
 can propagate without panic:
 
 ```rust
@@ -687,22 +687,22 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut GraphBuilder<StdTensorOp>,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
     fn transpose_rule(
         &self,
         op: &dyn ExtensionOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveBuilder<StdTensorOp>,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
 ```
 
@@ -711,13 +711,13 @@ that need payload parameters should downcast via `op.as_any()`.
 
 ### AD closure
 
-`linearize` and `transpose_rule` may emit core `StdTensorOp` values and
+`linearize` and `transpose_rule` may add core `StdTensorOp` values and
 `StdTensorOp::Extension` values. Emitted extension families MUST have their
 own `ExtensionAdRule` in the active `ExtensionRuleSet` before a subsequent AD
 pass reaches them. Terminal first-order helper families MAY omit a separate AD
 rule when the owning extension documents that higher-order AD through that
 helper is unsupported. This keeps out-of-tree operations in the same compute
-graph while preserving the `PrimitiveOp` closure invariant at the
+graph while preserving the `Primitive` closure invariant at the
 `StdTensorOp` carrier level.
 
 ### `ShapeGuardContext` interaction
@@ -814,7 +814,7 @@ these error types / behaviours in the listed scenarios.
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
 | AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no rule in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
 | Duplicate AD rule `family_id` in one `ExtensionRuleSet` or the compatibility global registry | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule`. |
-| Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
+| Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
 | AD rule registration with malformed `family_id` | `ExtensionRegistryError::MalformedFamilyId`. |
@@ -914,7 +914,7 @@ tropical einsum:
   registers the primal family `tenferro-ext-tropical.einsum.v1` and the JVP
   helper family `tenferro-ext-tropical.einsum_jvp.v1`. The transposed JVP emits
   runtime-registered VJP execution helper `tenferro-ext-tropical.einsum_vjp.v1`;
-  it is a terminal transpose helper, not a separately registered AD rule family
+  it is a terminal linear_transpose helper, not a separately registered AD rule family
   for higher-order AD.
 - Tropical AD follows the unique-winner subgradient. The JVP gathers the active
   tangent at each first-winning contracted coordinate; the VJP scatters the
@@ -950,8 +950,8 @@ without revisiting this document.
    split are open.
 
 4. **Metrics / observability hooks.** Whether `eager_execute` should
-   emit tracing spans (via `tracing` crate or similar) is deferred.
-   Extensions MAY emit their own; the core pipeline does not
+   add tracing spans (via `tracing` crate or similar) is deferred.
+   Extensions MAY add their own; the core pipeline does not
    instrument extension calls today.
 
 ---

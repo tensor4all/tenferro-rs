@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use computegraph::GraphOp;
+use computegraph::GraphOperation;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
@@ -47,11 +47,11 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
             "extension::apply_eager requires at least one input tensor".to_string(),
         ));
     };
-    if inputs.len() != op.n_inputs() {
+    if inputs.len() != op.input_count() {
         return Err(Error::Internal(format!(
             "extension::apply_eager: op family {:?} expects {} inputs, got {}",
             op.family_id(),
-            op.n_inputs(),
+            op.input_count(),
             inputs.len()
         )));
     }
@@ -69,10 +69,10 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     let op = StdTensorOp::Extension(op);
     let concrete_inputs: Vec<&Tensor> = inputs.iter().map(|tensor| tensor.data.as_ref()).collect();
     let outputs = ctx.exec_outputs(&op, &concrete_inputs)?;
-    if outputs.len() != op.n_outputs() {
+    if outputs.len() != op.output_count() {
         return Err(Error::Internal(format!(
             "expected {} eager outputs for {:?}, got {}",
-            op.n_outputs(),
+            op.output_count(),
             op,
             outputs.len()
         )));

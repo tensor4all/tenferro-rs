@@ -24,7 +24,7 @@ fn integer_subscripts_convert_to_and_from_raw_subscripts() {
     let owned = EinsumSubscripts::from(raw.clone());
 
     assert_eq!(borrowed, owned);
-    assert_eq!(borrowed.n_inputs(), 2);
+    assert_eq!(borrowed.input_count(), 2);
     assert_eq!(Subscripts::from(borrowed.clone()), raw);
     assert_eq!(Subscripts::from(&borrowed), raw);
 }

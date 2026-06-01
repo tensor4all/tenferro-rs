@@ -411,7 +411,7 @@ fn build_elementwise_fusion_plan(
 
     Some(ElementwiseFusionPlan {
         dtype,
-        n_inputs: input_slots.len(),
+        input_count: input_slots.len(),
         outputs,
         ops,
     })

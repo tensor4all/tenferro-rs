@@ -4,12 +4,12 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tidu::{ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::PrimitiveRuleBuilder;
 use crate::ext_op::{
     is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
     register_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
@@ -56,11 +56,11 @@ impl ExtensionOp for NoInlineRuleOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -101,11 +101,11 @@ impl ExtensionOp for FamilyOnlyOp {
         self
     }
 
-    fn n_inputs(&self) -> usize {
+    fn input_count(&self) -> usize {
         1
     }
 
-    fn n_outputs(&self) -> usize {
+    fn output_count(&self) -> usize {
         1
     }
 
@@ -130,24 +130,24 @@ impl ExtensionAdRule for CoverageRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut dyn OpEmitter<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[0]])
     }
 
     fn transpose_rule(
         &self,
         _op: &dyn ExtensionOp,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
         _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[0]])
     }
 }
@@ -203,7 +203,7 @@ fn explicit_empty_rule_set_does_not_fallback_to_global_registry() {
         .expect("global sentinel rule should register");
 
     let op = FamilyOnlyOp { family };
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let dx = builder.add_input(TensorInputKey::User { id: 10_201 });
     let mut ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
     let err = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
@@ -271,18 +271,24 @@ fn owned_rule_set_rejects_duplicate_and_malformed_rules() {
 fn missing_registered_rule_helpers_return_ad_rule_errors() {
     let op = NoInlineRuleOp;
 
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let linearize_err =
         linearize_extension_rule(&op, &mut builder, &[], &[], &[], &mut ctx).unwrap_err();
     assert_eq!(linearize_err.rule(), ADRuleKind::Jvp);
     assert!(linearize_err.to_string().contains(op.family_id()));
 
-    let mut emitter = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
-    let transpose_err =
-        transpose_extension_rule(&op, &mut emitter, &[], &[], &OpMode::Primal, &mut ctx)
-            .unwrap_err();
+    let transpose_err = transpose_extension_rule(
+        &op,
+        &mut builder,
+        &[],
+        &[],
+        &OperationRole::Primary,
+        &mut ctx,
+    )
+    .unwrap_err();
     assert_eq!(transpose_err.rule(), ADRuleKind::Transpose);
     assert!(transpose_err.to_string().contains(op.family_id()));
 }
@@ -291,15 +297,15 @@ fn missing_registered_rule_helpers_return_ad_rule_errors() {
 fn register_rule_rejects_malformed_family_ids() {
     // Each case targets a different reject branch in `is_valid_family_id`.
     let cases = [
-        "noversion",     // rsplitn(2, '.').next() returns None on second call
-        "foo.v1",        // prefix has no '.', split_once returns None
-        "foo.bar",       // version segment "bar" fails starts_with('v')
-        "foo.bar.v",     // empty digit string after 'v'
-        "foo.bar.vabc",  // non-digit version
-        ".op.v1",        // empty crate name
-        "foo..v1",       // empty op name
-        "foo bar.op.v1", // whitespace in crate
-        "fooあ.op.v1",   // non-ASCII in crate
+        "noversion",            // rsplitn(2, '.').next() returns None on second call
+        "foo.v1",               // prefix has no '.', split_once returns None
+        "foo.bar",              // version segment "bar" fails starts_with('v')
+        "foo.bar.v",            // empty digit string after 'v'
+        "foo.bar.vabc",         // non-digit version
+        ".operation.v1",        // empty crate name
+        "foo..v1",              // empty op name
+        "foo bar.operation.v1", // whitespace in crate
+        "fooあ.operation.v1",   // non-ASCII in crate
     ];
     for bad in cases {
         let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family: bad });

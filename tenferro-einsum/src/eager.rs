@@ -617,7 +617,7 @@ fn eager_einsum_exec_values<'a>(
 ) -> Result<Tensor> {
     record_eager_einsum_profile("exec_values.enter", Duration::ZERO);
     let subscripts = &tree.subscripts;
-    let n_inputs = subscripts.inputs.len();
+    let input_count = subscripts.inputs.len();
     let output_labels = &subscripts.output;
 
     let mut labeled: Vec<Option<LabeledTensor<'a>>> =
@@ -642,7 +642,7 @@ fn eager_einsum_exec_values<'a>(
         Ok(())
     })?;
 
-    if n_inputs == 1 || tree.step_count() == 0 {
+    if input_count == 1 || tree.step_count() == 0 {
         let operand = take_labeled(&mut labeled, 0, "input")?;
         let output_set: HashSet<u32> = output_labels.iter().copied().collect();
         let reduce_labels: HashSet<u32> = operand
@@ -680,7 +680,7 @@ fn eager_einsum_exec_values<'a>(
         labeled.push(Some(result));
     }
 
-    let final_index = n_inputs + tree.step_count() - 1;
+    let final_index = input_count + tree.step_count() - 1;
     let result = take_labeled(&mut labeled, final_index, "result")?;
     let extra_labels: HashSet<u32> =
         profile_eager_einsum_section("exec.final_label_analysis", || {
@@ -857,7 +857,7 @@ pub(crate) fn eager_einsum_subscripts(
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
         eprintln!(
-            "tenferro_eager_einsum_profile,n_inputs={},shapes={:?},steps={},shape_us={shape_us:.3},plan_us={plan_us:.3},exec_us={exec_us:.3},total_us={total_us:.3}",
+            "tenferro_eager_einsum_profile,input_count={},shapes={:?},steps={},shape_us={shape_us:.3},plan_us={plan_us:.3},exec_us={exec_us:.3},total_us={total_us:.3}",
             inputs.len(),
             shapes,
             tree.step_count(),

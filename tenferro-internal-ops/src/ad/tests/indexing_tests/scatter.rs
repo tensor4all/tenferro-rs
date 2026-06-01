@@ -3,24 +3,24 @@ use super::*;
 #[test]
 fn linearize_scatter_inactive_tangents_returns_none() {
     // Both operand_dot = None and updates_dot = None => [None] with no ops.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let operand_key = input_key(50);
     let indices_key = input_key(51);
     let updates_key = input_key(52);
     let op = StdTensorOp::Scatter(rank1_scatter_config());
     let primal_in = vec![operand_key, indices_key, updates_key];
-    let tangent_in: [Option<LocalValId>; 3] = [None, None, None];
+    let tangent_in: [Option<LocalValueId>; 3] = [None, None, None];
     let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result, vec![None]);
-    assert!(builder.build().ops().is_empty());
+    assert!(builder.build().operations().is_empty());
 }
 
 #[test]
 fn linearize_scatter_operand_only_is_identity_passthrough() {
     // Only operand_dot is active: the output tangent is the operand
     // tangent itself, with no ops emitted.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let operand_key = input_key(40);
     let indices_key = input_key(41);
@@ -46,9 +46,9 @@ fn linearize_scatter_operand_only_is_identity_passthrough() {
         vec![Some(operand_tangent)],
         "operand-only scatter tangent must be the operand tangent itself"
     );
-    let fragment = builder.build();
+    let graph = builder.build();
     assert!(
-        fragment.ops().is_empty(),
+        graph.operations().is_empty(),
         "identity passthrough must not emit any ops"
     );
 }
@@ -57,7 +57,7 @@ fn linearize_scatter_operand_only_is_identity_passthrough() {
 fn linearize_scatter_updates_only_uses_zero_operand() {
     // Only updates_dot is active: emit Scatter(zeros_like(operand), ..., d_updates)
     // via Constant + BroadcastInDim + Scatter.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let operand_key = input_key(40);
     let indices_key = input_key(41);
@@ -85,43 +85,43 @@ fn linearize_scatter_updates_only_uses_zero_operand() {
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 
-    let fragment = builder.build();
-    // Fragment: [Constant, BroadcastInDim, Scatter]
+    let graph = builder.build();
+    // Graph: [Constant, BroadcastInDim, Scatter]
     assert_eq!(
-        fragment.ops().len(),
+        graph.operations().len(),
         3,
-        "expected Constant + BroadcastInDim + Scatter in the fragment"
+        "expected Constant + BroadcastInDim + Scatter in the graph"
     );
-    let scatter = fragment
-        .ops()
+    let scatter = graph
+        .operations()
         .iter()
-        .find(|op_node| matches!(op_node.op, StdTensorOp::Scatter(_)))
+        .find(|op_node| matches!(op_node.operation, StdTensorOp::Scatter(_)))
         .expect("expected a Scatter op");
-    assert_eq!(scatter.op, StdTensorOp::Scatter(config));
+    assert_eq!(scatter.operation, StdTensorOp::Scatter(config));
     assert_eq!(
-        scatter.mode,
-        OpMode::Linear {
+        scatter.role,
+        OperationRole::Linearized {
             active_mask: vec![false, false, true],
         }
     );
     // The scatter's operand must be a freshly built zero local, not the
     // primal operand.
-    assert!(matches!(scatter.inputs[0], ValRef::Local(_)));
-    assert_ne!(scatter.inputs[0], ValRef::External(operand_key));
-    assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
-    assert_eq!(scatter.inputs[2], ValRef::Local(updates_tangent));
+    assert!(matches!(scatter.inputs[0], ValueRef::Local(_)));
+    assert_ne!(scatter.inputs[0], ValueRef::External(operand_key));
+    assert_eq!(scatter.inputs[1], ValueRef::External(indices_key));
+    assert_eq!(scatter.inputs[2], ValueRef::Local(updates_tangent));
 
-    // And the fragment should contain a matching Constant + BroadcastInDim
+    // And the graph should contain a matching Constant + BroadcastInDim
     // pair feeding the scatter's operand.
-    let constant_count = fragment
-        .ops()
+    let constant_count = graph
+        .operations()
         .iter()
-        .filter(|op_node| matches!(op_node.op, StdTensorOp::Constant { .. }))
+        .filter(|op_node| matches!(op_node.operation, StdTensorOp::Constant { .. }))
         .count();
-    let broadcast_count = fragment
-        .ops()
+    let broadcast_count = graph
+        .operations()
         .iter()
-        .filter(|op_node| matches!(op_node.op, StdTensorOp::BroadcastInDim { .. }))
+        .filter(|op_node| matches!(op_node.operation, StdTensorOp::BroadcastInDim { .. }))
         .count();
     assert_eq!(constant_count, 1, "exactly one Constant(zero) expected");
     assert_eq!(broadcast_count, 1, "exactly one BroadcastInDim expected");
@@ -131,7 +131,7 @@ fn linearize_scatter_updates_only_uses_zero_operand() {
 fn linearize_scatter_both_tangents_emit_single_scatter() {
     // Both operand_dot and updates_dot active => single Scatter with
     // active_mask [true, false, true], no zero-operand plumbing.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let operand_key = input_key(40);
     let indices_key = input_key(41);
@@ -156,28 +156,28 @@ fn linearize_scatter_both_tangents_emit_single_scatter() {
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 
-    let fragment = builder.build();
+    let graph = builder.build();
     assert_eq!(
-        fragment.ops().len(),
+        graph.operations().len(),
         1,
         "both-tangents case must emit exactly one Scatter"
     );
-    let scatter = &fragment.ops()[0];
-    assert_eq!(scatter.op, StdTensorOp::Scatter(config));
+    let scatter = &graph.operations()[0];
+    assert_eq!(scatter.operation, StdTensorOp::Scatter(config));
     assert_eq!(
-        scatter.mode,
-        OpMode::Linear {
+        scatter.role,
+        OperationRole::Linearized {
             active_mask: vec![true, false, true],
         }
     );
-    assert_eq!(scatter.inputs[0], ValRef::Local(operand_tangent));
-    assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
-    assert_eq!(scatter.inputs[2], ValRef::Local(updates_tangent));
+    assert_eq!(scatter.inputs[0], ValueRef::Local(operand_tangent));
+    assert_eq!(scatter.inputs[1], ValueRef::External(indices_key));
+    assert_eq!(scatter.inputs[2], ValueRef::Local(updates_tangent));
 }
 
 #[test]
 fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(60));
     let operand_key = input_key(61);
@@ -195,16 +195,16 @@ fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
     let config = rank1_scatter_config();
     let op = StdTensorOp::Scatter(config.clone());
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key.clone()),
-        ValRef::External(updates_key),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key.clone()),
+        ValueRef::External(updates_key),
     ];
 
     let result = op.transpose_rule(
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![true, false, true],
         },
         &mut ctx,
@@ -217,15 +217,15 @@ fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
     assert_eq!(result[1], None, "indices cotangent must stay None");
     assert!(result[2].is_some(), "updates cotangent must be active");
 
-    let fragment = builder.build();
+    let graph = builder.build();
     assert_eq!(
-        fragment.ops().len(),
+        graph.operations().len(),
         1,
         "identity passthrough must not emit extra ops; only the Gather"
     );
-    let gather = &fragment.ops()[0];
-    let StdTensorOp::Gather(gather_cfg) = &gather.op else {
-        panic!("expected Gather op, got {:?}", gather.op);
+    let gather = &graph.operations()[0];
+    let StdTensorOp::Gather(gather_cfg) = &gather.operation else {
+        panic!("expected Gather op, got {:?}", gather.operation);
     };
     assert_eq!(gather_cfg.offset_dims, config.update_window_dims);
     assert_eq!(gather_cfg.collapsed_slice_dims, config.inserted_window_dims);
@@ -239,15 +239,15 @@ fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
         vec![1],
         "all operand dims are inserted_window_dims => slice_sizes = [1]"
     );
-    assert_eq!(gather.inputs[0], ValRef::Local(cot));
-    assert_eq!(gather.inputs[1], ValRef::External(indices_key));
+    assert_eq!(gather.inputs[0], ValueRef::Local(cot));
+    assert_eq!(gather.inputs[1], ValueRef::External(indices_key));
 }
 
 #[test]
 fn transpose_scatter_updates_only_emits_only_gather() {
     // active_mask[0] = false, active_mask[2] = true → only the updates
     // cotangent comes back, via a single Gather.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(60));
     let operand_key = input_key(61);
@@ -265,16 +265,16 @@ fn transpose_scatter_updates_only_emits_only_gather() {
     let config = rank1_scatter_config();
     let op = StdTensorOp::Scatter(config);
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key.clone()),
-        ValRef::External(updates_key),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key.clone()),
+        ValueRef::External(updates_key),
     ];
 
     let result = op.transpose_rule(
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![false, false, true],
         },
         &mut ctx,
@@ -286,21 +286,21 @@ fn transpose_scatter_updates_only_emits_only_gather() {
     assert_eq!(result[1], None, "indices cotangent must stay None");
     assert!(result[2].is_some(), "updates cotangent must be active");
 
-    let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
-    let gather = &fragment.ops()[0];
-    let StdTensorOp::Gather(_) = &gather.op else {
-        panic!("expected Gather op, got {:?}", gather.op);
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    let gather = &graph.operations()[0];
+    let StdTensorOp::Gather(_) = &gather.operation else {
+        panic!("expected Gather op, got {:?}", gather.operation);
     };
-    assert_eq!(gather.inputs[0], ValRef::Local(cot));
-    assert_eq!(gather.inputs[1], ValRef::External(indices_key));
+    assert_eq!(gather.inputs[0], ValueRef::Local(cot));
+    assert_eq!(gather.inputs[1], ValueRef::External(indices_key));
 }
 
 #[test]
 fn transpose_scatter_operand_only_is_identity_and_no_ops() {
     // active_mask[0] = true, active_mask[2] = false → operand cotangent is
     // cot_out (identity passthrough); no ops emitted.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(60));
     let operand_key = input_key(61);
@@ -318,16 +318,16 @@ fn transpose_scatter_operand_only_is_identity_and_no_ops() {
     let config = rank1_scatter_config();
     let op = StdTensorOp::Scatter(config);
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key),
-        ValRef::External(updates_key),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key),
+        ValueRef::External(updates_key),
     ];
 
     let result = op.transpose_rule(
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![true, false, false],
         },
         &mut ctx,
@@ -337,12 +337,12 @@ fn transpose_scatter_operand_only_is_identity_and_no_ops() {
         vec![Some(cot), None, None],
         "operand-only transpose must be identity passthrough and no-op"
     );
-    assert!(builder.build().ops().is_empty());
+    assert!(builder.build().operations().is_empty());
 }
 
 #[test]
 fn transpose_scatter_inactive_updates_returns_all_none() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(70));
     let operand_key = input_key(71);
@@ -357,9 +357,9 @@ fn transpose_scatter_inactive_updates_returns_all_none() {
         ],
     );
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key),
-        ValRef::External(updates_key),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key),
+        ValueRef::External(updates_key),
     ];
 
     let op = StdTensorOp::Scatter(rank1_scatter_config());
@@ -367,20 +367,20 @@ fn transpose_scatter_inactive_updates_returns_all_none() {
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![false, false, false],
         },
         &mut ctx,
     );
     assert_eq!(result, vec![None, None, None]);
-    assert!(builder.build().ops().is_empty());
+    assert!(builder.build().operations().is_empty());
 }
 
 #[test]
 fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
     // Scatter 2-slabs into a rank-2 operand, along axis 0. The inverse
     // Gather must read a window of 2 along operand axis 1.
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(80));
     let operand_key = input_key(81);
@@ -404,24 +404,24 @@ fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
     };
     let op = StdTensorOp::Scatter(config);
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key),
-        ValRef::External(updates_key),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key),
+        ValueRef::External(updates_key),
     ];
 
     let result = op.transpose_rule(
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![false, false, true],
         },
         &mut ctx,
     );
     assert!(result[2].is_some());
 
-    let fragment = builder.build();
-    let StdTensorOp::Gather(cfg) = &fragment.ops()[0].op else {
+    let graph = builder.build();
+    let StdTensorOp::Gather(cfg) = &graph.operations()[0].operation else {
         panic!("expected Gather op");
     };
     // operand rank = 2, inserted_window_dims = [0] -> window dim is operand
@@ -436,7 +436,7 @@ fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
 
 #[test]
 fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(900));
     let operand_key = input_key(901);
@@ -468,24 +468,24 @@ fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
 
     let op = StdTensorOp::Scatter(config);
     let inputs = vec![
-        ValRef::External(operand_key),
-        ValRef::External(indices_key),
-        ValRef::External(updates_key.clone()),
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key),
+        ValueRef::External(updates_key.clone()),
     ];
     let result = op.transpose_rule(
         &mut builder,
         &[Some(cot)],
         &inputs,
-        &OpMode::Linear {
+        &OperationRole::Linearized {
             active_mask: vec![false, false, true],
         },
         &mut ctx,
     );
 
     assert!(result[2].is_some());
-    let fragment = builder.build();
-    let gather = fragment.ops().last().expect("expected gather op");
-    match &gather.op {
+    let graph = builder.build();
+    let gather = graph.operations().last().expect("expected gather op");
+    match &gather.operation {
         StdTensorOp::GatherDynamicSliceSizes { slice_sizes, .. } => {
             assert_eq!(
                 slice_sizes[1],
@@ -494,7 +494,7 @@ fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
                     axis: 1,
                 }
             );
-            assert_eq!(gather.inputs[2], ValRef::External(updates_key));
+            assert_eq!(gather.inputs[2], ValueRef::External(updates_key));
         }
         other => panic!("expected GatherDynamicSliceSizes, got {other:?}"),
     }

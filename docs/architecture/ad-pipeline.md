@@ -1,8 +1,8 @@
 # AD Architecture
 
-**Repos:** chainrules-rs, tidu-rs, tenferro-rs
+**Repos:** computegraph-rs, tidu-rs, tenferro-rs
 **Parent:** `../index.md`
-**Related:** `computegraph.md`, `chainrules.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
+**Related:** `computegraph.md`, `primitive-ad.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
 
 ---
 
@@ -10,11 +10,11 @@
 
 Build a differentiable programming stack in Rust where:
 
-- `differentiate` is the only derivative-producing transform. It consumes a
-  resolved logical view of computation and produces a new linear fragment.
-- `transpose` is not differentiation. It reverses active linear flow in a
-  linear fragment and reuses the same derivative information.
-- AD transforms operate on **fragments**, not on a single eagerly merged
+- `linearize` is the only derivative-producing transform. It consumes a
+  resolved logical view of computation and produces a new linear graph.
+- `linear_transpose` is not differentiation. It reverses active linear flow in a
+  linear graph and reuses the same derivative information.
+- AD transforms operate on **graphs**, not on a single eagerly merged
   graph.
 - What higher-order AD needs is **resolve**, not physical merge. External
   references must be traceable; they do not need to be copied into one graph
@@ -27,10 +27,10 @@ Build a differentiable programming stack in Rust where:
 This is the intended operation set:
 
 ```text
-build             user constructs a primal fragment
-resolve           create a logical DAG view over one or more fragments
-differentiate     resolved view -> new linear fragment (JVP)
-transpose         linear fragment -> new linear fragment (reverse linear flow)
+build             user constructs a primal graph
+resolve           create a logical DAG view over one or more graphs
+linearize         resolved view -> new linear graph (JVP)
+linear_transpose  linear graph -> new linear graph (reverse linear flow)
 materialize_merge resolved view -> MaterializedGraph (flatten + CSE)
 compile           MaterializedGraph -> CompiledProgram
 eval              CompiledProgram + input values -> output values
@@ -39,13 +39,13 @@ eval              CompiledProgram + input values -> output values
 The key pipeline distinction is:
 
 ```text
-differentiate -> resolve -> differentiate -> resolve -> ...
+linearize -> resolve -> linearize -> resolve -> ...
 ```
 
 not
 
 ```text
-differentiate -> physical merge -> differentiate -> physical merge -> ...
+linearize -> physical merge -> linearize -> physical merge -> ...
 ```
 
 `materialize_merge` is still required, but only when a backend, serializer, or
@@ -55,29 +55,27 @@ Typical pipelines:
 
 ```text
 JVP:
-  build -> resolve -> differentiate -> materialize_merge -> compile -> eval
+  build -> resolve -> linearize -> materialize_merge -> compile -> eval
 
 VJP:
-  build -> resolve -> differentiate -> transpose -> materialize_merge -> compile -> eval
+  build -> resolve -> linearize -> linear_transpose -> materialize_merge -> compile -> eval
 
 2nd directional derivative:
-  build -> resolve -> differentiate -> resolve -> differentiate -> materialize_merge -> compile -> eval
+  build -> resolve -> linearize -> resolve -> linearize -> materialize_merge -> compile -> eval
 
 n-th derivative:
-  build -> (resolve -> differentiate) x n -> [transpose] -> materialize_merge -> compile -> eval
+  build -> (resolve -> linearize) x n -> [linear_transpose] -> materialize_merge -> compile -> eval
 ```
 
 Four crates, strictly layered:
 
 ```text
-computegraph   GraphOp + Operand traits, Fragment, resolve,
+computegraph   GraphOperation + Operand traits, Graph, resolve,
                materialize_merge, compile (SSA), eval,
                compilation cache
     ↓
-chainrules     PrimitiveOp: GraphOp (adds add + linearize + transpose_rule)
-    ↓
-tidu           differentiate, transpose — generic AD transforms
-               over PrimitiveOp; no graph infrastructure of its own
+tidu           Primitive: GraphOperation (adds add + JVP + transpose_rule),
+               linearize, linear_transpose; no graph infrastructure of its own
     ↓
 tenferro       Concrete tensor primitives + execution lowering
 ```
@@ -85,22 +83,22 @@ tenferro       Concrete tensor primitives + execution lowering
 `computegraph` provides the general-purpose computation graph engine. It is
 usable without AD (e.g. multi-tensor einsum as a graph of binary
 contractions). `tidu` is a thin layer that adds AD-specific graph transforms
-(`differentiate`, `transpose`), fully generic over `Op: PrimitiveOp`.
+(`linearize`, `linear_transpose`), fully generic over `Op: Primitive`.
 Neither `computegraph` nor `tidu` references specific primitives. The
 responsibility for ensuring that `linearize` and `transpose_rule` produce
-valid, closed fragments belongs entirely to the downstream primitive
+valid, closed graphs belongs entirely to the downstream primitive
 implementor (tenferro).
 
 ---
 
 ## II. Core Model
 
-### Fragment vs MaterializedGraph
+### Graph vs MaterializedGraph
 
-A **Fragment** is the unit produced by `build`, `differentiate`, and
-`transpose`.
+A **Graph** is the unit produced by `build`, `linearize`, and
+`linear_transpose`.
 
-A fragment:
+A graph:
 
 - owns only its **local** nodes and ops
 - may reference values defined elsewhere through external references
@@ -116,46 +114,46 @@ by `materialize_merge`:
 So the intended mental model is:
 
 ```text
-Fragment          = transform-time object
+Graph          = transform-time object
 ResolvedView      = logical traversal object
 MaterializedGraph = compile-time object
 ```
 
 ### Local ids are local only
 
-Local ids are fragment-scoped. They must not be used as cross-fragment
+Local ids are graph-scoped. They must not be used as cross-graph
 identity.
 
 ```rust
-type LocalValId = usize;
-type LocalOpId = usize;
+type LocalValueId = usize;
+type LocalOperationId = usize;
 
-enum ValRef<Op: GraphOp> {
-    Local(LocalValId),
-    External(GlobalValKey<Op>),
+enum ValueRef<Op: GraphOperation> {
+    Local(LocalValueId),
+    External(ValueKey<Op>),
 }
 
-enum GlobalValKey<Op: GraphOp> {
+enum ValueKey<Op: GraphOperation> {
     Input(Op::InputKey),
     Derived {
-        op: GlobalOpKey<Op>,
+        operation: Arc<OperationKey<Op>>,
         output_slot: u8,
     },
 }
 
-struct GlobalOpKey<Op> {
-    primitive: Op,
-    inputs: Vec<GlobalValKey<Op>>,
-    mode: OpMode,
+struct OperationKey<Op> {
+    operation: Op,
+    inputs: Vec<ValueKey<Op>>,
+    role: OperationRole,
 }
 
-enum OpMode {
-    Primal,
-    Linear { active_mask: Vec<bool> },
+enum OperationRole {
+    Primary,
+    Linearized { active_mask: Vec<bool> },
 }
 ```
 
-`GlobalValKey` is the identity that matters across fragments. It is
+`ValueKey` is the identity that matters across graphs. It is
 structural:
 
 - inputs are keyed by `InputKey`
@@ -165,50 +163,50 @@ structural:
 This is what makes the following possible:
 
 - external reference resolution
-- cross-fragment CSE
-- higher-order tracing through earlier fragments
-- transpose accumulation bucketed by global identity
+- cross-graph CSE
+- higher-order tracing through earlier graphs
+- linear_transpose accumulation bucketed by global identity
 
 ### Active mask is part of identity
 
 Linear nodes use the same primitive set as primal nodes, but the linear mode is
-not optional metadata. It changes the meaning of transpose and therefore must
+not optional metadata. It changes the meaning of linear_transpose and therefore must
 participate in identity.
 
 Examples:
 
 ```text
-Mul(a, b)   mode=Primal
-Mul(a, dx)  mode=Linear { active_mask=[fixed, active] }
-Add(dx, dy) mode=Linear { active_mask=[active, active] }
+Mul(a, b)   role=Primary
+Mul(a, dx)  role=Linearized { active_mask=[fixed, active] }
+Add(dx, dy) role=Linearized { active_mask=[active, active] }
 ```
 
 The first and second node both evaluate as multiplication, but they are not the
-same graph object. They transpose differently, so they must not alias.
+same graph object. They linear_transpose differently, so they must not alias.
 
-### Fragment data structure
+### Graph data structure
 
 Conceptually:
 
 ```rust
-struct ValNode<Op> {
-    key: GlobalValKey<Op>,
-    producer: Option<(LocalOpId, usize)>, // None for fragment inputs
+struct ValueNode<Op> {
+    key: ValueKey<Op>,
+    producer: Option<(LocalOperationId, usize)>, // None for graph inputs
 }
 
-struct OpNode<Op> {
-    op: Op,
-    inputs: Vec<ValRef<Op>>,
-    outputs: Vec<LocalValId>,
-    mode: OpMode,
+struct OperationNode<Op> {
+    operation: Op,
+    inputs: Vec<ValueRef<Op>>,
+    outputs: Vec<LocalValueId>,
+    role: OperationRole,
 }
 
-struct Fragment<Op: GraphOp> {
-    vals: Vec<ValNode<Op>>,
-    ops: Vec<OpNode<Op>>,
-    inputs: Vec<LocalValId>,
-    outputs: Vec<LocalValId>,
-    parents: Vec<Arc<Fragment<Op>>>,
+struct Graph<Op: GraphOperation> {
+    values: Vec<ValueNode<Op>>,
+    operations: Vec<OperationNode<Op>>,
+    inputs: Vec<LocalValueId>,
+    outputs: Vec<LocalValueId>,
+    parents: Vec<Arc<Graph<Op>>>,
 }
 ```
 
@@ -217,32 +215,32 @@ struct Fragment<Op: GraphOp> {
 ### Resolver and ResolvedView
 
 `resolve` does not copy nodes into one graph. It builds a logical lookup view
-over fragments.
+over graphs.
 
 ```rust
-enum ValDef<Op> {
+enum ValueDef<Op> {
     Input {
         key: InputKey,
     },
     Produced {
-        op: Op,
-        inputs: Vec<ValRef<Op>>,
-        mode: OpMode,
+        operation: Op,
+        inputs: Vec<ValueRef<Op>>,
+        role: OperationRole,
         output_slot: usize,
     },
 }
 
 trait Resolver<Op> {
-    fn resolve_val(&self, key: &GlobalValKey<Op>) -> Option<ValDef<Op>>;
+    fn resolve_value(&self, key: &ValueKey<Op>) -> Option<ValueDef<Op>>;
 }
 
 struct ResolvedView<Op> {
-    roots: Vec<Arc<Fragment<Op>>>,
+    roots: Vec<Arc<Graph<Op>>>,
     resolver: Arc<dyn Resolver<Op>>,
 }
 ```
 
-The intended implementation is a resolver assembled from parent fragments, not a
+The intended implementation is a resolver assembled from parent graphs, not a
 mandatory central registry.
 
 `resolve` therefore means:
@@ -262,29 +260,29 @@ It does **not** mean:
 All transform-time walkers operate on the same logical rule:
 
 ```text
-Local(LocalValId)       -> follow the local producer
-External(GlobalValKey)  -> ask the resolver for the defining op
+Local(LocalValueId)       -> follow the local producer
+External(ValueKey)  -> ask the resolver for the defining op
 ```
 
-This must work recursively through any number of fragment boundaries.
+This must work recursively through any number of graph boundaries.
 
 Topological traversal at transform time is therefore **logical**, not physical:
 
-- visitation is keyed by `GlobalValKey`
+- visitation is keyed by `ValueKey`
 - the ordering is computed on the resolved logical DAG
-- local ids only matter inside the fragment currently being built
+- local ids only matter inside the graph currently being built
 
 ### Materialized graph
 
-Compile does not consume a fragment. It consumes the result of
+Compile does not consume a graph. It consumes the result of
 `materialize_merge`.
 
 ```rust
 struct MaterializedGraph<Op> {
-    vals: Vec<MaterializedVal<Op>>,
-    ops: Vec<MaterializedOp<Op>>,
-    inputs: Vec<GlobalValKey<Op>>,
-    outputs: Vec<GlobalValKey<Op>>,
+    values: Vec<MaterializedVal<Op>>,
+    operations: Vec<MaterializedOp<Op>>,
+    inputs: Vec<ValueKey<Op>>,
+    outputs: Vec<ValueKey<Op>>,
 }
 ```
 
@@ -301,10 +299,10 @@ struct MaterializedGraph<Op> {
 
 ### `build`
 
-`build` creates a primal fragment.
+`build` creates a primal graph.
 
-- all nodes are `OpMode::Primal`
-- fragment inputs use `GlobalValKey::Input`
+- all nodes are `OperationRole::Primary`
+- graph inputs use `ValueKey::Input`
 - no eager merge is implied
 
 ### `resolve`
@@ -312,16 +310,16 @@ struct MaterializedGraph<Op> {
 Conceptually:
 
 ```rust
-fn resolve<Op: GraphOp>(roots: Vec<Arc<Fragment<Op>>>) -> ResolvedView<Op>;
+fn resolve<Op: GraphOperation>(roots: Vec<Arc<Graph<Op>>>) -> ResolvedView<Op>;
 ```
 
-`resolve` is cheap and logical. It prepares a traversal view over fragment
+`resolve` is cheap and logical. It prepares a traversal view over graph
 parents and external references.
 
 This is the correct replacement for the old statement:
 
 ```text
-"merge must precede next differentiate"
+"merge must precede next linearize"
 ```
 
 The precise rule is:
@@ -332,34 +330,34 @@ resolve must precede any transform that needs to trace through external refs
 
 In practice:
 
-- higher-order `differentiate` requires `resolve`
+- higher-order `linearize` requires `resolve`
 - dependency analysis requires `resolve`
-- `transpose` usually needs only the linear fragment itself plus active masks
+- `linear_transpose` usually needs only the linear graph itself plus active masks
 
-### `differentiate`
+### `linearize`
 
-`differentiate` consumes a resolved view and returns a new linear fragment.
+`linearize` consumes a resolved view and returns a new linear graph.
 
 ```rust
-struct LinearFragment<Op> {
-    fragment: Fragment<Op>,
-    tangent_inputs: Vec<(InputKey, LocalValId)>,
-    tangent_outputs: Vec<Option<LocalValId>>,
+struct LinearizedGraph<Op> {
+    graph: Graph<Op>,
+    tangent_inputs: Vec<(InputKey, LocalValueId)>,
+    tangent_outputs: Vec<Option<LocalValueId>>,
 }
 
-fn differentiate<Op: PrimitiveOp>(
+fn linearize<Op: Primitive>(
     view: &ResolvedView<Op>,
-    outputs: &[GlobalValKey<Op>],
+    outputs: &[ValueKey<Op>],
     wrt: &[InputKey],
-) -> LinearFragment<Op>;
+) -> LinearizedGraph<Op>;
 ```
 
 Important consequences:
 
-- callers specify **which primal inputs** they differentiate with respect to
-- tangent inputs are created **inside the returned fragment**
+- callers specify **which primal inputs** they linearize with respect to
+- tangent inputs are created **inside the returned graph**
 - those tangent inputs receive fresh `InputKey`s and are returned to the caller
-- primal values are referenced by `External(GlobalValKey)`, not copied
+- primal values are referenced by `External(ValueKey)`, not copied
 
 Algorithm sketch:
 
@@ -367,8 +365,8 @@ Algorithm sketch:
 1. Traverse the reachable logical DAG in topological order.
 2. Seed tangent inputs for the requested primal InputKeys.
 3. For each reachable primitive, call its linearization rule.
-4. Emit new local linear nodes into the new fragment.
-5. Reference primal values through External(GlobalValKey).
+4. Emit new local linear nodes into the new graph.
+5. Reference primal values through External(ValueKey).
 6. Skip unreachable tangent flow with zero propagation.
 ```
 
@@ -382,56 +380,56 @@ dedicated `Scale` primitive.
 Examples:
 
 ```text
-Mul(a, dx)   mode=Linear { active_mask=[fixed, active] }
-Add(dx, dy)  mode=Linear { active_mask=[active, active] }
-Exp(x)       mode=Primal
+Mul(a, dx)   role=Linearized { active_mask=[fixed, active] }
+Add(dx, dy)  role=Linearized { active_mask=[active, active] }
+Exp(x)       role=Primary
 ```
 
 That last line matters: `Exp` itself is not a linear node. The linearization of
 `Exp(x)` emits linear nodes such as:
 
 ```text
-Mul(External(exp(x)), dx) mode=Linear { active_mask=[fixed, active] }
+Mul(External(exp(x)), dx) role=Linearized { active_mask=[fixed, active] }
 ```
 
 The design rule is:
 
 - linearization may reference primal inputs or outputs as fixed operands
 - linearization must stay linear in tangent inputs
-- active-vs-fixed information is recorded in `OpMode::Linear`
+- active-vs-fixed information is recorded in `OperationRole::Linearized`
 
-### `transpose`
+### `linear_transpose`
 
-`transpose` consumes a linear fragment and produces another linear fragment with
+`linear_transpose` consumes a linear graph and produces another linear graph with
 active inputs and outputs reversed.
 
 ```rust
-fn transpose<Op: PrimitiveOp>(
-    linear: &LinearFragment<Op>,
-) -> LinearFragment<Op>;
+fn linear_transpose<Op: Primitive>(
+    linear: &LinearizedGraph<Op>,
+) -> LinearizedGraph<Op>;
 ```
 
-It does not differentiate again. It reuses the same local linear rules with
+It does not linearize again. It reuses the same local linear rules with
 direction reversed.
 
-`tidu::transpose` is generic. It traverses the linear fragment in reverse
+`tidu::linear_transpose` is generic. It traverses the linear graph in reverse
 topological order and, for each op node, calls `Op::transpose_rule` to obtain
 the local transposed contribution. `tidu` does not know which primitives
-exist; it only requires that every op in the linear fragment implements
-`PrimitiveOp::transpose_rule`.
+exist; it only requires that every op in the linear graph implements
+`Primitive::transpose_rule`.
 
 Transpose accumulation must use global identity. When multiple reverse
 contributions flow back to the same original tangent node, bucket by the
-**global key of that tangent value**, not by a fragment-local id.
+**global key of that tangent value**, not by a graph-local id.
 
 ### `materialize_merge`
 
 `materialize_merge` is the physical graph-building step.
 
 ```rust
-fn materialize_merge<Op: GraphOp>(
+fn materialize_merge<Op: GraphOperation>(
     view: &ResolvedView<Op>,
-    outputs: &[GlobalValKey<Op>],
+    outputs: &[ValueKey<Op>],
 ) -> MaterializedGraph<Op>;
 ```
 
@@ -439,7 +437,7 @@ This step:
 
 - walks the resolved logical DAG from the requested outputs
 - collects reachable definitions
-- deduplicates by `GlobalValKey` / `GlobalOpKey`
+- deduplicates by `ValueKey` / `OperationKey`
 - computes one physical DAG
 - prepares the input to `compile`
 
@@ -449,15 +447,15 @@ The terminology should therefore be:
 
 ```text
 resolve            = make external references traceable
-materialize_merge  = flatten fragments into one concrete graph
+materialize_merge  = flatten graphs into one concrete graph
 ```
 
 ### `compile` and `eval`
 
-`compile` consumes a `MaterializedGraph`, not a fragment.
+`compile` consumes a `MaterializedGraph`, not a graph.
 
 ```rust
-let view = resolve(vec![fragment_a, fragment_b, fragment_c]);
+let view = resolve(vec![graph_a, graph_b, graph_c]);
 let graph = materialize_merge(&view, &requested_outputs);
 let prog = compile(&graph);
 let values = prog.run(&runtime_inputs);
@@ -465,7 +463,7 @@ let values = prog.run(&runtime_inputs);
 
 This separation is deliberate:
 
-- transforms stay fragment-based
+- transforms stay graph-based
 - compile stays backend-oriented
 - flattening and CSE happen once, late
 
@@ -473,7 +471,7 @@ This separation is deliberate:
 
 ## IV. Scalar Example: `f(x) = exp(a * x)`
 
-### Step 1: build the primal fragment `F0`
+### Step 1: build the primal graph `F0`
 
 ```text
 p0 = Input(x)
@@ -491,18 +489,18 @@ key(p2) = Derived { op=Mul(Input(x), Input(a)), output_slot=0 }
 key(p3) = Derived { op=Exp(key(p2)), output_slot=0 }
 ```
 
-### Step 2: differentiate the resolved primal view
+### Step 2: linearize the resolved primal view
 
 ```text
-L1 = differentiate(resolve([F0]), outputs=[key(p3)], wrt=[x])
+L1 = linearize(resolve([F0]), outputs=[key(p3)], wrt=[x])
 ```
 
-One possible linear fragment:
+One possible linear graph:
 
 ```text
 t0 = Input(t_x)                                         // new tangent input key
-t1 = Mul(External(key(p1)), Local(t0))                  mode=Linear { active_mask=[fixed, active] }
-t2 = Mul(External(key(p3)), Local(t1))                  mode=Linear { active_mask=[fixed, active] }
+t1 = Mul(External(key(p1)), Local(t0))                  role=Linearized { active_mask=[fixed, active] }
+t2 = Mul(External(key(p3)), Local(t1))                  role=Linearized { active_mask=[fixed, active] }
 ```
 
 Important facts:
@@ -519,7 +517,7 @@ If we want a second derivative, we resolve the combined logical view:
 R1 = resolve([F0, L1])
 ```
 
-Now `differentiate` can trace the output of `L1` through `key(p3)` and then
+Now `linearize` can trace the output of `L1` through `key(p3)` and then
 further through the primal chain back to `x`.
 
 This is the critical distinction:
@@ -529,18 +527,18 @@ R1 is enough for higher-order AD.
 No physical merge is required yet.
 ```
 
-### Step 4: transpose the linear fragment
+### Step 4: linear_transpose the linear graph
 
 ```text
-T1 = transpose(L1)
+T1 = linear_transpose(L1)
 ```
 
-One possible transposed fragment:
+One possible transposed graph:
 
 ```text
 c0 = Input(ct_y)
-c1 = Mul(External(key(p3)), Local(c0))                  mode=Linear { active_mask=[fixed, active] }
-c2 = Mul(External(key(p1)), Local(c1))                  mode=Linear { active_mask=[fixed, active] }
+c1 = Mul(External(key(p3)), Local(c0))                  role=Linearized { active_mask=[fixed, active] }
+c2 = Mul(External(key(p1)), Local(c1))                  role=Linearized { active_mask=[fixed, active] }
 ```
 
 This computes the cotangent with respect to `x`.
@@ -575,10 +573,10 @@ ct_x = a * exp(a*x) * ct_y
 
 ### Higher order
 
-Second directional derivative uses `resolve`, then `differentiate` again:
+Second directional derivative uses `resolve`, then `linearize` again:
 
 ```text
-L2 = differentiate(resolve([F0, L1]), outputs=[key(t2)], wrt=[x])
+L2 = linearize(resolve([F0, L1]), outputs=[key(t2)], wrt=[x])
 ```
 
 Again, no physical merge is required before this step.
@@ -588,14 +586,14 @@ Again, no physical merge is required before this step.
 ## V. Vector Examples
 
 The vector examples remain mathematically identical to the earlier version.
-What changes is only the graph interpretation: fragments stay separate until
+What changes is only the graph interpretation: graphs stay separate until
 `materialize_merge`.
 
 For readability, `Sum` below is shorthand for `ReduceSum` over all axes.
 
 ### Vector example 1: elementwise `y = exp(a * x)` with `x, a in R^2`
 
-Primal fragment:
+Primal graph:
 
 ```text
 u0 = Input(x:[2])
@@ -604,20 +602,20 @@ u2 = Mul(u0, u1)
 u3 = Exp(u2)
 ```
 
-Linear fragment from `differentiate(resolve([F0]), outputs=[key(u3)], wrt=[x])`:
+Linear graph from `linearize(resolve([F0]), outputs=[key(u3)], wrt=[x])`:
 
 ```text
 u4 = Input(t_x:[2])
-u5 = Mul(External(key(u1)), Local(u4))                 mode=Linear { active_mask=[fixed, active] }
-u6 = Mul(External(key(u3)), Local(u5))                 mode=Linear { active_mask=[fixed, active] }
+u5 = Mul(External(key(u1)), Local(u4))                 role=Linearized { active_mask=[fixed, active] }
+u6 = Mul(External(key(u3)), Local(u5))                 role=Linearized { active_mask=[fixed, active] }
 ```
 
-Transposed fragment:
+Transposed graph:
 
 ```text
 u7 = Input(ct_y:[2])
-u8 = Mul(External(key(u3)), Local(u7))                 mode=Linear { active_mask=[fixed, active] }
-u9 = Mul(External(key(u1)), Local(u8))                 mode=Linear { active_mask=[fixed, active] }
+u8 = Mul(External(key(u3)), Local(u7))                 role=Linearized { active_mask=[fixed, active] }
+u9 = Mul(External(key(u1)), Local(u8))                 role=Linearized { active_mask=[fixed, active] }
 ```
 
 Resulting formulas:
@@ -631,11 +629,11 @@ ct_x = [a0 * exp(a0*x0) * ct_y0,
 ```
 
 This stays purely elementwise. The JVP matches finite differences and the
-transpose satisfies `<ct_y, dy> = <ct_x, t_x>`.
+linear_transpose satisfies `<ct_y, dy> = <ct_x, t_x>`.
 
 ### Vector example 2: reduction `y = Sum(exp(a * x))` with `x, a in R^2`
 
-Primal fragment:
+Primal graph:
 
 ```text
 r0 = Input(x:[2])
@@ -645,22 +643,22 @@ r3 = Exp(r2)
 r4 = Sum(r3)
 ```
 
-Linear fragment:
+Linear graph:
 
 ```text
 r5 = Input(t_x:[2])
-r6 = Mul(External(key(r1)), Local(r5))                 mode=Linear { active_mask=[fixed, active] }
-r7 = Mul(External(key(r3)), Local(r6))                 mode=Linear { active_mask=[fixed, active] }
-r8 = Sum(Local(r7))                                    mode=Linear { active_mask=[active] }
+r6 = Mul(External(key(r1)), Local(r5))                 role=Linearized { active_mask=[fixed, active] }
+r7 = Mul(External(key(r3)), Local(r6))                 role=Linearized { active_mask=[fixed, active] }
+r8 = Sum(Local(r7))                                    role=Linearized { active_mask=[active] }
 ```
 
-Transposed fragment:
+Transposed graph:
 
 ```text
 r9  = Input(ct_y:[])
-r10 = BroadcastInDim(Local(r9), shape=[2], dims=[])    mode=Linear { active_mask=[active] }
-r11 = Mul(External(key(r3)), Local(r10))               mode=Linear { active_mask=[fixed, active] }
-r12 = Mul(External(key(r1)), Local(r11))               mode=Linear { active_mask=[fixed, active] }
+r10 = BroadcastInDim(Local(r9), shape=[2], dims=[])    role=Linearized { active_mask=[active] }
+r11 = Mul(External(key(r3)), Local(r10))               role=Linearized { active_mask=[fixed, active] }
+r12 = Mul(External(key(r1)), Local(r11))               role=Linearized { active_mask=[fixed, active] }
 ```
 
 Resulting formulas:
@@ -672,7 +670,7 @@ ct_x = [a0 * exp(a0*x0) * ct_y,
         a1 * exp(a1*x1) * ct_y]
 ```
 
-This is the smallest vector example that makes reduction transpose explicit
+This is the smallest vector example that makes reduction linear_transpose explicit
 without requiring eager merge.
 
 A reproducible checker for these two examples is in
@@ -687,43 +685,43 @@ A reproducible checker for these two examples is in
 `Operand` is the runtime value type (tensor-like; scalars are rank-0 tensors).
 Canonical signature in [`spec/primitive-catalog.md`](../spec/primitive-catalog.md).
 
-### PrimitiveOp
+### Primitive
 
-`PrimitiveOp` extends `GraphOp` with `add()` (cotangent accumulation),
+`Primitive` extends `GraphOperation` with `add()` (cotangent accumulation),
 `linearize`, and `transpose_rule`. tidu is fully generic over this trait.
 Canonical signature in [`spec/ad-contract.md`](../spec/ad-contract.md).
 
-### Linearization and transpose rules
+### Linearization and linear_transpose rules
 
 A primitive's `linearize` must be linear in tangent inputs. It may:
 
-- reference primal inputs or outputs through `External(GlobalValKey)`
-- emit primal primitives in `OpMode::Linear`
-- emit `Conj` when required by transpose semantics
+- reference primal inputs or outputs through `External(ValueKey)`
+- add primal primitives in `OperationRole::Linearized`
+- add `Conj` when required by linear_transpose semantics
 
 It must not introduce nonlinear dependence on tangent inputs.
 
 Fan-out accumulation (when multiple cotangents flow to the same tangent
-node during transpose) is handled internally by `tidu::transpose`, not
+node during linear_transpose) is handled internally by `tidu::linear_transpose`, not
 by an explicit `Dup` primitive. `tidu` buckets reverse contributions by
-`GlobalValKey` and accumulates them by emitting `Op::add()` nodes.
+`ValueKey` and accumulates them by emitting `Op::add()` nodes.
 
 A primitive's `transpose_rule` receives cotangent outputs and must produce
-cotangent inputs. It must only emit primitives that themselves implement
-`PrimitiveOp`. The downstream implementor is responsible for ensuring that
+cotangent inputs. It must only add primitives that themselves implement
+`Primitive`. The downstream implementor is responsible for ensuring that
 the set of primitives reachable through `linearize` and `transpose_rule`
 is closed.
 
 ### Closure responsibility
 
 `tidu` does not define or constrain the primitive set. It is fully generic
-over `Op: PrimitiveOp`. The only rule is:
+over `Op: Primitive`. The only rule is:
 
-> `linearize` and `transpose_rule` must emit only ops that themselves
-> implement `PrimitiveOp`.
+> `linearize` and `transpose_rule` must add only ops that themselves
+> implement `Primitive`.
 
-This ensures that `tidu` can apply `differentiate` and `transpose` to any
-fragment without knowledge of the specific primitives involved. The concrete
+This ensures that `tidu` can apply `linearize` and `linear_transpose` to any
+graph without knowledge of the specific primitives involved. The concrete
 primitive set and its closure guarantees are entirely the downstream
 implementor's responsibility (e.g. tenferro).
 
@@ -736,7 +734,7 @@ There is no dedicated `Scale` primitive in this design.
 ### Pipeline
 
 ```text
-Fragments (primal / linear / transposed)
+Graphs (primal / linear / transposed)
     |
     | resolve                          ← computegraph
     v
@@ -762,7 +760,7 @@ Runtime values
 `computegraph::compile`. Each slot is written exactly once.
 
 ```rust
-struct CompiledProgram<Op: GraphOp> {
+struct CompiledProgram<Op: GraphOperation> {
     instructions: Vec<Instruction<Op>>,
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
@@ -770,7 +768,7 @@ struct CompiledProgram<Op: GraphOp> {
 }
 
 struct Instruction<Op> {
-    op: Op,
+    operation: Op,
     inputs: Vec<usize>,
     outputs: Vec<usize>,
 }
@@ -792,13 +790,13 @@ details (execution lowering, GPU dispatch) remain in `../spec/backend-contract.m
 
 The important contract is:
 
-- AD transforms (tidu) are fragment-based and resolver-backed
+- AD transforms (tidu) are graph-based and resolver-backed
 - graph infrastructure (computegraph) is AD-agnostic
 - backends only see the materialized or compiled result
 
 ---
 
-## VIII. Advantages of the Fragment + Resolver Model
+## VIII. Advantages of the Graph + Resolver Model
 
 ### No eager merge between transforms
 
@@ -807,12 +805,12 @@ physical merge avoids repeated flattening and repeated global CSE.
 
 ### Better fit for partial transforms
 
-Cross-country evaluation and partial transpose are more natural when transforms
-operate on fragments rather than on one giant graph.
+Cross-country evaluation and partial linear_transpose are more natural when transforms
+operate on graphs rather than on one giant graph.
 
 ### Global identity is explicit
 
-`GlobalValKey` gives one identity mechanism for:
+`ValueKey` gives one identity mechanism for:
 
 - external refs
 - accumulation buckets
@@ -829,7 +827,7 @@ code can stay light and local.
 The rule for higher order is simple:
 
 ```text
-resolve before the next differentiate
+resolve before the next linearize
 materialize_merge before compile
 ```
 
@@ -837,17 +835,17 @@ materialize_merge before compile
 
 ## IX. Golden Tests
 
-Minimal tests that validate the fragment-based transform procedure:
+Minimal tests that validate the graph-based transform procedure:
 
 | # | Function | What it checks |
 |---|----------|----------------|
-| 1 | `x + x` | transpose accumulation buckets by global identity |
+| 1 | `x + x` | linear_transpose accumulation buckets by global identity |
 | 2 | `x * y` | binary linearization with distinct reverse sinks |
-| 3 | `c * z` (complex) | `Conj` appears only in transpose |
+| 3 | `c * z` (complex) | `Conj` appears only in linear_transpose |
 | 4 | `x^2` | higher-order AD without eager physical merge |
-| 5 | `exp(a*x)` | external refs, resolve-before-differentiate, transpose correctness |
-| 6 | `Sum(exp(a*x))` | reduction transpose via `BroadcastInDim` |
-| 7 | `exp(a*x)` 3rd order | repeated higher-order closure over fragments |
+| 5 | `exp(a*x)` | external refs, resolve-before-linearize, linear_transpose correctness |
+| 6 | `Sum(exp(a*x))` | reduction linear_transpose via `BroadcastInDim` |
+| 7 | `exp(a*x)` 3rd order | repeated higher-order closure over graphs |
 
 Expected second-order result for `x^2` with unit seeds:
 
@@ -871,11 +869,11 @@ Expected second-order result for `exp(a*x)` with unit seeds:
 
 ## X. Implementation Status
 
-Phases 1–3 (scalar fragment AD, tensor primitives, backend compilation) are
+Phases 1–3 (scalar graph AD, tensor primitives, backend compilation) are
 implemented and tested. Current work focuses on:
 
 - Logical-DAG-aware checkpoint scheduling
-- Partial transpose / cross-country mode
+- Partial linear_transpose / cross-country mode
 - Late materialization heuristics
 - Operator fusion in compiled IR
 
@@ -887,7 +885,7 @@ This document unifies and supersedes:
 
 - tidu-rs#12: tape AD design
 - tidu-rs#13: graph-based AD design
-- chainrules-rs#7: trait unification
-- chainrules-rs#8: DifferentiableOp trait
+- tidu-rs#7: trait unification
+- tidu-rs#8: DifferentiableOp trait
 - tenferro-rs#616: Traced Tensor + StableHLO IR
 - tenferro-rs#618: tenferro roadmap (AD portions)

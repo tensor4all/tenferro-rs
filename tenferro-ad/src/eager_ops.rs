@@ -515,7 +515,7 @@ impl EagerTensor {
             tensors,
             StdTensorOp::Concatenate {
                 axis,
-                n_inputs: tensors.len(),
+                input_count: tensors.len(),
             },
         )
     }

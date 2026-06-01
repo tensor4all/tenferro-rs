@@ -227,23 +227,23 @@ fn malformed_family_id_is_rejected() {
         fn linearize(
             &self,
             _op: &dyn ExtensionOp,
-            _builder: &mut dyn OpEmitter<StdTensorOp>,
-            _primal_in: &[GlobalValKey<StdTensorOp>],
-            _primal_out: &[GlobalValKey<StdTensorOp>],
-            _tangent_in: &[Option<LocalValId>],
+            _builder: &mut dyn PrimitiveRuleBuilder,
+            _primal_in: &[ValueKey<StdTensorOp>],
+            _primal_out: &[ValueKey<StdTensorOp>],
+            _tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             Ok(vec![])
         }
         fn transpose_rule(
             &self,
             _op: &dyn ExtensionOp,
-            _emitter: &mut dyn OpEmitter<StdTensorOp>,
-            _cotangent_out: &[Option<LocalValId>],
-            _inputs: &[ValRef<StdTensorOp>],
-            _mode: &OpMode,
+            _builder: &mut dyn PrimitiveRuleBuilder,
+            _cotangent_out: &[Option<LocalValueId>],
+            _inputs: &[ValueRef<StdTensorOp>],
+            _mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             Ok(vec![])
         }
     }

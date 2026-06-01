@@ -1,20 +1,20 @@
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{conjugate_linear_if_dtype_complex, conjugate_primal_if_complex};
+use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_add(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     match (tangent_in[0], tangent_in[1]) {
         (Some(dx), Some(dy)) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Add,
-                vec![ValRef::Local(dx), ValRef::Local(dy)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx), ValueRef::Local(dy)],
+                OperationRole::Linearized {
                     active_mask: vec![true, true],
                 },
             );
@@ -27,17 +27,20 @@ pub fn linearize_add(
 }
 
 pub fn linearize_mul(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
-        let term = builder.add_op(
+        let term = builder.add_operation(
             StdTensorOp::Mul,
-            vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
-            OpMode::Linear {
+            vec![
+                ValueRef::Local(dx),
+                ValueRef::External(primal_in[1].clone()),
+            ],
+            OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
         );
@@ -45,10 +48,13 @@ pub fn linearize_mul(
     }
 
     if let Some(dy) = tangent_in[1] {
-        let term = builder.add_op(
+        let term = builder.add_operation(
             StdTensorOp::Mul,
-            vec![ValRef::External(primal_in[0].clone()), ValRef::Local(dy)],
-            OpMode::Linear {
+            vec![
+                ValueRef::External(primal_in[0].clone()),
+                ValueRef::Local(dy),
+            ],
+            OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
         );
@@ -59,10 +65,10 @@ pub fn linearize_mul(
         [] => vec![None],
         [only] => vec![Some(*only)],
         [lhs, rhs] => {
-            let sum = builder.add_op(
+            let sum = builder.add_operation(
                 StdTensorOp::Add,
-                vec![ValRef::Local(*lhs), ValRef::Local(*rhs)],
-                OpMode::Linear {
+                vec![ValueRef::Local(*lhs), ValueRef::Local(*rhs)],
+                OperationRole::Linearized {
                     active_mask: vec![true, true],
                 },
             );
@@ -73,15 +79,15 @@ pub fn linearize_mul(
 }
 
 pub fn linearize_neg(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Neg,
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -92,21 +98,21 @@ pub fn linearize_neg(
 }
 
 pub fn linearize_conj(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
+            let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
             vec![Some(conjugate_linear_if_dtype_complex(builder, dx, dtype))]
         }
         None => vec![None],
     }
 }
 
-pub fn transpose_add(cotangent_out: &[Option<LocalValId>]) -> Vec<Option<LocalValId>> {
+pub fn transpose_add(cotangent_out: &[Option<LocalValueId>]) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => vec![Some(ct), Some(ct)],
         None => vec![None, None],
@@ -114,30 +120,30 @@ pub fn transpose_add(cotangent_out: &[Option<LocalValId>]) -> Vec<Option<LocalVa
 }
 
 pub fn transpose_mul(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None],
     };
 
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None, None],
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return vec![None, None],
     };
 
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj = conjugate_primal_if_complex(emitter, inputs[1].clone(), ctx);
-        let out = emitter.add_op(
+        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
+        let out = builder.add_operation(
             StdTensorOp::Mul,
-            vec![rhs_conj, ValRef::Local(ct)],
-            OpMode::Linear {
+            vec![rhs_conj, ValueRef::Local(ct)],
+            OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
         );
@@ -145,11 +151,11 @@ pub fn transpose_mul(
     }
 
     if active_mask[1] {
-        let lhs_conj = conjugate_primal_if_complex(emitter, inputs[0].clone(), ctx);
-        let out = emitter.add_op(
+        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
+        let out = builder.add_operation(
             StdTensorOp::Mul,
-            vec![lhs_conj, ValRef::Local(ct)],
-            OpMode::Linear {
+            vec![lhs_conj, ValueRef::Local(ct)],
+            OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
         );
@@ -160,15 +166,15 @@ pub fn transpose_mul(
 }
 
 pub fn transpose_neg(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Neg,
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -179,15 +185,15 @@ pub fn transpose_neg(
 }
 
 pub fn transpose_conj(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => {
             let dtype = ctx.dtype_of(&inputs[0]);
-            vec![Some(conjugate_linear_if_dtype_complex(emitter, ct, dtype))]
+            vec![Some(conjugate_linear_if_dtype_complex(builder, ct, dtype))]
         }
         None => vec![None],
     }

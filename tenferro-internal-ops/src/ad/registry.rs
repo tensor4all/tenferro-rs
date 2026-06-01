@@ -1,5 +1,5 @@
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use crate::ad::PrimitiveRuleBuilder;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_core_ops::PrimitiveOpKind;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -11,21 +11,21 @@ use crate::std_tensor_op::StdTensorOp;
 
 pub(crate) type LinearizeFn = fn(
     &StdTensorOp,
-    &mut dyn OpEmitter<StdTensorOp>,
-    &[GlobalValKey<StdTensorOp>],
-    &[GlobalValKey<StdTensorOp>],
-    &[Option<LocalValId>],
+    &mut dyn PrimitiveRuleBuilder,
+    &[ValueKey<StdTensorOp>],
+    &[ValueKey<StdTensorOp>],
+    &[Option<LocalValueId>],
     &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>>;
+) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
 pub(crate) type TransposeFn = fn(
     &StdTensorOp,
-    &mut dyn OpEmitter<StdTensorOp>,
-    &[Option<LocalValId>],
-    &[ValRef<StdTensorOp>],
-    &OpMode,
+    &mut dyn PrimitiveRuleBuilder,
+    &[Option<LocalValueId>],
+    &[ValueRef<StdTensorOp>],
+    &OperationRole,
     &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>>;
+) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
 pub(crate) trait PrimitiveAdRule: Send + Sync {
     fn kind(&self) -> PrimitiveOpKind;
@@ -33,22 +33,22 @@ pub(crate) trait PrimitiveAdRule: Send + Sync {
     fn linearize(
         &self,
         op: &StdTensorOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
     fn transpose_rule(
         &self,
         op: &StdTensorOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
 
 struct FunctionPrimitiveAdRule {
@@ -65,25 +65,25 @@ impl PrimitiveAdRule for FunctionPrimitiveAdRule {
     fn linearize(
         &self,
         op: &StdTensorOp,
-        builder: &mut dyn OpEmitter<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         (self.linearize)(op, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     fn transpose_rule(
         &self,
         op: &StdTensorOp,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        (self.transpose_rule)(op, emitter, cotangent_out, inputs, mode, ctx)
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        (self.transpose_rule)(op, builder, cotangent_out, inputs, mode, ctx)
     }
 }
 
@@ -342,47 +342,47 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
 
 fn linearize_add(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::linearize_add(builder, tangent_in))
 }
 
 fn transpose_add(
     _op: &StdTensorOp,
-    _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::transpose_add(cotangent_out))
 }
 
 fn linearize_mul(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::linearize_mul(builder, primal_in, tangent_in))
 }
 
 fn transpose_mul(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::transpose_mul(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -392,34 +392,34 @@ fn transpose_mul(
 
 fn linearize_neg(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::linearize_neg(builder, tangent_in))
 }
 
 fn transpose_neg(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    Ok(semiring::transpose_neg(emitter, cotangent_out))
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(semiring::transpose_neg(builder, cotangent_out))
 }
 
 fn linearize_conj(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::linearize_conj(
         builder, primal_in, tangent_in, ctx,
     ))
@@ -427,14 +427,14 @@ fn linearize_conj(
 
 fn transpose_conj(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(semiring::transpose_conj(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         ctx,
@@ -443,12 +443,12 @@ fn transpose_conj(
 
 fn linearize_div(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_div(
         builder, primal_in, primal_out, tangent_in,
     ))
@@ -456,34 +456,34 @@ fn linearize_div(
 
 fn linearize_abs(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_abs(builder, primal_in, tangent_in))
 }
 
 fn linearize_sign(
     _op: &StdTensorOp,
-    _builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_sign(_builder, tangent_in))
 }
 
 fn linearize_maximum(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_maximum(
         builder, primal_in, tangent_in,
     ))
@@ -491,12 +491,12 @@ fn linearize_maximum(
 
 fn linearize_minimum(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_minimum(
         builder, primal_in, tangent_in,
     ))
@@ -504,23 +504,23 @@ fn linearize_minimum(
 
 fn linearize_compare(
     _op: &StdTensorOp,
-    _builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    _tangent_in: &[Option<LocalValId>],
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    _tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![None])
 }
 
 fn linearize_select(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_select(
         builder, primal_in, tangent_in,
     ))
@@ -528,12 +528,12 @@ fn linearize_select(
 
 fn linearize_clamp(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_clamp(builder, primal_in, tangent_in))
 }
 
@@ -541,13 +541,13 @@ macro_rules! transpose_elementwise {
     ($name:ident, $callee:path) => {
         fn $name(
             _op: &StdTensorOp,
-            emitter: &mut dyn OpEmitter<StdTensorOp>,
-            cotangent_out: &[Option<LocalValId>],
-            inputs: &[ValRef<StdTensorOp>],
-            mode: &OpMode,
+            builder: &mut dyn PrimitiveRuleBuilder,
+            cotangent_out: &[Option<LocalValueId>],
+            inputs: &[ValueRef<StdTensorOp>],
+            mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-            Ok($callee(emitter, cotangent_out, inputs, mode))
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+            Ok($callee(builder, cotangent_out, inputs, mode))
         }
     };
 }
@@ -556,13 +556,13 @@ transpose_elementwise!(transpose_div, elementwise::transpose_div);
 transpose_elementwise!(transpose_abs, elementwise::transpose_abs);
 fn transpose_sign(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    Ok(elementwise::transpose_sign(emitter, cotangent_out, mode))
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(elementwise::transpose_sign(builder, cotangent_out, mode))
 }
 transpose_elementwise!(transpose_maximum, elementwise::transpose_maximum);
 transpose_elementwise!(transpose_minimum, elementwise::transpose_minimum);
@@ -570,12 +570,12 @@ transpose_elementwise!(transpose_select, elementwise::transpose_select);
 transpose_elementwise!(transpose_clamp, elementwise::transpose_clamp);
 fn transpose_compare(
     _op: &StdTensorOp,
-    _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    _cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![None, None])
 }
 
@@ -583,24 +583,24 @@ macro_rules! analytic_linearize {
     ($name:ident, $callee:path, primal_in) => {
         fn $name(
             _op: &StdTensorOp,
-            builder: &mut dyn OpEmitter<StdTensorOp>,
-            primal_in: &[GlobalValKey<StdTensorOp>],
-            _primal_out: &[GlobalValKey<StdTensorOp>],
-            tangent_in: &[Option<LocalValId>],
+            builder: &mut dyn PrimitiveRuleBuilder,
+            primal_in: &[ValueKey<StdTensorOp>],
+            _primal_out: &[ValueKey<StdTensorOp>],
+            tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             Ok($callee(builder, primal_in, tangent_in))
         }
     };
     ($name:ident, $callee:path, primal_out) => {
         fn $name(
             _op: &StdTensorOp,
-            builder: &mut dyn OpEmitter<StdTensorOp>,
-            _primal_in: &[GlobalValKey<StdTensorOp>],
-            primal_out: &[GlobalValKey<StdTensorOp>],
-            tangent_in: &[Option<LocalValId>],
+            builder: &mut dyn PrimitiveRuleBuilder,
+            _primal_in: &[ValueKey<StdTensorOp>],
+            primal_out: &[ValueKey<StdTensorOp>],
+            tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             Ok($callee(builder, primal_out, tangent_in))
         }
     };
@@ -614,24 +614,24 @@ analytic_linearize!(linearize_tanh, analytic::linearize_tanh, primal_out);
 analytic_linearize!(linearize_sqrt, analytic::linearize_sqrt, primal_out);
 fn linearize_rsqrt(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(analytic::linearize_rsqrt(
         builder, primal_in, primal_out, tangent_in,
     ))
 }
 fn linearize_pow(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(analytic::linearize_pow(
         builder, primal_in, primal_out, tangent_in,
     ))
@@ -643,13 +643,13 @@ macro_rules! analytic_transpose {
     ($name:ident, $callee:path) => {
         fn $name(
             _op: &StdTensorOp,
-            emitter: &mut dyn OpEmitter<StdTensorOp>,
-            cotangent_out: &[Option<LocalValId>],
-            inputs: &[ValRef<StdTensorOp>],
-            mode: &OpMode,
+            builder: &mut dyn PrimitiveRuleBuilder,
+            cotangent_out: &[Option<LocalValueId>],
+            inputs: &[ValueRef<StdTensorOp>],
+            mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-            Ok($callee(emitter, cotangent_out, inputs, mode))
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+            Ok($callee(builder, cotangent_out, inputs, mode))
         }
     };
 }
@@ -667,12 +667,12 @@ analytic_transpose!(transpose_log1p, analytic::transpose_log1p);
 
 fn linearize_dot_general(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::DotGeneral { config } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -683,17 +683,17 @@ fn linearize_dot_general(
 
 fn transpose_dot_general(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::DotGeneral { config } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(contraction::transpose_dot_general(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -704,12 +704,12 @@ fn transpose_dot_general(
 
 fn linearize_reduce_sum(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceSum { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -720,14 +720,14 @@ fn linearize_reduce_sum(
 
 fn transpose_reduce_sum(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(contraction::transpose_reduce_sum(
-        emitter,
+        builder,
         cotangent_out,
         op,
         inputs,
@@ -737,12 +737,12 @@ fn transpose_reduce_sum(
 
 fn linearize_reduce_prod(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceProd { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -753,14 +753,14 @@ fn linearize_reduce_prod(
 
 fn transpose_reduce_prod(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(contraction::transpose_reduce_prod(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         op,
@@ -770,12 +770,12 @@ fn transpose_reduce_prod(
 
 fn linearize_reduce_max(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceMax { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -786,12 +786,12 @@ fn linearize_reduce_max(
 
 fn linearize_reduce_min(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceMin { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -802,14 +802,14 @@ fn linearize_reduce_min(
 
 fn transpose_reduce_max(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(contraction::transpose_reduce_chooser(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         op,
@@ -819,14 +819,14 @@ fn transpose_reduce_max(
 
 fn transpose_reduce_min(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(contraction::transpose_reduce_chooser(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         op,
@@ -836,12 +836,12 @@ fn transpose_reduce_min(
 
 fn linearize_transpose(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Transpose { perm } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -850,17 +850,17 @@ fn linearize_transpose(
 
 fn transpose_transpose(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Transpose { perm } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_transpose(
-        emitter,
+        builder,
         cotangent_out,
         perm,
     ))
@@ -868,12 +868,12 @@ fn transpose_transpose(
 
 fn linearize_reshape(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(structural::linearize_reshape(
         builder, primal_in, tangent_in, op, ctx,
     ))
@@ -881,14 +881,14 @@ fn linearize_reshape(
 
 fn transpose_reshape(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(structural::transpose_reshape(
-        emitter,
+        builder,
         cotangent_out,
         op,
         inputs,
@@ -898,12 +898,12 @@ fn transpose_reshape(
 
 fn linearize_broadcast_in_dim(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::BroadcastInDim { shape, dims } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -914,17 +914,17 @@ fn linearize_broadcast_in_dim(
 
 fn transpose_broadcast_in_dim(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::BroadcastInDim { shape, dims } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_broadcast_in_dim(
-        emitter,
+        builder,
         cotangent_out,
         shape,
         dims,
@@ -933,12 +933,12 @@ fn transpose_broadcast_in_dim(
 
 fn linearize_convert(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Convert { from, to } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -949,17 +949,17 @@ fn linearize_convert(
 
 fn transpose_convert(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Convert { from, to } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_convert(
-        emitter,
+        builder,
         cotangent_out,
         mode,
         *from,
@@ -971,12 +971,12 @@ macro_rules! diagonal_rule {
     ($lin:ident, $trans:ident, $variant:ident, $lin_call:path, $trans_call:path) => {
         fn $lin(
             op: &StdTensorOp,
-            builder: &mut dyn OpEmitter<StdTensorOp>,
-            _primal_in: &[GlobalValKey<StdTensorOp>],
-            _primal_out: &[GlobalValKey<StdTensorOp>],
-            tangent_in: &[Option<LocalValId>],
+            builder: &mut dyn PrimitiveRuleBuilder,
+            _primal_in: &[ValueKey<StdTensorOp>],
+            _primal_out: &[ValueKey<StdTensorOp>],
+            tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let StdTensorOp::$variant { axis_a, axis_b } = op else {
                 unreachable!("catalog kind mismatch")
             };
@@ -985,16 +985,16 @@ macro_rules! diagonal_rule {
 
         fn $trans(
             op: &StdTensorOp,
-            emitter: &mut dyn OpEmitter<StdTensorOp>,
-            cotangent_out: &[Option<LocalValId>],
-            _inputs: &[ValRef<StdTensorOp>],
-            _mode: &OpMode,
+            builder: &mut dyn PrimitiveRuleBuilder,
+            cotangent_out: &[Option<LocalValueId>],
+            _inputs: &[ValueRef<StdTensorOp>],
+            _mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let StdTensorOp::$variant { axis_a, axis_b } = op else {
                 unreachable!("catalog kind mismatch")
             };
-            Ok($trans_call(emitter, cotangent_out, *axis_a, *axis_b))
+            Ok($trans_call(builder, cotangent_out, *axis_a, *axis_b))
         }
     };
 }
@@ -1018,12 +1018,12 @@ macro_rules! triangular_rule {
     ($lin:ident, $trans:ident, $variant:ident, $lin_call:path, $trans_call:path) => {
         fn $lin(
             op: &StdTensorOp,
-            builder: &mut dyn OpEmitter<StdTensorOp>,
-            _primal_in: &[GlobalValKey<StdTensorOp>],
-            _primal_out: &[GlobalValKey<StdTensorOp>],
-            tangent_in: &[Option<LocalValId>],
+            builder: &mut dyn PrimitiveRuleBuilder,
+            _primal_in: &[ValueKey<StdTensorOp>],
+            _primal_out: &[ValueKey<StdTensorOp>],
+            tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let StdTensorOp::$variant { k } = op else {
                 unreachable!("catalog kind mismatch")
             };
@@ -1032,16 +1032,16 @@ macro_rules! triangular_rule {
 
         fn $trans(
             op: &StdTensorOp,
-            emitter: &mut dyn OpEmitter<StdTensorOp>,
-            cotangent_out: &[Option<LocalValId>],
-            _inputs: &[ValRef<StdTensorOp>],
-            _mode: &OpMode,
+            builder: &mut dyn PrimitiveRuleBuilder,
+            cotangent_out: &[Option<LocalValueId>],
+            _inputs: &[ValueRef<StdTensorOp>],
+            _mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let StdTensorOp::$variant { k } = op else {
                 unreachable!("catalog kind mismatch")
             };
-            Ok($trans_call(emitter, cotangent_out, *k))
+            Ok($trans_call(builder, cotangent_out, *k))
         }
     };
 }
@@ -1063,12 +1063,12 @@ triangular_rule!(
 
 fn linearize_gather(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Gather(config) = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1079,17 +1079,17 @@ fn linearize_gather(
 
 fn transpose_gather(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Gather(config) = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(indexing::transpose_gather(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1100,12 +1100,12 @@ fn transpose_gather(
 
 fn linearize_gather_dynamic_slice_sizes(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::GatherDynamicSliceSizes {
         offset_dims,
         collapsed_slice_dims,
@@ -1130,12 +1130,12 @@ fn linearize_gather_dynamic_slice_sizes(
 
 fn transpose_gather_dynamic_slice_sizes(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::GatherDynamicSliceSizes {
         offset_dims,
         collapsed_slice_dims,
@@ -1147,7 +1147,7 @@ fn transpose_gather_dynamic_slice_sizes(
         unreachable!("catalog kind mismatch")
     };
     Ok(indexing::transpose_gather_dynamic_slice_sizes(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1161,12 +1161,12 @@ fn transpose_gather_dynamic_slice_sizes(
 
 fn linearize_scatter(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Scatter(config) = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1177,17 +1177,17 @@ fn linearize_scatter(
 
 fn transpose_scatter(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Scatter(config) = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(indexing::transpose_scatter(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1198,12 +1198,12 @@ fn transpose_scatter(
 
 fn linearize_slice(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Slice(config) = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1212,17 +1212,17 @@ fn linearize_slice(
 
 fn transpose_slice(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Slice(config) = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_slice(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1233,12 +1233,12 @@ fn transpose_slice(
 
 fn linearize_dynamic_slice(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::DynamicSlice { slice_sizes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1252,14 +1252,14 @@ fn linearize_dynamic_slice(
 
 fn transpose_dynamic_slice(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(indexing::transpose_dynamic_slice(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1269,12 +1269,12 @@ fn transpose_dynamic_slice(
 
 fn linearize_dynamic_update_slice(
     _op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(indexing::linearize_dynamic_update_slice(
         builder, primal_in, tangent_in, ctx,
     ))
@@ -1282,14 +1282,14 @@ fn linearize_dynamic_update_slice(
 
 fn transpose_dynamic_update_slice(
     _op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(indexing::transpose_dynamic_update_slice(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1299,12 +1299,12 @@ fn transpose_dynamic_update_slice(
 
 fn linearize_pad(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Pad(config) = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1313,17 +1313,17 @@ fn linearize_pad(
 
 fn transpose_pad(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Pad(config) = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_pad(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1334,50 +1334,55 @@ fn transpose_pad(
 
 fn linearize_concatenate(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    let StdTensorOp::Concatenate { axis, n_inputs } = op else {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let StdTensorOp::Concatenate { axis, input_count } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::linearize_concatenate(
-        builder, primal_in, tangent_in, *axis, *n_inputs, ctx,
+        builder,
+        primal_in,
+        tangent_in,
+        *axis,
+        *input_count,
+        ctx,
     ))
 }
 
 fn transpose_concatenate(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    let StdTensorOp::Concatenate { axis, n_inputs } = op else {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let StdTensorOp::Concatenate { axis, input_count } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_concatenate(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
         *axis,
-        *n_inputs,
+        *input_count,
         ctx,
     ))
 }
 
 fn linearize_reverse(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Reverse { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1386,17 +1391,17 @@ fn linearize_reverse(
 
 fn transpose_reverse(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Reverse { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(structural::transpose_reverse(
-        emitter,
+        builder,
         cotangent_out,
         mode,
         axes,
@@ -1405,34 +1410,34 @@ fn transpose_reverse(
 
 fn linearize_shape_of(
     _op: &StdTensorOp,
-    _builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    _tangent_in: &[Option<LocalValId>],
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    _tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![None])
 }
 
 fn transpose_shape_of(
     _op: &StdTensorOp,
-    _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    _cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![None])
 }
 
 fn linearize_dynamic_truncate(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::DynamicTruncate { axis } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1443,17 +1448,17 @@ fn linearize_dynamic_truncate(
 
 fn transpose_dynamic_truncate(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::DynamicTruncate { axis } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(dynamic::transpose_dynamic_truncate(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         *axis,
@@ -1462,12 +1467,12 @@ fn transpose_dynamic_truncate(
 
 fn linearize_pad_to_match(
     op: &StdTensorOp,
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::PadToMatch { axis } = op else {
         unreachable!("catalog kind mismatch")
     };
@@ -1478,17 +1483,17 @@ fn linearize_pad_to_match(
 
 fn transpose_pad_to_match(
     op: &StdTensorOp,
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::PadToMatch { axis } = op else {
         unreachable!("catalog kind mismatch")
     };
     Ok(dynamic::transpose_pad_to_match(
-        emitter,
+        builder,
         cotangent_out,
         inputs,
         mode,
@@ -1499,22 +1504,22 @@ fn transpose_pad_to_match(
 
 fn linearize_constant(
     _op: &StdTensorOp,
-    _builder: &mut dyn OpEmitter<StdTensorOp>,
-    _primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
-    _tangent_in: &[Option<LocalValId>],
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    _tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![None])
 }
 
 fn transpose_constant(
     _op: &StdTensorOp,
-    _emitter: &mut dyn OpEmitter<StdTensorOp>,
-    _cotangent_out: &[Option<LocalValId>],
-    _inputs: &[ValRef<StdTensorOp>],
-    _mode: &OpMode,
+    _builder: &mut dyn PrimitiveRuleBuilder,
+    _cotangent_out: &[Option<LocalValueId>],
+    _inputs: &[ValueRef<StdTensorOp>],
+    _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValId>>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(vec![])
 }

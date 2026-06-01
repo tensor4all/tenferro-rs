@@ -36,8 +36,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{OpMode, ValRef};
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{OperationRole, ValueRef};
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -48,7 +48,7 @@ use crate::{Error, Result};
 
 #[derive(Clone, Debug)]
 struct LabeledVal {
-    val: ValRef<StdTensorOp>,
+    val: ValueRef<StdTensorOp>,
     labels: Vec<u32>,
     shape: Vec<usize>,
 }
@@ -92,7 +92,7 @@ fn labeled_operand<'a>(
 }
 
 fn reduce_val(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut GraphBuilder<StdTensorOp>,
     lv: &LabeledVal,
     reduce_labels: &HashSet<u32>,
 ) -> LabeledVal {
@@ -124,13 +124,13 @@ fn reduce_val(
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &s)| s)
         .collect();
-    let outputs = builder.add_op(
+    let outputs = builder.add_operation(
         StdTensorOp::ReduceSum { axes: reduce_axes },
         vec![lv.val.clone()],
-        OpMode::Primal,
+        OperationRole::Primary,
     );
     LabeledVal {
-        val: ValRef::Local(outputs[0]),
+        val: ValueRef::Local(outputs[0]),
         labels: new_labels,
         shape: new_shape,
     }
@@ -140,7 +140,7 @@ fn reduce_val(
 /// than the current tensor has. For example, "i->ii" needs to embed axis 0
 /// into a new axis 1 of the same size.
 fn embed_repeated(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut GraphBuilder<StdTensorOp>,
     lv: &LabeledVal,
     output_labels: &[u32],
 ) -> Result<LabeledVal> {
@@ -156,17 +156,17 @@ fn embed_repeated(
             // Insert the new axis right after axis_a.
             let axis_b = axis_a + 1;
             let n = result.shape[axis_a];
-            let outputs = builder.add_op(
+            let outputs = builder.add_operation(
                 StdTensorOp::EmbedDiag { axis_a, axis_b },
                 vec![result.val.clone()],
-                OpMode::Primal,
+                OperationRole::Primary,
             );
             let mut new_labels = result.labels.clone();
             new_labels.insert(axis_b, label);
             let mut new_shape = result.shape.clone();
             new_shape.insert(axis_b, n);
             result = LabeledVal {
-                val: ValRef::Local(outputs[0]),
+                val: ValueRef::Local(outputs[0]),
                 labels: new_labels,
                 shape: new_shape,
             };
@@ -177,25 +177,25 @@ fn embed_repeated(
     Ok(result)
 }
 
-fn diagonalize_repeated(builder: &mut FragmentBuilder<StdTensorOp>, lv: &LabeledVal) -> LabeledVal {
+fn diagonalize_repeated(builder: &mut GraphBuilder<StdTensorOp>, lv: &LabeledVal) -> LabeledVal {
     let mut seen: HashMap<u32, usize> = HashMap::new();
     for (i, &label) in lv.labels.iter().enumerate() {
         if let Some(&first) = seen.get(&label) {
             // Found repeated label at axes `first` and `i`
-            let outputs = builder.add_op(
+            let outputs = builder.add_operation(
                 StdTensorOp::ExtractDiag {
                     axis_a: first,
                     axis_b: i,
                 },
                 vec![lv.val.clone()],
-                OpMode::Primal,
+                OperationRole::Primary,
             );
             let mut new_labels = lv.labels.clone();
             new_labels.remove(i);
             let mut new_shape = lv.shape.clone();
             new_shape.remove(i);
             let result = LabeledVal {
-                val: ValRef::Local(outputs[0]),
+                val: ValueRef::Local(outputs[0]),
                 labels: new_labels,
                 shape: new_shape,
             };
@@ -208,7 +208,7 @@ fn diagonalize_repeated(builder: &mut FragmentBuilder<StdTensorOp>, lv: &Labeled
 }
 
 fn binary_contract(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut GraphBuilder<StdTensorOp>,
     lhs: &LabeledVal,
     rhs: &LabeledVal,
     survive_labels: &[u32],
@@ -311,14 +311,14 @@ fn binary_contract(
             .map(|&l| label_to_size(l))
             .collect::<Result<_>>()?;
 
-        let outputs = builder.add_op(
+        let outputs = builder.add_operation(
             StdTensorOp::DotGeneral { config },
             vec![lhs.val.clone(), rhs.val.clone()],
-            OpMode::Primal,
+            OperationRole::Primary,
         );
 
         LabeledVal {
-            val: ValRef::Local(outputs[0]),
+            val: ValueRef::Local(outputs[0]),
             labels: result_labels,
             shape: result_shape,
         }
@@ -368,21 +368,21 @@ fn binary_contract(
     }
 
     let new_shape: Vec<usize> = perm.iter().map(|&p| result.shape[p]).collect();
-    let outputs = builder.add_op(
+    let outputs = builder.add_operation(
         StdTensorOp::Transpose { perm },
         vec![result.val.clone()],
-        OpMode::Primal,
+        OperationRole::Primary,
     );
 
     Ok(LabeledVal {
-        val: ValRef::Local(outputs[0]),
+        val: ValueRef::Local(outputs[0]),
         labels: target_labels,
         shape: new_shape,
     })
 }
 
 fn outer_product(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut GraphBuilder<StdTensorOp>,
     lhs: &LabeledVal,
     rhs: &LabeledVal,
     batch_labels: &[u32],
@@ -403,13 +403,13 @@ fn outer_product(
 
     if lhs.labels == rhs.labels {
         // Same labels: just Mul
-        let outputs = builder.add_op(
+        let outputs = builder.add_operation(
             StdTensorOp::Mul,
             vec![lhs.val.clone(), rhs.val.clone()],
-            OpMode::Primal,
+            OperationRole::Primary,
         );
         return Ok(LabeledVal {
-            val: ValRef::Local(outputs[0]),
+            val: ValueRef::Local(outputs[0]),
             labels: lhs.labels.clone(),
             shape: lhs.shape.clone(),
         });
@@ -427,51 +427,51 @@ fn outer_product(
         .map(|l| find_label_axis(&combined_labels, *l))
         .collect::<Result<_>>()?;
 
-    let lhs_bc = builder.add_op(
+    let lhs_bc = builder.add_operation(
         StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(&combined_shape),
             dims: lhs_dims,
         },
         vec![lhs.val.clone()],
-        OpMode::Primal,
+        OperationRole::Primary,
     );
-    let rhs_bc = builder.add_op(
+    let rhs_bc = builder.add_operation(
         StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(&combined_shape),
             dims: rhs_dims,
         },
         vec![rhs.val.clone()],
-        OpMode::Primal,
+        OperationRole::Primary,
     );
-    let outputs = builder.add_op(
+    let outputs = builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValRef::Local(lhs_bc[0]), ValRef::Local(rhs_bc[0])],
-        OpMode::Primal,
+        vec![ValueRef::Local(lhs_bc[0]), ValueRef::Local(rhs_bc[0])],
+        OperationRole::Primary,
     );
     Ok(LabeledVal {
-        val: ValRef::Local(outputs[0]),
+        val: ValueRef::Local(outputs[0]),
         labels: combined_labels,
         shape: combined_shape,
     })
 }
 
-/// Lower a planned einsum contraction tree into a compute graph fragment.
+/// Lower a planned einsum contraction tree into a compute graph graph.
 ///
 /// # Errors
 ///
 /// Returns an error if the supplied tree, input values, or input shapes are
 /// internally inconsistent.
-pub(crate) fn build_einsum_fragment(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+pub(crate) fn build_einsum_graph(
+    builder: &mut GraphBuilder<StdTensorOp>,
     tree: &ContractionTree,
-    input_vals: &[ValRef<StdTensorOp>],
+    input_vals: &[ValueRef<StdTensorOp>],
     input_shapes: &[Vec<usize>],
-) -> Result<ValRef<StdTensorOp>> {
+) -> Result<ValueRef<StdTensorOp>> {
     let subscripts = &tree.subscripts;
-    let n_inputs = subscripts.inputs.len();
-    if n_inputs != input_vals.len() {
+    let input_count = subscripts.inputs.len();
+    if input_count != input_vals.len() {
         return Err(builder_invalid_argument(format!(
-            "number of subscripts inputs ({n_inputs}) must match number of input values ({})",
+            "number of subscripts inputs ({input_count}) must match number of input values ({})",
             input_vals.len()
         )));
     }
@@ -510,7 +510,7 @@ pub(crate) fn build_einsum_fragment(
         *lv = diagonalize_repeated(builder, lv);
     }
 
-    if n_inputs == 1 || tree.step_count() == 0 {
+    if input_count == 1 || tree.step_count() == 0 {
         // Unary: reduce, embed, and reorder
         let lv = &labeled[0];
         let output_set: HashSet<u32> = output_labels.iter().copied().collect();
@@ -536,16 +536,16 @@ pub(crate) fn build_einsum_fragment(
         if perm.iter().enumerate().all(|(i, &p)| i == p) {
             return Ok(result.val);
         }
-        let outputs = builder.add_op(
+        let outputs = builder.add_operation(
             StdTensorOp::Transpose { perm },
             vec![result.val],
-            OpMode::Primal,
+            OperationRole::Primary,
         );
-        return Ok(ValRef::Local(outputs[0]));
+        return Ok(ValueRef::Local(outputs[0]));
     }
 
     // N >= 2: use contraction tree from v1
-    // Operand indices: 0..n_inputs are originals, n_inputs+step_idx are intermediates
+    // Operand indices: 0..input_count are originals, input_count+step_idx are intermediates
     for step_idx in 0..tree.step_count() {
         let (left, right) = tree.step_pair(step_idx).ok_or_else(|| {
             builder_invalid_argument(format!("missing contraction pair for step {step_idx}"))
@@ -569,8 +569,8 @@ pub(crate) fn build_einsum_fragment(
         labeled.push(result);
     }
 
-    // The final result is the last intermediate: labeled[n_inputs + step_count - 1]
-    let final_idx = n_inputs + tree.step_count() - 1;
+    // The final result is the last intermediate: labeled[input_count + step_count - 1]
+    let final_idx = input_count + tree.step_count() - 1;
     let result = labeled_operand(&labeled, final_idx, "final result")?;
 
     // Final reduction if result has labels not in output
@@ -599,10 +599,10 @@ pub(crate) fn build_einsum_fragment(
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
         return Ok(result.val);
     }
-    let outputs = builder.add_op(
+    let outputs = builder.add_operation(
         StdTensorOp::Transpose { perm },
         vec![result.val.clone()],
-        OpMode::Primal,
+        OperationRole::Primary,
     );
-    Ok(ValRef::Local(outputs[0]))
+    Ok(ValueRef::Local(outputs[0]))
 }

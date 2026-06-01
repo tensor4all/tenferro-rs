@@ -1,18 +1,18 @@
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::SliceConfig;
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_dynamic_truncate(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     axis: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
             // Checkpointed dynamic truncation records the concrete runtime
@@ -21,24 +21,27 @@ pub fn linearize_dynamic_truncate(
             // shape instead of the pre-truncation static upper bound.
             if let Some(limits) = static_truncated_shape(primal_in, primal_out, axis, ctx) {
                 let rank = limits.len();
-                let out = builder.add_op(
+                let out = builder.add_operation(
                     StdTensorOp::Slice(SliceConfig {
                         starts: vec![0; rank],
                         limits,
                         strides: vec![1; rank],
                     }),
-                    vec![ValRef::Local(dx)],
-                    OpMode::Linear {
+                    vec![ValueRef::Local(dx)],
+                    OperationRole::Linearized {
                         active_mask: vec![true],
                     },
                 );
                 return vec![Some(out[0])];
             }
 
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::DynamicTruncate { axis },
-                vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
-                OpMode::Linear {
+                vec![
+                    ValueRef::Local(dx),
+                    ValueRef::External(primal_in[1].clone()),
+                ],
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             );
@@ -49,17 +52,17 @@ pub fn linearize_dynamic_truncate(
 }
 
 pub fn transpose_dynamic_truncate(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
     axis: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::PadToMatch { axis },
-                vec![ValRef::Local(ct), inputs[0].clone()],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct), inputs[0].clone()],
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             );
@@ -70,17 +73,20 @@ pub fn transpose_dynamic_truncate(
 }
 
 pub fn linearize_pad_to_match(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     axis: usize,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::PadToMatch { axis },
-                vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
-                OpMode::Linear {
+                vec![
+                    ValueRef::Local(dx),
+                    ValueRef::External(primal_in[1].clone()),
+                ],
+                OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
             );
@@ -91,13 +97,13 @@ pub fn linearize_pad_to_match(
 }
 
 pub fn transpose_pad_to_match(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     axis: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
     };
@@ -120,14 +126,14 @@ pub fn transpose_pad_to_match(
             .collect::<Option<Vec<_>>>()
         {
             let rank = limits.len();
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Slice(SliceConfig {
                     starts: vec![0; rank],
                     limits,
                     strides: vec![1; rank],
                 }),
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -135,41 +141,41 @@ pub fn transpose_pad_to_match(
         }
     }
 
-    let size = emitter.add_op(
+    let size = builder.add_operation(
         StdTensorOp::ShapeOf { axis },
         vec![inputs[0].clone()],
-        OpMode::Linear {
+        OperationRole::Linearized {
             active_mask: vec![false],
         },
     );
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::DynamicTruncate { axis },
-        vec![ValRef::Local(ct), ValRef::Local(size[0])],
-        OpMode::Linear {
+        vec![ValueRef::Local(ct), ValueRef::Local(size[0])],
+        OperationRole::Linearized {
             active_mask: vec![true, false],
         },
     );
     vec![Some(out[0]), None]
 }
 
-fn first_input_active(mode: &OpMode) -> bool {
+fn first_input_active(mode: &OperationRole) -> bool {
     matches!(
         mode,
-        OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
+        OperationRole::Linearized { active_mask } if active_mask.first().copied().unwrap_or(false)
     )
 }
 
 fn static_truncated_shape(
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
     axis: usize,
     ctx: &mut ShapeGuardContext,
 ) -> Option<Vec<usize>> {
     let input_shape = ctx
-        .try_shape_of(&ValRef::External(primal_in[0].clone()))?
+        .try_shape_of(&ValueRef::External(primal_in[0].clone()))?
         .to_vec();
     let output_shape = ctx
-        .try_shape_of(&ValRef::External(primal_out[0].clone()))?
+        .try_shape_of(&ValueRef::External(primal_out[0].clone()))?
         .to_vec();
     if axis >= input_shape.len() || input_shape.len() != output_shape.len() {
         return None;

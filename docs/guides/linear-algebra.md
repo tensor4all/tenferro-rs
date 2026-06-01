@@ -61,7 +61,7 @@ the result should remain connected to a scalar loss `backward()` pass.
 For linalg eager helpers or linalg AD rules, enable `tenferro-linalg`'s
 `autodiff` feature.
 
-When traced graph AD must differentiate through linalg extension ops, include the
+When traced graph AD must linearize through linalg extension ops, include the
 owned rule set in an explicit context:
 
 ```rust

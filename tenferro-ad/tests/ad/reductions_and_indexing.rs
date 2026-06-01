@@ -4,8 +4,7 @@ use super::*;
 fn test_reduce_prod_jvp() {
     let op = StdTensorOp::ReduceProd { axes: vec![0] };
     let input_shape = vec![4usize];
-    let (fragment, input_key, output_key) =
-        build_unary_fragment(op.clone(), tensor_input_key(60_000));
+    let (graph, input_key, output_key) = build_unary_graph(op.clone(), tensor_input_key(60_000));
     let x_data = vec![1.5, -2.0, 0.75, 4.0];
     let dx_data = vec![0.25, -0.5, 1.0, 0.75];
     let mut inputs_map = HashMap::new();
@@ -14,8 +13,8 @@ fn test_reduce_prod_jvp() {
         f64_tensor(input_shape.clone(), x_data.clone()),
     );
 
-    let tangent = jvp_from_fragment_with_inputs(
-        fragment,
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
         output_key,
         input_key,
         inputs_map,
@@ -54,8 +53,7 @@ fn test_reduce_prod_vjp() {
 fn test_reduce_max_jvp() {
     let op = StdTensorOp::ReduceMax { axes: vec![0] };
     let input_shape = vec![2usize, 3];
-    let (fragment, input_key, output_key) =
-        build_unary_fragment(op.clone(), tensor_input_key(60_002));
+    let (graph, input_key, output_key) = build_unary_graph(op.clone(), tensor_input_key(60_002));
     let x_data = vec![2.0, 2.0, 4.0, 1.0, -3.0, -3.0];
     let dx_data = vec![1.0, -0.5, 0.75, -1.25, 2.0, -1.0];
     let mut inputs_map = HashMap::new();
@@ -64,8 +62,8 @@ fn test_reduce_max_jvp() {
         f64_tensor(input_shape.clone(), x_data.clone()),
     );
 
-    let tangent = jvp_from_fragment_with_inputs(
-        fragment,
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
         output_key,
         input_key,
         inputs_map,
@@ -100,8 +98,7 @@ fn test_reduce_max_vjp() {
 fn test_reduce_min_jvp() {
     let op = StdTensorOp::ReduceMin { axes: vec![0] };
     let input_shape = vec![4usize];
-    let (fragment, input_key, output_key) =
-        build_unary_fragment(op.clone(), tensor_input_key(60_004));
+    let (graph, input_key, output_key) = build_unary_graph(op.clone(), tensor_input_key(60_004));
     let x_data = vec![1.0, -2.0, 4.0, -2.0];
     let dx_data = vec![0.5, 1.0, -1.0, -0.5];
     let mut inputs_map = HashMap::new();
@@ -110,8 +107,8 @@ fn test_reduce_min_jvp() {
         f64_tensor(input_shape.clone(), x_data.clone()),
     );
 
-    let tangent = jvp_from_fragment_with_inputs(
-        fragment,
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
         output_key,
         input_key,
         inputs_map,
@@ -480,24 +477,24 @@ fn grad_log1p() {
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
 
-fn build_gather_reduce_sum_fragment(
+fn build_gather_reduce_sum_graph(
     operand_key: TensorInputKey,
     indices_key: TensorInputKey,
     config: GatherConfig,
     reduce_axes: Vec<usize>,
-) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+) -> (Arc<Graph<StdTensorOp>>, ValueKey<StdTensorOp>) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let operand = builder.add_input(operand_key);
     let indices = builder.add_input(indices_key);
-    let gathered = builder.add_op(
+    let gathered = builder.add_operation(
         StdTensorOp::Gather(config),
-        vec![ValRef::Local(operand), ValRef::Local(indices)],
-        OpMode::Primal,
+        vec![ValueRef::Local(operand), ValueRef::Local(indices)],
+        OperationRole::Primary,
     )[0];
-    let loss = builder.add_op(
+    let loss = builder.add_operation(
         StdTensorOp::ReduceSum { axes: reduce_axes },
-        vec![ValRef::Local(gathered)],
-        OpMode::Primal,
+        vec![ValueRef::Local(gathered)],
+        OperationRole::Primary,
     )[0];
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
@@ -519,8 +516,8 @@ fn grad_gather_reduce_sum_accumulates_indices_correctly() {
         index_vector_dim: 1,
         slice_sizes: vec![1],
     };
-    let (fragment, loss_key) =
-        build_gather_reduce_sum_fragment(operand_key.clone(), indices_key.clone(), config, vec![0]);
+    let (graph, loss_key) =
+        build_gather_reduce_sum_graph(operand_key.clone(), indices_key.clone(), config, vec![0]);
 
     let operand_data = vec![10.0_f64, 20.0, 30.0, 40.0, 50.0];
     let indices_data = vec![2_i64, 4, 0, 2, 2];
@@ -531,7 +528,7 @@ fn grad_gather_reduce_sum_accumulates_indices_correctly() {
     );
     inputs_map.insert(indices_key, i64_tensor(vec![5, 1], indices_data));
 
-    let grad = grad_from_fragment_with_inputs(fragment, loss_key, operand_key, inputs_map);
+    let grad = grad_from_graph_with_inputs(graph, loss_key, operand_key, inputs_map);
     assert_eq!(grad.shape(), &[5]);
     assert_close_slice(get_f64_data(&grad), &[1.0, 0.0, 3.0, 0.0, 1.0]);
 }
@@ -565,96 +562,96 @@ fn jvp_traced_index_select_gathers_tangent() {
 
 /// Build `y = ReduceSum(Scatter(operand, indices, updates, config))`,
 /// where the Scatter output has the same shape as `operand`.
-fn build_scatter_reduce_sum_fragment(
+fn build_scatter_reduce_sum_graph(
     operand_key: TensorInputKey,
     indices_key: TensorInputKey,
     updates_key: TensorInputKey,
     config: ScatterConfig,
     reduce_axes: Vec<usize>,
-) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+) -> (Arc<Graph<StdTensorOp>>, ValueKey<StdTensorOp>) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let operand = builder.add_input(operand_key);
     let indices = builder.add_input(indices_key);
     let updates = builder.add_input(updates_key);
-    let scattered = builder.add_op(
+    let scattered = builder.add_operation(
         StdTensorOp::Scatter(config),
         vec![
-            ValRef::Local(operand),
-            ValRef::Local(indices),
-            ValRef::Local(updates),
+            ValueRef::Local(operand),
+            ValueRef::Local(indices),
+            ValueRef::Local(updates),
         ],
-        OpMode::Primal,
+        OperationRole::Primary,
     )[0];
-    let loss = builder.add_op(
+    let loss = builder.add_operation(
         StdTensorOp::ReduceSum { axes: reduce_axes },
-        vec![ValRef::Local(scattered)],
-        OpMode::Primal,
+        vec![ValueRef::Local(scattered)],
+        OperationRole::Primary,
     )[0];
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), loss_key)
 }
 
-fn build_weighted_unary_sum_fragment(
+fn build_weighted_unary_sum_graph(
     input_key: TensorInputKey,
     weights_key: TensorInputKey,
     op: StdTensorOp,
     reduce_axes: Vec<usize>,
-) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+) -> (Arc<Graph<StdTensorOp>>, ValueKey<StdTensorOp>) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let input = builder.add_input(input_key);
     let weights = builder.add_input(weights_key);
-    let output = builder.add_op(op, vec![ValRef::Local(input)], OpMode::Primal)[0];
-    let weighted = builder.add_op(
+    let output = builder.add_operation(op, vec![ValueRef::Local(input)], OperationRole::Primary)[0];
+    let weighted = builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValRef::Local(output), ValRef::Local(weights)],
-        OpMode::Primal,
+        vec![ValueRef::Local(output), ValueRef::Local(weights)],
+        OperationRole::Primary,
     )[0];
-    let loss = builder.add_op(
+    let loss = builder.add_operation(
         StdTensorOp::ReduceSum { axes: reduce_axes },
-        vec![ValRef::Local(weighted)],
-        OpMode::Primal,
+        vec![ValueRef::Local(weighted)],
+        OperationRole::Primary,
     )[0];
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), loss_key)
 }
 
-fn build_dynamic_slice_fragment(
+fn build_dynamic_slice_graph(
     input_key: TensorInputKey,
     starts_key: TensorInputKey,
     slice_sizes: Vec<usize>,
-) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+) -> (Arc<Graph<StdTensorOp>>, ValueKey<StdTensorOp>) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let input = builder.add_input(input_key);
     let starts = builder.add_input(starts_key);
-    let output = builder.add_op(
+    let output = builder.add_operation(
         StdTensorOp::DynamicSlice { slice_sizes },
-        vec![ValRef::Local(input), ValRef::Local(starts)],
-        OpMode::Primal,
+        vec![ValueRef::Local(input), ValueRef::Local(starts)],
+        OperationRole::Primary,
     )[0];
     let output_key = builder.global_key(output).clone();
     builder.set_outputs(vec![output]);
     (Arc::new(builder.build()), output_key)
 }
 
-fn build_dynamic_update_slice_fragment(
+fn build_dynamic_update_slice_graph(
     operand_key: TensorInputKey,
     update_key: TensorInputKey,
     starts_key: TensorInputKey,
-) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+) -> (Arc<Graph<StdTensorOp>>, ValueKey<StdTensorOp>) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
     let operand = builder.add_input(operand_key);
     let update = builder.add_input(update_key);
     let starts = builder.add_input(starts_key);
-    let output = builder.add_op(
+    let output = builder.add_operation(
         StdTensorOp::DynamicUpdateSlice,
         vec![
-            ValRef::Local(operand),
-            ValRef::Local(update),
-            ValRef::Local(starts),
+            ValueRef::Local(operand),
+            ValueRef::Local(update),
+            ValueRef::Local(starts),
         ],
-        OpMode::Primal,
+        OperationRole::Primary,
     )[0];
     let output_key = builder.global_key(output).clone();
     builder.set_outputs(vec![output]);
@@ -676,7 +673,7 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
         scatter_dims_to_operand_dims: vec![0],
         index_vector_dim: 1,
     };
-    let (fragment, loss_key) = build_scatter_reduce_sum_fragment(
+    let (graph, loss_key) = build_scatter_reduce_sum_graph(
         operand_key.clone(),
         indices_key.clone(),
         updates_key.clone(),
@@ -695,7 +692,7 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
         f64_tensor(vec![3], updates_data.clone()),
     );
 
-    let grad = grad_from_fragment_with_inputs(fragment, loss_key, updates_key, inputs_map);
+    let grad = grad_from_graph_with_inputs(graph, loss_key, updates_key, inputs_map);
     assert_eq!(grad.shape(), &[3]);
     // reduce_sum over the scatter output contributes a 1 to each updated
     // slot; the inverse Gather reads one value for each `indices` entry.
@@ -706,8 +703,8 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
 fn jvp_dynamic_slice_matches_finite_diff() {
     let input_key = tensor_input_key(61_500);
     let starts_key = tensor_input_key(61_501);
-    let (fragment, output_key) =
-        build_dynamic_slice_fragment(input_key.clone(), starts_key.clone(), vec![3]);
+    let (graph, output_key) =
+        build_dynamic_slice_graph(input_key.clone(), starts_key.clone(), vec![3]);
 
     let input_data = vec![0.5_f64, -1.0, 2.5, 4.0, -3.0];
     let starts_data = vec![1_i64];
@@ -717,8 +714,8 @@ fn jvp_dynamic_slice_matches_finite_diff() {
         (starts_key, i64_tensor(vec![1], starts_data)),
     ]);
 
-    let tangent = jvp_from_fragment_with_inputs(
-        fragment,
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
         output_key,
         input_key,
         inputs_map,
@@ -734,8 +731,8 @@ fn jvp_dynamic_slice_matches_finite_diff() {
 fn grad_dynamic_slice_clamped_start_matches_finite_diff() {
     let input_key = tensor_input_key(61_510);
     let starts_key = tensor_input_key(61_511);
-    let (fragment, output_key) =
-        build_dynamic_slice_fragment(input_key.clone(), starts_key.clone(), vec![3]);
+    let (graph, output_key) =
+        build_dynamic_slice_graph(input_key.clone(), starts_key.clone(), vec![3]);
 
     let input_data = vec![0.5_f64, -1.0, 2.5, 4.0, -3.0];
     let starts_data = vec![4_i64];
@@ -745,8 +742,8 @@ fn grad_dynamic_slice_clamped_start_matches_finite_diff() {
         (starts_key, i64_tensor(vec![1], starts_data)),
     ]);
 
-    let grad = grad_from_fragment_with_inputs_and_cotangent(
-        fragment,
+    let grad = grad_from_graph_with_inputs_and_cotangent(
+        graph,
         output_key,
         input_key,
         inputs_map,
@@ -771,7 +768,7 @@ fn jvp_dynamic_update_slice_update_matches_finite_diff() {
     let operand_key = tensor_input_key(61_520);
     let update_key = tensor_input_key(61_521);
     let starts_key = tensor_input_key(61_522);
-    let (fragment, output_key) = build_dynamic_update_slice_fragment(
+    let (graph, output_key) = build_dynamic_update_slice_graph(
         operand_key.clone(),
         update_key.clone(),
         starts_key.clone(),
@@ -787,8 +784,8 @@ fn jvp_dynamic_update_slice_update_matches_finite_diff() {
         (starts_key, i64_tensor(vec![1], starts_data)),
     ]);
 
-    let tangent = jvp_from_fragment_with_inputs(
-        fragment,
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
         output_key,
         update_key,
         inputs_map,
@@ -807,7 +804,7 @@ fn grad_dynamic_update_slice_matches_finite_diff() {
     let operand_key = tensor_input_key(61_530);
     let update_key = tensor_input_key(61_531);
     let starts_key = tensor_input_key(61_532);
-    let (fragment, output_key) = build_dynamic_update_slice_fragment(
+    let (graph, output_key) = build_dynamic_update_slice_graph(
         operand_key.clone(),
         update_key.clone(),
         starts_key.clone(),
@@ -826,15 +823,15 @@ fn grad_dynamic_update_slice_matches_finite_diff() {
         (starts_key, i64_tensor(vec![1], starts_data)),
     ]);
 
-    let grad_operand = grad_from_fragment_with_inputs_and_cotangent(
-        fragment.clone(),
+    let grad_operand = grad_from_graph_with_inputs_and_cotangent(
+        graph.clone(),
         output_key.clone(),
         operand_key,
         inputs_map.clone(),
         f64_tensor(vec![5], cotangent_data.clone()),
     );
-    let grad_update = grad_from_fragment_with_inputs_and_cotangent(
-        fragment,
+    let grad_update = grad_from_graph_with_inputs_and_cotangent(
+        graph,
         output_key,
         update_key,
         inputs_map,
@@ -869,7 +866,7 @@ fn grad_slice_weighted_sum_matches_finite_diff() {
         limits: vec![5],
         strides: vec![2],
     };
-    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+    let (graph, loss_key) = build_weighted_unary_sum_graph(
         input_key.clone(),
         weights_key.clone(),
         StdTensorOp::Slice(config),
@@ -883,7 +880,7 @@ fn grad_slice_weighted_sum_matches_finite_diff() {
         (weights_key, f64_tensor(vec![2], weights_data.clone())),
     ]);
 
-    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    let grad = grad_from_graph_with_inputs(graph, loss_key, input_key, inputs_map);
     assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
         xs[1] * weights_data[0] + xs[3] * weights_data[1]
     });
@@ -898,7 +895,7 @@ fn grad_pad_weighted_sum_matches_finite_diff() {
         edge_padding_high: vec![2],
         interior_padding: vec![1],
     };
-    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+    let (graph, loss_key) = build_weighted_unary_sum_graph(
         input_key.clone(),
         weights_key.clone(),
         StdTensorOp::Pad(config),
@@ -912,7 +909,7 @@ fn grad_pad_weighted_sum_matches_finite_diff() {
         (weights_key, f64_tensor(vec![8], weights_data.clone())),
     ]);
 
-    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    let grad = grad_from_graph_with_inputs(graph, loss_key, input_key, inputs_map);
     assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
         xs[0] * weights_data[1] + xs[1] * weights_data[3] + xs[2] * weights_data[5]
     });
@@ -922,7 +919,7 @@ fn grad_pad_weighted_sum_matches_finite_diff() {
 fn grad_reverse_weighted_sum_matches_finite_diff() {
     let input_key = tensor_input_key(64_000);
     let weights_key = tensor_input_key(64_001);
-    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+    let (graph, loss_key) = build_weighted_unary_sum_graph(
         input_key.clone(),
         weights_key.clone(),
         StdTensorOp::Reverse { axes: vec![0] },
@@ -936,7 +933,7 @@ fn grad_reverse_weighted_sum_matches_finite_diff() {
         (weights_key, f64_tensor(vec![4], weights_data.clone())),
     ]);
 
-    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    let grad = grad_from_graph_with_inputs(graph, loss_key, input_key, inputs_map);
     assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
         xs[0] * weights_data[3]
             + xs[1] * weights_data[2]
@@ -953,10 +950,10 @@ fn dropped_traced_graph_releases_registered_metadata() {
 
     {
         let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-        leaf_key = GlobalValKey::Input(x.input_key().expect("leaf input key"));
+        leaf_key = ValueKey::Input(x.input_key().expect("leaf input key"));
 
         y = &x + &x;
-        derived_key = y.fragment.vals()[y.val].key.clone();
+        derived_key = y.graph.values()[y.val].key.clone();
 
         assert!(lookup_global_metadata(&leaf_key).is_some());
         assert!(lookup_global_metadata(&derived_key).is_some());

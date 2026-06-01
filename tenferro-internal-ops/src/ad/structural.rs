@@ -1,9 +1,9 @@
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{PadConfig, SliceConfig};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::zeros::build_zero_like;
+use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -16,7 +16,7 @@ fn is_identity_perm(perm: &[usize]) -> bool {
 
 fn shape_exprs_match_primal_input(
     ctx: &mut ShapeGuardContext,
-    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_in: &[ValueKey<StdTensorOp>],
     shape: &[DimExpr],
 ) -> bool {
     if primal_in.is_empty() || DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0) {
@@ -24,7 +24,7 @@ fn shape_exprs_match_primal_input(
     }
 
     let input_shape = ctx
-        .shape_of(&ValRef::External(primal_in[0].clone()))
+        .shape_of(&ValueRef::External(primal_in[0].clone()))
         .to_vec();
     if input_shape.len() != shape.len() {
         return false;
@@ -38,21 +38,21 @@ fn shape_exprs_match_primal_input(
 }
 
 pub fn linearize_transpose(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     perm: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
             if is_identity_perm(perm) {
                 return vec![Some(dx)];
             }
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Transpose {
                     perm: perm.to_vec(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -63,12 +63,12 @@ pub fn linearize_transpose(
 }
 
 pub fn linearize_reshape(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     op: &StdTensorOp,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let StdTensorOp::Reshape { to_shape } = op else {
         unreachable!("linearize_reshape expects Reshape");
     };
@@ -80,19 +80,19 @@ pub fn linearize_reshape(
             }
             let needs_shape_source =
                 DimExpr::max_input_idx_all(to_shape).is_some_and(|idx| idx > 0);
-            let mut op_inputs = vec![ValRef::Local(dx)];
+            let mut op_inputs = vec![ValueRef::Local(dx)];
             let active_mask = if needs_shape_source {
-                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                op_inputs.push(ValueRef::External(primal_in[1].clone()));
                 vec![true, false]
             } else {
                 vec![true]
             };
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Reshape {
                     to_shape: to_shape.clone(),
                 },
                 op_inputs,
-                OpMode::Linear { active_mask },
+                OperationRole::Linearized { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -101,13 +101,13 @@ pub fn linearize_reshape(
 }
 
 pub fn linearize_broadcast_in_dim(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     shape: &[DimExpr],
     dims: &[usize],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
             if dims.iter().copied().eq(0..dims.len())
@@ -116,20 +116,20 @@ pub fn linearize_broadcast_in_dim(
                 return vec![Some(dx)];
             }
             let needs_shape_source = DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0);
-            let mut op_inputs = vec![ValRef::Local(dx)];
+            let mut op_inputs = vec![ValueRef::Local(dx)];
             let active_mask = if needs_shape_source {
-                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                op_inputs.push(ValueRef::External(primal_in[1].clone()));
                 vec![true, false]
             } else {
                 vec![true]
             };
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::BroadcastInDim {
                     shape: shape.to_vec(),
                     dims: dims.to_vec(),
                 },
                 op_inputs,
-                OpMode::Linear { active_mask },
+                OperationRole::Linearized { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -138,17 +138,17 @@ pub fn linearize_broadcast_in_dim(
 }
 
 pub fn linearize_convert(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     from: tenferro_tensor::DType,
     to: tenferro_tensor::DType,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dt) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Convert { from, to },
-                vec![ValRef::Local(dt)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dt)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -159,16 +159,16 @@ pub fn linearize_convert(
 }
 
 pub fn linearize_tril(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     k: i64,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Tril { k },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -179,16 +179,16 @@ pub fn linearize_tril(
 }
 
 pub fn linearize_triu(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     k: i64,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Triu { k },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -199,16 +199,16 @@ pub fn linearize_triu(
 }
 
 pub fn linearize_slice(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     config: &SliceConfig,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Slice(config.clone()),
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -219,16 +219,16 @@ pub fn linearize_slice(
 }
 
 pub fn linearize_pad(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     config: &PadConfig,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Pad(config.clone()),
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -239,59 +239,59 @@ pub fn linearize_pad(
 }
 
 pub fn linearize_concatenate(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
     axis: usize,
-    n_inputs: usize,
+    input_count: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     if tangent_in.iter().all(Option::is_none) {
         return vec![None];
     }
-    if n_inputs == 1 {
+    if input_count == 1 {
         return vec![tangent_in[0]];
     }
 
-    let mut inputs = Vec::with_capacity(n_inputs);
-    let mut active_mask = Vec::with_capacity(n_inputs);
-    for input_index in 0..n_inputs {
+    let mut inputs = Vec::with_capacity(input_count);
+    let mut active_mask = Vec::with_capacity(input_count);
+    for input_index in 0..input_count {
         match tangent_in[input_index] {
             Some(tangent) => {
-                inputs.push(ValRef::Local(tangent));
+                inputs.push(ValueRef::Local(tangent));
                 active_mask.push(true);
             }
             None => {
-                let anchor = ValRef::External(primal_in[input_index].clone());
+                let anchor = ValueRef::External(primal_in[input_index].clone());
                 let meta = ctx.metadata_of(&anchor);
                 let zero = build_zero_like(builder, meta.dtype, anchor, meta.shape.len());
-                inputs.push(ValRef::Local(zero));
+                inputs.push(ValueRef::Local(zero));
                 active_mask.push(false);
             }
         }
     }
 
-    let out = builder.add_op(
-        StdTensorOp::Concatenate { axis, n_inputs },
+    let out = builder.add_operation(
+        StdTensorOp::Concatenate { axis, input_count },
         inputs,
-        OpMode::Linear { active_mask },
+        OperationRole::Linearized { active_mask },
     );
     vec![Some(out[0])]
 }
 
 pub fn linearize_reverse(
-    builder: &mut dyn OpEmitter<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    tangent_in: &[Option<LocalValueId>],
     axes: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Reverse {
                     axes: axes.to_vec(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
+                vec![ValueRef::Local(dx)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -302,10 +302,10 @@ pub fn linearize_reverse(
 }
 
 pub fn transpose_transpose(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     perm: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let mut inv = vec![0; perm.len()];
     for (index, &value) in perm.iter().enumerate() {
         inv[value] = index;
@@ -316,10 +316,10 @@ pub fn transpose_transpose(
             if is_identity_perm(&inv) {
                 return vec![Some(ct)];
             }
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Transpose { perm: inv },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -330,12 +330,12 @@ pub fn transpose_transpose(
 }
 
 pub fn transpose_reshape(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     op: &StdTensorOp,
-    inputs: &[ValRef<StdTensorOp>],
+    inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let StdTensorOp::Reshape { to_shape: _ } = op else {
         unreachable!("transpose_reshape expects Reshape");
     };
@@ -346,19 +346,19 @@ pub fn transpose_reshape(
             let remapped_to_shape = DimExpr::input_shape(1, input_rank);
             let needs_shape_source =
                 DimExpr::max_input_idx_all(&remapped_to_shape).is_some_and(|idx| idx > 0);
-            let mut op_inputs = vec![ValRef::Local(ct)];
+            let mut op_inputs = vec![ValueRef::Local(ct)];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
                 vec![true, false]
             } else {
                 vec![true]
             };
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Reshape {
                     to_shape: remapped_to_shape,
                 },
                 op_inputs,
-                OpMode::Linear { active_mask },
+                OperationRole::Linearized { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -367,11 +367,11 @@ pub fn transpose_reshape(
 }
 
 pub fn transpose_broadcast_in_dim(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     shape: &[DimExpr],
     dims: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let output_rank = shape.len();
     let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
 
@@ -384,12 +384,12 @@ pub fn transpose_broadcast_in_dim(
     let primary = match cotangent_out[0] {
         Some(ct) if broadcast_axes.is_empty() => Some(ct),
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::ReduceSum {
                     axes: broadcast_axes,
                 },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -407,15 +407,15 @@ pub fn transpose_broadcast_in_dim(
 }
 
 pub fn transpose_convert(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    mode: &OperationRole,
     from: tenferro_tensor::DType,
     to: tenferro_tensor::DType,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let is_active = matches!(
         mode,
-        OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
+        OperationRole::Linearized { active_mask } if active_mask.first().copied().unwrap_or(false)
     );
     if !is_active {
         return vec![None];
@@ -423,10 +423,10 @@ pub fn transpose_convert(
 
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Convert { from: to, to: from },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -437,16 +437,16 @@ pub fn transpose_convert(
 }
 
 pub fn transpose_tril(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     k: i64,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Tril { k },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -457,16 +457,16 @@ pub fn transpose_tril(
 }
 
 pub fn transpose_triu(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
     k: i64,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Triu { k },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -477,13 +477,13 @@ pub fn transpose_triu(
 }
 
 pub fn transpose_slice(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     config: &SliceConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None];
     };
@@ -544,14 +544,14 @@ pub fn transpose_slice(
         interior_padding.push(usize_to_i64(stride - 1, "transpose_slice"));
     }
 
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::Pad(PadConfig {
             edge_padding_low,
             edge_padding_high,
             interior_padding,
         }),
-        vec![ValRef::Local(ct)],
-        OpMode::Linear {
+        vec![ValueRef::Local(ct)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     );
@@ -559,13 +559,13 @@ pub fn transpose_slice(
 }
 
 pub fn transpose_pad(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     config: &PadConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None];
     };
@@ -651,14 +651,14 @@ pub fn transpose_pad(
         edge_padding_high.push(i128_to_i64(input_extent_i - j_end, "transpose_pad"));
     }
 
-    let sliced = emitter.add_op(
+    let sliced = builder.add_operation(
         StdTensorOp::Slice(SliceConfig {
             starts,
             limits,
             strides,
         }),
-        vec![ValRef::Local(ct)],
-        OpMode::Linear {
+        vec![ValueRef::Local(ct)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     )[0];
@@ -668,14 +668,14 @@ pub fn transpose_pad(
         return vec![Some(sliced)];
     }
 
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::Pad(PadConfig {
             edge_padding_low,
             edge_padding_high,
             interior_padding: vec![0; rank],
         }),
-        vec![ValRef::Local(sliced)],
-        OpMode::Linear {
+        vec![ValueRef::Local(sliced)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     );
@@ -683,11 +683,11 @@ pub fn transpose_pad(
 }
 
 pub fn transpose_reverse(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    mode: &OperationRole,
     axes: &[usize],
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None];
     };
@@ -695,12 +695,12 @@ pub fn transpose_reverse(
         return vec![None];
     }
 
-    let out = emitter.add_op(
+    let out = builder.add_operation(
         StdTensorOp::Reverse {
             axes: axes.to_vec(),
         },
-        vec![ValRef::Local(ct)],
-        OpMode::Linear {
+        vec![ValueRef::Local(ct)],
+        OperationRole::Linearized {
             active_mask: vec![true],
         },
     );
@@ -708,25 +708,25 @@ pub fn transpose_reverse(
 }
 
 pub fn transpose_concatenate(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     axis: usize,
-    n_inputs: usize,
+    input_count: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
+) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None; n_inputs];
+        return vec![None; input_count];
     };
     let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None; n_inputs],
+        OperationRole::Linearized { active_mask } => active_mask,
+        OperationRole::Primary => return vec![None; input_count],
     };
 
-    let mut result = vec![None; n_inputs];
+    let mut result = vec![None; input_count];
     let mut axis_offset = 0usize;
-    for input_index in 0..n_inputs {
+    for input_index in 0..input_count {
         let input_shape = ctx.shape_of(&inputs[input_index]);
         let rank = input_shape.len();
         assert!(
@@ -747,14 +747,14 @@ pub fn transpose_concatenate(
                     }
                 })
                 .collect();
-            let out = emitter.add_op(
+            let out = builder.add_operation(
                 StdTensorOp::Slice(SliceConfig {
                     starts,
                     limits,
                     strides: vec![1; rank],
                 }),
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
+                vec![ValueRef::Local(ct)],
+                OperationRole::Linearized {
                     active_mask: vec![true],
                 },
             );
@@ -766,10 +766,10 @@ pub fn transpose_concatenate(
     result
 }
 
-fn first_input_active(mode: &OpMode) -> bool {
+fn first_input_active(mode: &OperationRole) -> bool {
     matches!(
         mode,
-        OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
+        OperationRole::Linearized { active_mask } if active_mask.first().copied().unwrap_or(false)
     )
 }
 

@@ -1,8 +1,8 @@
-use computegraph::types::{LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_tensor::DType;
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn is_real_dtype(dtype: DType) -> bool {
@@ -10,38 +10,40 @@ pub fn is_real_dtype(dtype: DType) -> bool {
 }
 
 pub fn conjugate_primal_if_complex(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
-) -> ValRef<StdTensorOp> {
+) -> ValueRef<StdTensorOp> {
     let dtype = ctx.dtype_of(&input);
-    conjugate_primal_if_dtype_complex(emitter, input, dtype)
+    conjugate_primal_if_dtype_complex(builder, input, dtype)
 }
 
 pub fn conjugate_primal_if_dtype_complex(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
     dtype: DType,
-) -> ValRef<StdTensorOp> {
+) -> ValueRef<StdTensorOp> {
     if is_real_dtype(dtype) {
         input
     } else {
-        ValRef::Local(emitter.add_op(StdTensorOp::Conj, vec![input], OpMode::Primal)[0])
+        ValueRef::Local(
+            builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
+        )
     }
 }
 
 pub fn conjugate_linear_if_dtype_complex(
-    emitter: &mut dyn OpEmitter<StdTensorOp>,
-    input: LocalValId,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
     dtype: DType,
-) -> LocalValId {
+) -> LocalValueId {
     if is_real_dtype(dtype) {
         input
     } else {
-        emitter.add_op(
+        builder.add_operation(
             StdTensorOp::Conj,
-            vec![ValRef::Local(input)],
-            OpMode::Linear {
+            vec![ValueRef::Local(input)],
+            OperationRole::Linearized {
                 active_mask: vec![true],
             },
         )[0]

@@ -374,7 +374,7 @@ fn product_or_one_for_empty(sizes: &[usize]) -> usize {
 ///   2. Pre-reduction (if unique-only axes)
 ///   3. GEMM (always, after steps 1-2 make all labels unique)
 pub(crate) fn compile_step_plans(tree: &ContractionTree) -> EinsumResult<Vec<StepPlan>> {
-    let n_inputs = tree.subscripts.inputs.len();
+    let input_count = tree.subscripts.inputs.len();
     let size_dict = &tree.size_dict;
 
     tree.steps
@@ -387,7 +387,7 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> EinsumResult<Vec<Ste
             let subs_c = if is_last {
                 &tree.subscripts.output
             } else {
-                &tree.operand_subs[n_inputs + step_idx]
+                &tree.operand_subs[input_count + step_idx]
             };
             compile_pairwise_step_plan(subs_a, subs_b, subs_c, size_dict)
         })

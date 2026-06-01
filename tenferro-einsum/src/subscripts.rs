@@ -42,10 +42,10 @@ impl EinsumSubscripts {
     ///
     /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
     ///
-    /// assert_eq!(subscripts.n_inputs(), 2);
+    /// assert_eq!(subscripts.input_count(), 2);
     /// ```
     #[must_use]
-    pub fn n_inputs(&self) -> usize {
+    pub fn input_count(&self) -> usize {
         self.inputs.len()
     }
 }

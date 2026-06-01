@@ -293,9 +293,9 @@ Internal: tenferro-core-ops  - Internal core primitive operation catalog
           tenferro-internal-extension-macros - Extension-op registration macros
 ```
 
-`chainrules-rs` defines the generic `PrimitiveOp` AD contract, independent of
-any tensor type. `tidu-rs` owns generic graph transforms such as
-`differentiate` and `transpose`.
+`tidu-rs` defines the generic `Primitive` AD contract, independent of any
+tensor type, and owns graph transforms such as `linearize` and
+`linear_transpose`.
 `tenferro-tensor-core` owns the lightweight host tensor data model.
 `tenferro-tensor` owns concrete dense runtime value types and CPU backend
 execution surface. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer

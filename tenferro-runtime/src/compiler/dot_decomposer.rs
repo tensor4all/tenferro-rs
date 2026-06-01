@@ -95,7 +95,7 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
                 let lhs_extents = require_slot_extents(&slot_extents, lhs_slot);
                 let rhs_extents = require_slot_extents(&slot_extents, rhs_slot);
                 if !is_dot_canonical(config, lhs_shape.len(), rhs_shape.len()) {
-                    let mut emitter = InstructionEmitter {
+                    let mut builder = InstructionBuilder {
                         n_slots: &mut n_slots,
                         instructions: &mut new_instructions,
                     };
@@ -116,7 +116,7 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
                             lhs_conj,
                             rhs_conj,
                         },
-                        &mut emitter,
+                        &mut builder,
                     );
                     continue;
                 }
@@ -151,7 +151,7 @@ struct DotDecomposeInput<'a> {
     rhs_conj: bool,
 }
 
-struct InstructionEmitter<'a> {
+struct InstructionBuilder<'a> {
     n_slots: &'a mut usize,
     instructions: &'a mut Vec<ExecInstruction>,
 }
@@ -170,7 +170,7 @@ enum MergeSide {
     Rhs,
 }
 
-impl InstructionEmitter<'_> {
+impl InstructionBuilder<'_> {
     fn next_slot(&mut self) -> usize {
         let slot = *self.n_slots;
         *self.n_slots += 1;
@@ -259,7 +259,7 @@ fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr 
 }
 
 /// Emit decomposed instructions for a single non-canonical DotGeneral.
-fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<'_>) {
+fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<'_>) {
     let instr = input.instr;
     let config = input.config;
     let lhs = input.lhs;
@@ -295,7 +295,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
         .chain(config.lhs_batch_dims.iter())
         .copied()
         .collect();
-    let lhs_after_transpose = emit_transpose_if_needed(lhs, &lhs_target_perm, instr.dtype, emitter);
+    let lhs_after_transpose = emit_transpose_if_needed(lhs, &lhs_target_perm, instr.dtype, builder);
 
     let lhs_canon = if fi_l > 1 || ci_l > 1 {
         emit_merge_reshape(
@@ -307,7 +307,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
                 side: MergeSide::Lhs,
             },
             instr.dtype,
-            emitter,
+            builder,
         )
     } else {
         lhs_after_transpose
@@ -320,7 +320,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
         .chain(config.rhs_batch_dims.iter())
         .copied()
         .collect();
-    let rhs_after_transpose = emit_transpose_if_needed(rhs, &rhs_target_perm, instr.dtype, emitter);
+    let rhs_after_transpose = emit_transpose_if_needed(rhs, &rhs_target_perm, instr.dtype, builder);
 
     let rhs_canon = if fi_r > 1 || ci_r > 1 {
         emit_merge_reshape(
@@ -332,7 +332,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
                 side: MergeSide::Rhs,
             },
             instr.dtype,
-            emitter,
+            builder,
         )
     } else {
         rhs_after_transpose
@@ -350,7 +350,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
     let needs_output_reshape = fi_l > 1 || fi_r > 1;
 
     let canonical_output_slot = if needs_output_reshape {
-        emitter.next_slot()
+        builder.next_slot()
     } else {
         instr.output_slots[0]
     };
@@ -374,7 +374,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
             .push(lhs_canon.extents[lhs_free_count_canon + 1 + axis_offset].clone());
     }
 
-    emitter.push(ExecInstruction {
+    builder.push(ExecInstruction {
         op: if input.lhs_conj || input.rhs_conj {
             ExecOp::DotGeneralWithConj {
                 config: canonical_config,
@@ -413,7 +413,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, emitter: &mut InstructionEmitter<
         // directly, which we cloned from `instr` above.
         let metadata_shape = instr.output_shapes[0].clone();
 
-        emitter.push(ExecInstruction {
+        builder.push(ExecInstruction {
             op: ExecOp::Reshape {
                 shape: to_shape.clone(),
             },
@@ -431,7 +431,7 @@ fn emit_transpose_if_needed(
     operand: OperandMeta<'_>,
     target_perm: &[usize],
     dtype: DType,
-    emitter: &mut InstructionEmitter<'_>,
+    builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let is_identity = target_perm.iter().enumerate().all(|(i, &p)| i == p);
     if is_identity {
@@ -449,8 +449,8 @@ fn emit_transpose_if_needed(
         .iter()
         .map(|&axis| operand.extents[axis].clone())
         .collect();
-    let out_slot = emitter.next_slot();
-    emitter.push(ExecInstruction {
+    let out_slot = builder.next_slot();
+    builder.push(ExecInstruction {
         op: ExecOp::Transpose {
             perm: target_perm.to_vec(),
         },
@@ -472,7 +472,7 @@ fn emit_merge_reshape(
     operand: &EmittedOperand,
     spec: MergeReshapeSpec,
     dtype: DType,
-    emitter: &mut InstructionEmitter<'_>,
+    builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let to_shape = match spec.side {
         MergeSide::Lhs => lhs_merge_shape(spec),
@@ -483,8 +483,8 @@ fn emit_merge_reshape(
         MergeSide::Rhs => rhs_merge_meta(operand, spec),
     };
 
-    let out_slot = emitter.next_slot();
-    emitter.push(ExecInstruction {
+    let out_slot = builder.next_slot();
+    builder.push(ExecInstruction {
         op: ExecOp::Reshape { shape: to_shape },
         input_slots: vec![operand.slot],
         output_slots: vec![out_slot],

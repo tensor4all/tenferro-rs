@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use computegraph::fragment::Fragment;
-use computegraph::types::GlobalValKey;
+use computegraph::graph::Graph;
+use computegraph::types::ValueKey;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::Tensor;
 
 #[derive(Clone)]
 pub struct CheckpointNode {
-    pub fragment: Arc<Fragment<StdTensorOp>>,
+    pub graph: Arc<Graph<StdTensorOp>>,
     pub alias_key: TensorInputKey,
-    pub alias_target: GlobalValKey<StdTensorOp>,
+    pub alias_target: ValueKey<StdTensorOp>,
     pub old_inputs: HashMap<TensorInputKey, Arc<Tensor>>,
     pub prev: Option<Arc<CheckpointNode>>,
 }
 
 impl CheckpointNode {
-    pub fn collect_aliases(&self) -> HashMap<TensorInputKey, GlobalValKey<StdTensorOp>> {
+    pub fn collect_aliases(&self) -> HashMap<TensorInputKey, ValueKey<StdTensorOp>> {
         let mut aliases = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {
@@ -27,14 +27,14 @@ impl CheckpointNode {
         aliases
     }
 
-    pub fn collect_fragments(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
-        let mut fragments = Vec::new();
+    pub fn collect_graphs(&self) -> Vec<Arc<Graph<StdTensorOp>>> {
+        let mut graphs = Vec::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {
-            fragments.push(node.fragment.clone());
+            graphs.push(node.graph.clone());
             current = node.prev.as_deref();
         }
-        fragments
+        graphs
     }
 
     pub fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
@@ -54,7 +54,7 @@ impl CheckpointNode {
     /// Merge two checkpoint chains into a single linked list.
     ///
     /// The lhs chain is reconstructed on top of the rhs chain so that
-    /// `collect_aliases`, `collect_fragments`, and `collect_inputs`
+    /// `collect_aliases`, `collect_graphs`, and `collect_inputs`
     /// traverse both sides during the AD pass.
     pub(crate) fn merge_chains(
         lhs: Option<Arc<CheckpointNode>>,
@@ -73,7 +73,7 @@ impl CheckpointNode {
                 let mut prev: Option<Arc<CheckpointNode>> = Some(rhs_head);
                 for node in nodes.into_iter().rev() {
                     prev = Some(Arc::new(CheckpointNode {
-                        fragment: node.fragment.clone(),
+                        graph: node.graph.clone(),
                         alias_key: node.alias_key.clone(),
                         alias_target: node.alias_target.clone(),
                         old_inputs: node.old_inputs.clone(),

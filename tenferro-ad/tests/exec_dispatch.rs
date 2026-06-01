@@ -14,8 +14,8 @@ fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
 }
 
-fn empty_extents(n_outputs: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
-    vec![Vec::new(); n_outputs]
+fn empty_extents(output_count: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    vec![Vec::new(); output_count]
 }
 
 fn scalar_tensor(value: f64) -> Tensor {
@@ -67,20 +67,20 @@ fn pad_config() -> PadConfig {
     }
 }
 
-fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
+fn single_instruction_program(op: ExecOp, input_count: usize) -> ExecProgram {
     ExecProgram {
         instructions: vec![ExecInstruction {
             op,
-            input_slots: (0..n_inputs).collect(),
-            output_slots: vec![n_inputs],
+            input_slots: (0..input_count).collect(),
+            output_slots: vec![input_count],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
             output_extents: empty_extents(1),
-            last_use: vec![false; n_inputs],
+            last_use: vec![false; input_count],
         }],
-        input_slots: (0..n_inputs).collect(),
-        output_slots: vec![n_inputs],
-        n_slots: n_inputs + 1,
+        input_slots: (0..input_count).collect(),
+        output_slots: vec![input_count],
+        n_slots: input_count + 1,
     }
 }
 
@@ -438,10 +438,10 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::ReduceMin { axes: vec![0] }, 1, "reduce_min", 31.0),
     ];
 
-    for (op, n_inputs, expected_call, expected_value) in cases {
+    for (op, input_count, expected_call, expected_value) in cases {
         let mut backend = FakeTensorBackend::default();
-        let program = single_instruction_program(op, n_inputs);
-        let inputs = (0..n_inputs)
+        let program = single_instruction_program(op, input_count);
+        let inputs = (0..input_count)
             .map(|idx| scalar_tensor(idx as f64 + 1.0))
             .collect();
         let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
