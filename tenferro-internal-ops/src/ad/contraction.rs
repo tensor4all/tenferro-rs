@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
@@ -10,7 +9,7 @@ use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
 pub fn linearize_dot_general(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &DotGeneralConfig,
@@ -71,7 +70,7 @@ pub fn linearize_dot_general(
 }
 
 pub fn linearize_reduce_sum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
     _axes: &[usize],
@@ -92,7 +91,7 @@ pub fn linearize_reduce_sum(
 }
 
 pub fn linearize_reduce_prod(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -142,7 +141,7 @@ pub fn linearize_reduce_prod(
 }
 
 pub fn linearize_reduce_chooser(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],

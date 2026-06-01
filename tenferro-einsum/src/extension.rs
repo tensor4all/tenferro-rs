@@ -283,13 +283,13 @@ impl ExtensionAdRule for EinsumAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Linearize)?;
+        let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
         let mut terms = Vec::new();
 
         for (active_idx, tangent) in tangent_in.iter().enumerate() {
@@ -989,7 +989,7 @@ fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&Einsu
 
 #[cfg(feature = "autodiff")]
 fn sum_terms(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     terms: Vec<LocalValId>,
 ) -> Option<LocalValId> {
     match terms.as_slice() {

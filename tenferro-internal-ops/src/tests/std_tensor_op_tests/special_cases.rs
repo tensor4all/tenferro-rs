@@ -33,7 +33,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         to_shape: shape![2, 2],
     };
     let identity_reshape_result =
-        identity_reshape.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+        identity_reshape.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
     let identity_reshape_fragment = builder.build();
     assert_eq!(identity_reshape_result, vec![Some(tangent)]);
     assert!(identity_reshape_fragment.ops().is_empty());
@@ -78,7 +78,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         dims: vec![0, 1],
     };
     let identity_broadcast_result =
-        identity_broadcast.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+        identity_broadcast.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
     let identity_broadcast_fragment = builder.build();
     assert_eq!(identity_broadcast_result, vec![Some(tangent)]);
     assert!(identity_broadcast_fragment.ops().is_empty());
@@ -489,7 +489,7 @@ impl ExtensionAdRule for RuleOnlyIdentityAd {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -520,7 +520,7 @@ fn extension_try_linearize_uses_registered_rule() {
     let mut ad_ctx = ShapeGuardContext::default();
     let dx = builder.add_input(tensor_input_key(900));
     let result = op
-        .try_linearize(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .try_jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
         .expect("registered extension rule should linearize");
 
     assert_eq!(result, vec![Some(dx)]);
@@ -535,7 +535,7 @@ fn extension_try_transpose_uses_registered_rule() {
     let mut ad_ctx = ShapeGuardContext::default();
     let ct = builder.add_input(tensor_input_key(901));
     let result = op
-        .try_transpose_rule(
+        .try_linear_transpose_rule(
             &mut builder,
             &[Some(ct)],
             &external_inputs(910, 1),
@@ -555,9 +555,9 @@ fn extension_try_linearize_reports_missing_rule() {
     let mut ad_ctx = ShapeGuardContext::default();
     let dx = builder.add_input(tensor_input_key(920));
     let err = op
-        .try_linearize(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .try_jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
         .expect_err("missing extension rule should be an AD error");
 
-    assert_eq!(err.rule(), ADRuleKind::Linearize);
+    assert_eq!(err.rule(), ADRuleKind::Jvp);
     assert!(err.to_string().contains(family));
 }

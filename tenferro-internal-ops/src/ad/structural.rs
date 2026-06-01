@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::{PadConfig, SliceConfig};
@@ -39,7 +38,7 @@ fn shape_exprs_match_primal_input(
 }
 
 pub fn linearize_transpose(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     perm: &[usize],
 ) -> Vec<Option<LocalValId>> {
@@ -64,7 +63,7 @@ pub fn linearize_transpose(
 }
 
 pub fn linearize_reshape(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
@@ -102,7 +101,7 @@ pub fn linearize_reshape(
 }
 
 pub fn linearize_broadcast_in_dim(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     shape: &[DimExpr],
@@ -139,7 +138,7 @@ pub fn linearize_broadcast_in_dim(
 }
 
 pub fn linearize_convert(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     from: tenferro_tensor::DType,
     to: tenferro_tensor::DType,
@@ -160,7 +159,7 @@ pub fn linearize_convert(
 }
 
 pub fn linearize_tril(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
@@ -180,7 +179,7 @@ pub fn linearize_tril(
 }
 
 pub fn linearize_triu(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
@@ -200,7 +199,7 @@ pub fn linearize_triu(
 }
 
 pub fn linearize_slice(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     config: &SliceConfig,
 ) -> Vec<Option<LocalValId>> {
@@ -220,7 +219,7 @@ pub fn linearize_slice(
 }
 
 pub fn linearize_pad(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     config: &PadConfig,
 ) -> Vec<Option<LocalValId>> {
@@ -240,7 +239,7 @@ pub fn linearize_pad(
 }
 
 pub fn linearize_concatenate(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axis: usize,
@@ -281,7 +280,7 @@ pub fn linearize_concatenate(
 }
 
 pub fn linearize_reverse(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
 ) -> Vec<Option<LocalValId>> {

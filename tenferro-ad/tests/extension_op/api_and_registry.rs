@@ -227,7 +227,7 @@ fn malformed_family_id_is_rejected() {
         fn linearize(
             &self,
             _op: &dyn ExtensionOp,
-            _builder: &mut FragmentBuilder<StdTensorOp>,
+            _builder: &mut dyn OpEmitter<StdTensorOp>,
             _primal_in: &[GlobalValKey<StdTensorOp>],
             _primal_out: &[GlobalValKey<StdTensorOp>],
             _tangent_in: &[Option<LocalValId>],

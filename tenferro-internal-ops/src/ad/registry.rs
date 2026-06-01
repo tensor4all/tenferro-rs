@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_core_ops::PrimitiveOpKind;
@@ -12,7 +11,7 @@ use crate::std_tensor_op::StdTensorOp;
 
 pub(crate) type LinearizeFn = fn(
     &StdTensorOp,
-    &mut FragmentBuilder<StdTensorOp>,
+    &mut dyn OpEmitter<StdTensorOp>,
     &[GlobalValKey<StdTensorOp>],
     &[GlobalValKey<StdTensorOp>],
     &[Option<LocalValId>],
@@ -34,7 +33,7 @@ pub(crate) trait PrimitiveAdRule: Send + Sync {
     fn linearize(
         &self,
         op: &StdTensorOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -66,7 +65,7 @@ impl PrimitiveAdRule for FunctionPrimitiveAdRule {
     fn linearize(
         &self,
         op: &StdTensorOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -343,7 +342,7 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
 
 fn linearize_add(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -365,7 +364,7 @@ fn transpose_add(
 
 fn linearize_mul(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -393,7 +392,7 @@ fn transpose_mul(
 
 fn linearize_neg(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -415,7 +414,7 @@ fn transpose_neg(
 
 fn linearize_conj(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -444,7 +443,7 @@ fn transpose_conj(
 
 fn linearize_div(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -457,7 +456,7 @@ fn linearize_div(
 
 fn linearize_abs(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -468,7 +467,7 @@ fn linearize_abs(
 
 fn linearize_sign(
     _op: &StdTensorOp,
-    _builder: &mut FragmentBuilder<StdTensorOp>,
+    _builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -479,7 +478,7 @@ fn linearize_sign(
 
 fn linearize_maximum(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -492,7 +491,7 @@ fn linearize_maximum(
 
 fn linearize_minimum(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -505,7 +504,7 @@ fn linearize_minimum(
 
 fn linearize_compare(
     _op: &StdTensorOp,
-    _builder: &mut FragmentBuilder<StdTensorOp>,
+    _builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     _tangent_in: &[Option<LocalValId>],
@@ -516,7 +515,7 @@ fn linearize_compare(
 
 fn linearize_select(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -529,7 +528,7 @@ fn linearize_select(
 
 fn linearize_clamp(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -584,7 +583,7 @@ macro_rules! analytic_linearize {
     ($name:ident, $callee:path, primal_in) => {
         fn $name(
             _op: &StdTensorOp,
-            builder: &mut FragmentBuilder<StdTensorOp>,
+            builder: &mut dyn OpEmitter<StdTensorOp>,
             primal_in: &[GlobalValKey<StdTensorOp>],
             _primal_out: &[GlobalValKey<StdTensorOp>],
             tangent_in: &[Option<LocalValId>],
@@ -596,7 +595,7 @@ macro_rules! analytic_linearize {
     ($name:ident, $callee:path, primal_out) => {
         fn $name(
             _op: &StdTensorOp,
-            builder: &mut FragmentBuilder<StdTensorOp>,
+            builder: &mut dyn OpEmitter<StdTensorOp>,
             _primal_in: &[GlobalValKey<StdTensorOp>],
             primal_out: &[GlobalValKey<StdTensorOp>],
             tangent_in: &[Option<LocalValId>],
@@ -615,7 +614,7 @@ analytic_linearize!(linearize_tanh, analytic::linearize_tanh, primal_out);
 analytic_linearize!(linearize_sqrt, analytic::linearize_sqrt, primal_out);
 fn linearize_rsqrt(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -627,7 +626,7 @@ fn linearize_rsqrt(
 }
 fn linearize_pow(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -668,7 +667,7 @@ analytic_transpose!(transpose_log1p, analytic::transpose_log1p);
 
 fn linearize_dot_general(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -705,7 +704,7 @@ fn transpose_dot_general(
 
 fn linearize_reduce_sum(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -738,7 +737,7 @@ fn transpose_reduce_sum(
 
 fn linearize_reduce_prod(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -771,7 +770,7 @@ fn transpose_reduce_prod(
 
 fn linearize_reduce_max(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -787,7 +786,7 @@ fn linearize_reduce_max(
 
 fn linearize_reduce_min(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -837,7 +836,7 @@ fn transpose_reduce_min(
 
 fn linearize_transpose(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -869,7 +868,7 @@ fn transpose_transpose(
 
 fn linearize_reshape(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -899,7 +898,7 @@ fn transpose_reshape(
 
 fn linearize_broadcast_in_dim(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -934,7 +933,7 @@ fn transpose_broadcast_in_dim(
 
 fn linearize_convert(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -972,7 +971,7 @@ macro_rules! diagonal_rule {
     ($lin:ident, $trans:ident, $variant:ident, $lin_call:path, $trans_call:path) => {
         fn $lin(
             op: &StdTensorOp,
-            builder: &mut FragmentBuilder<StdTensorOp>,
+            builder: &mut dyn OpEmitter<StdTensorOp>,
             _primal_in: &[GlobalValKey<StdTensorOp>],
             _primal_out: &[GlobalValKey<StdTensorOp>],
             tangent_in: &[Option<LocalValId>],
@@ -1019,7 +1018,7 @@ macro_rules! triangular_rule {
     ($lin:ident, $trans:ident, $variant:ident, $lin_call:path, $trans_call:path) => {
         fn $lin(
             op: &StdTensorOp,
-            builder: &mut FragmentBuilder<StdTensorOp>,
+            builder: &mut dyn OpEmitter<StdTensorOp>,
             _primal_in: &[GlobalValKey<StdTensorOp>],
             _primal_out: &[GlobalValKey<StdTensorOp>],
             tangent_in: &[Option<LocalValId>],
@@ -1064,7 +1063,7 @@ triangular_rule!(
 
 fn linearize_gather(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1101,7 +1100,7 @@ fn transpose_gather(
 
 fn linearize_gather_dynamic_slice_sizes(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1162,7 +1161,7 @@ fn transpose_gather_dynamic_slice_sizes(
 
 fn linearize_scatter(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1199,7 +1198,7 @@ fn transpose_scatter(
 
 fn linearize_slice(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1234,7 +1233,7 @@ fn transpose_slice(
 
 fn linearize_dynamic_slice(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1270,7 +1269,7 @@ fn transpose_dynamic_slice(
 
 fn linearize_dynamic_update_slice(
     _op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1300,7 +1299,7 @@ fn transpose_dynamic_update_slice(
 
 fn linearize_pad(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1335,7 +1334,7 @@ fn transpose_pad(
 
 fn linearize_concatenate(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1373,7 +1372,7 @@ fn transpose_concatenate(
 
 fn linearize_reverse(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1406,7 +1405,7 @@ fn transpose_reverse(
 
 fn linearize_shape_of(
     _op: &StdTensorOp,
-    _builder: &mut FragmentBuilder<StdTensorOp>,
+    _builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     _tangent_in: &[Option<LocalValId>],
@@ -1428,7 +1427,7 @@ fn transpose_shape_of(
 
 fn linearize_dynamic_truncate(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1463,7 +1462,7 @@ fn transpose_dynamic_truncate(
 
 fn linearize_pad_to_match(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -1500,7 +1499,7 @@ fn transpose_pad_to_match(
 
 fn linearize_constant(
     _op: &StdTensorOp,
-    _builder: &mut FragmentBuilder<StdTensorOp>,
+    _builder: &mut dyn OpEmitter<StdTensorOp>,
     _primal_in: &[GlobalValKey<StdTensorOp>],
     _primal_out: &[GlobalValKey<StdTensorOp>],
     _tangent_in: &[Option<LocalValId>],

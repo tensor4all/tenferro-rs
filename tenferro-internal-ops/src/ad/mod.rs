@@ -31,19 +31,45 @@ pub mod support;
 mod zeros;
 
 #[cfg(feature = "autodiff")]
-use computegraph::fragment::FragmentBuilder;
-#[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
 
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleKind, ADRuleResult};
+use tidu::{ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
 #[cfg(feature = "autodiff")]
 use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
+
+#[cfg(feature = "autodiff")]
+pub(crate) struct PrimitiveBuilderEmitter<'a, B: ?Sized> {
+    inner: &'a mut B,
+}
+
+#[cfg(feature = "autodiff")]
+impl<'a, B: ?Sized> PrimitiveBuilderEmitter<'a, B> {
+    pub(crate) fn new(inner: &'a mut B) -> Self {
+        Self { inner }
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl<B> OpEmitter<StdTensorOp> for PrimitiveBuilderEmitter<'_, B>
+where
+    B: PrimitiveBuilder<StdTensorOp> + ?Sized,
+{
+    fn add_op(
+        &mut self,
+        op: StdTensorOp,
+        inputs: Vec<ValRef<StdTensorOp>>,
+        mode: OpMode,
+    ) -> Vec<LocalValId> {
+        let inputs = inputs.into_iter().map(PrimitiveValue::from).collect();
+        self.inner.add_primitive(op, inputs, mode)
+    }
+}
 
 /// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its
 /// tangent inputs, emit the linearized fragment into `builder` and return
@@ -55,7 +81,7 @@ use crate::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 pub fn linearize(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -71,7 +97,7 @@ pub fn linearize(
 #[cfg(feature = "autodiff")]
 pub fn try_linearize(
     op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -92,7 +118,7 @@ pub fn try_linearize(
         .primitive_kind()
         .expect("non-extension StdTensorOp must have a primitive kind");
     let rule = registry::primitive_ad_rule(kind)
-        .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Linearize))?;
+        .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Jvp))?;
     rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx)
 }
 

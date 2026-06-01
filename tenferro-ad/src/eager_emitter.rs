@@ -6,6 +6,7 @@ use computegraph::{GlobalValKey, LocalValId, OpEmitter, OpMode, ValRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
+use tidu::{PrimitiveBuilder, PrimitiveValue};
 
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 
@@ -101,6 +102,18 @@ impl<B: TensorBackend + 'static> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> 
             self.results.push(Arc::new(output));
         }
         (base..self.results.len()).collect()
+    }
+}
+
+impl<B: TensorBackend + 'static> PrimitiveBuilder<StdTensorOp> for EagerEmitter<'_, B> {
+    fn add_primitive(
+        &mut self,
+        op: StdTensorOp,
+        inputs: Vec<PrimitiveValue<StdTensorOp>>,
+        mode: OpMode,
+    ) -> Vec<LocalValId> {
+        let inputs = inputs.into_iter().map(ValRef::from).collect();
+        self.add_op(op, inputs, mode)
     }
 }
 

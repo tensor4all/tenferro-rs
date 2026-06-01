@@ -6,7 +6,6 @@ use std::sync::Arc;
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 #[cfg(feature = "autodiff")]
-use computegraph::fragment::FragmentBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
@@ -411,14 +410,14 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = downcast_primal_op(op, ADRuleKind::Linearize)?;
-        validate_ad_supported(&op.subscripts, ADRuleKind::Linearize)?;
+        let op = downcast_primal_op(op, ADRuleKind::Jvp)?;
+        validate_ad_supported(&op.subscripts, ADRuleKind::Jvp)?;
         let active_inputs: Vec<usize> = tangent_in
             .iter()
             .enumerate()
@@ -481,7 +480,7 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         _tangent_in: &[Option<LocalValId>],
@@ -489,7 +488,7 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
         Err(ADRuleError::unsupported(
             TROPICAL_EINSUM_JVP_FAMILY_ID,
-            ADRuleKind::Linearize,
+            ADRuleKind::Jvp,
         ))
     }
 

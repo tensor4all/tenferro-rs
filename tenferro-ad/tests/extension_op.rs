@@ -24,7 +24,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 use support::RunTraced;
 
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use num_complex::{Complex32, Complex64};
@@ -146,7 +145,7 @@ impl ExtensionAdRuleTrait for TestScaleBy2Rule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -263,7 +262,7 @@ impl ExtensionAdRuleTrait for TestSwapRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -447,7 +446,7 @@ impl ExtensionAdRuleTrait for TestProbeIdentityRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut FragmentBuilder<StdTensorOp>,
+        builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -500,7 +499,7 @@ impl ExtensionAdRuleTrait for TestProbeLinearRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],

@@ -16,7 +16,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorElementwise, TypedTensor};
-use tidu::eager::{self, Input as EagerInput, KeySource, Output as EagerOutput, Recorder, Trace};
+use tidu::eager::{self, EagerInput, EagerOutput, KeySource, Recorder, Trace};
 
 use self::backward::TenferroBackwardCallbacks;
 use crate::eager_backend::EagerBackend;

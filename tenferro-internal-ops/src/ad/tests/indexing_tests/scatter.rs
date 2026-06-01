@@ -11,7 +11,7 @@ fn linearize_scatter_inactive_tangents_returns_none() {
     let op = StdTensorOp::Scatter(rank1_scatter_config());
     let primal_in = vec![operand_key, indices_key, updates_key];
     let tangent_in: [Option<LocalValId>; 3] = [None, None, None];
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result, vec![None]);
     assert!(builder.build().ops().is_empty());
 }
@@ -40,7 +40,7 @@ fn linearize_scatter_operand_only_is_identity_passthrough() {
     let primal_in = vec![operand_key, indices_key, updates_key];
     let tangent_in = [Some(operand_tangent), None, None];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(
         result,
         vec![Some(operand_tangent)],
@@ -81,7 +81,7 @@ fn linearize_scatter_updates_only_uses_zero_operand() {
     ];
     let tangent_in = [None, None, Some(updates_tangent)];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 
@@ -152,7 +152,7 @@ fn linearize_scatter_both_tangents_emit_single_scatter() {
     let primal_in = vec![operand_key, indices_key.clone(), updates_key];
     let tangent_in = [Some(operand_tangent), None, Some(updates_tangent)];
 
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 

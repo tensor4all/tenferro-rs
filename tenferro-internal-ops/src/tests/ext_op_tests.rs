@@ -130,7 +130,7 @@ impl ExtensionAdRule for CoverageRule {
     fn linearize(
         &self,
         _op: &dyn ExtensionOp,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _builder: &mut dyn OpEmitter<StdTensorOp>,
         _primal_in: &[GlobalValKey<StdTensorOp>],
         _primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
@@ -208,7 +208,7 @@ fn explicit_empty_rule_set_does_not_fallback_to_global_registry() {
     let mut ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
     let err = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
         .expect_err("explicit empty rule set must not consult global registry");
-    assert_eq!(err.rule(), ADRuleKind::Linearize);
+    assert_eq!(err.rule(), ADRuleKind::Jvp);
     assert!(err.to_string().contains(family));
 }
 
@@ -275,7 +275,7 @@ fn missing_registered_rule_helpers_return_ad_rule_errors() {
     let mut ctx = ShapeGuardContext::default();
     let linearize_err =
         linearize_extension_rule(&op, &mut builder, &[], &[], &[], &mut ctx).unwrap_err();
-    assert_eq!(linearize_err.rule(), ADRuleKind::Linearize);
+    assert_eq!(linearize_err.rule(), ADRuleKind::Jvp);
     assert!(linearize_err.to_string().contains(op.family_id()));
 
     let mut emitter = FragmentBuilder::<StdTensorOp>::new();

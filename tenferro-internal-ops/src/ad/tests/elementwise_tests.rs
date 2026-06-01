@@ -3,7 +3,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use tenferro_tensor::{CompareDir, DType};
-use tidu::PrimitiveOp;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::input_key::TensorInputKey;
@@ -93,7 +92,7 @@ fn linearize_elementwise_inactive_inputs_return_none_without_ops() {
         StdTensorOp::Clamp,
     ] {
         let mut builder = FragmentBuilder::<StdTensorOp>::new();
-        let result = op.linearize(
+        let result = op.jvp_rule(
             &mut builder,
             &keys,
             &[input_key(4)],
@@ -116,7 +115,7 @@ fn linearize_div_with_two_active_inputs_sums_both_terms() {
     let mut ctx = ShapeGuardContext::default();
     let op = StdTensorOp::Div;
 
-    let result = op.linearize(
+    let result = op.jvp_rule(
         &mut builder,
         &[input_key(12), input_key(13)],
         &[input_key(14)],
@@ -138,7 +137,7 @@ fn linearize_extrema_and_select_emit_zero_fill_for_one_sided_tangents() {
 
     let mut max_builder = FragmentBuilder::<StdTensorOp>::new();
     let dx = max_builder.add_input(tensor_input(20));
-    let result = StdTensorOp::Maximum.linearize(
+    let result = StdTensorOp::Maximum.jvp_rule(
         &mut max_builder,
         &[input_key(21), input_key(22)],
         &[],
@@ -152,7 +151,7 @@ fn linearize_extrema_and_select_emit_zero_fill_for_one_sided_tangents() {
 
     let mut min_builder = FragmentBuilder::<StdTensorOp>::new();
     let dy = min_builder.add_input(tensor_input(23));
-    let result = StdTensorOp::Minimum.linearize(
+    let result = StdTensorOp::Minimum.jvp_rule(
         &mut min_builder,
         &[input_key(24), input_key(25)],
         &[],
@@ -173,7 +172,7 @@ fn linearize_clamp_builds_nested_selects_for_active_bounds() {
     let dupper = builder.add_input(tensor_input(32));
     let mut ctx = ShapeGuardContext::default();
 
-    let result = StdTensorOp::Clamp.linearize(
+    let result = StdTensorOp::Clamp.jvp_rule(
         &mut builder,
         &[input_key(33), input_key(34), input_key(35)],
         &[],

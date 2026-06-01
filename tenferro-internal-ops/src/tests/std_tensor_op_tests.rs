@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
-use tidu::{ADRuleKind, ADRuleResult, PrimitiveOp};
+use tidu::{ADRuleKind, ADRuleResult, Primitive};
 
 use crate::input_key::TensorInputKey;
 
@@ -133,7 +133,7 @@ fn run_linearize_case(
             active.then(|| builder.add_input(tensor_input_key(300 + offset as u64)))
         })
         .collect();
-    let result = op.linearize(
+    let result = op.jvp_rule(
         &mut builder,
         &primal_in,
         &primal_out,
@@ -437,7 +437,7 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
     let dy = builder.add_input(TensorInputKey::User { id: 2 });
 
     let result =
-        StdTensorOp::add().linearize(&mut builder, &[], &[], &[Some(dx), Some(dy)], &mut ad_ctx);
+        StdTensorOp::add().jvp_rule(&mut builder, &[], &[], &[Some(dx), Some(dy)], &mut ad_ctx);
 
     assert_eq!(result.len(), 1);
     assert!(result[0].is_some());
@@ -529,7 +529,7 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
     );
     let tangent = builder.add_input(tensor_input_key(540));
     let real_linearized =
-        StdTensorOp::Conj.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+        StdTensorOp::Conj.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
     let real_linear_fragment = builder.build();
     assert_eq!(real_linearized, vec![Some(tangent)]);
     assert!(real_linear_fragment.ops().is_empty());
@@ -564,7 +564,7 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
     );
     let tangent = builder.add_input(tensor_input_key(560));
     let complex_linearized =
-        StdTensorOp::Conj.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+        StdTensorOp::Conj.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
     let complex_linear_fragment = builder.build();
     assert!(complex_linearized[0].is_some());
     assert_eq!(complex_linear_fragment.ops().len(), 1);
@@ -660,6 +660,65 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
 }
 
 #[test]
+fn test_std_tensor_op_reduce_prod_transpose_emits_product_rule() {
+    let (result, _, fragment) = run_transpose_case_with_input_shape(
+        StdTensorOp::ReduceProd { axes: vec![0] },
+        1,
+        &[true],
+        true,
+        Some(sym_shape(&[2, 3])),
+    );
+
+    assert!(result[0].is_some());
+    assert!(fragment.ops().iter().any(|instr| matches!(
+        &instr.op,
+        StdTensorOp::BroadcastInDim { dims, .. } if dims.as_slice() == [1]
+    )));
+    assert!(fragment.ops().iter().any(|instr| matches!(
+        &instr.op,
+        StdTensorOp::ReduceProd { axes } if axes.as_slice() == [0]
+    )));
+    assert!(fragment
+        .ops()
+        .iter()
+        .any(|instr| instr.op == StdTensorOp::Div));
+    assert_eq!(fragment.ops().last().unwrap().op, StdTensorOp::Mul);
+}
+
+#[test]
+fn test_std_tensor_op_reduce_chooser_transpose_emits_tie_split_rule() {
+    let (result, _, fragment) = run_transpose_case_with_input_shape(
+        StdTensorOp::ReduceMax { axes: vec![0, 1] },
+        1,
+        &[true],
+        true,
+        Some(sym_shape(&[2, 3])),
+    );
+
+    assert!(result[0].is_some());
+    assert!(fragment.ops().iter().any(|instr| matches!(
+        &instr.op,
+        StdTensorOp::Reshape { to_shape } if to_shape.is_empty()
+    )));
+    assert!(fragment
+        .ops()
+        .iter()
+        .any(|instr| instr.op == StdTensorOp::Compare(CompareDir::Eq)));
+    assert!(fragment.ops().iter().any(|instr| matches!(
+        &instr.op,
+        StdTensorOp::ReduceSum { axes } if axes.as_slice() == [0, 1]
+    )));
+    assert!(fragment.ops().iter().any(|instr| {
+        instr.op
+            == StdTensorOp::Convert {
+                from: DType::Bool,
+                to: DType::F64,
+            }
+    }));
+    assert_eq!(fragment.ops().last().unwrap().op, StdTensorOp::Mul);
+}
+
+#[test]
 fn test_std_tensor_op_pad_to_match_transpose_uses_static_slice_for_concrete_shape() {
     let (result, _, fragment) = run_transpose_case_with_input_shapes(
         StdTensorOp::PadToMatch { axis: 0 },
@@ -699,7 +758,7 @@ fn test_std_tensor_op_dynamic_truncate_linearize_uses_static_slice_for_narrowed_
         TensorMeta::exact(DType::F64, vec![SymDim::from(2usize)]),
     );
 
-    let result = StdTensorOp::DynamicTruncate { axis: 0 }.linearize(
+    let result = StdTensorOp::DynamicTruncate { axis: 0 }.jvp_rule(
         &mut builder,
         &primal_in,
         &primal_out,

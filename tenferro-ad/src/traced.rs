@@ -15,7 +15,7 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
-use tidu::{try_differentiate, try_transpose};
+use tidu::{try_linear_transpose, try_linearize};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -279,7 +279,7 @@ fn jvp_optional_result_with_rules(
     roots.extend(checkpoint_fragments.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
-    let linear = try_differentiate(
+    let linear = try_linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&wrt_input_key),
@@ -288,12 +288,12 @@ fn jvp_optional_result_with_rules(
         &aliases,
     )
     .map_err(|err| Error::Internal(err.to_string()))?;
-    let Some(tangent_output) = linear.tangent_outputs[0] else {
+    let Some(tangent_output) = linear.tangent_outputs()[0] else {
         return Ok(None);
     };
-    let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+    let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
     let metadata_scope = register_scoped_fragment_metadata(
-        &linear.fragment,
+        linear.as_graph(),
         vec![(
             GlobalValKey::Input(tangent_input_key.clone()),
             tensor_meta_from_tensor(
@@ -325,7 +325,7 @@ fn jvp_optional_result_with_rules(
     Ok(Some(traced_tensor_from_parts(TracedTensorParts {
         rank: output.rank,
         dtype: output.dtype,
-        fragment: Arc::new(linear.fragment),
+        fragment: Arc::new(linear.into_graph()),
         val: tangent_output,
         data: None,
         shape_hint: traced_shape_hint(output),
@@ -364,7 +364,7 @@ fn vjp_optional_result_with_rules(
     roots.extend(checkpoint_fragments.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
-    let linear = try_differentiate(
+    let linear = try_linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&wrt_input_key),
@@ -373,24 +373,24 @@ fn vjp_optional_result_with_rules(
         &aliases,
     )
     .map_err(|err| Error::Internal(err.to_string()))?;
-    if linear.tangent_outputs[0].is_none() {
+    if linear.tangent_outputs()[0].is_none() {
         return Ok(None);
     }
-    let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+    let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
     let linear_metadata_scope = register_scoped_fragment_metadata(
-        &linear.fragment,
+        linear.as_graph(),
         vec![(
             GlobalValKey::Input(linear_seed_key),
             registered_meta(&wrt.fragment.vals()[wrt.val].key),
         )],
     );
     ad_ctx.refresh_global_metadata();
-    let transposed =
-        try_transpose(&linear, &mut ad_ctx).map_err(|err| Error::Internal(err.to_string()))?;
+    let transposed = try_linear_transpose(&linear, &mut ad_ctx)
+        .map_err(|err| Error::Internal(err.to_string()))?;
     let cotangent_input_key =
-        linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
+        linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1);
     let transposed_metadata_scope = register_scoped_fragment_metadata(
-        &transposed.fragment,
+        transposed.as_graph(),
         vec![(
             GlobalValKey::Input(cotangent_input_key.clone()),
             tensor_meta_from_tensor(
@@ -402,8 +402,8 @@ fn vjp_optional_result_with_rules(
             ),
         )],
     );
-    let linear_fragment = Arc::new(linear.fragment);
-    let Some(cotangent_output) = transposed.tangent_outputs[0] else {
+    let linear_fragment = Arc::new(linear.into_graph());
+    let Some(cotangent_output) = transposed.tangent_outputs()[0] else {
         return Ok(None);
     };
 
@@ -426,7 +426,7 @@ fn vjp_optional_result_with_rules(
     Ok(Some(traced_tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
         dtype: wrt.dtype,
-        fragment: Arc::new(transposed.fragment),
+        fragment: Arc::new(transposed.into_graph()),
         val: cotangent_output,
         data: None,
         shape_hint: traced_shape_hint(wrt),

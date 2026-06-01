@@ -1,4 +1,3 @@
-use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::CompareDir;
@@ -160,7 +159,7 @@ fn active_mask(mode: &OpMode, len: usize) -> Vec<bool> {
 }
 
 pub fn linearize_div(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
@@ -206,7 +205,7 @@ pub fn linearize_div(
 }
 
 pub fn linearize_abs(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -228,7 +227,7 @@ pub fn linearize_abs(
 }
 
 pub fn linearize_sign(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
@@ -238,7 +237,7 @@ pub fn linearize_sign(
 }
 
 pub fn linearize_maximum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -261,7 +260,7 @@ pub fn linearize_maximum(
 }
 
 pub fn linearize_minimum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -284,7 +283,7 @@ pub fn linearize_minimum(
 }
 
 pub fn linearize_select(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
@@ -297,7 +296,7 @@ pub fn linearize_select(
 }
 
 pub fn linearize_clamp(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut dyn OpEmitter<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
