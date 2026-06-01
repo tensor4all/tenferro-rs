@@ -87,6 +87,12 @@ part of unrelated GPU or documentation work.
 CUDA client for one device. GPU kernels are JIT-compiled by CubeCL, so local
 CUDA toolkit configuration matters.
 
+`CubeclRuntime::synchronize()` is the explicit host-side barrier for direct GPU
+backend code. It synchronizes the current CubeCL CUDA stream and does not
+download tensor data. Higher-level eager CUDA execution exposes the same barrier
+through `EagerRuntime::synchronize()`, with CPU eager runtimes treating the call
+as a no-op.
+
 cuTENSOR, cuSOLVER, and cuBLAS are loaded lazily through the FFI layer. The
 backend first uses default soname/path candidates and allows explicit override
 with these variables:

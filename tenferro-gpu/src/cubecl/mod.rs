@@ -36,10 +36,14 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::cubecl::{CubeclBackend, upload_tensor, download_tensor};
+//! use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 //! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
 //!
 //! fn main() -> tenferro_tensor::Result<()> {
+//! if !gpu_available() {
+//!     return Ok(());
+//! }
+//!
 //! // 1. Create the GPU backend (device ordinal 0)
 //! let mut backend = CubeclBackend::new(0)?;
 //!

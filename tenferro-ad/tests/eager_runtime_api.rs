@@ -17,3 +17,10 @@ fn eager_runtime_replaces_eager_context_public_name() {
     runtime.clear_grads();
     assert!(x.grad().is_none());
 }
+
+#[test]
+fn eager_runtime_synchronize_is_available_and_cpu_noop() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+
+    runtime.synchronize().unwrap();
+}

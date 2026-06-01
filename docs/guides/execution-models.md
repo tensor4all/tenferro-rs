@@ -30,7 +30,8 @@ Subsequent CUDA ops can consume that handle on the same backend stream.
 
 The host waits when values are downloaded or otherwise need host inspection.
 Some library-backed operations also synchronize internally when they must read
-device-side status.
+device-side status. Call `EagerRuntime::synchronize()` when a workflow needs an
+explicit host-side barrier without downloading tensor values.
 
 ## Traced Mode
 

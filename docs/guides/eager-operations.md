@@ -35,8 +35,9 @@ provided by the separate `tenferro-einsum` standard extension.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
-download/read boundaries or inside operations that must inspect device-side
-status. See [Execution Models](execution-models.md) and
+download/read boundaries, through `EagerRuntime::synchronize()`, or inside
+operations that must inspect device-side status. See
+[Execution Models](execution-models.md) and
 [Devices and GPU](devices-and-gpu.md).
 
 ## Creating tensors

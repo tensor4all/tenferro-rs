@@ -342,6 +342,27 @@ impl EagerRuntime {
             .set_cache_limits(limits);
     }
 
+    /// Block the current thread until backend work submitted by this eager runtime completes.
+    ///
+    /// CPU runtimes return immediately. CUDA runtimes synchronize the current backend stream.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::EagerRuntime;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// ctx.synchronize().unwrap();
+    /// ```
+    pub fn synchronize(&self) -> Result<()> {
+        self.backend
+            .lock()
+            .unwrap()
+            .synchronize()
+            .map_err(Error::from)
+    }
+
     pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
         let mut backend =
             profile_eager_op_section("exec_outputs.lock_backend", || self.backend.lock().unwrap());

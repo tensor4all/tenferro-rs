@@ -24,6 +24,14 @@ impl EagerBackend {
     pub(crate) fn cuda(backend: CubeclBackend) -> Self {
         Self::Cuda(backend)
     }
+
+    pub(crate) fn synchronize(&mut self) -> TensorResult<()> {
+        match self {
+            Self::Cpu(_) => Ok(()),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(backend) => backend.runtime().synchronize(),
+        }
+    }
 }
 
 macro_rules! dispatch {
