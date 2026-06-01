@@ -6,7 +6,8 @@ Maintainers are the listed project stewards for tenferro-rs policy and release
 direction. GitHub write/admin access may be broader than this list and does not
 by itself confer maintainer status.
 
-- Hiroshi Shinaoka
+- Hiroshi Shinaoka (Lead Maintainer)
+- Satoshi Terasaki
 
 ## Contributors
 

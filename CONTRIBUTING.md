@@ -4,6 +4,10 @@ Thanks for helping improve tenferro-rs. This file describes the external
 contribution path. Repository-specific implementation rules live in
 `REPOSITORY_RULES.md`.
 
+Governance, maintainer roles, merge authority, and project-direction decisions
+are defined in [GOVERNANCE.md](GOVERNANCE.md). The maintainer list is
+maintained in [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
 ## Agent-assisted workflows
 
 Agent-assisted issue and bug-fix PR preparation is supported.
