@@ -1,7 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{
@@ -16,8 +16,16 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
+fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+}
+
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn c32_tensor(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
+    Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn i32_tensor(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
@@ -208,6 +216,15 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
+    let err = backend.svd_values(&Tensor::F64(input.clone())).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "svd_values",
+            ref message,
+        } if message.contains("does not implement")
+    ));
+
     let err = backend
         .svd_view(TensorView::F64(input.as_view()))
         .unwrap_err();
@@ -219,26 +236,59 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
             ref message,
         } if message.contains("borrowed tensor views")
     ));
+
+    let err = backend
+        .eigh_values(&Tensor::F64(input.clone()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "eigh_values",
+            ref message,
+        } if message.contains("does not implement")
+    ));
+
+    let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]));
+    let err = backend
+        .lu_solve_prepared(
+            &Tensor::F64(input.clone()),
+            &Tensor::F64(input.clone()),
+            &pivots,
+            &Tensor::F64(input),
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "lu_solve_prepared",
+            ref message,
+        } if message.contains("does not implement")
+    ));
 }
 
 #[test]
-fn default_lu_solve_prepared_delegates_to_solve_modes() {
+fn cpu_lu_solve_prepared_consumes_packed_factor_outputs() {
     let mut backend = CpuBackend::new();
-    let pivots = i32_tensor(vec![2], vec![0, 1]);
 
     let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
     let b = f64_tensor(vec![2, 1], vec![4.0, 9.0]);
+    let factors = backend.lu_factor(&a).unwrap();
     let x = backend
-        .lu_solve_prepared(&a, &a, &pivots, &b, false, false)
+        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
         .unwrap();
     assert_eq!(f64_values(&x), vec![2.0, 3.0]);
 
     let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 2.0, 3.0]);
     let b = f64_tensor(vec![2, 1], vec![5.0, 31.0]);
+    let factors = backend.lu_factor(&a).unwrap();
     let x = backend
-        .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
+        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, false)
         .unwrap();
-    assert_eq!(f64_values(&x), vec![5.0, 7.0]);
+    let values = f64_values(&x);
+    assert!((values[0] - 5.0).abs() < 1.0e-12);
+    assert!((values[1] - 7.0).abs() < 1.0e-12);
 
     let a = c64_tensor(
         vec![2, 2],
@@ -253,8 +303,9 @@ fn default_lu_solve_prepared_delegates_to_solve_modes() {
         vec![2, 1],
         vec![Complex64::new(2.0, -2.0), Complex64::new(6.0, 3.0)],
     );
+    let factors = backend.lu_factor(&a).unwrap();
     let x = backend
-        .lu_solve_prepared(&a, &a, &pivots, &b, true, true)
+        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, true)
         .unwrap();
     let values = c64_values(&x);
     assert!((values[0] - Complex64::new(2.0, 0.0)).norm() < 1.0e-12);
@@ -262,11 +313,180 @@ fn default_lu_solve_prepared_delegates_to_solve_modes() {
 }
 
 #[test]
-fn default_lu_solve_prepared_rejects_rank_less_than_two_transpose() {
+fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
+    let mut backend = CpuBackend::new();
+
+    let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
+    let factors = backend.lu_factor(&a).unwrap();
+    assert!(matches!(&factors[0], Tensor::F32(t) if t.shape() == [2, 2]));
+    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data() == [2, 2]));
+    assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data() == [-1.0]));
+
+    let a = c32_tensor(
+        vec![2, 2],
+        vec![
+            Complex32::new(2.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(3.0, 1.0),
+        ],
+    );
+    let factors = backend.lu_factor(&a).unwrap();
+    assert!(matches!(&factors[0], Tensor::C32(t) if t.shape() == [2, 2]));
+    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data() == [1, 2]));
+    assert!(matches!(&factors[2], Tensor::C32(t) if t.host_data() == [Complex32::new(1.0, 0.0)]));
+}
+
+#[test]
+fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
+    let mut backend = CpuBackend::new();
+
+    let s = backend
+        .svd_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
+        .unwrap();
+    assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+
+    let s = backend
+        .svd_values(&f64_tensor(
+            vec![2, 2, 2],
+            vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
+        ))
+        .unwrap();
+    assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2, 2]));
+
+    let s = backend
+        .svd_values(&c32_tensor(
+            vec![2, 2],
+            vec![
+                Complex32::new(3.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(4.0, 0.0),
+            ],
+        ))
+        .unwrap();
+    assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+
+    let s = backend
+        .svd_values(&c64_tensor(
+            vec![2, 2],
+            vec![
+                Complex64::new(3.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(4.0, 0.0),
+            ],
+        ))
+        .unwrap();
+    assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2]));
+
+    let values = backend
+        .eigh_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
+        .unwrap();
+    assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+
+    let values = backend
+        .eigh_values(&f64_tensor(
+            vec![2, 2, 2],
+            vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
+        ))
+        .unwrap();
+    assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2, 2]));
+
+    let values = backend
+        .eigh_values(&c32_tensor(
+            vec![2, 2],
+            vec![
+                Complex32::new(3.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(4.0, 0.0),
+            ],
+        ))
+        .unwrap();
+    assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+
+    let values = backend
+        .eigh_values(&c64_tensor(
+            vec![2, 2],
+            vec![
+                Complex64::new(3.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(4.0, 0.0),
+            ],
+        ))
+        .unwrap();
+    assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2]));
+}
+
+#[test]
+fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]);
+    let factors = backend.lu_factor(&a).unwrap();
+    let b = f64_tensor(vec![2], vec![6.0, 20.0]);
+
+    let x = backend
+        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+        .unwrap();
+    assert_eq!(x.shape(), &[2]);
+    assert_eq!(f64_values(&x), vec![3.0, 5.0]);
+
+    let empty_a = f64_tensor(vec![0, 0], Vec::new());
+    let empty_b = f64_tensor(vec![0, 1], Vec::new());
+    let empty_pivots = i32_tensor(vec![0], Vec::new());
+    let x = backend
+        .lu_solve_prepared(&empty_a, &empty_a, &empty_pivots, &empty_b, false, false)
+        .unwrap();
+    assert_eq!(x.shape(), &[0, 1]);
+
+    let bad_pivots = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let err = backend
+        .lu_solve_prepared(&a, &factors[0], &bad_pivots, &b, false, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DTypeMismatch {
+            op: "lu_solve_prepared",
+            ..
+        }
+    ));
+
+    let bad_b = c64_tensor(
+        vec![2, 1],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    );
+    let err = backend
+        .lu_solve_prepared(&a, &factors[0], &factors[1], &bad_b, false, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DTypeMismatch {
+            op: "lu_solve_prepared",
+            ..
+        }
+    ));
+
+    let bad_pivots = i32_tensor(vec![2], vec![0, 2]);
+    let err = backend
+        .lu_solve_prepared(&a, &a, &bad_pivots, &b, false, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "lu_solve_prepared",
+            ref message,
+        } if message.contains("1-based")
+    ));
+}
+
+#[test]
+fn cpu_lu_solve_prepared_rejects_rank_less_than_two() {
     let mut backend = CpuBackend::new();
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let pivots = i32_tensor(vec![2], vec![0, 1]);
+    let pivots = i32_tensor(vec![2], vec![1, 2]);
 
     let err = backend
         .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
@@ -274,7 +494,7 @@ fn default_lu_solve_prepared_rejects_rank_less_than_two_transpose() {
 
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::RankMismatch {
             op: "lu_solve_prepared",
             ..
         }

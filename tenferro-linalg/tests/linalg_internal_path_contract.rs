@@ -75,6 +75,91 @@ fn matrix_norm_uses_singular_values_only_path() {
 }
 
 #[test]
+fn traced_eigvalsh_uses_hermitian_values_only_path() {
+    let source = crate_source("src/traced.rs");
+    let eigvalsh_source = source_section(
+        &source,
+        "pub fn eigvalsh",
+        "/// Build a traced general eigenvalue-only op",
+    );
+
+    assert!(
+        eigvalsh_source.contains("eigh_values("),
+        "eigvalsh should emit a Hermitian eigenvalues-only internal op"
+    );
+    assert!(
+        !eigvalsh_source.contains("eigh(a)?.0"),
+        "eigvalsh should not materialize eigenvectors and then discard them"
+    );
+
+    let extension_source = crate_source("src/extension.rs");
+    assert!(
+        extension_source.contains("LinalgOp::EighVals"),
+        "linalg extension should define an internal EighVals op"
+    );
+    assert!(
+        extension_source.contains("backend.eigh_values"),
+        "EighVals execution should dispatch to a backend values-only hook"
+    );
+}
+
+#[test]
+fn traced_pinv_scales_svd_vectors_without_dense_diagonal_materialization() {
+    let source = crate_source("src/traced.rs");
+    let pinv_source = source_section(
+        &source,
+        "pub fn pinv_with_rtol",
+        "/// Build a traced vector, matrix, or tensor norm op",
+    );
+
+    assert!(
+        pinv_source.contains("scale_matrix_columns"),
+        "pinv should broadcast singular-value reciprocals across V columns"
+    );
+    assert!(
+        !pinv_source.contains("s_inv.embed_diag"),
+        "pinv should not materialize a dense diagonal matrix for singular values"
+    );
+}
+
+#[test]
+fn cpu_backend_overrides_prepared_lu_and_values_only_paths() {
+    let source = crate_source("src/cpu/backend.rs");
+    let lu_factor_source = source_section(&source, "fn lu_factor", "fn full_piv_lu");
+
+    assert!(
+        !lu_factor_source.contains("self.lu(input)?"),
+        "CPU lu_factor should factor directly instead of rebuilding from public LU outputs"
+    );
+    assert!(
+        !lu_factor_source.contains("identity_pivots"),
+        "CPU lu_factor should return real pivot metadata, not identity pivots"
+    );
+    for needle in ["fn lu_solve_prepared", "fn svd_values", "fn eigh_values"] {
+        assert!(
+            source.contains(needle),
+            "CPU backend should override {needle}"
+        );
+    }
+}
+
+#[test]
+fn backend_surface_has_hidden_hermitian_values_only_hook() {
+    let source = crate_source("src/backend.rs");
+
+    assert!(
+        source.contains("fn eigh_values"),
+        "backend surface should include a hidden eigh_values hook"
+    );
+    assert!(
+        source.contains(
+            "backend {} does not implement internal Hermitian eigenvalues-only decomposition"
+        ),
+        "default eigh_values should fail explicitly instead of silently using full eigh"
+    );
+}
+
+#[test]
 fn linalg_ad_has_prepared_solve_rules() {
     let source = crate_source("src/ad/rules/solve.rs");
 

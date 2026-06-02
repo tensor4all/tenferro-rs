@@ -310,6 +310,30 @@ fn test_cubecl_triangular_solve_c32_reconstructs_rhs() {
 
 #[test]
 #[ignore]
+fn test_cubecl_triangular_solve_batched_f64_matches_cpu() {
+    let a = tensor_f64(vec![2, 2, 2], vec![2.0, 0.0, 1.0, 3.0, 4.0, 0.0, -1.0, 2.0]);
+    let b = tensor_f64(vec![2, 1, 2], vec![5.0, 9.0, 2.0, 3.0]);
+    let mut cpu = cpu_backend();
+    let expected = cpu
+        .triangular_solve(&a, &b, true, false, false, false)
+        .unwrap();
+    let mut gpu = gpu_backend();
+    let actual = gpu
+        .triangular_solve(
+            &upload(&gpu, &a),
+            &upload(&gpu, &b),
+            true,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+    let actual = download(&gpu, &actual);
+    assert_tensor_close(&actual, &expected, 1e-9);
+}
+
+#[test]
+#[ignore]
 fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
     let input = tensor_f32(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
     let mut gpu = gpu_backend();
@@ -471,6 +495,27 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
         2,
     );
     assert_slice_close_c64(&recon, input.as_slice::<Complex64>().unwrap(), 1e-9);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_eigh_values_c64_matches_cpu() {
+    let l = vec![
+        Complex64::new(2.0, 0.0),
+        Complex64::new(1.0, -1.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.5, 0.0),
+    ];
+    let input = tensor_c64(
+        vec![2, 2],
+        matmul_c64(&l, &conj_transpose_c64(&l, 2, 2), 2, 2, 2),
+    );
+    let mut cpu = cpu_backend();
+    let expected = cpu.eigh_values(&input).unwrap();
+    let mut gpu = gpu_backend();
+    let actual = gpu.eigh_values(&upload(&gpu, &input)).unwrap();
+    let actual = download(&gpu, &actual);
+    assert_tensor_close(&actual, &expected, 1e-9);
 }
 
 #[test]

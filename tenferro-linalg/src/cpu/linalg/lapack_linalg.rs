@@ -11,10 +11,10 @@ mod triangular_solve;
 
 pub(crate) use cholesky::cholesky;
 pub(crate) use eig::eig;
-pub(crate) use eigh::eigh;
+pub(crate) use eigh::{eigh, eigh_values};
 pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
-pub(crate) use lu::lu;
+pub(crate) use lu::{lu, lu_factor};
 pub(crate) use qr::qr;
 pub(crate) use solve::solve;
-pub(crate) use svd::svd;
+pub(crate) use svd::{svd, svd_values};
 pub(crate) use triangular_solve::triangular_solve;

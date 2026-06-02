@@ -38,6 +38,9 @@ pub(crate) enum LinalgOp {
     Eigh {
         eps: f64,
     },
+    EighVals {
+        eps: f64,
+    },
     Eig {
         input_dtype: DType,
     },
@@ -53,6 +56,7 @@ impl LinalgOp {
     fn output_count(self) -> usize {
         match self {
             Self::Cholesky
+            | Self::EighVals { .. }
             | Self::FullPivLuSolve { .. }
             | Self::LuSolvePrepared { .. }
             | Self::SvdVals { .. }
@@ -87,6 +91,7 @@ impl LinalgOp {
             Self::LuFactor => 10,
             Self::LuSolvePrepared { .. } => 11,
             Self::SvdVals { .. } => 12,
+            Self::EighVals { .. } => 13,
         }
     }
 }
@@ -200,9 +205,10 @@ impl ExtensionOpTrait for LinalgExtensionOp {
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
         hasher.write_u8(self.op.tag());
         match self.op {
-            LinalgOp::Svd { eps } | LinalgOp::SvdVals { eps } | LinalgOp::Eigh { eps } => {
-                hasher.write_u64(eps.to_bits())
-            }
+            LinalgOp::Svd { eps }
+            | LinalgOp::SvdVals { eps }
+            | LinalgOp::Eigh { eps }
+            | LinalgOp::EighVals { eps } => hasher.write_u64(eps.to_bits()),
             LinalgOp::Eig { input_dtype } => hash_dtype(hasher, input_dtype),
             LinalgOp::FullPivLuSolve { transpose_a } => {
                 hasher.write_u8(u8::from(transpose_a));
@@ -289,6 +295,7 @@ impl ExtensionOpTrait for LinalgExtensionOp {
             }
             LinalgOp::Qr => qr_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0]),
+            LinalgOp::EighVals { .. } => vec![eigh_values_meta(input_dtypes[0], input_shapes[0])],
             LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0]),
         }
     }
@@ -365,6 +372,7 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
         LinalgOp::Qr => backend.qr(inputs[0]),
         LinalgOp::Eigh { .. } => backend.eigh(inputs[0]),
+        LinalgOp::EighVals { .. } => Ok(vec![backend.eigh_values(inputs[0])?]),
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
         LinalgOp::TriangularSolve {
             left_side,
@@ -457,6 +465,12 @@ fn eigh_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
         (dtype, vector_shape(n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
     ]
+}
+
+fn eigh_values_meta(dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
+    let n = shape[0].clone();
+    let batch = &shape[2..];
+    (singular_values_dtype(dtype), vector_shape(n, batch))
 }
 
 fn eig_meta(input_dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {

@@ -89,6 +89,10 @@ impl LinalgBackend for CubeclBackend {
         linalg::eigh(self, input)
     }
 
+    fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        linalg::eigh_values(self, input)
+    }
+
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         linalg::eig(self, input)
     }

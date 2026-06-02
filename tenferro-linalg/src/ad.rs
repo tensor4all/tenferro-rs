@@ -146,6 +146,9 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             LinalgOp::Eigh { eps } => {
                 rules::linearize_eigh(builder, primal_in, primal_out, tangent_in, eps, ctx)
             }
+            LinalgOp::EighVals { eps } => {
+                rules::linearize_eigh_values(builder, primal_in, tangent_in, eps, ctx)
+            }
             LinalgOp::Eig { input_dtype } => {
                 rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
             }
@@ -209,6 +212,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             | LinalgOp::SvdVals { .. }
             | LinalgOp::Qr
             | LinalgOp::Eigh { .. }
+            | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. } => vec![None; op.input_count()],
         };
         Ok(cotangents)

@@ -11,6 +11,8 @@ use tenferro_cpu::CpuContext;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
+    type Real: Copy + Clone + PoolScalar;
+
     fn parity_one() -> Self;
     fn cholesky_2d(
         ctx: &CpuContext,
@@ -22,6 +24,11 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn lu_factor_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)>;
     fn full_piv_lu_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -58,6 +65,11 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn svd_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
     fn qr_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -68,6 +80,11 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn eigh_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
 }
 
 fn matrix_dims<T>(
@@ -206,6 +223,10 @@ fn checked_product(
         .ok_or_else(|| invalid_config(op, format!("{role} element count overflows usize")))
 }
 
+fn batch_count(batch_shape: &[usize]) -> usize {
+    batch_shape.iter().product::<usize>().max(1)
+}
+
 fn checked_repeated_len(
     op: &'static str,
     role: &'static str,
@@ -333,6 +354,26 @@ fn permutation_matrix<T: Copy + Default>(perm: &[usize], one: T) -> Vec<T> {
         data[row + source * n] = one;
     }
     data
+}
+
+fn swap_sequence_from_permutation(
+    perm: &[usize],
+    k: usize,
+    op: &'static str,
+) -> tenferro_tensor::Result<Vec<i32>> {
+    let mut current: Vec<usize> = (0..perm.len()).collect();
+    let mut pivots = Vec::with_capacity(k);
+    for (step, &wanted) in perm.iter().take(k).enumerate() {
+        let pivot = current
+            .iter()
+            .position(|&row| row == wanted)
+            .ok_or_else(|| invalid_config(op, "invalid row permutation"))?;
+        current.swap(step, pivot);
+        let pivot_one_based = i32::try_from(pivot + 1)
+            .map_err(|_| invalid_config(op, "pivot index exceeds i32 range"))?;
+        pivots.push(pivot_one_based);
+    }
+    Ok(pivots)
 }
 
 impl_complex_vec_helpers!(
@@ -789,6 +830,8 @@ where
 macro_rules! impl_faer_linalg_for_real {
     ($scalar:ty) => {
         impl FaerLinalg for $scalar {
+    type Real = $scalar;
+
     fn parity_one() -> Self {
         1.0
     }
@@ -876,6 +919,49 @@ macro_rules! impl_faer_linalg_for_real {
             tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
         ])
+    }
+
+    fn lu_factor_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
+        let (m, n) = matrix_dims(input, "lu_factor")?;
+        let k = m.min(n);
+        let mut lu = Mat::zeros(m, n);
+        lu.copy_from(MatRef::from_column_major_slice(input.host_data(), m, n));
+        let mut perm = vec![0usize; m];
+        let mut perm_inv = vec![0usize; m];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
+                m,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut perm,
+            &mut perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .0;
+        let parity = if info.transposition_count % 2 == 0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let pivots = swap_sequence_from_permutation(&perm, k, "lu_factor")?;
+
+        Ok((
+            tensor_from_vec_with_template(vec![m, n], col_major_vec_from_mat(buffers, lu.as_ref()), input),
+            tensor_from_vec_with_template(vec![k], pivots, input),
+            tensor_from_vec_with_template(vec![], vec![parity], input),
+        ))
     }
 
     fn full_piv_lu_2d(
@@ -1303,6 +1389,38 @@ macro_rules! impl_faer_linalg_for_real {
         Ok(vec![u, s, vt])
     }
 
+    fn svd_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+        let (m, n) = matrix_dims(input, "svd_values")?;
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
+        let mut s = Diag::zeros(k);
+        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
+            m,
+            n,
+            faer::linalg::svd::ComputeSvdVectors::No,
+            faer::linalg::svd::ComputeSvdVectors::No,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::svd::svd(
+            mat,
+            s.as_mut(),
+            None,
+            None,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| decomposition_failed("svd_values"))?;
+
+        Ok(tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), input))
+    }
+
     fn qr_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -1400,6 +1518,34 @@ macro_rules! impl_faer_linalg_for_real {
 
         Ok(vec![values, vectors])
     }
+
+    fn eigh_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+        let n = square_matrix_dim(input, "eigh_values")?;
+        let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+        let mut values = Diag::zeros(n);
+        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
+            n,
+            faer::linalg::evd::ComputeEigenvectors::No,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::evd::self_adjoint_evd(
+            mat,
+            values.as_mut(),
+            None,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| decomposition_failed("eigh_values"))?;
+
+        Ok(tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), input))
+    }
         }
     };
 }
@@ -1410,6 +1556,7 @@ impl_faer_linalg_for_real!(f64);
 macro_rules! impl_faer_linalg_for_complex {
     (
         $complex:ty,
+        $real:ty,
         $faer_complex:ty,
         $to_faer_slice:ident,
         $to_faer_slice_mut:ident,
@@ -1419,6 +1566,8 @@ macro_rules! impl_faer_linalg_for_complex {
         $matrix_from_predicate:ident
     ) => {
         impl FaerLinalg for $complex {
+    type Real = $real;
+
     fn parity_one() -> Self {
         <$complex>::new(1.0, 0.0)
     }
@@ -1513,6 +1662,53 @@ macro_rules! impl_faer_linalg_for_complex {
             tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
         ])
+    }
+
+    fn lu_factor_2d(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
+        let (m, n) = matrix_dims(input, "lu_factor")?;
+        let k = m.min(n);
+        let mut lu = Mat::zeros(m, n);
+        lu.copy_from(MatRef::from_column_major_slice(
+            $to_faer_slice(input.host_data()),
+            m,
+            n,
+        ));
+        let mut perm = vec![0usize; m];
+        let mut perm_inv = vec![0usize; m];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
+                m,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut perm,
+            &mut perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .0;
+        let parity = if info.transposition_count % 2 == 0 {
+            <$complex>::new(1.0, 0.0)
+        } else {
+            <$complex>::new(-1.0, 0.0)
+        };
+        let pivots = swap_sequence_from_permutation(&perm, k, "lu_factor")?;
+
+        Ok((
+            tensor_from_vec_with_template(vec![m, n], $vec_from_mat(_buffers, lu.as_ref()), input),
+            tensor_from_vec_with_template(vec![k], pivots, input),
+            tensor_from_vec_with_template(vec![], vec![parity], input),
+        ))
     }
 
     fn full_piv_lu_2d(
@@ -1971,6 +2167,43 @@ macro_rules! impl_faer_linalg_for_complex {
         Ok(vec![u, s, vt])
     }
 
+    fn svd_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+        let (m, n) = matrix_dims(input, "svd_values")?;
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
+        let mut s = Diag::zeros(k);
+        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
+            m,
+            n,
+            faer::linalg::svd::ComputeSvdVectors::No,
+            faer::linalg::svd::ComputeSvdVectors::No,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::svd::svd(
+            mat,
+            s.as_mut(),
+            None,
+            None,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| decomposition_failed("svd_values"))?;
+
+        let col = s.as_ref().column_vector();
+        let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
+        for i in 0..col.nrows() {
+            data.push(col[i].re);
+        }
+        Ok(tensor_from_vec_with_template(vec![k], data, input))
+    }
+
     fn qr_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -2071,12 +2304,46 @@ macro_rules! impl_faer_linalg_for_complex {
 
         Ok(vec![values, vectors])
     }
+
+    fn eigh_values_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+        let n = square_matrix_dim(input, "eigh_values")?;
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+        let mut values = Diag::zeros(n);
+        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
+            n,
+            faer::linalg::evd::ComputeEigenvectors::No,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::evd::self_adjoint_evd(
+            mat,
+            values.as_mut(),
+            None,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| decomposition_failed("eigh_values"))?;
+
+        let col = values.as_ref().column_vector();
+        let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
+        for i in 0..col.nrows() {
+            data.push(col[i].re);
+        }
+        Ok(tensor_from_vec_with_template(vec![n], data, input))
+    }
         }
     };
 }
 
 impl_faer_linalg_for_complex!(
     Complex32,
+    f32,
     faer::c32,
     complex32_to_faer_slice,
     complex32_to_faer_slice_mut,
@@ -2087,6 +2354,7 @@ impl_faer_linalg_for_complex!(
 );
 impl_faer_linalg_for_complex!(
     Complex64,
+    f64,
     faer::c64,
     complex64_to_faer_slice,
     complex64_to_faer_slice_mut,
@@ -2149,6 +2417,63 @@ pub(crate) fn lu<T: FaerLinalg>(
     batched_multi_result("lu", buffers, input, 2, |buffers, batch| {
         T::lu_2d(ctx, buffers, batch)
     })
+}
+
+pub(crate) fn lu_factor<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
+    if has_zero_dim(input.shape()) {
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "lu_factor")?;
+        let k = m.min(n);
+        let parity_len = batch_count(batch_shape);
+        return Ok((
+            tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input),
+            tensor_from_vec_with_template(
+                vector_with_batch_shape(k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                batch_shape.to_vec(),
+                vec![T::parity_one(); parity_len],
+                input,
+            ),
+        ));
+    }
+
+    let (m, n, batch_shape) = matrix_core_and_batch(input, "lu_factor")?;
+    if batch_shape.is_empty() {
+        return T::lu_factor_2d(ctx, buffers, input);
+    }
+
+    let k = m.min(n);
+    let matrix_len = m * n;
+    let batch_total = batch_count(batch_shape);
+    let mut lu_data = buffers.acquire_with_capacity::<T>(matrix_len * batch_total);
+    let mut pivot_data = Vec::with_capacity(k * batch_total);
+    let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
+
+    for batch in 0..batch_total {
+        let start = batch * matrix_len;
+        let end = start + matrix_len;
+        let batch_input = tensor_from_vec_with_template(
+            vec![m, n],
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let (packed, pivots, parity) = T::lu_factor_2d(ctx, buffers, &batch_input)?;
+        lu_data.extend_from_slice(packed.host_data());
+        pivot_data.extend_from_slice(pivots.host_data());
+        parity_data.extend_from_slice(parity.host_data());
+    }
+
+    Ok((
+        tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input),
+        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input),
+        tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input),
+    ))
 }
 
 pub(crate) fn full_piv_lu<T: FaerLinalg>(
@@ -2343,6 +2668,27 @@ pub(crate) fn svd<T: FaerLinalg>(
     })
 }
 
+pub(crate) fn svd_values<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+    if has_zero_dim(input.shape()) {
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "svd_values")?;
+        let k = m.min(n);
+        return Ok(tensor_from_vec_with_template(
+            vector_with_batch_shape(k, batch_shape),
+            Vec::new(),
+            input,
+        ));
+    }
+    let mut outputs =
+        batched_multi_convert_result("svd_values", buffers, input, 2, |buffers, batch| {
+            T::svd_values_2d(ctx, buffers, batch).map(|values| vec![values])
+        })?;
+    Ok(outputs.remove(0))
+}
+
 pub(crate) fn qr<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
@@ -2392,6 +2738,26 @@ pub(crate) fn eigh<T: FaerLinalg>(
     batched_multi_result("eigh", buffers, input, 2, |buffers, batch| {
         T::eigh_2d(ctx, buffers, batch)
     })
+}
+
+pub(crate) fn eigh_values<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+    if has_zero_dim(input.shape()) {
+        let (n, batch_shape) = square_core_and_batch(input, "eigh_values")?;
+        return Ok(tensor_from_vec_with_template(
+            vector_with_batch_shape(n, batch_shape),
+            Vec::new(),
+            input,
+        ));
+    }
+    let mut outputs =
+        batched_multi_convert_result("eigh_values", buffers, input, 2, |buffers, batch| {
+            T::eigh_values_2d(ctx, buffers, batch).map(|values| vec![values])
+        })?;
+    Ok(outputs.remove(0))
 }
 
 macro_rules! impl_eig_real_2d {
