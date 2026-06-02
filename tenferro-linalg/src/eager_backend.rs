@@ -73,6 +73,10 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, eigh(input))
     }
 
+    fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        dispatch_linalg!(self, eigh_values(input))
+    }
+
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, eig(input))
     }

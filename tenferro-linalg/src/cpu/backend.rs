@@ -4,7 +4,8 @@ use super::linalg;
 
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::{
-    DType, Error, Tensor, TensorStructural, TensorView, TensorViewCanonicalization, TypedTensor,
+    validate::validate_nonsingular_u, DType, Error, Tensor, TensorElementwise, TensorStructural,
+    TensorView, TensorViewCanonicalization, TypedTensor,
 };
 
 impl LinalgBackend for CpuBackend {
@@ -228,42 +229,73 @@ impl LinalgBackend for CpuBackend {
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu_factor", input)?;
-        let outputs = self.lu(input)?;
-        let [_p, l, u, parity] = outputs.as_slice() else {
-            return Err(Error::backend_failure(
-                "lu_factor",
-                "public LU returned an unexpected number of outputs",
-            ));
-        };
-        let (packed_lu, parity) = match (input, l, u, parity) {
-            (Tensor::F32(input), Tensor::F32(l), Tensor::F32(u), Tensor::F32(parity)) => (
-                Tensor::F32(pack_lu_from_public_outputs(input, l, u)?),
-                Tensor::F32(parity.clone()),
-            ),
-            (Tensor::F64(input), Tensor::F64(l), Tensor::F64(u), Tensor::F64(parity)) => (
-                Tensor::F64(pack_lu_from_public_outputs(input, l, u)?),
-                Tensor::F64(parity.clone()),
-            ),
-            (Tensor::C32(input), Tensor::C32(l), Tensor::C32(u), Tensor::C32(parity)) => (
-                Tensor::C32(pack_lu_from_public_outputs(input, l, u)?),
-                Tensor::C32(parity.clone()),
-            ),
-            (Tensor::C64(input), Tensor::C64(l), Tensor::C64(u), Tensor::C64(parity)) => (
-                Tensor::C64(pack_lu_from_public_outputs(input, l, u)?),
-                Tensor::C64(parity.clone()),
-            ),
-            (Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_), _, _, _) => {
-                return Err(unsupported_dtype("lu_factor", input.dtype()));
+        match self.kind() {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => linalg::faer::lu_factor(ctx.as_ref(), buffers, t).map(
+                            |(lu, pivots, parity)| {
+                                vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
+                            },
+                        ),
+                        Tensor::F64(t) => linalg::faer::lu_factor(ctx.as_ref(), buffers, t).map(
+                            |(lu, pivots, parity)| {
+                                vec![Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(parity)]
+                            },
+                        ),
+                        Tensor::C32(t) => linalg::faer::lu_factor(ctx.as_ref(), buffers, t).map(
+                            |(lu, pivots, parity)| {
+                                vec![Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(parity)]
+                            },
+                        ),
+                        Tensor::C64(t) => linalg::faer::lu_factor(ctx.as_ref(), buffers, t).map(
+                            |(lu, pivots, parity)| {
+                                vec![Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(parity)]
+                            },
+                        ),
+                        _ => Err(unsupported_dtype("lu_factor", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("lu_factor", self.kind()))
+                }
             }
-            _ => {
-                return Err(Error::backend_failure(
-                    "lu_factor",
-                    "public LU returned outputs with unexpected dtypes",
-                ));
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => {
+                            linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
+                                vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
+                            })
+                        }
+                        Tensor::F64(t) => {
+                            linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
+                                vec![Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(parity)]
+                            })
+                        }
+                        Tensor::C32(t) => {
+                            linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
+                                vec![Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(parity)]
+                            })
+                        }
+                        Tensor::C64(t) => {
+                            linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
+                                vec![Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(parity)]
+                            })
+                        }
+                        _ => Err(unsupported_dtype("lu_factor", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unsupported_provider("lu_factor", self.kind()))
+                }
             }
-        };
-        let pivots = Tensor::I32(identity_pivots(input.shape()));
-        Ok(vec![packed_lu, pivots, parity])
+        }
     }
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -464,6 +496,53 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("svd_values", input)?;
+        match self.kind() {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => {
+                            linalg::faer::svd_values(ctx.as_ref(), buffers, t).map(Tensor::F32)
+                        }
+                        Tensor::F64(t) => {
+                            linalg::faer::svd_values(ctx.as_ref(), buffers, t).map(Tensor::F64)
+                        }
+                        Tensor::C32(t) => {
+                            linalg::faer::svd_values(ctx.as_ref(), buffers, t).map(Tensor::F32)
+                        }
+                        Tensor::C64(t) => {
+                            linalg::faer::svd_values(ctx.as_ref(), buffers, t).map(Tensor::F64)
+                        }
+                        _ => Err(unsupported_dtype("svd_values", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("svd_values", self.kind()))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
+                        Tensor::F64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
+                        Tensor::C32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
+                        Tensor::C64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
+                        _ => Err(unsupported_dtype("svd_values", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unsupported_provider("svd_values", self.kind()))
+                }
+            }
+        }
+    }
+
     fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         match input {
             TensorView::F32(view) => {
@@ -586,6 +665,53 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("eigh_values", input)?;
+        match self.kind() {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => {
+                            linalg::faer::eigh_values(ctx.as_ref(), buffers, t).map(Tensor::F32)
+                        }
+                        Tensor::F64(t) => {
+                            linalg::faer::eigh_values(ctx.as_ref(), buffers, t).map(Tensor::F64)
+                        }
+                        Tensor::C32(t) => {
+                            linalg::faer::eigh_values(ctx.as_ref(), buffers, t).map(Tensor::F32)
+                        }
+                        Tensor::C64(t) => {
+                            linalg::faer::eigh_values(ctx.as_ref(), buffers, t).map(Tensor::F64)
+                        }
+                        _ => Err(unsupported_dtype("eigh_values", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("eigh_values", self.kind()))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
+                        Tensor::F64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
+                        Tensor::C32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
+                        Tensor::C64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
+                        _ => Err(unsupported_dtype("eigh_values", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unsupported_provider("eigh_values", self.kind()))
+                }
+            }
+        }
+    }
+
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eig", input)?;
         if !matches!(
@@ -616,6 +742,67 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("eig", self.kind()))
                 }
             }
+        }
+    }
+
+    fn lu_solve_prepared(
+        &mut self,
+        a: &Tensor,
+        packed_lu: &Tensor,
+        pivots: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+        conjugate_a: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        const OP: &str = "lu_solve_prepared";
+
+        ensure_host_tensor(OP, a)?;
+        ensure_host_tensor(OP, packed_lu)?;
+        ensure_host_tensor(OP, pivots)?;
+        ensure_host_tensor(OP, b)?;
+        ensure_supported_linalg_pair(OP, a, b)?;
+        ensure_supported_linalg_pair(OP, a, packed_lu)?;
+        if !matches!(pivots, Tensor::I32(_)) {
+            return Err(Error::DTypeMismatch {
+                op: OP,
+                lhs: DType::I32,
+                rhs: pivots.dtype(),
+            });
+        }
+        if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+            return Ok(zeros_like_tensor(b));
+        }
+
+        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
+            (
+                self.reshape(b, &matrix_rhs_shape)?,
+                Some(b.shape().to_vec()),
+            )
+        } else {
+            (b.clone(), None)
+        };
+
+        validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), rhs.shape())?;
+        validate_nonsingular_u(packed_lu)?;
+        let lu_op = if conjugate_a {
+            self.conj(packed_lu)?
+        } else {
+            packed_lu.clone()
+        };
+        let result = if transpose_a {
+            let z = self.triangular_solve(&lu_op, &rhs, true, false, true, false)?;
+            let y = self.triangular_solve(&lu_op, &z, true, true, true, true)?;
+            apply_lu_pivots_cpu(&y, pivots, true)?
+        } else {
+            let pb = apply_lu_pivots_cpu(&rhs, pivots, false)?;
+            let y = self.triangular_solve(&lu_op, &pb, true, true, false, true)?;
+            self.triangular_solve(&lu_op, &y, true, false, false, false)?
+        };
+
+        if let Some(shape) = restore_shape {
+            self.reshape(&result, &shape)
+        } else {
+            Ok(result)
         }
     }
 
@@ -720,6 +907,26 @@ fn ensure_host_typed_tensor<T: 'static>(
     Ok(())
 }
 
+fn ensure_supported_linalg_pair(
+    op: &'static str,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> tenferro_tensor::Result<()> {
+    if lhs.dtype() != rhs.dtype() {
+        return Err(Error::DTypeMismatch {
+            op,
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        });
+    }
+    match lhs {
+        Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_dtype(op, lhs.dtype()))
+        }
+    }
+}
+
 fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
@@ -761,61 +968,152 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
     }
 }
 
-fn pack_lu_from_public_outputs<T: Clone + Default>(
+fn apply_lu_pivots_cpu(
+    input: &Tensor,
+    pivots: &Tensor,
+    inverse: bool,
+) -> tenferro_tensor::Result<Tensor> {
+    let Tensor::I32(pivots) = pivots else {
+        return Err(Error::DTypeMismatch {
+            op: "lu_solve_prepared",
+            lhs: DType::I32,
+            rhs: pivots.dtype(),
+        });
+    };
+    match input {
+        Tensor::F32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F32),
+        Tensor::F64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F64),
+        Tensor::C32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C32),
+        Tensor::C64(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::C64),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_dtype("lu_solve_prepared", input.dtype()))
+        }
+    }
+}
+
+fn apply_lu_pivots_typed<T: Clone>(
     input: &TypedTensor<T>,
-    l: &TypedTensor<T>,
-    u: &TypedTensor<T>,
+    pivots: &TypedTensor<i32>,
+    inverse: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let shape = input.shape();
     if shape.len() < 2 {
         return Err(Error::RankMismatch {
-            op: "lu_factor",
+            op: "lu_solve_prepared",
             expected: 2,
             actual: shape.len(),
         });
     }
-    let m = shape[0];
-    let n = shape[1];
-    let k = m.min(n);
+    let rows = shape[0];
+    let cols = shape[1];
+    let k = pivots.shape()[0];
+    if k > rows || pivots.shape()[1..] != shape[2..] {
+        return Err(Error::ShapeMismatch {
+            op: "lu_solve_prepared",
+            lhs: pivots.shape().to_vec(),
+            rhs: shape.to_vec(),
+        });
+    }
     let batch_total = batch_count(&shape[2..]);
-    let matrix_len = m * n;
-    let l_stride = m * k;
-    let u_stride = k * n;
-    let mut data = vec![T::default(); matrix_len * batch_total];
+    let matrix_stride = rows * cols;
+    let pivot_stride = k;
+    let mut data = Vec::with_capacity(input.host_data().len());
+
     for batch in 0..batch_total {
-        let packed_offset = batch * matrix_len;
-        let l_offset = batch * l_stride;
-        let u_offset = batch * u_stride;
-        for col in 0..n {
-            for row in 0..m {
-                let dst = packed_offset + row + col * m;
-                data[dst] = if row > col && col < k {
-                    l.host_data()[l_offset + row + col * m].clone()
-                } else if row <= col && row < k {
-                    u.host_data()[u_offset + row + col * k].clone()
-                } else {
-                    T::default()
-                };
+        let mut perm: Vec<usize> = (0..rows).collect();
+        let pivot_offset = batch * pivot_stride;
+        for step in 0..k {
+            let pivot_one_based = pivots.host_data()[pivot_offset + step];
+            if pivot_one_based <= 0 {
+                return Err(Error::backend_failure(
+                    "lu_solve_prepared",
+                    "LU pivot index must be 1-based and positive",
+                ));
+            }
+            let pivot = usize::try_from(pivot_one_based - 1).map_err(|_| {
+                Error::backend_failure("lu_solve_prepared", "LU pivot index is invalid")
+            })?;
+            if pivot >= rows {
+                return Err(Error::backend_failure(
+                    "lu_solve_prepared",
+                    "LU pivot index is out of bounds",
+                ));
+            }
+            perm.swap(step, pivot);
+        }
+        let row_map = if inverse {
+            let mut inv = vec![0usize; rows];
+            for (row, &source) in perm.iter().enumerate() {
+                inv[source] = row;
+            }
+            inv
+        } else {
+            perm
+        };
+        let batch_offset = batch * matrix_stride;
+        for col in 0..cols {
+            for &source_row in &row_map {
+                data.push(input.host_data()[batch_offset + source_row + col * rows].clone());
             }
         }
     }
+
     Ok(TypedTensor::from_vec_col_major(shape.to_vec(), data))
 }
 
-fn identity_pivots(shape: &[usize]) -> TypedTensor<i32> {
-    let m = shape[0];
-    let n = shape[1];
-    let k = m.min(n);
-    let batch_total = batch_count(&shape[2..]);
-    let mut pivot_shape = vec![k];
-    pivot_shape.extend_from_slice(&shape[2..]);
-    let mut data = vec![0_i32; k * batch_total];
-    for batch in 0..batch_total {
-        for step in 0..k {
-            data[batch * k + step] = (step + 1) as i32;
-        }
+fn validate_lu_solve_prepared_shapes(
+    lu_shape: &[usize],
+    pivots_shape: &[usize],
+    b_shape: &[usize],
+) -> tenferro_tensor::Result<()> {
+    let n = square_matrix_dim("lu_solve_prepared", lu_shape)?;
+    let (b_rows, _) = matrix_dims("lu_solve_prepared", b_shape)?;
+    if b_rows != n {
+        return Err(Error::InvalidConfig {
+            op: "lu_solve_prepared",
+            message: format!("rhs row count mismatch: expected {n}, got {b_rows}"),
+        });
     }
-    TypedTensor::from_vec_col_major(pivot_shape, data)
+    if lu_shape[2..] != b_shape[2..] {
+        return Err(Error::ShapeMismatch {
+            op: "lu_solve_prepared",
+            lhs: lu_shape.to_vec(),
+            rhs: b_shape.to_vec(),
+        });
+    }
+    let mut expected_pivots = vec![n];
+    expected_pivots.extend_from_slice(&lu_shape[2..]);
+    if pivots_shape != expected_pivots {
+        return Err(Error::ShapeMismatch {
+            op: "lu_solve_prepared",
+            lhs: expected_pivots,
+            rhs: pivots_shape.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+fn matrix_dims(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<(usize, usize)> {
+    if shape.len() < 2 {
+        return Err(Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: shape.len(),
+        });
+    }
+    Ok((shape[0], shape[1]))
+}
+
+fn square_matrix_dim(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<usize> {
+    let (rows, cols) = matrix_dims(op, shape)?;
+    if rows != cols {
+        return Err(Error::ShapeMismatch {
+            op,
+            lhs: vec![rows],
+            rhs: vec![cols],
+        });
+    }
+    Ok(rows)
 }
 
 // Used only by feature-disabled provider branches, so default feature builds

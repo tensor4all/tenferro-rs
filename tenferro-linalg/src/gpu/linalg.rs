@@ -324,6 +324,18 @@ pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Te
     }
 }
 
+pub(super) fn eigh_values(backend: &mut CubeclBackend, input: &Tensor) -> Result<Tensor> {
+    match input {
+        Tensor::F32(t) => eigh_values_typed(backend, t).map(Tensor::F32),
+        Tensor::F64(t) => eigh_values_typed(backend, t).map(Tensor::F64),
+        Tensor::C32(t) => eigh_values_typed(backend, t).map(Tensor::F32),
+        Tensor::C64(t) => eigh_values_typed(backend, t).map(Tensor::F64),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_linalg_dtype("eigh_values", input))
+        }
+    }
+}
+
 pub(super) fn eig(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::backend_failure(
         "eig",
@@ -469,42 +481,28 @@ where
         OP,
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = n * n;
 
     for batch in 0..batch_total {
-        let batch_ptr = unsafe { batch_ptr::<T>(first_ptr, batch * matrix_stride) };
+        let batch_a = unsafe { batch_ptr::<T>(first_ptr, batch * matrix_stride) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().potrf(
                 T::DATA_TYPE,
                 CublasFillMode::Lower,
                 n_i32,
-                batch_ptr,
+                batch_a,
                 lda,
                 workspace.ptr,
                 lwork,
-                info.ptr.cast::<i32>(),
+                batch_info,
                 OP,
             )?;
         }
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        match host_info[0] {
-            0 => {}
-            x if x < 0 => {
-                return Err(Error::backend_failure(
-                    OP,
-                    format!("cusolverDn*potrf reported invalid parameter {}", -x),
-                ));
-            }
-            x => {
-                return Err(Error::backend_failure(
-                    OP,
-                    format!("matrix is not positive definite (minor {x})"),
-                ));
-            }
-        }
     }
+    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*potrf")?;
 
     backend.tril_typed(&work, 0)
 }
@@ -592,9 +590,39 @@ where
     let n_rhs = as_i32(cols, op, "n")?;
     let alpha = T::one();
 
-    for batch in 0..batch_count(&b.shape()[2..]) {
-        let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), batch * a_stride) };
-        let batch_b = unsafe { batch_ptr::<T>(out_ptr, batch * out_stride) };
+    let batch_total = batch_count(&b.shape()[2..]);
+    if batch_total > 1 {
+        let mut a_pointers = Vec::with_capacity(batch_total);
+        let mut b_pointers = Vec::with_capacity(batch_total);
+        for batch in 0..batch_total {
+            let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), batch * a_stride) };
+            let batch_b = unsafe { batch_ptr::<T>(out_ptr, batch * out_stride) };
+            a_pointers.push(batch_a as usize);
+            b_pointers.push(batch_b as usize);
+        }
+        let a_array = upload_pointer_array(backend.runtime(), &a_pointers, op)?;
+        let b_array = upload_pointer_array(backend.runtime(), &b_pointers, op)?;
+        unsafe {
+            handles.cublas().trsm_batched(
+                T::DATA_TYPE,
+                side,
+                uplo,
+                trans,
+                diag,
+                m,
+                n_rhs,
+                (&alpha as *const T).cast(),
+                a_array.ptr.cast_const(),
+                lda,
+                b_array.ptr,
+                ldb,
+                as_i32(batch_total, op, "batch_count")?,
+                op,
+            )?;
+        }
+    } else {
+        let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), 0) };
+        let batch_b = unsafe { batch_ptr::<T>(out_ptr, 0) };
         unsafe {
             handles.cublas().trsm(
                 T::DATA_TYPE,
@@ -686,7 +714,7 @@ where
     for batch in 0..batch_total {
         let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
         let batch_pivots = unsafe { batch_ptr::<i32>(pivots_ptr, batch * k) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().getrf(
                 T::DATA_TYPE,
@@ -840,8 +868,9 @@ where
     } else {
         Workspace::none()
     };
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
     let batch_total = batch_count(batch_shape);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let a_stride = m * n;
     let u_stride = m * k;
     let s_stride = k;
@@ -853,6 +882,7 @@ where
         let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
         let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
         let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, batch * vt_stride) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().gesvd(
                 T::DATA_TYPE,
@@ -870,14 +900,12 @@ where
                 workspace.ptr,
                 lwork,
                 rwork.ptr,
-                info.ptr.cast::<i32>(),
+                batch_info,
                 OP,
             )?;
         }
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        check_solver_info(OP, "cusolverDn*gesvd", host_info[0])?;
     }
+    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
 
     Ok((u, s, vt))
 }
@@ -922,8 +950,9 @@ where
     } else {
         Workspace::none()
     };
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
     let batch_total = batch_count(batch_shape);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let a_stride = m * n;
     let s_stride = k;
     let job = b'N' as c_char;
@@ -931,6 +960,7 @@ where
     for batch in 0..batch_total {
         let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
         let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().gesvd(
                 T::DATA_TYPE,
@@ -948,14 +978,12 @@ where
                 workspace.ptr,
                 lwork,
                 rwork.ptr,
-                info.ptr.cast::<i32>(),
+                batch_info,
                 OP,
             )?;
         }
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        check_solver_info(OP, "cusolverDn*gesvd", host_info[0])?;
     }
+    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
 
     Ok(s)
 }
@@ -1003,7 +1031,6 @@ where
             .geqrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, work_ptr, lda, OP)?;
     let geqrf_workspace = alloc_workspace_elems::<T>(backend.runtime(), geqrf_lwork, OP)?;
     let tau = alloc_workspace_bytes(backend.runtime(), k * std::mem::size_of::<T>(), OP)?;
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
     let orgqr_lwork = handles.cusolver().orgqr_buffer_size(
         T::DATA_TYPE,
         m_i32,
@@ -1016,12 +1043,18 @@ where
     )?;
     let orgqr_workspace = alloc_workspace_elems::<T>(backend.runtime(), orgqr_lwork, OP)?;
     let batch_total = batch_count(batch_shape);
+    let geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let geqrf_info_ptr = typed_device_ptr(backend.runtime(), &geqrf_info, OP)?;
+    let orgqr_info_ptr = typed_device_ptr(backend.runtime(), &orgqr_info, OP)?;
     let work_stride = m * n;
     let q_stride = m * k;
 
     for batch in 0..batch_total {
         let batch_work = unsafe { batch_ptr::<T>(work_ptr, batch * work_stride) };
         let batch_q = unsafe { batch_ptr::<T>(q_ptr, batch * q_stride) };
+        let batch_geqrf_info = unsafe { batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>() };
+        let batch_orgqr_info = unsafe { batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().geqrf(
                 T::DATA_TYPE,
@@ -1032,13 +1065,10 @@ where
                 tau.ptr,
                 geqrf_workspace.ptr,
                 geqrf_lwork,
-                info.ptr.cast::<i32>(),
+                batch_geqrf_info,
                 OP,
             )?;
         }
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        check_solver_info(OP, "cusolverDn*geqrf", host_info[0])?;
 
         copy_device_to_device(
             backend.runtime(),
@@ -1058,13 +1088,13 @@ where
                 tau.ptr.cast_const(),
                 orgqr_workspace.ptr,
                 orgqr_lwork,
-                info.ptr.cast::<i32>(),
+                batch_orgqr_info,
                 OP,
             )?;
         }
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        check_solver_info(OP, "cusolverDn*orgqr", host_info[0])?;
     }
+    check_solver_info_tensor(backend.runtime(), &geqrf_info, OP, "cusolverDn*geqrf")?;
+    check_solver_info_tensor(backend.runtime(), &orgqr_info, OP, "cusolverDn*orgqr")?;
 
     let r_input = backend.slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
     let r = backend.triu_typed(&r_input, 0)?;
@@ -1114,14 +1144,16 @@ where
         OP,
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
     let batch_total = batch_count(batch_shape);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = n * n;
     let values_stride = n;
 
     for batch in 0..batch_total {
         let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
         let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, batch * values_stride) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().syevd(
                 T::DATA_TYPE,
@@ -1133,16 +1165,85 @@ where
                 batch_w,
                 workspace.ptr,
                 lwork,
-                info.ptr.cast::<i32>(),
+                batch_info,
                 OP,
             )?;
         }
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        check_solver_info(OP, "cusolverDn*syevd", host_info[0])?;
     }
+    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*syevd")?;
 
     Ok((values, work))
+}
+
+fn eigh_values_typed<T>(
+    backend: &CubeclBackend,
+    input: &TypedTensor<T>,
+) -> Result<TypedTensor<T::Real>>
+where
+    T: LinalgScalar,
+{
+    const OP: &str = "eigh_values";
+
+    backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
+    let n = square_matrix_dim(OP, input.shape())?;
+    let batch_shape = &input.shape()[2..];
+    let mut values_shape = vec![n];
+    values_shape.extend_from_slice(batch_shape);
+    if has_zero_dim(input.shape()) {
+        return Ok(alloc_output(backend.runtime(), &values_shape));
+    }
+
+    let work = clone_device_tensor(backend.runtime(), input, OP)?;
+    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape);
+    let handles = linalg_handles(backend)?;
+    let stream = raw_stream(backend.runtime(), OP)?;
+    handles.cusolver().set_stream(stream, OP)?;
+
+    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+    let values_ptr = typed_device_ptr(backend.runtime(), &values, OP)?;
+    let n_i32 = as_i32(n, OP, "n")?;
+    let lda = as_i32(n, OP, "lda")?;
+    let lwork = handles.cusolver().syevd_buffer_size(
+        T::DATA_TYPE,
+        CusolverEigMode::NoVector,
+        CublasFillMode::Lower,
+        n_i32,
+        a_ptr.cast_const(),
+        lda,
+        values_ptr.cast_const(),
+        OP,
+    )?;
+    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+    let batch_total = batch_count(batch_shape);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+    let matrix_stride = n * n;
+    let values_stride = n;
+
+    for batch in 0..batch_total {
+        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
+        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, batch * values_stride) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+        unsafe {
+            handles.cusolver().syevd(
+                T::DATA_TYPE,
+                CusolverEigMode::NoVector,
+                CublasFillMode::Lower,
+                n_i32,
+                batch_a,
+                lda,
+                batch_w,
+                workspace.ptr,
+                lwork,
+                batch_info,
+                OP,
+            )?;
+        }
+    }
+    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*syevd")?;
+
+    Ok(values)
 }
 
 fn build_lu_outputs_device<T>(
@@ -1411,6 +1512,26 @@ where
     ))
 }
 
+fn upload_pointer_array(
+    rt: &CubeclRuntime,
+    pointers: &[usize],
+    op: &'static str,
+) -> Result<Workspace> {
+    let nbytes = std::mem::size_of_val(pointers);
+    let bytes = unsafe { std::slice::from_raw_parts(pointers.as_ptr().cast::<u8>(), nbytes) };
+    let handle = rt.client().create_from_slice(bytes);
+    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
+        Error::backend_failure(
+            op,
+            format!("failed to obtain pointer-array resource: {err:?}"),
+        )
+    })?;
+    Ok(Workspace {
+        _handle: Some(handle),
+        ptr: resource.resource().ptr as usize as *mut c_void,
+    })
+}
+
 fn download_device_tensor<T>(
     rt: &CubeclRuntime,
     tensor: &TypedTensor<T>,
@@ -1444,21 +1565,6 @@ fn copy_device_to_device(
     let stream = raw_stream(rt, op)? as cudaStream_t;
     unsafe { cuda_result::memcpy_dtod_async(dst, src, nbytes, stream) }
         .map_err(|err| Error::backend_failure(op, format!("cudaMemcpyAsync DtoD failed: {err:?}")))
-}
-
-fn copy_device_to_host<T: Copy>(
-    rt: &CubeclRuntime,
-    dst: &mut [T],
-    src: *const c_void,
-    op: &'static str,
-) -> Result<()> {
-    let stream = raw_stream(rt, op)? as cudaStream_t;
-    unsafe { cuda_result::memcpy_dtoh_async(dst, src, stream) }.map_err(|err| {
-        Error::backend_failure(op, format!("cudaMemcpyAsync DtoH failed: {err:?}"))
-    })?;
-    unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
-        Error::backend_failure(op, format!("CUDA stream synchronize failed: {err:?}"))
-    })
 }
 
 fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> SliceConfig {
@@ -1570,6 +1676,19 @@ fn check_solver_info(op: &'static str, call: &'static str, info: i32) -> Result<
         op,
         format!("{call} failed with info={info}"),
     ))
+}
+
+fn check_solver_info_tensor(
+    rt: &CubeclRuntime,
+    info: &TypedTensor<i32>,
+    op: &'static str,
+    call: &'static str,
+) -> Result<()> {
+    let host_info = download_device_tensor(rt, info, op)?;
+    for &value in host_info.host_data() {
+        check_solver_info(op, call, value)?;
+    }
+    Ok(())
 }
 
 fn has_zero_dim(shape: &[usize]) -> bool {

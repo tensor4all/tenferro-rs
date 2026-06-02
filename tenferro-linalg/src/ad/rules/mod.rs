@@ -574,6 +574,47 @@ pub(crate) fn linearize_eigh(
     vec![Some(dw), Some(dv)]
 }
 
+pub(crate) fn linearize_eigh_values(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    eps: f64,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValueId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None];
+    };
+
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
+    let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let eigh_outputs = builder.add_operation(
+        linalg_std_op(LinalgOp::Eigh { eps }),
+        vec![ValueRef::External(primal_in[0].clone())],
+        OperationRole::Primary,
+    );
+    let v = ValueRef::Local(eigh_outputs[1]);
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
+    let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank, dtype);
+    let tmp = matmul_linear(
+        builder,
+        ValueRef::Local(vh),
+        ValueRef::Local(da_self_adjoint),
+        vec![false, true],
+        matrix_rank,
+    );
+    let projected = matmul_linear(
+        builder,
+        ValueRef::Local(tmp),
+        v,
+        vec![true, false],
+        matrix_rank,
+    );
+
+    vec![Some(extract_diag_linear(builder, projected))]
+}
+
 pub(crate) fn linearize_cholesky(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],

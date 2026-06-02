@@ -73,6 +73,7 @@ pub enum CublasOperation {
 #[repr(i32)]
 #[derive(Clone, Copy)]
 pub enum CusolverEigMode {
+    NoVector = 0,
     Vector = 1,
 }
 
@@ -591,6 +592,66 @@ type TrsmC64Fn = unsafe extern "C" fn(
     *mut Complex64,
     i32,
 ) -> CublasStatus;
+type TrsmBatchedF32Fn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasSideMode,
+    CublasFillMode,
+    CublasOperation,
+    CublasDiagType,
+    i32,
+    i32,
+    *const f32,
+    *const *const f32,
+    i32,
+    *mut *mut f32,
+    i32,
+    i32,
+) -> CublasStatus;
+type TrsmBatchedF64Fn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasSideMode,
+    CublasFillMode,
+    CublasOperation,
+    CublasDiagType,
+    i32,
+    i32,
+    *const f64,
+    *const *const f64,
+    i32,
+    *mut *mut f64,
+    i32,
+    i32,
+) -> CublasStatus;
+type TrsmBatchedC32Fn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasSideMode,
+    CublasFillMode,
+    CublasOperation,
+    CublasDiagType,
+    i32,
+    i32,
+    *const Complex32,
+    *const *const Complex32,
+    i32,
+    *mut *mut Complex32,
+    i32,
+    i32,
+) -> CublasStatus;
+type TrsmBatchedC64Fn = unsafe extern "C" fn(
+    CublasHandleRaw,
+    CublasSideMode,
+    CublasFillMode,
+    CublasOperation,
+    CublasDiagType,
+    i32,
+    i32,
+    *const Complex64,
+    *const *const Complex64,
+    i32,
+    *mut *mut Complex64,
+    i32,
+    i32,
+) -> CublasStatus;
 
 struct CusolverVtable {
     create: CusolverCreateFn,
@@ -712,6 +773,10 @@ struct CublasVtable {
     dtrsm: TrsmF64Fn,
     ctrsm: TrsmC32Fn,
     ztrsm: TrsmC64Fn,
+    strsm_batched: TrsmBatchedF32Fn,
+    dtrsm_batched: TrsmBatchedF64Fn,
+    ctrsm_batched: TrsmBatchedC32Fn,
+    ztrsm_batched: TrsmBatchedC64Fn,
 }
 
 impl CublasVtable {
@@ -724,6 +789,10 @@ impl CublasVtable {
             dtrsm: load_symbol(lib, b"cublasDtrsm_v2\0", "cuBLAS")?,
             ctrsm: load_symbol(lib, b"cublasCtrsm_v2\0", "cuBLAS")?,
             ztrsm: load_symbol(lib, b"cublasZtrsm_v2\0", "cuBLAS")?,
+            strsm_batched: load_symbol(lib, b"cublasStrsmBatched\0", "cuBLAS")?,
+            dtrsm_batched: load_symbol(lib, b"cublasDtrsmBatched\0", "cuBLAS")?,
+            ctrsm_batched: load_symbol(lib, b"cublasCtrsmBatched\0", "cuBLAS")?,
+            ztrsm_batched: load_symbol(lib, b"cublasZtrsmBatched\0", "cuBLAS")?,
         })
     }
 }
@@ -1706,6 +1775,88 @@ impl CublasHandle {
             ),
         };
         self.lib.check_status(status, op, "cublas*trsm_v2")
+    }
+
+    pub unsafe fn trsm_batched(
+        &self,
+        dtype: CudaDataType,
+        side: CublasSideMode,
+        uplo: CublasFillMode,
+        trans: CublasOperation,
+        diag: CublasDiagType,
+        m: i32,
+        n: i32,
+        alpha: *const c_void,
+        a_array: *const c_void,
+        lda: i32,
+        b_array: *mut c_void,
+        ldb: i32,
+        batch_count: i32,
+        op: &'static str,
+    ) -> Result<()> {
+        let status = match dtype {
+            CudaDataType::F32 => (self.lib.vtable.strsm_batched)(
+                self.raw,
+                side,
+                uplo,
+                trans,
+                diag,
+                m,
+                n,
+                alpha.cast(),
+                a_array.cast(),
+                lda,
+                b_array.cast(),
+                ldb,
+                batch_count,
+            ),
+            CudaDataType::F64 => (self.lib.vtable.dtrsm_batched)(
+                self.raw,
+                side,
+                uplo,
+                trans,
+                diag,
+                m,
+                n,
+                alpha.cast(),
+                a_array.cast(),
+                lda,
+                b_array.cast(),
+                ldb,
+                batch_count,
+            ),
+            CudaDataType::Complex32 => (self.lib.vtable.ctrsm_batched)(
+                self.raw,
+                side,
+                uplo,
+                trans,
+                diag,
+                m,
+                n,
+                alpha.cast(),
+                a_array.cast(),
+                lda,
+                b_array.cast(),
+                ldb,
+                batch_count,
+            ),
+            CudaDataType::Complex64 => (self.lib.vtable.ztrsm_batched)(
+                self.raw,
+                side,
+                uplo,
+                trans,
+                diag,
+                m,
+                n,
+                alpha.cast(),
+                a_array.cast(),
+                lda,
+                b_array.cast(),
+                ldb,
+                batch_count,
+            ),
+        };
+        self.lib.check_status(status, op, "cublas*trsmBatched")
     }
 }
 

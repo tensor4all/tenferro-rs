@@ -118,6 +118,13 @@ rules from `tensor4all-agent-rules`.
   runtime before dispatch, following the crate's established pattern, or expose
   the missing-runtime error. Add regression tests for missing-runtime behavior
   when changing extension dispatch.
+- Hidden backend hooks for internal optimized operations, such as prepared
+  solves, values-only decompositions, cache-aware kernels, or device-specific
+  fast paths, must not silently fall back to a slower public operation, full
+  decomposition, freshly constructed backend, CPU transfer, or reference
+  implementation. The trait default should return an explicit unsupported or
+  backend error, and each backend that supports the path must override the hook
+  directly. Add source-contract or behavior tests when introducing such hooks.
 - Optional capabilities are feature boundaries, not new operation-family
   crates. Put operation-specific AD support behind an `autodiff` feature in the
   owning operation crate instead of adding `*-ad` companion crates.

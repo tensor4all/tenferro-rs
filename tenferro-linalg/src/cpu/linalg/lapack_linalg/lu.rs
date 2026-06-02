@@ -6,7 +6,7 @@ use tenferro_tensor::TypedTensor;
 use super::helpers::{
     batch_element_count, batched_multi, check_lapack_info, dim_i32, has_zero_dim,
     leading_upper_triangle_from_lapack, matrix_core_and_batch_result, matrix_dims,
-    matrix_with_batch_shape, tensor_from_vec_with_template,
+    matrix_with_batch_shape, tensor_from_vec_with_template, vector_with_batch_shape,
 };
 
 pub(crate) trait LapackLu: Clone + Copy + Default {
@@ -144,6 +144,37 @@ fn lu_2d<T: LapackLu>(
     ])
 }
 
+fn lu_factor_2d<T: LapackLu>(
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
+    let (m, n) = matrix_dims(input, "lu_factor")?;
+    let k = m.min(n);
+    let m_i32 = dim_i32(m, "lu_factor")?;
+    let n_i32 = dim_i32(n, "lu_factor")?;
+    let mut lu = input.host_data().to_vec();
+    let mut ipiv = vec![0_i32; k];
+    let mut info = 0;
+    T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
+    check_lapack_info("lu_factor", "getrf", info.min(0))?;
+
+    let swap_count = ipiv
+        .iter()
+        .enumerate()
+        .filter(|(idx, pivot_one_based)| **pivot_one_based != (*idx as i32 + 1))
+        .count();
+    let parity = if swap_count % 2 == 0 {
+        T::one()
+    } else {
+        T::negative_one()
+    };
+
+    Ok((
+        tensor_from_vec_with_template(vec![m, n], lu, input),
+        tensor_from_vec_with_template(vec![k], ipiv, input),
+        tensor_from_vec_with_template(vec![], vec![parity], input),
+    ))
+}
+
 pub(crate) fn lu<T: LapackLu>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -176,4 +207,56 @@ pub(crate) fn lu<T: LapackLu>(
         ]);
     }
     batched_multi("lu", buffers, input, lu_2d)
+}
+
+pub(crate) fn lu_factor<T: LapackLu>(
+    _buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
+    if has_zero_dim(input.shape()) {
+        let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
+        let k = m.min(n);
+        let parity_elements = batch_element_count("lu_factor", batch_shape)?;
+        return Ok((
+            tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input),
+            tensor_from_vec_with_template(
+                vector_with_batch_shape(k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                batch_shape.to_vec(),
+                vec![T::one(); parity_elements],
+                input,
+            ),
+        ));
+    }
+
+    let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
+    let matrix_len = m * n;
+    let k = m.min(n);
+    let batch_total = batch_element_count("lu_factor", batch_shape)?;
+    let mut lu_data = Vec::with_capacity(matrix_len * batch_total);
+    let mut pivot_data = Vec::with_capacity(k * batch_total);
+    let mut parity_data = Vec::with_capacity(batch_total);
+
+    for batch in 0..batch_total {
+        let start = batch * matrix_len;
+        let end = start + matrix_len;
+        let batch_input = tensor_from_vec_with_template(
+            vec![m, n],
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let (packed, pivots, parity) = lu_factor_2d(&batch_input)?;
+        lu_data.extend_from_slice(packed.host_data());
+        pivot_data.extend_from_slice(pivots.host_data());
+        parity_data.extend_from_slice(parity.host_data());
+    }
+
+    Ok((
+        tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input),
+        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input),
+        tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input),
+    ))
 }

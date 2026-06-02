@@ -382,7 +382,7 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(values.rank, 1);
 /// ```
 pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
-    Ok(eigh(a)?.0)
+    eigh_values(a)
 }
 
 /// Build a traced general eigenvalue-only op.
@@ -451,8 +451,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
 
     let v = vt.conj().transpose(&matrix_transpose_perm(vt.rank));
     let uh = u.conj().transpose(&matrix_transpose_perm(u.rank));
-    let s_inv_diag = s_inv.embed_diag(0, 1);
-    let vs = matmul_preserve_trailing_batch(&v, &s_inv_diag);
+    let vs = scale_matrix_columns(&v, &s_inv);
     Ok(matmul_preserve_trailing_batch(&vs, &uh))
 }
 
@@ -711,6 +710,27 @@ fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
         ),
         "svd_values",
     )
+}
+
+fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
+    one_output(
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals { eps: 1e-12 })),
+            &[a],
+        ),
+        "eigh_values",
+    )
+}
+
+fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> TracedTensor {
+    let matrix_shape = matrix.concrete_shape();
+    let mut scale_shape = vec![1, scale.concrete_shape()[0]];
+    scale_shape.extend_from_slice(&matrix_shape[2..]);
+    let dims: Vec<usize> = (0..matrix_shape.len()).collect();
+    let scale = scale
+        .reshape(&scale_shape)
+        .broadcast_in_dim(&matrix_shape, &dims);
+    matrix * &scale
 }
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {

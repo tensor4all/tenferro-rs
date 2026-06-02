@@ -171,6 +171,109 @@ fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
 }
 
 #[test]
+fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
+    let source = linalg_source();
+
+    for (start, end, info_name, call_name) in [
+        (
+            "fn cholesky_typed",
+            "fn triangular_solve_typed",
+            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*potrf\")",
+        ),
+        (
+            "fn svd_typed",
+            "fn svd_values_typed",
+            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+        ),
+        (
+            "fn svd_values_typed",
+            "fn qr_typed",
+            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+        ),
+        (
+            "fn eigh_typed",
+            "fn build_lu_outputs_device",
+            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*syevd\")",
+        ),
+    ] {
+        let section = source_section(&source, start, end);
+        assert!(
+            section.contains(info_name),
+            "{start} should allocate one solver-info tensor for the whole batch"
+        );
+        assert!(
+            section.contains(call_name),
+            "{start} should check solver info once after the batch loop"
+        );
+        assert!(
+            !section.contains("copy_device_to_host"),
+            "{start} should not synchronize inside the per-batch loop"
+        );
+    }
+
+    let qr = source_section(&source, "fn qr_typed", "fn eigh_typed");
+    for needle in [
+        "geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+        "orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
+        "check_solver_info_tensor(backend.runtime(), &geqrf_info, OP, \"cusolverDn*geqrf\")",
+        "check_solver_info_tensor(backend.runtime(), &orgqr_info, OP, \"cusolverDn*orgqr\")",
+    ] {
+        assert!(
+            qr.contains(needle),
+            "QR should use batched info handling: missing {needle}"
+        );
+    }
+    assert!(
+        !qr.contains("copy_device_to_host"),
+        "QR should not synchronize inside the per-batch loop"
+    );
+}
+
+#[test]
+fn gpu_eigh_values_uses_cusolver_no_vector_mode() {
+    let source = linalg_source();
+    let gpu_mod = gpu_mod_source();
+    let ffi = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
+
+    assert!(
+        source.contains("pub(super) fn eigh_values"),
+        "GPU linalg should expose an internal eigh_values hook"
+    );
+    assert!(
+        source.contains("CusolverEigMode::NoVector"),
+        "GPU eigvalsh should use cuSOLVER values-only mode"
+    );
+    assert!(
+        gpu_mod.contains("fn eigh_values"),
+        "CubeCL linalg backend should override eigh_values"
+    );
+    assert!(
+        ffi.contains("NoVector = 0"),
+        "cuSOLVER eig mode enum should expose values-only mode"
+    );
+}
+
+#[test]
+fn gpu_triangular_solve_uses_batched_cublas_when_batching_is_present() {
+    let source = linalg_source();
+    let ffi = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
+    let triangular = source_section(&source, "fn triangular_solve_typed_with_op", "fn lu_typed");
+
+    assert!(
+        ffi.contains("trsm_batched"),
+        "cuBLAS FFI should expose a batched triangular solve entry point"
+    );
+    assert!(
+        triangular.contains("trsm_batched"),
+        "GPU triangular_solve should use the batched entry point for batched inputs"
+    );
+}
+
+#[test]
 fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs() {
     let source = linalg_source();
 
