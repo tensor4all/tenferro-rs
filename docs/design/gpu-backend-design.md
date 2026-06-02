@@ -243,6 +243,13 @@ CUDA library calls:
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
 
+CUDA SVD follows JAX-compatible default driver selection as an internal backend
+policy: use cuSOLVER Jacobi `gesvdj` when both matrix dimensions are at most
+1024, otherwise use QR-based `gesvd`. `gesvdj` returns V, so the backend
+materializes the public `vt` output by copying V to V^H on the device. The
+singular-values-only path still passes scratch U/V buffers to `gesvdj` because
+cuSOLVER rejects null U/V pointers on that path.
+
 The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
 the current CUDA operation and dtype matrix. Keep that matrix synchronized with
 the `CubeclBackend` `TensorBackend` implementation when adding or removing CUDA

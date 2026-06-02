@@ -234,6 +234,104 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
 }
 
 #[test]
+fn gpu_svd_uses_jax_compatible_default_driver_selection() {
+    let source = linalg_source();
+    let svd = source_section(&source, "fn svd_typed", "fn svd_values_typed");
+    let svd_values = source_section(&source, "fn svd_values_typed", "fn qr_typed");
+    let ffi = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
+    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+
+    for needle in [
+        "const JAX_COMPATIBLE_GESVDJ_MAX_DIM: usize = 1024",
+        "enum SvdDriver",
+        "fn select_svd_driver",
+        "m <= JAX_COMPATIBLE_GESVDJ_MAX_DIM && n <= JAX_COMPATIBLE_GESVDJ_MAX_DIM",
+    ] {
+        assert!(
+            source.contains(needle),
+            "GPU SVD should encode JAX-compatible default driver selection: missing {needle}"
+        );
+    }
+
+    for section in [svd, svd_values] {
+        for needle in [
+            "match select_svd_driver(m, n)",
+            "SvdDriver::Gesvdj",
+            "SvdDriver::Gesvd",
+            "handles.cusolver().gesvdj(",
+            "handles.cusolver().gesvd(",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvdj\")",
+            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+        ] {
+            assert!(
+                section.contains(needle),
+                "GPU SVD driver path should contain {needle}"
+            );
+        }
+    }
+
+    for needle in [
+        "let u = alloc_output::<T>(backend.runtime(), &u_shape);",
+        "let v = alloc_output::<T>(backend.runtime(), &v_shape);",
+        "CusolverEigMode::NoVector",
+        "batch_u",
+        "batch_v",
+    ] {
+        assert!(
+            svd_values.contains(needle),
+            "values-only gesvdj should pass scratch U/V buffers like JAX: missing {needle}"
+        );
+    }
+
+    for needle in [
+        "T::copy_svd_v_to_vt(backend.runtime(), &v, &vt_shape, OP)",
+        "copy_svd_v_to_vt_real",
+        "copy_svd_v_to_vt_complex",
+    ] {
+        assert!(
+            source.contains(needle),
+            "GPU SVD should materialize gesvdj V^H on CUDA without a host roundtrip: missing {needle}"
+        );
+    }
+    assert!(
+        !source.contains("runtime_typed_tensor::transpose"),
+        "GPU SVD should not route gesvdj V-to-VT conversion through borrowed-view typed helpers"
+    );
+
+    for needle in [
+        "pub fn svd_v_to_vt_real",
+        "pub fn svd_v_to_vt_complex",
+        ".conj()",
+    ] {
+        assert!(
+            kernels.contains(needle),
+            "GPU SVD kernels should expose real and complex V-to-VT copies: missing {needle}"
+        );
+    }
+
+    for needle in [
+        "pub struct GesvdjInfo",
+        "cusolverDnCreateGesvdjInfo",
+        "cusolverDnDestroyGesvdjInfo",
+        "cusolverDnSgesvdj_bufferSize",
+        "cusolverDnDgesvdj_bufferSize",
+        "cusolverDnCgesvdj_bufferSize",
+        "cusolverDnZgesvdj_bufferSize",
+        "cusolverDnSgesvdj",
+        "cusolverDnDgesvdj",
+        "cusolverDnCgesvdj",
+        "cusolverDnZgesvdj",
+        "pub fn gesvdj_buffer_size",
+        "pub unsafe fn gesvdj",
+    ] {
+        assert!(
+            ffi.contains(needle),
+            "cuSOLVER FFI should expose gesvdj support: missing {needle}"
+        );
+    }
+}
+
+#[test]
 fn gpu_eigh_values_uses_cusolver_no_vector_mode() {
     let source = linalg_source();
     let gpu_mod = gpu_mod_source();

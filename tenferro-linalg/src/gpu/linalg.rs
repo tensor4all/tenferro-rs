@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl::prelude::{ComplexCore, CubeElement, CubePrimitive};
 use cubecl_cuda::CudaRuntime;
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
@@ -37,6 +37,13 @@ trait LinalgScalar:
 
     const DATA_TYPE: CudaDataType;
     const NEEDS_RWORK: bool;
+
+    fn copy_svd_v_to_vt(
+        rt: &CubeclRuntime,
+        v: &TypedTensor<Self>,
+        vt_shape: &[usize],
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>>;
 }
 
 impl LinalgScalar for f32 {
@@ -44,6 +51,15 @@ impl LinalgScalar for f32 {
 
     const DATA_TYPE: CudaDataType = CudaDataType::F32;
     const NEEDS_RWORK: bool = false;
+
+    fn copy_svd_v_to_vt(
+        rt: &CubeclRuntime,
+        v: &TypedTensor<Self>,
+        vt_shape: &[usize],
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        copy_svd_v_to_vt_real(rt, v, vt_shape, op)
+    }
 }
 
 impl LinalgScalar for f64 {
@@ -51,6 +67,15 @@ impl LinalgScalar for f64 {
 
     const DATA_TYPE: CudaDataType = CudaDataType::F64;
     const NEEDS_RWORK: bool = false;
+
+    fn copy_svd_v_to_vt(
+        rt: &CubeclRuntime,
+        v: &TypedTensor<Self>,
+        vt_shape: &[usize],
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        copy_svd_v_to_vt_real(rt, v, vt_shape, op)
+    }
 }
 
 impl LinalgScalar for Complex32 {
@@ -58,6 +83,15 @@ impl LinalgScalar for Complex32 {
 
     const DATA_TYPE: CudaDataType = CudaDataType::Complex32;
     const NEEDS_RWORK: bool = true;
+
+    fn copy_svd_v_to_vt(
+        rt: &CubeclRuntime,
+        v: &TypedTensor<Self>,
+        vt_shape: &[usize],
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        copy_svd_v_to_vt_complex(rt, v, vt_shape, op)
+    }
 }
 
 impl LinalgScalar for Complex64 {
@@ -65,6 +99,31 @@ impl LinalgScalar for Complex64 {
 
     const DATA_TYPE: CudaDataType = CudaDataType::Complex64;
     const NEEDS_RWORK: bool = true;
+
+    fn copy_svd_v_to_vt(
+        rt: &CubeclRuntime,
+        v: &TypedTensor<Self>,
+        vt_shape: &[usize],
+        op: &'static str,
+    ) -> Result<TypedTensor<Self>> {
+        copy_svd_v_to_vt_complex(rt, v, vt_shape, op)
+    }
+}
+
+const JAX_COMPATIBLE_GESVDJ_MAX_DIM: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SvdDriver {
+    Gesvdj,
+    Gesvd,
+}
+
+fn select_svd_driver(m: usize, n: usize) -> SvdDriver {
+    if m <= JAX_COMPATIBLE_GESVDJ_MAX_DIM && n <= JAX_COMPATIBLE_GESVDJ_MAX_DIM {
+        SvdDriver::Gesvdj
+    } else {
+        SvdDriver::Gesvd
+    }
 }
 
 fn unsupported_linalg_dtype(op: &'static str, input: &Tensor) -> Error {
@@ -814,10 +873,102 @@ where
     }
 }
 
+fn copy_svd_v_to_vt_real<T>(
+    rt: &CubeclRuntime,
+    v: &TypedTensor<T>,
+    vt_shape: &[usize],
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    let vt = alloc_output::<T>(rt, vt_shape);
+    launch_svd_v_to_vt_real(rt, v, &vt, op)?;
+    Ok(vt)
+}
+
+fn copy_svd_v_to_vt_complex<T>(
+    rt: &CubeclRuntime,
+    v: &TypedTensor<T>,
+    vt_shape: &[usize],
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar + ComplexCore,
+{
+    let vt = alloc_output::<T>(rt, vt_shape);
+    launch_svd_v_to_vt_complex(rt, v, &vt, op)?;
+    Ok(vt)
+}
+
+fn launch_svd_v_to_vt_real<T>(
+    rt: &CubeclRuntime,
+    v: &TypedTensor<T>,
+    vt: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<()>
+where
+    T: LinalgScalar,
+{
+    if vt.n_elements() == 0 {
+        return Ok(());
+    }
+    let client = rt.client();
+    let vt_arg = typed_tensor_binding(vt, op)?;
+    let v_arg = typed_tensor_binding(v, op)?;
+    unsafe {
+        cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(vt.n_elements()),
+            cube_dim_1d(),
+            vt_arg.into_tensor_arg(),
+            v_arg.into_tensor_arg(),
+            vt.shape().len(),
+        );
+    }
+    client.flush().map_err(|err| {
+        Error::backend_failure(op, format!("SVD V-to-VT copy launch failed: {err:?}"))
+    })
+}
+
+fn launch_svd_v_to_vt_complex<T>(
+    rt: &CubeclRuntime,
+    v: &TypedTensor<T>,
+    vt: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<()>
+where
+    T: LinalgScalar + ComplexCore,
+{
+    if vt.n_elements() == 0 {
+        return Ok(());
+    }
+    let client = rt.client();
+    let vt_arg = typed_tensor_binding(vt, op)?;
+    let v_arg = typed_tensor_binding(v, op)?;
+    unsafe {
+        cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(vt.n_elements()),
+            cube_dim_1d(),
+            vt_arg.into_tensor_arg(),
+            v_arg.into_tensor_arg(),
+            vt.shape().len(),
+        );
+    }
+    client.flush().map_err(|err| {
+        Error::backend_failure(op, format!("SVD V-to-VT copy launch failed: {err:?}"))
+    })
+}
+
 fn svd_typed<T>(
     backend: &CubeclBackend,
     input: &TypedTensor<T>,
-) -> Result<(TypedTensor<T>, TypedTensor<T::Real>, TypedTensor<T>)>
+) -> Result<(
+    TypedTensor<T>,
+    TypedTensor<<T as LinalgScalar>::Real>,
+    TypedTensor<T>,
+)>
 where
     T: LinalgScalar,
 {
@@ -844,70 +995,149 @@ where
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
     let u = alloc_output::<T>(backend.runtime(), &u_shape);
-    let s = alloc_output::<T::Real>(backend.runtime(), &s_shape);
-    let vt = alloc_output::<T>(backend.runtime(), &vt_shape);
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
-    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
-    let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-    let vt_ptr = typed_device_ptr(backend.runtime(), &vt, OP)?;
+    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape);
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
     let ldu = as_i32(m, OP, "ldu")?;
-    let ldvt = as_i32(k.max(1), OP, "ldvt")?;
-    let lwork = handles
-        .cusolver()
-        .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let rwork = if T::NEEDS_RWORK {
-        alloc_workspace_elems::<T::Real>(backend.runtime(), as_i32(5 * k, OP, "rwork")?, OP)?
-    } else {
-        Workspace::none()
-    };
     let batch_total = batch_count(batch_shape);
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let a_stride = m * n;
     let u_stride = m * k;
     let s_stride = k;
-    let vt_stride = k * n;
-    let job = b'S' as c_char;
 
-    for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
-        let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
-        let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
-        let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, batch * vt_stride) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
-        unsafe {
-            handles.cusolver().gesvd(
-                T::DATA_TYPE,
-                job,
-                job,
-                m_i32,
-                n_i32,
-                batch_a,
-                lda,
-                batch_s,
-                batch_u,
-                ldu,
-                batch_vt,
-                ldvt,
-                workspace.ptr,
-                lwork,
-                rwork.ptr,
-                batch_info,
-                OP,
-            )?;
+    match select_svd_driver(m, n) {
+        SvdDriver::Gesvdj => {
+            let mut v_shape = vec![n, k];
+            v_shape.extend_from_slice(batch_shape);
+            let v = alloc_output::<T>(backend.runtime(), &v_shape);
+            {
+                let handles = linalg_handles(backend)?;
+                let stream = raw_stream(backend.runtime(), OP)?;
+                handles.cusolver().set_stream(stream, OP)?;
+
+                let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+                let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
+                let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
+                let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
+                let ldv = as_i32(n, OP, "ldv")?;
+                let params = handles.cusolver().create_gesvdj_info(OP)?;
+                let lwork = handles.cusolver().gesvdj_buffer_size(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    1,
+                    m_i32,
+                    n_i32,
+                    a_ptr.cast_const(),
+                    lda,
+                    s_ptr.cast_const(),
+                    u_ptr.cast_const(),
+                    ldu,
+                    v_ptr.cast_const(),
+                    ldv,
+                    &params,
+                    OP,
+                )?;
+                let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+                let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+                let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+                let v_stride = n * k;
+
+                for batch in 0..batch_total {
+                    let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+                    let batch_s =
+                        unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, batch * s_stride) };
+                    let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
+                    let batch_v = unsafe { batch_ptr::<T>(v_ptr, batch * v_stride) };
+                    let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                    unsafe {
+                        handles.cusolver().gesvdj(
+                            T::DATA_TYPE,
+                            CusolverEigMode::Vector,
+                            1,
+                            m_i32,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_s,
+                            batch_u,
+                            ldu,
+                            batch_v,
+                            ldv,
+                            workspace.ptr,
+                            lwork,
+                            batch_info,
+                            &params,
+                            OP,
+                        )?;
+                    }
+                }
+                check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvdj")?;
+            }
+            let vt = T::copy_svd_v_to_vt(backend.runtime(), &v, &vt_shape, OP)?;
+            Ok((u, s, vt))
+        }
+        SvdDriver::Gesvd => {
+            let vt = alloc_output::<T>(backend.runtime(), &vt_shape);
+            let handles = linalg_handles(backend)?;
+            let stream = raw_stream(backend.runtime(), OP)?;
+            handles.cusolver().set_stream(stream, OP)?;
+
+            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+            let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
+            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
+            let vt_ptr = typed_device_ptr(backend.runtime(), &vt, OP)?;
+            let ldvt = as_i32(k, OP, "ldvt")?;
+            let lwork = handles
+                .cusolver()
+                .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
+            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+            let rwork = if T::NEEDS_RWORK {
+                alloc_workspace_elems::<<T as LinalgScalar>::Real>(
+                    backend.runtime(),
+                    as_i32(5 * k, OP, "rwork")?,
+                    OP,
+                )?
+            } else {
+                Workspace::none()
+            };
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+            let vt_stride = k * n;
+            let job = b'S' as c_char;
+
+            for batch in 0..batch_total {
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+                let batch_s =
+                    unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, batch * s_stride) };
+                let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
+                let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, batch * vt_stride) };
+                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                unsafe {
+                    handles.cusolver().gesvd(
+                        T::DATA_TYPE,
+                        job,
+                        job,
+                        m_i32,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_s,
+                        batch_u,
+                        ldu,
+                        batch_vt,
+                        ldvt,
+                        workspace.ptr,
+                        lwork,
+                        rwork.ptr,
+                        batch_info,
+                        OP,
+                    )?;
+                }
+            }
+            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
+            Ok((u, s, vt))
         }
     }
-    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
-
-    Ok((u, s, vt))
 }
 
 fn svd_values_typed<T>(
@@ -932,60 +1162,137 @@ where
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
     let s = alloc_output::<T::Real>(backend.runtime(), &s_shape);
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
-    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
-    let lwork = handles
-        .cusolver()
-        .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let rwork = if T::NEEDS_RWORK {
-        alloc_workspace_elems::<T::Real>(backend.runtime(), as_i32(5 * k, OP, "rwork")?, OP)?
-    } else {
-        Workspace::none()
-    };
     let batch_total = batch_count(batch_shape);
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let a_stride = m * n;
     let s_stride = k;
-    let job = b'N' as c_char;
 
-    for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
-        let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
-        unsafe {
-            handles.cusolver().gesvd(
+    match select_svd_driver(m, n) {
+        SvdDriver::Gesvdj => {
+            let mut u_shape = vec![m, k];
+            u_shape.extend_from_slice(batch_shape);
+            let mut v_shape = vec![n, k];
+            v_shape.extend_from_slice(batch_shape);
+            let u = alloc_output::<T>(backend.runtime(), &u_shape);
+            let v = alloc_output::<T>(backend.runtime(), &v_shape);
+            let handles = linalg_handles(backend)?;
+            let stream = raw_stream(backend.runtime(), OP)?;
+            handles.cusolver().set_stream(stream, OP)?;
+
+            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
+            let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
+            let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
+            let params = handles.cusolver().create_gesvdj_info(OP)?;
+            let lwork = handles.cusolver().gesvdj_buffer_size(
                 T::DATA_TYPE,
-                job,
-                job,
+                CusolverEigMode::NoVector,
+                1,
                 m_i32,
                 n_i32,
-                batch_a,
+                a_ptr.cast_const(),
                 lda,
-                batch_s,
-                std::ptr::null_mut(),
-                1,
-                std::ptr::null_mut(),
-                1,
-                workspace.ptr,
-                lwork,
-                rwork.ptr,
-                batch_info,
+                s_ptr.cast_const(),
+                u_ptr.cast_const(),
+                lda,
+                v_ptr.cast_const(),
+                n_i32,
+                &params,
                 OP,
             )?;
+            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+            let u_stride = m * k;
+            let v_stride = n * k;
+
+            for batch in 0..batch_total {
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
+                let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
+                let batch_v = unsafe { batch_ptr::<T>(v_ptr, batch * v_stride) };
+                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                unsafe {
+                    handles.cusolver().gesvdj(
+                        T::DATA_TYPE,
+                        CusolverEigMode::NoVector,
+                        1,
+                        m_i32,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_s,
+                        batch_u,
+                        lda,
+                        batch_v,
+                        n_i32,
+                        workspace.ptr,
+                        lwork,
+                        batch_info,
+                        &params,
+                        OP,
+                    )?;
+                }
+            }
+            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvdj")?;
+            Ok(s)
+        }
+        SvdDriver::Gesvd => {
+            let handles = linalg_handles(backend)?;
+            let stream = raw_stream(backend.runtime(), OP)?;
+            handles.cusolver().set_stream(stream, OP)?;
+
+            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
+            let lwork = handles
+                .cusolver()
+                .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
+            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+            let rwork = if T::NEEDS_RWORK {
+                alloc_workspace_elems::<T::Real>(
+                    backend.runtime(),
+                    as_i32(5 * k, OP, "rwork")?,
+                    OP,
+                )?
+            } else {
+                Workspace::none()
+            };
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+            let job = b'N' as c_char;
+
+            for batch in 0..batch_total {
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
+                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                unsafe {
+                    handles.cusolver().gesvd(
+                        T::DATA_TYPE,
+                        job,
+                        job,
+                        m_i32,
+                        n_i32,
+                        batch_a,
+                        lda,
+                        batch_s,
+                        std::ptr::null_mut(),
+                        1,
+                        std::ptr::null_mut(),
+                        1,
+                        workspace.ptr,
+                        lwork,
+                        rwork.ptr,
+                        batch_info,
+                        OP,
+                    )?;
+                }
+            }
+            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
+            Ok(s)
         }
     }
-    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
-
-    Ok(s)
 }
 
 fn qr_typed<T>(
