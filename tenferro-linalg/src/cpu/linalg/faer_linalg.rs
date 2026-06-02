@@ -363,8 +363,7 @@ fn swap_sequence_from_permutation(
 ) -> tenferro_tensor::Result<Vec<i32>> {
     let mut current: Vec<usize> = (0..perm.len()).collect();
     let mut pivots = Vec::with_capacity(k);
-    for step in 0..k {
-        let wanted = perm[step];
+    for (step, &wanted) in perm.iter().take(k).enumerate() {
         let pivot = current
             .iter()
             .position(|&row| row == wanted)
