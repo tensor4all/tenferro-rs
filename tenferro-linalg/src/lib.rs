@@ -39,11 +39,6 @@ mod gpu;
 mod traced;
 pub mod traced_tensor;
 
-#[doc(hidden)]
-pub mod ad_support {
-    pub use crate::extension::{LinalgExtensionOp, LinalgOp};
-}
-
 #[cfg(feature = "autodiff")]
 pub use ad::{ad_rules, register_extension_rule};
 pub use backend::LinalgBackend;

@@ -23,10 +23,9 @@ use tenferro_gpu::cubecl::{
     download_tensor, CubeclBackend, CubeclRuntime, CudaExtensionCacheGuard,
 };
 use tenferro_gpu::CubeclBuffer;
-use tenferro_tensor::config::{DotGeneralConfig, SliceConfig};
+use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    Buffer, DType, Error, Tensor, TensorDot, TensorElementwise, TensorReduction, TensorStructural,
-    TypedTensor,
+    Buffer, DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -218,6 +217,42 @@ pub(super) fn lu(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tens
     }
 }
 
+pub(super) fn lu_factor(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+    match input {
+        Tensor::F32(t) => lu_factor_typed(backend, t).map(|(packed_lu, pivots, parity)| {
+            vec![
+                Tensor::F32(packed_lu),
+                Tensor::I32(pivots),
+                Tensor::F32(parity),
+            ]
+        }),
+        Tensor::F64(t) => lu_factor_typed(backend, t).map(|(packed_lu, pivots, parity)| {
+            vec![
+                Tensor::F64(packed_lu),
+                Tensor::I32(pivots),
+                Tensor::F64(parity),
+            ]
+        }),
+        Tensor::C32(t) => lu_factor_typed(backend, t).map(|(packed_lu, pivots, parity)| {
+            vec![
+                Tensor::C32(packed_lu),
+                Tensor::I32(pivots),
+                Tensor::C32(parity),
+            ]
+        }),
+        Tensor::C64(t) => lu_factor_typed(backend, t).map(|(packed_lu, pivots, parity)| {
+            vec![
+                Tensor::C64(packed_lu),
+                Tensor::I32(pivots),
+                Tensor::C64(parity),
+            ]
+        }),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_linalg_dtype("lu_factor", input))
+        }
+    }
+}
+
 pub(super) fn full_piv_lu(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::backend_failure(
         "full_piv_lu",
@@ -249,6 +284,18 @@ pub(super) fn svd(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Ten
             .map(|(u, s, vt)| vec![Tensor::C64(u), Tensor::F64(s), Tensor::C64(vt)]),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("svd", input))
+        }
+    }
+}
+
+pub(super) fn svd_values(backend: &mut CubeclBackend, input: &Tensor) -> Result<Tensor> {
+    match input {
+        Tensor::F32(t) => svd_values_typed(backend, t).map(Tensor::F32),
+        Tensor::F64(t) => svd_values_typed(backend, t).map(Tensor::F64),
+        Tensor::C32(t) => svd_values_typed(backend, t).map(Tensor::F32),
+        Tensor::C64(t) => svd_values_typed(backend, t).map(Tensor::F64),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_linalg_dtype("svd_values", input))
         }
     }
 }
@@ -307,19 +354,87 @@ pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Resu
         (b.clone(), None)
     };
 
-    let outputs = lu(backend, a)?;
-    let p = &outputs[0];
-    let l = &outputs[1];
-    let u = &outputs[2];
-    validate_nonsingular_gpu(backend, u)?;
-
-    let pb = matmul_preserve_trailing_batch(backend, p, &rhs)?;
-    let z = triangular_solve(backend, l, &pb, true, true, false, true)?;
-    let x = triangular_solve(backend, u, &z, true, false, false, false)?;
+    let factors = lu_factor(backend, a)?;
+    let [packed_lu, pivots, _parity] = factors.as_slice() else {
+        return Err(Error::backend_failure(
+            OP,
+            "lu_factor returned an unexpected number of outputs",
+        ));
+    };
+    let x = lu_solve_prepared(backend, a, packed_lu, pivots, &rhs, false, false)?;
     if let Some(shape) = restore_shape {
         backend.reshape(&x, &shape)
     } else {
         Ok(x)
+    }
+}
+
+pub(super) fn lu_solve_prepared(
+    backend: &mut CubeclBackend,
+    a: &Tensor,
+    packed_lu: &Tensor,
+    pivots: &Tensor,
+    b: &Tensor,
+    transpose_a: bool,
+    conjugate_a: bool,
+) -> Result<Tensor> {
+    const OP: &str = "lu_solve_prepared";
+
+    backend.runtime().set_current_cuda_context(OP)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
+    ensure_supported_linalg_pair(OP, a, packed_lu)?;
+    ensure_cubecl_resident_tensor(OP, a)?;
+    ensure_cubecl_resident_tensor(OP, packed_lu)?;
+    ensure_cubecl_resident_tensor(OP, pivots)?;
+    ensure_cubecl_resident_tensor(OP, b)?;
+    if !matches!(pivots, Tensor::I32(_)) {
+        return Err(Error::DTypeMismatch {
+            op: OP,
+            lhs: DType::I32,
+            rhs: pivots.dtype(),
+        });
+    }
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+        return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
+    }
+
+    let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
+        (
+            backend.reshape(b, &matrix_rhs_shape)?,
+            Some(b.shape().to_vec()),
+        )
+    } else {
+        (b.clone(), None)
+    };
+
+    validate_nonsingular_gpu(backend, packed_lu)?;
+    let result = match (packed_lu, pivots, &rhs) {
+        (Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(rhs)) => {
+            lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
+                .map(Tensor::F32)
+        }
+        (Tensor::F64(lu), Tensor::I32(pivots), Tensor::F64(rhs)) => {
+            lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
+                .map(Tensor::F64)
+        }
+        (Tensor::C32(lu), Tensor::I32(pivots), Tensor::C32(rhs)) => {
+            lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
+                .map(Tensor::C32)
+        }
+        (Tensor::C64(lu), Tensor::I32(pivots), Tensor::C64(rhs)) => {
+            lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
+                .map(Tensor::C64)
+        }
+        _ => Err(Error::backend_failure(
+            OP,
+            "packed LU, pivots, and rhs dtypes are inconsistent",
+        )),
+    }?;
+
+    if let Some(shape) = restore_shape {
+        backend.reshape(&result, &shape)
+    } else {
+        Ok(result)
     }
 }
 
@@ -406,24 +521,52 @@ fn triangular_solve_typed<T>(
 where
     T: LinalgScalar,
 {
-    const OP: &str = "triangular_solve";
+    let trans = if transpose_a {
+        CublasOperation::T
+    } else {
+        CublasOperation::N
+    };
+    triangular_solve_typed_with_op(
+        backend,
+        a,
+        b,
+        left_side,
+        lower,
+        trans,
+        unit_diagonal,
+        "triangular_solve",
+    )
+}
 
-    backend.runtime().set_current_cuda_context(OP)?;
-    ensure_cubecl_resident_typed(OP, a)?;
-    ensure_cubecl_resident_typed(OP, b)?;
-    let n = square_matrix_dim(OP, a.shape())?;
-    validate_triangular_rhs(OP, a.shape(), b.shape(), left_side)?;
+fn triangular_solve_typed_with_op<T>(
+    backend: &CubeclBackend,
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    left_side: bool,
+    lower: bool,
+    trans: CublasOperation,
+    unit_diagonal: bool,
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    backend.runtime().set_current_cuda_context(op)?;
+    ensure_cubecl_resident_typed(op, a)?;
+    ensure_cubecl_resident_typed(op, b)?;
+    let n = square_matrix_dim(op, a.shape())?;
+    validate_triangular_rhs(op, a.shape(), b.shape(), left_side)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return Ok(alloc_output(backend.runtime(), b.shape()));
     }
 
-    let out = clone_device_tensor(backend.runtime(), b, OP)?;
+    let out = clone_device_tensor(backend.runtime(), b, op)?;
     let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cublas().set_stream(stream, OP)?;
+    let stream = raw_stream(backend.runtime(), op)?;
+    handles.cublas().set_stream(stream, op)?;
 
-    let a_ptr = typed_device_ptr(backend.runtime(), a, OP)?;
-    let out_ptr = typed_device_ptr(backend.runtime(), &out, OP)?;
+    let a_ptr = typed_device_ptr(backend.runtime(), a, op)?;
+    let out_ptr = typed_device_ptr(backend.runtime(), &out, op)?;
     let side = if left_side {
         CublasSideMode::Left
     } else {
@@ -434,11 +577,6 @@ where
     } else {
         CublasFillMode::Upper
     };
-    let trans = if transpose_a {
-        CublasOperation::T
-    } else {
-        CublasOperation::N
-    };
     let diag = if unit_diagonal {
         CublasDiagType::Unit
     } else {
@@ -448,10 +586,10 @@ where
     let cols = b.shape()[1];
     let a_stride = n * n;
     let out_stride = rows * cols;
-    let lda = as_i32(n, OP, "lda")?;
-    let ldb = as_i32(rows, OP, "ldb")?;
-    let m = as_i32(rows, OP, "m")?;
-    let n_rhs = as_i32(cols, OP, "n")?;
+    let lda = as_i32(n, op, "lda")?;
+    let ldb = as_i32(rows, op, "ldb")?;
+    let m = as_i32(rows, op, "m")?;
+    let n_rhs = as_i32(cols, op, "n")?;
     let alpha = T::one();
 
     for batch in 0..batch_count(&b.shape()[2..]) {
@@ -471,7 +609,7 @@ where
                 lda,
                 batch_b,
                 ldb,
-                OP,
+                op,
             )?;
         }
     }
@@ -493,12 +631,34 @@ where
 {
     const OP: &str = "lu";
 
+    let (packed_lu, pivots, parity) = lu_factor_typed(backend, input)?;
+    let (m, n) = matrix_dims(OP, input.shape())?;
+    let (p, l, u, _extracted_parity) = build_lu_outputs_device(
+        backend.runtime(),
+        &packed_lu,
+        &pivots,
+        m,
+        n,
+        &input.shape()[2..],
+    )?;
+    Ok((p, l, u, parity))
+}
+
+fn lu_factor_typed<T>(
+    backend: &CubeclBackend,
+    input: &TypedTensor<T>,
+) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
+where
+    T: LinalgScalar,
+{
+    const OP: &str = "lu_factor";
+
     backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
-        return zero_sized_lu_outputs(backend.runtime(), input.shape());
+        return zero_sized_lu_factor_outputs(backend.runtime(), input.shape());
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
@@ -517,7 +677,7 @@ where
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(&input.shape()[2..]);
-    let pivots = alloc_output::<u32>(backend.runtime(), &pivot_shape);
+    let pivots = alloc_output::<i32>(backend.runtime(), &pivot_shape);
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
     let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
@@ -525,7 +685,7 @@ where
 
     for batch in 0..batch_total {
         let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
-        let batch_pivots = unsafe { batch_ptr::<u32>(pivots_ptr, batch * k) };
+        let batch_pivots = unsafe { batch_ptr::<i32>(pivots_ptr, batch * k) };
         let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch) };
         unsafe {
             handles.cusolver().getrf(
@@ -555,7 +715,75 @@ where
         }
     }
 
-    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, &input.shape()[2..])
+    let parity = build_lu_parity_device(backend.runtime(), &pivots, k, &input.shape()[2..])?;
+    Ok((work, pivots, parity))
+}
+
+fn lu_solve_prepared_typed<T>(
+    backend: &CubeclBackend,
+    packed_lu: &TypedTensor<T>,
+    pivots: &TypedTensor<i32>,
+    b: &TypedTensor<T>,
+    transpose_a: bool,
+    conjugate_a: bool,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    const OP: &str = "lu_solve_prepared";
+
+    backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, packed_lu)?;
+    ensure_cubecl_resident_typed(OP, pivots)?;
+    ensure_cubecl_resident_typed(OP, b)?;
+    validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), b.shape())?;
+    if has_zero_dim(packed_lu.shape()) || has_zero_dim(b.shape()) {
+        return Ok(alloc_output(backend.runtime(), b.shape()));
+    }
+
+    match (transpose_a, conjugate_a) {
+        (false, false) => {
+            let pb = apply_lu_pivots_typed(backend.runtime(), b, pivots, false)?;
+            let z = triangular_solve_typed_with_op(
+                backend,
+                packed_lu,
+                &pb,
+                true,
+                true,
+                CublasOperation::N,
+                true,
+                OP,
+            )?;
+            triangular_solve_typed_with_op(
+                backend,
+                packed_lu,
+                &z,
+                true,
+                false,
+                CublasOperation::N,
+                false,
+                OP,
+            )
+        }
+        (true, conjugate_a) => {
+            let trans = if conjugate_a {
+                CublasOperation::C
+            } else {
+                CublasOperation::T
+            };
+            let z = triangular_solve_typed_with_op(
+                backend, packed_lu, b, true, false, trans, false, OP,
+            )?;
+            let y = triangular_solve_typed_with_op(
+                backend, packed_lu, &z, true, true, trans, true, OP,
+            )?;
+            apply_lu_pivots_typed(backend.runtime(), &y, pivots, true)
+        }
+        (false, true) => Err(Error::backend_failure(
+            OP,
+            "conjugate-only prepared LU solve is unsupported on CUDA; use transpose+conjugate or solve the conjugated matrix explicitly",
+        )),
+    }
 }
 
 fn svd_typed<T>(
@@ -652,6 +880,84 @@ where
     }
 
     Ok((u, s, vt))
+}
+
+fn svd_values_typed<T>(
+    backend: &CubeclBackend,
+    input: &TypedTensor<T>,
+) -> Result<TypedTensor<T::Real>>
+where
+    T: LinalgScalar,
+{
+    const OP: &str = "svd_values";
+
+    backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
+    let (m, n) = matrix_dims(OP, input.shape())?;
+    let k = m.min(n);
+    let batch_shape = &input.shape()[2..];
+    let mut s_shape = vec![k];
+    s_shape.extend_from_slice(batch_shape);
+    if has_zero_dim(input.shape()) {
+        return Ok(alloc_output(backend.runtime(), &s_shape));
+    }
+
+    let work = clone_device_tensor(backend.runtime(), input, OP)?;
+    let s = alloc_output::<T::Real>(backend.runtime(), &s_shape);
+    let handles = linalg_handles(backend)?;
+    let stream = raw_stream(backend.runtime(), OP)?;
+    handles.cusolver().set_stream(stream, OP)?;
+
+    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
+    let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
+    let m_i32 = as_i32(m, OP, "m")?;
+    let n_i32 = as_i32(n, OP, "n")?;
+    let lda = as_i32(m, OP, "lda")?;
+    let lwork = handles
+        .cusolver()
+        .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
+    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
+    let rwork = if T::NEEDS_RWORK {
+        alloc_workspace_elems::<T::Real>(backend.runtime(), as_i32(5 * k, OP, "rwork")?, OP)?
+    } else {
+        Workspace::none()
+    };
+    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
+    let batch_total = batch_count(batch_shape);
+    let a_stride = m * n;
+    let s_stride = k;
+    let job = b'N' as c_char;
+
+    for batch in 0..batch_total {
+        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+        let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
+        unsafe {
+            handles.cusolver().gesvd(
+                T::DATA_TYPE,
+                job,
+                job,
+                m_i32,
+                n_i32,
+                batch_a,
+                lda,
+                batch_s,
+                std::ptr::null_mut(),
+                1,
+                std::ptr::null_mut(),
+                1,
+                workspace.ptr,
+                lwork,
+                rwork.ptr,
+                info.ptr.cast::<i32>(),
+                OP,
+            )?;
+        }
+        let mut host_info = [0_i32; 1];
+        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
+        check_solver_info(OP, "cusolverDn*gesvd", host_info[0])?;
+    }
+
+    Ok(s)
 }
 
 fn qr_typed<T>(
@@ -842,7 +1148,7 @@ where
 fn build_lu_outputs_device<T>(
     rt: &CubeclRuntime,
     lu: &TypedTensor<T>,
-    pivots: &TypedTensor<u32>,
+    pivots: &TypedTensor<i32>,
     m: usize,
     n: usize,
     batch_shape: &[usize],
@@ -902,15 +1208,82 @@ where
     Ok((p, l, u, parity))
 }
 
-fn zero_sized_lu_outputs<T>(
+fn build_lu_parity_device<T>(
+    rt: &CubeclRuntime,
+    pivots: &TypedTensor<i32>,
+    k: usize,
+    batch_shape: &[usize],
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    let parity = alloc_output::<T>(rt, batch_shape);
+    let client = rt.client();
+    let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
+    let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
+    unsafe {
+        cubecl_linalg::lu_parity::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(parity.n_elements()),
+            cube_dim_1d(),
+            parity_arg.into_tensor_arg(),
+            pivots_arg,
+            k,
+        );
+    }
+    client.flush().map_err(|err| {
+        Error::backend_failure(
+            "lu_factor",
+            format!("LU parity extraction launch failed: {err:?}"),
+        )
+    })?;
+    Ok(parity)
+}
+
+fn apply_lu_pivots_typed<T>(
+    rt: &CubeclRuntime,
+    input: &TypedTensor<T>,
+    pivots: &TypedTensor<i32>,
+    inverse: bool,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    let out = alloc_output::<T>(rt, input.shape());
+    if out.n_elements() == 0 {
+        return Ok(out);
+    }
+    let k = pivots.shape()[0];
+    let client = rt.client();
+    let out_arg = typed_tensor_binding(&out, "lu_solve_prepared")?;
+    let input_arg = typed_tensor_binding(input, "lu_solve_prepared")?;
+    let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
+    unsafe {
+        cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(out.n_elements()),
+            cube_dim_1d(),
+            out_arg.into_tensor_arg(),
+            input_arg.into_tensor_arg(),
+            pivots_arg,
+            k,
+            input.shape().len(),
+            inverse,
+        );
+    }
+    client.flush().map_err(|err| {
+        Error::backend_failure(
+            "lu_solve_prepared",
+            format!("LU pivot application launch failed: {err:?}"),
+        )
+    })?;
+    Ok(out)
+}
+
+fn zero_sized_lu_factor_outputs<T>(
     rt: &CubeclRuntime,
     shape: &[usize],
-) -> Result<(
-    TypedTensor<T>,
-    TypedTensor<T>,
-    TypedTensor<T>,
-    TypedTensor<T>,
-)>
+) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
     T: LinalgScalar,
 {
@@ -918,12 +1291,8 @@ where
     let n = shape[1];
     let k = m.min(n);
     let batch_shape = &shape[2..];
-    let mut p_shape = vec![m, m];
-    p_shape.extend_from_slice(batch_shape);
-    let mut l_shape = vec![m, k];
-    l_shape.extend_from_slice(batch_shape);
-    let mut u_shape = vec![k, n];
-    u_shape.extend_from_slice(batch_shape);
+    let mut pivot_shape = vec![k];
+    pivot_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
     let parity_len = batch_count(batch_shape);
     let parity = upload_host_tensor(
@@ -931,9 +1300,8 @@ where
         TypedTensor::from_vec_col_major(parity_shape, vec![T::one(); parity_len.max(1)]),
     )?;
     Ok((
-        alloc_output(rt, &p_shape),
-        alloc_output(rt, &l_shape),
-        alloc_output(rt, &u_shape),
+        alloc_output(rt, shape),
+        alloc_output(rt, &pivot_shape),
         parity,
     ))
 }
@@ -1156,6 +1524,38 @@ fn validate_triangular_rhs(
     Ok(())
 }
 
+fn validate_lu_solve_prepared_shapes(
+    lu_shape: &[usize],
+    pivots_shape: &[usize],
+    b_shape: &[usize],
+) -> Result<()> {
+    let n = square_matrix_dim("lu_solve_prepared", lu_shape)?;
+    let (b_rows, _) = matrix_dims("lu_solve_prepared", b_shape)?;
+    if b_rows != n {
+        return Err(Error::InvalidConfig {
+            op: "lu_solve_prepared",
+            message: format!("rhs row count mismatch: expected {n}, got {b_rows}"),
+        });
+    }
+    if lu_shape[2..] != b_shape[2..] {
+        return Err(Error::ShapeMismatch {
+            op: "lu_solve_prepared",
+            lhs: lu_shape.to_vec(),
+            rhs: b_shape.to_vec(),
+        });
+    }
+    let mut expected_pivots = vec![n];
+    expected_pivots.extend_from_slice(&lu_shape[2..]);
+    if pivots_shape != expected_pivots {
+        return Err(Error::ShapeMismatch {
+            op: "lu_solve_prepared",
+            lhs: expected_pivots,
+            rhs: pivots_shape.to_vec(),
+        });
+    }
+    Ok(())
+}
+
 fn check_solver_info(op: &'static str, call: &'static str, info: i32) -> Result<()> {
     if info == 0 {
         return Ok(());
@@ -1240,25 +1640,6 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     let mut rhs_shape = vec![b.shape()[0], 1];
     rhs_shape.extend_from_slice(&b.shape()[1..]);
     Some(rhs_shape)
-}
-
-fn matmul_preserve_trailing_batch(
-    backend: &mut CubeclBackend,
-    lhs: &Tensor,
-    rhs: &Tensor,
-) -> Result<Tensor> {
-    let rank = lhs.shape().len();
-    let batch_dims: Vec<usize> = (2..rank).collect();
-    backend.dot_general(
-        lhs,
-        rhs,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: batch_dims.clone(),
-            rhs_batch_dims: batch_dims,
-        },
-    )
 }
 
 /// Validate that U's diagonal has no singular/zero entries — GPU-accelerated.

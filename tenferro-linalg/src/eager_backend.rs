@@ -36,6 +36,10 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, lu(input))
     }
 
+    fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, lu_factor(input))
+    }
+
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, full_piv_lu(input))
     }
@@ -51,6 +55,10 @@ impl LinalgBackend for EagerBackend {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, svd(input))
+    }
+
+    fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        dispatch_linalg!(self, svd_values(input))
     }
 
     fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -71,5 +79,20 @@ impl LinalgBackend for EagerBackend {
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
         dispatch_linalg!(self, solve(a, b))
+    }
+
+    fn lu_solve_prepared(
+        &mut self,
+        a: &Tensor,
+        packed_lu: &Tensor,
+        pivots: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+        conjugate_a: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        dispatch_linalg!(
+            self,
+            lu_solve_prepared(a, packed_lu, pivots, b, transpose_a, conjugate_a)
+        )
     }
 }

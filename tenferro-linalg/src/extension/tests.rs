@@ -1,13 +1,12 @@
-#![cfg(not(feature = "cuda"))]
-
 use std::sync::Arc;
 
-use tenferro_linalg::ad_support::{LinalgExtensionOp, LinalgOp};
 use tenferro_runtime::extension::ExtensionOpTrait;
 use tenferro_tensor::{
     Buffer, BufferHandle, ComputeDevice, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement,
     Tensor, TypedTensor,
 };
+
+use super::{LinalgExtensionOp, LinalgOp};
 
 #[test]
 fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {

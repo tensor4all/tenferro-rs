@@ -28,6 +28,10 @@ impl LinalgBackend for CubeclBackend {
         linalg::lu(self, input)
     }
 
+    fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        linalg::lu_factor(self, input)
+    }
+
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         linalg::full_piv_lu(self, input)
     }
@@ -43,6 +47,10 @@ impl LinalgBackend for CubeclBackend {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         linalg::svd(self, input)
+    }
+
+    fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        linalg::svd_values(self, input)
     }
 
     fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -87,6 +95,18 @@ impl LinalgBackend for CubeclBackend {
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::solve(self, a, b)
+    }
+
+    fn lu_solve_prepared(
+        &mut self,
+        a: &Tensor,
+        packed_lu: &Tensor,
+        pivots: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+        conjugate_a: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        linalg::lu_solve_prepared(self, a, packed_lu, pivots, b, transpose_a, conjugate_a)
     }
 }
 

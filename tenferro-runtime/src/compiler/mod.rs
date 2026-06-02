@@ -68,69 +68,64 @@ pub fn compile_std_to_exec(
                 })
                 .collect();
 
-            let (output_dtype, output_shapes, output_extents) = if let StdTensorOp::Extension(ext) =
-                &instr.operation
-            {
-                let metas =
-                    infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shapes_refs);
-                assert_eq!(
-                    metas.len(),
-                    instr.outputs.len(),
-                    "compile_std_to_exec: extension family_id={:?} \
+            let (output_dtypes, output_shapes, output_extents) =
+                if let StdTensorOp::Extension(ext) = &instr.operation {
+                    let metas = infer_extension_output_meta(
+                        ext.as_ref(),
+                        &input_dtypes,
+                        &input_shapes_refs,
+                    );
+                    assert_eq!(
+                        metas.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: extension family_id={:?} \
                          inferred {} output metas for {} output slots",
-                    ext.family_id(),
-                    metas.len(),
-                    instr.outputs.len()
-                );
-                // Current compiler supports a single dtype per instruction;
-                // per spec Section 7, extensions must keep a uniform dtype
-                // across all outputs. Surface a clean panic if violated.
-                let dtypes_consistent = metas.iter().all(|(dtype, _)| *dtype == metas[0].0);
-                assert!(
-                    dtypes_consistent,
-                    "compile_std_to_exec: extension family_id={:?} returned \
-                         multiple output dtypes {:?}; multi-dtype extensions are \
-                         not yet supported in the compiled path",
-                    ext.family_id(),
-                    metas.iter().map(|(dtype, _)| *dtype).collect::<Vec<_>>()
-                );
-                let dtype = metas[0].0;
-                let shapes: Vec<Vec<DimExpr>> =
-                    metas.into_iter().map(|(_dtype, shape)| shape).collect();
-                let extents = exact_extents_from_shapes(&shapes);
-                (dtype, shapes, extents)
-            } else {
-                let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
-                let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs);
-                let extents = infer_output_extents(&instr.operation, &input_shapes_refs);
-                assert_eq!(
-                    shapes.len(),
-                    instr.outputs.len(),
-                    "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                    instr.operation,
-                    shapes.len(),
-                    instr.outputs.len()
-                );
-                assert_eq!(
-                    extents.len(),
-                    instr.outputs.len(),
-                    "compile_std_to_exec: {:?} inferred {} output extents for {} output slots",
-                    instr.operation,
-                    extents.len(),
-                    instr.outputs.len()
-                );
-                let resolved_extents =
-                    resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs);
-                (dtype, shapes, resolved_extents)
-            };
+                        ext.family_id(),
+                        metas.len(),
+                        instr.outputs.len()
+                    );
+                    let dtypes: Vec<DType> = metas.iter().map(|(dtype, _)| *dtype).collect();
+                    let shapes: Vec<Vec<DimExpr>> =
+                        metas.into_iter().map(|(_dtype, shape)| shape).collect();
+                    let extents = exact_extents_from_shapes(&shapes);
+                    (dtypes, shapes, extents)
+                } else {
+                    let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
+                    let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs);
+                    let extents = infer_output_extents(&instr.operation, &input_shapes_refs);
+                    assert_eq!(
+                        shapes.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
+                        instr.operation,
+                        shapes.len(),
+                        instr.outputs.len()
+                    );
+                    assert_eq!(
+                        extents.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: {:?} inferred {} output extents for {} output slots",
+                        instr.operation,
+                        extents.len(),
+                        instr.outputs.len()
+                    );
+                    let resolved_extents =
+                        resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs);
+                    (vec![dtype; instr.outputs.len()], shapes, resolved_extents)
+                };
 
-            for ((slot, shape), extents) in instr
+            let instruction_dtype = output_dtypes
+                .first()
+                .copied()
+                .unwrap_or_else(|| panic!("compile_std_to_exec: instruction has no outputs"));
+            for (((slot, dtype), shape), extents) in instr
                 .outputs
                 .iter()
+                .zip(output_dtypes.iter())
                 .zip(output_shapes.iter())
                 .zip(output_extents.iter())
             {
-                slot_dtypes[*slot] = Some(output_dtype);
+                slot_dtypes[*slot] = Some(*dtype);
                 slot_shapes[*slot] = Some(shape.clone());
                 slot_extents[*slot] = Some(extents.clone());
             }
@@ -139,7 +134,7 @@ pub fn compile_std_to_exec(
                 op: ExecOp::from_std_tensor_op(&instr.operation),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
-                dtype: output_dtype,
+                dtype: instruction_dtype,
                 output_shapes,
                 output_extents,
                 last_use: Vec::new(),
@@ -439,20 +434,63 @@ fn collect_slot_meta(
         });
     }
     for instr in &program.instructions {
-        for ((&slot, shape), extents) in instr
+        let output_dtypes = instruction_output_dtypes(instr, &slot_meta);
+        for (((&slot, dtype), shape), extents) in instr
             .output_slots
             .iter()
+            .zip(output_dtypes.iter())
             .zip(instr.output_shapes.iter())
             .zip(instr.output_extents.iter())
         {
             slot_meta[slot] = Some(SlotMeta {
-                dtype: instr.dtype,
+                dtype: *dtype,
                 shape: shape.clone(),
                 extents: extents.clone(),
             });
         }
     }
     slot_meta
+}
+
+fn instruction_output_dtypes(
+    instr: &ExecInstruction,
+    slot_meta: &[Option<SlotMeta>],
+) -> Vec<DType> {
+    let ExecOp::Extension(ext) = &instr.op else {
+        return vec![instr.dtype; instr.output_slots.len()];
+    };
+    let input_dtypes: Vec<DType> = instr
+        .input_slots
+        .iter()
+        .map(|&slot| {
+            slot_meta[slot]
+                .as_ref()
+                .unwrap_or_else(|| panic!("collect_slot_meta: missing dtype for slot {slot}"))
+                .dtype
+        })
+        .collect();
+    let input_shapes: Vec<Vec<DimExpr>> = instr
+        .input_slots
+        .iter()
+        .map(|&slot| {
+            slot_meta[slot]
+                .as_ref()
+                .unwrap_or_else(|| panic!("collect_slot_meta: missing shape for slot {slot}"))
+                .shape
+                .clone()
+        })
+        .collect();
+    let input_shape_refs: Vec<&[DimExpr]> = input_shapes.iter().map(Vec::as_slice).collect();
+    let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs);
+    assert_eq!(
+        metas.len(),
+        instr.output_slots.len(),
+        "collect_slot_meta: extension family_id={:?} inferred {} output metas for {} output slots",
+        ext.family_id(),
+        metas.len(),
+        instr.output_slots.len()
+    );
+    metas.into_iter().map(|(dtype, _shape)| dtype).collect()
 }
 
 struct ConjSinkingState<'a> {
