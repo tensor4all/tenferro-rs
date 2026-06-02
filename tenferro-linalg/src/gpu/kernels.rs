@@ -53,7 +53,7 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
     u_out: &mut Tensor<E>,
     parity_out: &mut Tensor<E>,
     work: &Tensor<E>,
-    pivots: &Array<u32>,
+    pivots: &Array<i32>,
     #[comptime] k: usize,
     #[comptime] rank: usize,
 ) {
@@ -62,18 +62,18 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
         let row = p_out.coordinate(pos, 0usize);
         let col = p_out.coordinate(pos, 1usize);
         let batch = batch_linear_index(p_out, pos, 2usize, rank);
-        let mut final_row = col as u32;
+        let mut final_row = col as i32;
         #[unroll]
         for step in 0usize..k {
-            let step_u32 = step as u32;
-            let pivot = pivots[step + batch * k] - 1u32;
-            if final_row == step_u32 {
+            let step_i32 = step as i32;
+            let pivot = pivots[step + batch * k] - 1i32;
+            if final_row == step_i32 {
                 final_row = pivot;
             } else if final_row == pivot {
-                final_row = step_u32;
+                final_row = step_i32;
             }
         }
-        p_out[pos] = if final_row == row as u32 {
+        p_out[pos] = if final_row == row as i32 {
             one_value::<E>()
         } else {
             zero_value::<E>()
@@ -109,12 +109,84 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
         let mut sign = one_value::<E>();
         #[unroll]
         for step in 0usize..k {
-            let step_u32 = step as u32;
-            let pivot = pivots[step + batch * k] - 1u32;
-            if pivot != step_u32 {
+            let step_i32 = step as i32;
+            let pivot = pivots[step + batch * k] - 1i32;
+            if pivot != step_i32 {
                 sign = -sign;
             }
         }
         parity_out[pos] = sign;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn lu_parity<E: CubePrimitive + core::ops::Neg<Output = E>>(
+    parity_out: &mut Tensor<E>,
+    pivots: &Array<i32>,
+    #[comptime] k: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < parity_out.len() {
+        let mut sign = one_value::<E>();
+        #[unroll]
+        for step in 0usize..k {
+            let step_i32 = step as i32;
+            let pivot = pivots[step + pos * k] - 1i32;
+            if pivot != step_i32 {
+                sign = -sign;
+            }
+        }
+        parity_out[pos] = sign;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn lu_apply_pivots<E: CubePrimitive>(
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
+    pivots: &Array<i32>,
+    #[comptime] k: usize,
+    #[comptime] rank: usize,
+    #[comptime] inverse: bool,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        let row = out.coordinate(pos, 0usize);
+        let col = out.coordinate(pos, 1usize);
+        let batch = batch_linear_index(out, pos, 2usize, rank);
+        let mut source_row = row as i32;
+        if inverse {
+            #[unroll]
+            for step in 0usize..k {
+                let step_i32 = step as i32;
+                let pivot = pivots[step + batch * k] - 1i32;
+                if source_row == step_i32 {
+                    source_row = pivot;
+                } else if source_row == pivot {
+                    source_row = step_i32;
+                }
+            }
+        } else {
+            #[unroll]
+            for offset in 0usize..k {
+                let step = k - 1usize - offset;
+                let step_i32 = step as i32;
+                let pivot = pivots[step + batch * k] - 1i32;
+                if source_row == step_i32 {
+                    source_row = pivot;
+                } else if source_row == pivot {
+                    source_row = step_i32;
+                }
+            }
+        }
+
+        let mut input_offset =
+            (source_row as usize) * input.stride(0usize) + col * input.stride(1usize);
+        #[unroll]
+        for axis in 2usize..rank {
+            let coord = out.coordinate(pos, axis);
+            input_offset += coord * input.stride(axis);
+        }
+        out[pos] = input[input_offset];
     }
 }

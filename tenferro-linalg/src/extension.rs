@@ -9,18 +9,29 @@ use tenferro_tensor::{DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Plac
 
 use crate::backend::LinalgBackend;
 
+#[cfg(all(test, not(feature = "cuda")))]
+mod tests;
+
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[doc(hidden)]
-pub enum LinalgOp {
+pub(crate) enum LinalgOp {
     Cholesky,
     Lu,
+    LuFactor,
+    LuSolvePrepared {
+        transpose_a: bool,
+        conjugate_a: bool,
+    },
     FullPivLu,
     FullPivLuSolve {
         transpose_a: bool,
     },
     Svd {
+        eps: f64,
+    },
+    SvdVals {
         eps: f64,
     },
     Qr,
@@ -29,9 +40,6 @@ pub enum LinalgOp {
     },
     Eig {
         input_dtype: DType,
-    },
-    Solve {
-        transpose_a: bool,
     },
     TriangularSolve {
         left_side: bool,
@@ -42,14 +50,16 @@ pub enum LinalgOp {
 }
 
 impl LinalgOp {
-    pub fn output_count(self) -> usize {
+    fn output_count(self) -> usize {
         match self {
             Self::Cholesky
             | Self::FullPivLuSolve { .. }
-            | Self::Solve { .. }
+            | Self::LuSolvePrepared { .. }
+            | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } => 3,
             Self::Qr | Self::Eigh { .. } | Self::Eig { .. } => 2,
+            Self::LuFactor => 3,
             Self::Lu => 4,
             Self::FullPivLu => 5,
         }
@@ -57,7 +67,8 @@ impl LinalgOp {
 
     fn input_count(self) -> usize {
         match self {
-            Self::FullPivLuSolve { .. } | Self::Solve { .. } | Self::TriangularSolve { .. } => 2,
+            Self::FullPivLuSolve { .. } | Self::TriangularSolve { .. } => 2,
+            Self::LuSolvePrepared { .. } => 4,
             _ => 1,
         }
     }
@@ -72,24 +83,26 @@ impl LinalgOp {
             Self::Qr => 5,
             Self::Eigh { .. } => 6,
             Self::Eig { .. } => 7,
-            Self::Solve { .. } => 8,
             Self::TriangularSolve { .. } => 9,
+            Self::LuFactor => 10,
+            Self::LuSolvePrepared { .. } => 11,
+            Self::SvdVals { .. } => 12,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 #[doc(hidden)]
-pub struct LinalgExtensionOp {
+pub(crate) struct LinalgExtensionOp {
     op: LinalgOp,
 }
 
 impl LinalgExtensionOp {
-    pub fn new(op: LinalgOp) -> Self {
+    pub(crate) fn new(op: LinalgOp) -> Self {
         Self { op }
     }
 
-    pub fn op(&self) -> LinalgOp {
+    pub(crate) fn op(&self) -> LinalgOp {
         self.op
     }
 }
@@ -187,10 +200,19 @@ impl ExtensionOpTrait for LinalgExtensionOp {
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
         hasher.write_u8(self.op.tag());
         match self.op {
-            LinalgOp::Svd { eps } | LinalgOp::Eigh { eps } => hasher.write_u64(eps.to_bits()),
+            LinalgOp::Svd { eps } | LinalgOp::SvdVals { eps } | LinalgOp::Eigh { eps } => {
+                hasher.write_u64(eps.to_bits())
+            }
             LinalgOp::Eig { input_dtype } => hash_dtype(hasher, input_dtype),
-            LinalgOp::Solve { transpose_a } | LinalgOp::FullPivLuSolve { transpose_a } => {
+            LinalgOp::FullPivLuSolve { transpose_a } => {
                 hasher.write_u8(u8::from(transpose_a));
+            }
+            LinalgOp::LuSolvePrepared {
+                transpose_a,
+                conjugate_a,
+            } => {
+                hasher.write_u8(u8::from(transpose_a));
+                hasher.write_u8(u8::from(conjugate_a));
             }
             LinalgOp::TriangularSolve {
                 left_side,
@@ -203,7 +225,11 @@ impl ExtensionOpTrait for LinalgExtensionOp {
                 hasher.write_u8(u8::from(transpose_a));
                 hasher.write_u8(u8::from(unit_diagonal));
             }
-            LinalgOp::Cholesky | LinalgOp::Lu | LinalgOp::FullPivLu | LinalgOp::Qr => {}
+            LinalgOp::Cholesky
+            | LinalgOp::Lu
+            | LinalgOp::LuFactor
+            | LinalgOp::FullPivLu
+            | LinalgOp::Qr => {}
         }
     }
 
@@ -240,7 +266,6 @@ impl ExtensionOpTrait for LinalgExtensionOp {
         match self.op {
             LinalgOp::Cholesky
             | LinalgOp::FullPivLuSolve { .. }
-            | LinalgOp::Solve { .. }
             | LinalgOp::TriangularSolve { .. } => {
                 let output_shape = if self.input_count() == 1 {
                     input_shapes[0].to_vec()
@@ -249,9 +274,19 @@ impl ExtensionOpTrait for LinalgExtensionOp {
                 };
                 vec![(promote_dtypes(input_dtypes), output_shape)]
             }
+            LinalgOp::LuSolvePrepared { .. } => {
+                vec![(
+                    promote_dtypes(&[input_dtypes[0], input_dtypes[3]]),
+                    input_shapes[3].to_vec(),
+                )]
+            }
             LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0]),
+            LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0]),
+            LinalgOp::SvdVals { .. } => {
+                vec![svd_values_meta(input_dtypes[0], input_shapes[0])]
+            }
             LinalgOp::Qr => qr_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0]),
@@ -308,6 +343,18 @@ fn execute_linalg<B: LinalgBackend>(
     match op {
         LinalgOp::Cholesky => Ok(vec![backend.cholesky(inputs[0])?]),
         LinalgOp::Lu => backend.lu(inputs[0]),
+        LinalgOp::LuFactor => backend.lu_factor(inputs[0]),
+        LinalgOp::LuSolvePrepared {
+            transpose_a,
+            conjugate_a,
+        } => Ok(vec![backend.lu_solve_prepared(
+            inputs[0],
+            inputs[1],
+            inputs[2],
+            inputs[3],
+            transpose_a,
+            conjugate_a,
+        )?]),
         LinalgOp::FullPivLu => backend.full_piv_lu(inputs[0]),
         LinalgOp::FullPivLuSolve { transpose_a } => Ok(vec![backend.full_piv_lu_solve(
             inputs[0],
@@ -315,20 +362,10 @@ fn execute_linalg<B: LinalgBackend>(
             transpose_a,
         )?]),
         LinalgOp::Svd { .. } => backend.svd(inputs[0]),
+        LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
         LinalgOp::Qr => backend.qr(inputs[0]),
         LinalgOp::Eigh { .. } => backend.eigh(inputs[0]),
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
-        LinalgOp::Solve { transpose_a } => {
-            let a_transposed;
-            let a = if transpose_a {
-                let perm = matrix_transpose_perm(inputs[0])?;
-                a_transposed = backend.transpose(inputs[0], &perm)?;
-                &a_transposed
-            } else {
-                inputs[0]
-            };
-            Ok(vec![backend.solve(a, inputs[1])?])
-        }
         LinalgOp::TriangularSolve {
             left_side,
             lower,
@@ -345,19 +382,6 @@ fn execute_linalg<B: LinalgBackend>(
     }
 }
 
-fn matrix_transpose_perm(input: &Tensor) -> tenferro_tensor::Result<Vec<usize>> {
-    let rank = input.shape().len();
-    if rank < 2 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "solve",
-            message: "matrix operand rank must be at least 2".into(),
-        });
-    }
-    let mut perm: Vec<usize> = (0..rank).collect();
-    perm.swap(0, 1);
-    Ok(perm)
-}
-
 fn lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
     let m = shape[0].clone();
     let n = shape[1].clone();
@@ -367,6 +391,18 @@ fn lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
         (dtype, matrix_shape(m.clone(), m, batch)),
         (dtype, matrix_shape(shape[0].clone(), k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
+        (dtype, batch.to_vec()),
+    ]
+}
+
+fn lu_factor_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
+    let m = shape[0].clone();
+    let n = shape[1].clone();
+    let k = m.min(n);
+    let batch = &shape[2..];
+    vec![
+        (dtype, shape.to_vec()),
+        (DType::I32, vector_shape(k, batch)),
         (dtype, batch.to_vec()),
     ]
 }
@@ -390,9 +426,17 @@ fn svd_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
     let batch = &shape[2..];
     vec![
         (dtype, matrix_shape(m, k.clone(), batch)),
-        (dtype, vector_shape(k.clone(), batch)),
+        (singular_values_dtype(dtype), vector_shape(k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
     ]
+}
+
+fn svd_values_meta(dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
+    let m = shape[0].clone();
+    let n = shape[1].clone();
+    let k = m.min(n);
+    let batch = &shape[2..];
+    (singular_values_dtype(dtype), vector_shape(k, batch))
 }
 
 fn qr_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
@@ -442,6 +486,14 @@ fn eig_output_dtype(dtype: DType) -> DType {
         DType::F64 | DType::C64 => DType::C64,
         DType::F32 | DType::C32 => DType::C32,
         DType::I32 | DType::I64 | DType::Bool => DType::C64,
+    }
+}
+
+fn singular_values_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::C64 => DType::F64,
+        DType::C32 => DType::F32,
+        other => other,
     }
 }
 

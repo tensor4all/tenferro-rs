@@ -4,7 +4,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
-use crate::ad_support::LinalgOp;
+use crate::extension::LinalgOp;
 
 use super::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex, linalg_std_op};
 
@@ -47,36 +47,26 @@ pub(super) fn solve_in_graph(
     builder: &mut dyn PrimitiveRuleBuilder,
     a: ValueRef<StdTensorOp>,
     b: ValueRef<StdTensorOp>,
-    rank: usize,
+    _rank: usize,
 ) -> LocalValueId {
-    let lu_outputs =
-        builder.add_operation(linalg_std_op(LinalgOp::Lu), vec![a], OperationRole::Primary);
-    let p = lu_outputs[0];
-    let l = lu_outputs[1];
-    let u = lu_outputs[2];
-    let pb = matmul_linear(builder, ValueRef::Local(p), b, vec![false, true], rank);
-    let z = builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: true,
-        }),
-        vec![ValueRef::Local(l), ValueRef::Local(pb)],
-        OperationRole::Linearized {
-            active_mask: vec![false, true],
-        },
-    )[0];
+    let lu_outputs = builder.add_operation(
+        linalg_std_op(LinalgOp::LuFactor),
+        vec![a.clone()],
+        OperationRole::Primary,
+    );
     builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side: true,
-            lower: false,
+        linalg_std_op(LinalgOp::LuSolvePrepared {
             transpose_a: false,
-            unit_diagonal: false,
+            conjugate_a: false,
         }),
-        vec![ValueRef::Local(u), ValueRef::Local(z)],
+        vec![
+            a,
+            ValueRef::Local(lu_outputs[0]),
+            ValueRef::Local(lu_outputs[1]),
+            b,
+        ],
         OperationRole::Linearized {
-            active_mask: vec![false, true],
+            active_mask: vec![false, false, false, true],
         },
     )[0]
 }

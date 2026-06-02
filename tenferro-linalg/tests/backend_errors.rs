@@ -1,6 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
+use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{
@@ -13,6 +14,28 @@ use tenferro_tensor::{
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn i32_tensor(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
+    Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn f64_values(tensor: &Tensor) -> Vec<f64> {
+    match tensor {
+        Tensor::F64(tensor) => tensor.host_data().to_vec(),
+        other => panic!("expected F64 tensor, got {:?}", other.dtype()),
+    }
+}
+
+fn c64_values(tensor: &Tensor) -> Vec<Complex64> {
+    match tensor {
+        Tensor::C64(tensor) => tensor.host_data().to_vec(),
+        other => panic!("expected C64 tensor, got {:?}", other.dtype()),
+    }
 }
 
 fn opaque_backend_placement() -> Placement {
@@ -176,6 +199,15 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
     let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
     let mut backend = DefaultOnlyLinalgBackend;
 
+    let err = backend.lu_factor(&Tensor::F64(input.clone())).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "lu_factor",
+            ref message,
+        } if message.contains("does not implement")
+    ));
+
     let err = backend
         .svd_view(TensorView::F64(input.as_view()))
         .unwrap_err();
@@ -186,6 +218,66 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
             op: "svd",
             ref message,
         } if message.contains("borrowed tensor views")
+    ));
+}
+
+#[test]
+fn default_lu_solve_prepared_delegates_to_solve_modes() {
+    let mut backend = CpuBackend::new();
+    let pivots = i32_tensor(vec![2], vec![0, 1]);
+
+    let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
+    let b = f64_tensor(vec![2, 1], vec![4.0, 9.0]);
+    let x = backend
+        .lu_solve_prepared(&a, &a, &pivots, &b, false, false)
+        .unwrap();
+    assert_eq!(f64_values(&x), vec![2.0, 3.0]);
+
+    let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 2.0, 3.0]);
+    let b = f64_tensor(vec![2, 1], vec![5.0, 31.0]);
+    let x = backend
+        .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
+        .unwrap();
+    assert_eq!(f64_values(&x), vec![5.0, 7.0]);
+
+    let a = c64_tensor(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+    );
+    let b = c64_tensor(
+        vec![2, 1],
+        vec![Complex64::new(2.0, -2.0), Complex64::new(6.0, 3.0)],
+    );
+    let x = backend
+        .lu_solve_prepared(&a, &a, &pivots, &b, true, true)
+        .unwrap();
+    let values = c64_values(&x);
+    assert!((values[0] - Complex64::new(2.0, 0.0)).norm() < 1.0e-12);
+    assert!((values[1] - Complex64::new(3.0, 0.0)).norm() < 1.0e-12);
+}
+
+#[test]
+fn default_lu_solve_prepared_rejects_rank_less_than_two_transpose() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let b = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let pivots = i32_tensor(vec![2], vec![0, 1]);
+
+    let err = backend
+        .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "lu_solve_prepared",
+            ..
+        }
     ));
 }
 

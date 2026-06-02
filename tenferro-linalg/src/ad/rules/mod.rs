@@ -3,7 +3,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
-use crate::ad_support::{LinalgExtensionOp, LinalgOp};
+use crate::extension::{LinalgExtensionOp, LinalgOp};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
@@ -16,8 +16,8 @@ mod solve;
 mod support;
 
 pub(crate) use solve::{
-    linearize_full_piv_lu_solve, linearize_solve, linearize_triangular_solve,
-    transpose_full_piv_lu_solve, transpose_solve, transpose_triangular_solve,
+    linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_triangular_solve,
+    transpose_full_piv_lu_solve, transpose_lu_solve_prepared, transpose_triangular_solve,
 };
 use support::*;
 
@@ -463,6 +463,47 @@ pub(crate) fn linearize_svd(
     let dvt = adjoint_matrix_linear(builder, dv, matrix_rank, dtype);
 
     vec![Some(du), Some(ds), Some(dvt)]
+}
+
+pub(crate) fn linearize_svd_values(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    eps: f64,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValueId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None];
+    };
+
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
+    let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let svd_outputs = builder.add_operation(
+        linalg_std_op(LinalgOp::Svd { eps }),
+        vec![ValueRef::External(primal_in[0].clone())],
+        OperationRole::Primary,
+    );
+    let u = ValueRef::Local(svd_outputs[0]);
+    let vt = ValueRef::Local(svd_outputs[2]);
+    let uh = adjoint_matrix_fixed(builder, u, matrix_rank, dtype);
+    let v = adjoint_matrix_fixed(builder, vt, matrix_rank, dtype);
+    let tmp = matmul_linear(
+        builder,
+        ValueRef::Local(uh),
+        ValueRef::Local(da),
+        vec![false, true],
+        matrix_rank,
+    );
+    let ds_mat = matmul_linear(
+        builder,
+        ValueRef::Local(tmp),
+        ValueRef::Local(v),
+        vec![true, false],
+        matrix_rank,
+    );
+    vec![Some(extract_diag_linear(builder, ds_mat))]
 }
 
 pub(crate) fn linearize_eigh(

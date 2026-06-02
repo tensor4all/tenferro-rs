@@ -226,6 +226,46 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("lu_factor", input)?;
+        let outputs = self.lu(input)?;
+        let [_p, l, u, parity] = outputs.as_slice() else {
+            return Err(Error::backend_failure(
+                "lu_factor",
+                "public LU returned an unexpected number of outputs",
+            ));
+        };
+        let (packed_lu, parity) = match (input, l, u, parity) {
+            (Tensor::F32(input), Tensor::F32(l), Tensor::F32(u), Tensor::F32(parity)) => (
+                Tensor::F32(pack_lu_from_public_outputs(input, l, u)?),
+                Tensor::F32(parity.clone()),
+            ),
+            (Tensor::F64(input), Tensor::F64(l), Tensor::F64(u), Tensor::F64(parity)) => (
+                Tensor::F64(pack_lu_from_public_outputs(input, l, u)?),
+                Tensor::F64(parity.clone()),
+            ),
+            (Tensor::C32(input), Tensor::C32(l), Tensor::C32(u), Tensor::C32(parity)) => (
+                Tensor::C32(pack_lu_from_public_outputs(input, l, u)?),
+                Tensor::C32(parity.clone()),
+            ),
+            (Tensor::C64(input), Tensor::C64(l), Tensor::C64(u), Tensor::C64(parity)) => (
+                Tensor::C64(pack_lu_from_public_outputs(input, l, u)?),
+                Tensor::C64(parity.clone()),
+            ),
+            (Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_), _, _, _) => {
+                return Err(unsupported_dtype("lu_factor", input.dtype()));
+            }
+            _ => {
+                return Err(Error::backend_failure(
+                    "lu_factor",
+                    "public LU returned outputs with unexpected dtypes",
+                ));
+            }
+        };
+        let pivots = Tensor::I32(identity_pivots(input.shape()));
+        Ok(vec![packed_lu, pivots, parity])
+    }
+
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
         match self.kind() {
@@ -684,6 +724,10 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
+fn batch_count(batch_shape: &[usize]) -> usize {
+    batch_shape.iter().product::<usize>().max(1)
+}
+
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     if b.shape().len() == 1 {
         return Some(vec![b.shape()[0], 1]);
@@ -715,6 +759,63 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
         Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
         Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
     }
+}
+
+fn pack_lu_from_public_outputs<T: Clone + Default>(
+    input: &TypedTensor<T>,
+    l: &TypedTensor<T>,
+    u: &TypedTensor<T>,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let shape = input.shape();
+    if shape.len() < 2 {
+        return Err(Error::RankMismatch {
+            op: "lu_factor",
+            expected: 2,
+            actual: shape.len(),
+        });
+    }
+    let m = shape[0];
+    let n = shape[1];
+    let k = m.min(n);
+    let batch_total = batch_count(&shape[2..]);
+    let matrix_len = m * n;
+    let l_stride = m * k;
+    let u_stride = k * n;
+    let mut data = vec![T::default(); matrix_len * batch_total];
+    for batch in 0..batch_total {
+        let packed_offset = batch * matrix_len;
+        let l_offset = batch * l_stride;
+        let u_offset = batch * u_stride;
+        for col in 0..n {
+            for row in 0..m {
+                let dst = packed_offset + row + col * m;
+                data[dst] = if row > col && col < k {
+                    l.host_data()[l_offset + row + col * m].clone()
+                } else if row <= col && row < k {
+                    u.host_data()[u_offset + row + col * k].clone()
+                } else {
+                    T::default()
+                };
+            }
+        }
+    }
+    Ok(TypedTensor::from_vec_col_major(shape.to_vec(), data))
+}
+
+fn identity_pivots(shape: &[usize]) -> TypedTensor<i32> {
+    let m = shape[0];
+    let n = shape[1];
+    let k = m.min(n);
+    let batch_total = batch_count(&shape[2..]);
+    let mut pivot_shape = vec![k];
+    pivot_shape.extend_from_slice(&shape[2..]);
+    let mut data = vec![0_i32; k * batch_total];
+    for batch in 0..batch_total {
+        for step in 0..k {
+            data[batch * k + step] = (step + 1) as i32;
+        }
+    }
+    TypedTensor::from_vec_col_major(pivot_shape, data)
 }
 
 // Used only by feature-disabled provider branches, so default feature builds

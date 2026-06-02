@@ -3,10 +3,10 @@ use tenferro_ops::ad::context::ShapeGuardContext;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
-use crate::ad_support::LinalgOp;
+use crate::extension::LinalgOp;
 
 use super::support::*;
-use super::{conjugate_primal_if_dtype_complex, linalg_std_op};
+use super::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex, linalg_std_op};
 
 pub(crate) fn linearize_triangular_solve(
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -77,20 +77,17 @@ pub(crate) fn linearize_triangular_solve(
 
 #[derive(Clone, Copy)]
 enum LinearSolveOp {
-    Solve,
     FullPivLuSolve,
 }
 
 fn linear_solve_op(kind: LinearSolveOp, transpose_a: bool) -> StdTensorOp {
     match kind {
-        LinearSolveOp::Solve => linalg_std_op(LinalgOp::Solve { transpose_a }),
         LinearSolveOp::FullPivLuSolve => linalg_std_op(LinalgOp::FullPivLuSolve { transpose_a }),
     }
 }
 
 fn linear_solve_op_name(kind: LinearSolveOp) -> &'static str {
     match kind {
-        LinearSolveOp::Solve => "linearize_solve",
         LinearSolveOp::FullPivLuSolve => "linearize_full_piv_lu_solve",
     }
 }
@@ -155,23 +152,70 @@ fn linearize_linear_solve(
     vec![Some(out[0])]
 }
 
-pub(crate) fn linearize_solve(
+pub(crate) fn linearize_lu_solve_prepared(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     transpose_a: bool,
+    conjugate_a: bool,
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
-    linearize_linear_solve(
-        builder,
-        primal_in,
-        primal_out,
-        tangent_in,
-        transpose_a,
-        ctx,
-        LinearSolveOp::Solve,
-    )
+    let lhs_rank = ctx
+        .shape_of(&ValueRef::External(primal_in[0].clone()))
+        .len();
+    let rhs_rank = ctx
+        .shape_of(&ValueRef::External(primal_in[3].clone()))
+        .len();
+    assert!(
+        lhs_rank >= 2 && rhs_rank >= 2,
+        "linearize_lu_solve_prepared: expected matrix operands"
+    );
+    assert_eq!(
+        lhs_rank, rhs_rank,
+        "linearize_lu_solve_prepared: rank mismatch between lhs and rhs"
+    );
+    let rank = lhs_rank;
+    let mut rhs_tangent = tangent_in[3];
+
+    if let Some(da) = tangent_in[0] {
+        let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+        let d_op_a = match (transpose_a, conjugate_a) {
+            (false, false) => da,
+            (true, false) => transpose_matrix_linear(builder, da, rank),
+            (true, true) => adjoint_matrix_linear(builder, da, rank, dtype),
+            (false, true) => conjugate_linear_if_dtype_complex(builder, da, dtype),
+        };
+        let x = ValueRef::External(primal_out[0].clone());
+        let correction =
+            matmul_linear(builder, ValueRef::Local(d_op_a), x, vec![true, false], rank);
+        let neg_correction = linear_neg(builder, correction);
+        rhs_tangent = Some(match rhs_tangent {
+            Some(db) => linear_add(builder, db, neg_correction),
+            None => neg_correction,
+        });
+    }
+
+    let Some(rhs_tangent) = rhs_tangent else {
+        return vec![None];
+    };
+
+    let out = builder.add_operation(
+        linalg_std_op(LinalgOp::LuSolvePrepared {
+            transpose_a,
+            conjugate_a,
+        }),
+        vec![
+            ValueRef::External(primal_in[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
+            ValueRef::External(primal_in[2].clone()),
+            ValueRef::Local(rhs_tangent),
+        ],
+        OperationRole::Linearized {
+            active_mask: vec![false, false, false, true],
+        },
+    );
+    vec![Some(out[0])]
 }
 
 pub(crate) fn linearize_full_piv_lu_solve(
@@ -352,23 +396,44 @@ fn transpose_linear_solve(
     result
 }
 
-pub(crate) fn transpose_solve(
+pub(crate) fn transpose_lu_solve_prepared(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     transpose_a: bool,
-    ctx: &mut ShapeGuardContext,
+    conjugate_a: bool,
+    _ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
-    transpose_linear_solve(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        transpose_a,
-        ctx,
-        LinearSolveOp::Solve,
-    )
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None, None, None, None];
+    };
+    let OperationRole::Linearized { active_mask } = mode else {
+        return vec![None, None, None, None];
+    };
+
+    let mut result = vec![None, None, None, None];
+    if active_mask[3] {
+        let (adjoint_transpose_a, adjoint_conjugate_a) =
+            adjoint_lu_solve_flags(transpose_a, conjugate_a);
+        let out = builder.add_operation(
+            linalg_std_op(LinalgOp::LuSolvePrepared {
+                transpose_a: adjoint_transpose_a,
+                conjugate_a: adjoint_conjugate_a,
+            }),
+            vec![
+                inputs[0].clone(),
+                inputs[1].clone(),
+                inputs[2].clone(),
+                ValueRef::Local(ct),
+            ],
+            OperationRole::Linearized {
+                active_mask: vec![false, false, false, true],
+            },
+        );
+        result[3] = Some(out[0]);
+    }
+    result
 }
 
 pub(crate) fn transpose_full_piv_lu_solve(
@@ -388,4 +453,12 @@ pub(crate) fn transpose_full_piv_lu_solve(
         ctx,
         LinearSolveOp::FullPivLuSolve,
     )
+}
+
+fn adjoint_lu_solve_flags(transpose_a: bool, conjugate_a: bool) -> (bool, bool) {
+    if !transpose_a && !conjugate_a {
+        (true, true)
+    } else {
+        (false, false)
+    }
 }

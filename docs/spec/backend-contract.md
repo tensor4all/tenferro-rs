@@ -66,6 +66,7 @@ pub struct ExecInstruction {
     pub output_slots: Vec<usize>,
     pub dtype: DType,
     pub output_shapes: Vec<Vec<DimExpr>>,
+    pub output_extents: Vec<Vec<ShapeExtent<DimExpr>>>,
     pub last_use: Vec<bool>,
 }
 ```
@@ -73,10 +74,14 @@ pub struct ExecInstruction {
 ### Core guarantees
 
 - Each instruction is SSA over slots: outputs are written once.
-- `dtype` is the inferred output dtype for that instruction.
+- `dtype` is a representative instruction dtype used by legacy single-output
+  paths. For multi-output extensions, per-output slot metadata is the
+  authoritative dtype source.
 - `output_shapes` contains one symbolic shape per output slot.
+- `output_extents` contains one extent vector per output slot.
 - `last_use` is populated after lowering and is used for buffer reclamation.
-- Multi-output linalg instructions write directly to multiple output slots.
+- Multi-output extension instructions write directly to multiple output slots
+  and may use mixed output dtypes.
 
 ### ExecOp vocabulary
 
@@ -114,10 +119,12 @@ variants.
 
 For each computegraph instruction it:
 
-1. infers the output dtype with `infer_output_dtype()`
-2. infers output shapes with `infer_output_shapes()`
+1. infers output dtype, shape, and extent metadata; extension instructions use
+   `infer_extension_output_meta()` for one `(dtype, shape)` pair per output
+   slot
+2. resolves output extents
 3. lowers `StdTensorOp` to `ExecOp`
-4. records output slot dtype/shape metadata
+4. records output slot dtype/shape/extent metadata
 5. runs the compiler passes on the resulting `ExecProgram`
 6. populates `last_use`
 

@@ -219,12 +219,24 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// assert_eq!(x.rank, 2);
 /// ```
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
+    let mut factor_outputs =
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a]).into_iter();
+    let (packed_lu, pivots) = match (
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+    ) {
+        (Some(packed_lu), Some(pivots), Some(_parity), None) => (packed_lu, pivots),
+        _ => return Err(unexpected_output_count("lu_factor", 3)),
+    };
     one_output(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Solve {
+            Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
                 transpose_a: false,
+                conjugate_a: false,
             })),
-            &[a, b],
+            &[a, &packed_lu, &pivots, b],
         ),
         "solve",
     )
@@ -304,8 +316,18 @@ pub fn triangular_solve(
 /// assert_eq!(logabsdet.rank, 0);
 /// ```
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
-    let (_, _, u, parity) = lu(a)?;
-    let diag_u = u.extract_diag(0, 1);
+    let mut factor_outputs =
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a]).into_iter();
+    let (packed_lu, parity) = match (
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+    ) {
+        (Some(packed_lu), Some(_pivots), Some(parity), None) => (packed_lu, parity),
+        _ => return Err(unexpected_output_count("lu_factor", 3)),
+    };
+    let diag_u = packed_lu.extract_diag(0, 1);
     let sign_u = diag_u.sign().reduce_prod(&[0]);
     let sign = &parity * &sign_u;
     let logabsdet = diag_u.abs().log().reduce_sum(&[0]);
@@ -669,16 +691,26 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
         Some(1.0) => matrix_col_sum_norm(&abs, true),
         Some(-1.0) => matrix_col_sum_norm(&abs, false),
         Some(2.0) => {
-            let singular_values = svd(&matrix)?.1.abs();
+            let singular_values = svd_values(&matrix)?.abs();
             singular_values.reduce_max(&[0])
         }
         Some(-2.0) => {
-            let singular_values = svd(&matrix)?.1.abs();
+            let singular_values = svd_values(&matrix)?.abs();
             singular_values.reduce_min(&[0])
         }
         Some(0.0) => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
     })
+}
+
+fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
+    one_output(
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals { eps: 1e-12 })),
+            &[a],
+        ),
+        "svd_values",
+    )
 }
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {

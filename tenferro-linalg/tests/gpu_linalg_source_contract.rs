@@ -120,6 +120,40 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
 }
 
 #[test]
+fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
+    let source = linalg_source();
+    let solve_source = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
+    let banned = [
+        "let outputs = lu(backend, a)?;",
+        "let p = &outputs[0];",
+        "let l = &outputs[1];",
+        "let u = &outputs[2];",
+        "matmul_preserve_trailing_batch(backend, p, &rhs)?",
+    ];
+
+    let mut violations = Vec::new();
+    for needle in banned {
+        if solve_source.contains(needle) {
+            violations.push(format!("gpu/linalg.rs solve contains {needle}"));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "GPU solve must consume packed LU factors directly instead of materializing public P/L/U outputs:\n{}",
+        violations.join("\n")
+    );
+    assert!(
+        solve_source.contains("lu_factor("),
+        "GPU solve should factor into packed LU with pivots"
+    );
+    assert!(
+        solve_source.contains("lu_solve_prepared("),
+        "GPU solve should use the prepared LU solve path"
+    );
+}
+
+#[test]
 fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let svd_view_source = source_section(&source, "fn svd_view", "fn qr");
@@ -171,15 +205,15 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         assert_before(section, residency_check, "if has_zero_dim");
     }
 
-    let triangular = source_section(&source, "fn triangular_solve_typed", "fn lu_typed");
+    let triangular = source_section(&source, "fn triangular_solve_typed_with_op", "fn lu_typed");
     assert_before(
         triangular,
-        "ensure_cubecl_resident_typed(OP, a)?;",
+        "ensure_cubecl_resident_typed(op, a)?;",
         "if has_zero_dim",
     );
     assert_before(
         triangular,
-        "ensure_cubecl_resident_typed(OP, b)?;",
+        "ensure_cubecl_resident_typed(op, b)?;",
         "if has_zero_dim",
     );
 

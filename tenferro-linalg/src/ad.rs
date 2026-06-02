@@ -32,7 +32,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
-use crate::ad_support::{LinalgExtensionOp, LinalgOp};
+use crate::extension::{LinalgExtensionOp, LinalgOp};
 use crate::LINALG_EXTENSION_FAMILY_ID;
 
 mod rules;
@@ -93,11 +93,21 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
         let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
         let tangents = match op.op() {
             LinalgOp::Lu => rules::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
+            LinalgOp::LuFactor => vec![None; op.output_count()],
+            LinalgOp::LuSolvePrepared {
+                transpose_a,
+                conjugate_a,
+            } => rules::linearize_lu_solve_prepared(
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                transpose_a,
+                conjugate_a,
+                ctx,
+            ),
             LinalgOp::FullPivLu => {
                 rules::linearize_full_piv_lu(builder, primal_in, primal_out, tangent_in, ctx)
-            }
-            LinalgOp::Solve { transpose_a } => {
-                rules::linearize_solve(builder, primal_in, primal_out, tangent_in, transpose_a, ctx)
             }
             LinalgOp::FullPivLuSolve { transpose_a } => rules::linearize_full_piv_lu_solve(
                 builder,
@@ -128,6 +138,9 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             }
             LinalgOp::Svd { eps } => {
                 rules::linearize_svd(builder, primal_in, primal_out, tangent_in, eps, ctx)
+            }
+            LinalgOp::SvdVals { eps } => {
+                rules::linearize_svd_values(builder, primal_in, tangent_in, eps, ctx)
             }
             LinalgOp::Qr => rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
             LinalgOp::Eigh { eps } => {
@@ -168,9 +181,18 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 unit_diagonal,
                 ctx,
             ),
-            LinalgOp::Solve { transpose_a } => {
-                rules::transpose_solve(&mut builder, cotangent_out, inputs, mode, transpose_a, ctx)
-            }
+            LinalgOp::LuSolvePrepared {
+                transpose_a,
+                conjugate_a,
+            } => rules::transpose_lu_solve_prepared(
+                &mut builder,
+                cotangent_out,
+                inputs,
+                mode,
+                transpose_a,
+                conjugate_a,
+                ctx,
+            ),
             LinalgOp::FullPivLuSolve { transpose_a } => rules::transpose_full_piv_lu_solve(
                 &mut builder,
                 cotangent_out,
@@ -181,8 +203,10 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             ),
             LinalgOp::Cholesky
             | LinalgOp::Lu
+            | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
+            | LinalgOp::SvdVals { .. }
             | LinalgOp::Qr
             | LinalgOp::Eigh { .. }
             | LinalgOp::Eig { .. } => vec![None; op.input_count()],

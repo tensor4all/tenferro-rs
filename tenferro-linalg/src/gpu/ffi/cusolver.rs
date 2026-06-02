@@ -67,6 +67,7 @@ pub enum CublasSideMode {
 pub enum CublasOperation {
     N = 0,
     T = 1,
+    C = 2,
 }
 
 #[repr(i32)]
