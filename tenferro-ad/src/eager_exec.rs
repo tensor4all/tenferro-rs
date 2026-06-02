@@ -81,17 +81,15 @@ pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.
 ///
-/// Most ops produce one output tensor. Multi-output extensions return one
-/// tensor per output slot.
-pub fn exec_op_on_tensors<B: TensorBackend>(
+/// This core helper rejects extension ops because they require a runtime owner
+/// with a registered extension executor.
+pub(crate) fn exec_op_on_tensors<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        return ext
-            .eager_execute(inputs)
-            .map_err(|err| extension_error(ext.as_ref(), err));
+        return Err(missing_extension_executor_error(ext.as_ref()));
     }
 
     exec_standard_op_on_tensors(op, inputs, backend)
@@ -104,12 +102,10 @@ pub(crate) fn exec_op_on_tensors_with_extension_executor<B: TensorBackend + 'sta
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        let outputs = match extension_executor {
-            Some(extension_executor) if extension_executor.registry().contains(ext.family_id()) => {
-                extension_executor.execute(backend, ext.as_ref(), inputs)
-            }
-            _ => ext.eager_execute(inputs),
+        let Some(extension_executor) = extension_executor else {
+            return Err(missing_extension_executor_error(ext.as_ref()));
         };
+        let outputs = extension_executor.execute(backend, ext.as_ref(), inputs);
         return outputs.map_err(|err| extension_error(ext.as_ref(), err));
     }
 
@@ -124,6 +120,16 @@ fn extension_error(
         "extension",
         format!("family_id={:?}: {err}", ext.family_id()),
     ))
+}
+
+fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        op: "extension",
+        message: format!(
+            "extension op for family_id {:?} requires an ExtensionExecutor; execute through EagerRuntime or register and pass the extension runtime owner",
+            ext.family_id()
+        ),
+    })
 }
 
 fn exec_standard_op_on_tensors<B: TensorBackend>(
@@ -397,3 +403,6 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
     out.copy_from_slice(bytes);
     out
 }
+
+#[cfg(test)]
+mod tests;

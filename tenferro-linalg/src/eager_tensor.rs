@@ -5,6 +5,17 @@ use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
 use crate::ad_support::{LinalgExtensionOp, LinalgOp};
+use crate::register_runtime;
+
+fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
+    if let Some(first) = inputs.first() {
+        first
+            .runtime()
+            .register_extension(register_runtime)
+            .map_err(|err| Error::Internal(err.to_string()))?;
+    }
+    apply_eager(Arc::new(LinalgExtensionOp::new(op)), inputs)
+}
 
 /// Singular value decomposition for eager tensors.
 ///
@@ -23,11 +34,7 @@ use crate::ad_support::{LinalgExtensionOp, LinalgOp};
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
-    let mut outputs = apply_eager(
-        Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps: 0.0 })),
-        &[a],
-    )?
-    .into_iter();
+    let mut outputs = apply_linalg_eager(LinalgOp::Svd { eps: 0.0 }, &[a])?.into_iter();
     match (
         outputs.next(),
         outputs.next(),
@@ -59,10 +66,7 @@ pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
-    two_outputs(
-        apply_eager(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a])?,
-        "qr",
-    )
+    two_outputs(apply_linalg_eager(LinalgOp::Qr, &[a])?, "qr")
 }
 
 /// LU factorization for eager tensors.
@@ -84,8 +88,7 @@ pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
-    let mut outputs =
-        apply_eager(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?.into_iter();
+    let mut outputs = apply_linalg_eager(LinalgOp::Lu, &[a])?.into_iter();
     match (
         outputs.next(),
         outputs.next(),
@@ -127,8 +130,7 @@ pub fn full_piv_lu(
     EagerTensor,
     EagerTensor,
 )> {
-    let mut outputs =
-        apply_eager(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a])?.into_iter();
+    let mut outputs = apply_linalg_eager(LinalgOp::FullPivLu, &[a])?.into_iter();
     match (
         outputs.next(),
         outputs.next(),
@@ -166,12 +168,7 @@ pub fn full_piv_lu(
 /// ```
 pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     one_output(
-        apply_eager(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLuSolve {
-                transpose_a: false,
-            })),
-            &[a, b],
-        )?,
+        apply_linalg_eager(LinalgOp::FullPivLuSolve { transpose_a: false }, &[a, b])?,
         "full_piv_lu_solve",
     )
 }
@@ -198,12 +195,7 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 /// ```
 pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     one_output(
-        apply_eager(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Solve {
-                transpose_a: false,
-            })),
-            &[a, b],
-        )?,
+        apply_linalg_eager(LinalgOp::Solve { transpose_a: false }, &[a, b])?,
         "solve",
     )
 }
@@ -225,10 +217,7 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
-    one_output(
-        apply_eager(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
-        "cholesky",
-    )
+    one_output(apply_linalg_eager(LinalgOp::Cholesky, &[a])?, "cholesky")
 }
 
 /// Hermitian eigenvalue decomposition for eager tensors.
@@ -250,10 +239,7 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 /// ```
 pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     two_outputs(
-        apply_eager(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps: 0.0 })),
-            &[a],
-        )?,
+        apply_linalg_eager(LinalgOp::Eigh { eps: 0.0 }, &[a])?,
         "eigh",
     )
 }
@@ -277,10 +263,10 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// ```
 pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     two_outputs(
-        apply_eager(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
+        apply_linalg_eager(
+            LinalgOp::Eig {
                 input_dtype: a.data().dtype(),
-            })),
+            },
             &[a],
         )?,
         "eig",
@@ -318,13 +304,13 @@ pub fn triangular_solve(
     unit_diagonal: bool,
 ) -> Result<EagerTensor> {
     one_output(
-        apply_eager(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+        apply_linalg_eager(
+            LinalgOp::TriangularSolve {
                 left_side,
                 lower,
                 transpose_a,
                 unit_diagonal,
-            })),
+            },
             &[a, b],
         )?,
         "triangular_solve",

@@ -2,7 +2,8 @@ use num_complex::Complex64;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
     GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
@@ -439,14 +440,14 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
     ];
 
     for (op, input_count, expected_call, expected_value) in cases {
-        let mut backend = FakeTensorBackend::default();
+        let mut executor = GraphExecutor::new(FakeTensorBackend::default());
         let program = single_instruction_program(op, input_count);
         let inputs = (0..input_count)
             .map(|idx| scalar_tensor(idx as f64 + 1.0))
             .collect();
-        let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
+        let outputs = executor.eval_exec_ir(&program, inputs).unwrap();
 
-        assert_eq!(backend.calls, vec![expected_call]);
+        assert_eq!(executor.backend().calls, vec![expected_call]);
         assert_eq!(outputs.len(), 1);
         assert_eq!(scalar_value(&outputs[0]), expected_value);
     }
@@ -454,7 +455,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
 
 #[test]
 fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
-    let mut backend = FakeTensorBackend::default();
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
     let program = ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::GatherDynamicSliceSizes {
@@ -487,17 +488,17 @@ fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
         f64_tensor(vec![1, 3], vec![0.0; 3]),
     ];
 
-    let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
+    let outputs = executor.eval_exec_ir(&program, inputs).unwrap();
 
-    assert_eq!(backend.calls, vec!["gather"]);
-    assert_eq!(backend.last_gather_slice_sizes, Some(vec![1, 3]));
+    assert_eq!(executor.backend().calls, vec!["gather"]);
+    assert_eq!(executor.backend().last_gather_slice_sizes, Some(vec![1, 3]));
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 33.0);
 }
 
 #[test]
 fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
-    let mut backend = FakeTensorBackend::default();
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
     let program = ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::Constant {
@@ -516,16 +517,16 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![]).unwrap();
+    let outputs = executor.eval_exec_ir(&program, vec![]).unwrap();
 
-    assert!(backend.calls.is_empty());
+    assert!(executor.backend().calls.is_empty());
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 2.5);
 }
 
 #[test]
 fn eval_exec_ir_materializes_complex_constants() {
-    let mut backend = FakeTensorBackend::default();
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
     let value = Complex64::new(1.5, -2.0);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&value.re.to_le_bytes());
@@ -548,29 +549,29 @@ fn eval_exec_ir_materializes_complex_constants() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![]).unwrap();
+    let outputs = executor.eval_exec_ir(&program, vec![]).unwrap();
 
-    assert!(backend.calls.is_empty());
+    assert!(executor.backend().calls.is_empty());
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_c64_value(&outputs[0]), value);
 }
 
 #[test]
 fn eval_exec_ir_propagates_backend_errors() {
-    let mut backend = FakeTensorBackend {
+    let mut executor = GraphExecutor::new(FakeTensorBackend {
         calls: Vec::new(),
         error_on: Some("add"),
         reclaimed: 0,
         last_gather_slice_sizes: None,
-    };
-    let err = eval_exec_ir(
-        &mut backend,
-        &single_instruction_program(ExecOp::Add, 2),
-        vec![scalar_tensor(1.0), scalar_tensor(2.0)],
-    )
-    .unwrap_err();
+    });
+    let err = executor
+        .eval_exec_ir(
+            &single_instruction_program(ExecOp::Add, 2),
+            vec![scalar_tensor(1.0), scalar_tensor(2.0)],
+        )
+        .unwrap_err();
 
-    assert_eq!(backend.calls, vec!["add"]);
+    assert_eq!(executor.backend().calls, vec!["add"]);
     assert!(matches!(
         err,
         Error::TensorRuntime(tenferro_tensor::Error::BackendFailure { op: "add", .. })
@@ -579,7 +580,7 @@ fn eval_exec_ir_propagates_backend_errors() {
 
 #[test]
 fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
-    let mut backend = FakeTensorBackend::default();
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
     let program = ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::Add,
@@ -595,9 +596,11 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
         n_slots: 3,
     };
 
-    let err = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap_err();
+    let err = executor
+        .eval_exec_ir(&program, vec![scalar_tensor(1.0)])
+        .unwrap_err();
 
-    assert!(backend.calls.is_empty());
+    assert!(executor.backend().calls.is_empty());
     assert!(matches!(
         err,
         Error::TensorRuntime(tenferro_tensor::Error::MissingValue { slot: 1 })
@@ -632,16 +635,13 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
         n_slots: 4,
     };
 
-    let mut backend = FakeTensorBackend::default();
-    let outputs = eval_exec_ir(
-        &mut backend,
-        &program,
-        vec![scalar_tensor(1.0), scalar_tensor(2.0)],
-    )
-    .unwrap();
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
+    let outputs = executor
+        .eval_exec_ir(&program, vec![scalar_tensor(1.0), scalar_tensor(2.0)])
+        .unwrap();
 
-    assert_eq!(backend.calls, vec!["add", "neg"]);
+    assert_eq!(executor.backend().calls, vec!["add", "neg"]);
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 3.0);
-    assert_eq!(backend.reclaimed, 3);
+    assert_eq!(executor.backend().reclaimed, 3);
 }

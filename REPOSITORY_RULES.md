@@ -26,6 +26,11 @@ rules from `tensor4all-agent-rules`.
   contracts. If an item is primarily for tests, benchmarks, internal planning,
   execution dispatch, lowering, caching, or backend glue, it should normally be
   private or `pub(crate)`.
+- Do not keep low-level execution helpers, dispatch entrypoints, cache plumbing,
+  or internal IR evaluators public only for tests, parity checks, convenience,
+  or sibling-crate reach-through. When another crate genuinely needs access,
+  expose the narrowest owner-scoped API that preserves the intended runtime,
+  cache, backend, and extension-dispatch invariants.
 - Before adding or keeping a `pub` item, ask whether it is useful outside this
   repository and whether tenferro is prepared to support its semantics as a
   public contract. If the answer is unclear, keep it `pub(crate)` and expose a
@@ -105,6 +110,14 @@ rules from `tensor4all-agent-rules`.
 - Users import operation crates directly and register runtimes explicitly, for
   example `tenferro_einsum::einsum` plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
+- Extension runtime dispatch must fail explicitly when a runtime owner is
+  available but the extension family is not registered. Do not silently fall
+  back from a registered-runtime execution path to an `ExtensionOp::eager_execute`
+  implementation, CPU backend, reference path, or freshly constructed backend.
+  Public eager wrappers for standard extensions must either register their
+  runtime before dispatch, following the crate's established pattern, or expose
+  the missing-runtime error. Add regression tests for missing-runtime behavior
+  when changing extension dispatch.
 - Optional capabilities are feature boundaries, not new operation-family
   crates. Put operation-specific AD support behind an `autodiff` feature in the
   owning operation crate instead of adding `*-ad` companion crates.

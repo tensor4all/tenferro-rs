@@ -108,46 +108,19 @@ pub(crate) fn resolve_tensor_shape_exprs(
     Ok(DimExpr::eval_all(exprs, &input_shapes))
 }
 
-/// Evaluate an [`ExecProgram`] using segmented dispatch.
-///
-/// Consecutive fusible ops are executed within one backend execution session.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::exec::{eval_exec_ir, ExecProgram};
-/// use tenferro_cpu::CpuBackend;
-///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
-///     eval_exec_ir::<CpuBackend>;
-/// ```
-pub fn eval_exec_ir<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-) -> Result<Vec<Tensor>> {
-    crate::segment::eval_exec_segmented(backend, program, inputs)
-}
-
-/// Evaluate an [`ExecProgram`] one instruction at a time.
-///
-/// This is retained for parity tests against segmented dispatch.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::exec::{eval_exec_ir_unsegmented, ExecProgram};
-/// use tenferro_cpu::CpuBackend;
-///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
-///     eval_exec_ir_unsegmented::<CpuBackend>;
-/// ```
-pub fn eval_exec_ir_unsegmented<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-) -> Result<Vec<Tensor>> {
-    eval_exec_ir_unsegmented_with_cache(backend, program, inputs)
+pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {
+    for (idx, inst) in program.instructions.iter().enumerate() {
+        if let ExecOp::Extension(ext) = &inst.op {
+            return Err(Error::TensorRuntime(TensorError::InvalidConfig {
+                op: "extension",
+                message: format!(
+                    "{caller} can execute only core ExecProgram instructions; instruction {idx} uses extension family_id {:?}",
+                    ext.family_id()
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend + 'static>(
@@ -356,23 +329,29 @@ fn execute_extension_instruction<B: TensorBackend + 'static>(
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<()> {
     let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
-    let outputs = if let Some(extension_executor) = extension_executor {
-        extension_executor.execute(backend, ext, &inputs)
-    } else {
-        ext.eager_execute(&inputs)
-    }
-    .map_err(|err| {
-        Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
-            "extension",
-            format!("family_id={:?}: {err}", ext.family_id()),
-        ))
-    })?;
+    let Some(extension_executor) = extension_executor else {
+        return Err(Error::TensorRuntime(TensorError::InvalidConfig {
+            op: "extension",
+            message: format!(
+                "extension instruction for family_id {:?} requires an ExtensionExecutor; execute compiled programs through GraphExecutor and register the extension runtime on that executor",
+                ext.family_id()
+            ),
+        }));
+    };
+    let outputs = extension_executor
+        .execute(backend, ext, &inputs)
+        .map_err(|err| {
+            Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+                "extension",
+                format!("family_id={:?}: {err}", ext.family_id()),
+            ))
+        })?;
     if outputs.len() != inst.output_slots.len() {
         return Err(Error::TensorRuntime(
             tenferro_tensor::Error::InvalidConfig {
                 op: "extension",
                 message: format!(
-                    "family_id={:?}: eager_execute returned {} outputs for {} slots",
+                    "family_id={:?}: extension runtime returned {} outputs for {} slots",
                     ext.family_id(),
                     outputs.len(),
                     inst.output_slots.len()

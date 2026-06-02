@@ -63,8 +63,49 @@ fn apply_eager_rejects_cross_context_inputs() {
 }
 
 #[test]
+fn apply_eager_reports_missing_extension_runtime() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
+
+    let err = match apply_eager(Arc::new(TestScaleBy2), &[&x]) {
+        Ok(_) => panic!("unregistered eager extension runtime unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    let message = err.to_string();
+    assert!(message.contains("missing runtime"), "{message}");
+    assert!(
+        message.contains("tenferro-tests.scale_by_2.v1"),
+        "{message}"
+    );
+}
+
+#[test]
+fn graph_executor_reports_missing_extension_runtime() {
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let y = apply(Arc::new(TestScaleBy2), &[&x])
+        .into_iter()
+        .next()
+        .unwrap();
+
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let err = match y.run_with(&mut engine) {
+        Ok(_) => panic!("unregistered traced extension runtime unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    let message = err.to_string();
+    assert!(message.contains("missing runtime"), "{message}");
+    assert!(
+        message.contains("tenferro-tests.scale_by_2.v1"),
+        "{message}"
+    );
+}
+
+#[test]
 fn apply_eager_rejects_mismatched_output_count() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    register_test_eager_runtime(&ctx, "tenferro-tests.bad_output_count.v1");
     let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {

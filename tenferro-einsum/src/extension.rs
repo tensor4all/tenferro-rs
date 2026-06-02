@@ -48,8 +48,9 @@ use crate::{
 /// Standard einsum extension payload.
 ///
 /// This mirrors the current `tenferro.einsum.v1` payload shape. Runtime-owned
-/// execution goes through [`EinsumRuntime`]; [`ExtensionOp::eager_execute`] is
-/// kept only as a context-free compatibility fallback.
+/// execution goes through [`EinsumRuntime`]; [`ExtensionOp::eager_execute`]
+/// remains only as a host reference implementation for direct context-free
+/// extension calls.
 #[derive(Clone)]
 pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,
@@ -950,12 +951,11 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
 
     let program =
         tenferro_runtime::compiler::compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-    let mut outputs = tenferro_runtime::exec::eval_exec_ir_unsegmented(
-        ctx.backend_mut(),
-        &program,
-        program_inputs,
-    )
-    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
+    let mut outputs = ctx
+        .execute_core_exec_program_unsegmented(&program, program_inputs)
+        .map_err(|err| {
+            tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string())
+        })?;
     if outputs.len() != 1 {
         return Err(tenferro_tensor::Error::backend_failure(
             "einsum_extension",

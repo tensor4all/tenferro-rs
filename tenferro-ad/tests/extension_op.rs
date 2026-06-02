@@ -636,6 +636,16 @@ fn register_test_runtime<B: TensorBackend + 'static>(
         .expect("register test extension runtime");
 }
 
+fn register_test_eager_runtime(runtime: &EagerRuntime, family_id: &'static str) {
+    runtime
+        .register_extension(|extension_executor| {
+            extension_executor
+                .registry_mut()
+                .register(Arc::new(TestRuntime { family_id }))
+        })
+        .expect("register test eager extension runtime");
+}
+
 // ----------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------
@@ -682,6 +692,7 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
     ensure_scale_by_2_registered();
 
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]),
         ctx,
@@ -793,6 +804,7 @@ fn ad_context_builder_rejects_duplicate_extension_rule_sets() {
 fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback() {
     let empty_ad = AdContext::builder().build().unwrap();
     let empty_ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &empty_ad);
+    register_test_eager_runtime(&empty_ctx, "tenferro-tests.scale_by_2.v1");
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
         empty_ctx,
@@ -817,6 +829,7 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
         .build()
         .unwrap();
     let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
     let x =
         EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
@@ -835,6 +848,8 @@ fn assert_probe_identity_eager_backward(probe: Tensor) {
     ensure_probe_registered();
 
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    register_test_eager_runtime(&ctx, "tenferro-tests.probe_identity.v1");
+    register_test_eager_runtime(&ctx, "tenferro-tests.probe_linear.v1");
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
         ctx.clone(),
@@ -889,6 +904,7 @@ fn missing_extension_rule_errors_in_traced_grad() {
 #[test]
 fn missing_extension_rule_errors_in_eager_backward() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    register_test_eager_runtime(&ctx, "tenferro-tests.no_ad.v1");
     let x =
         EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
