@@ -4,6 +4,8 @@ use num_complex::Complex64;
 use std::sync::{Arc, OnceLock};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -176,4 +178,30 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
         sorted,
         vec![Complex64::new(1.0, 0.0), Complex64::new(3.0, 0.0)]
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore]
+fn cuda_eager_solve_uses_registered_linalg_runtime() {
+    if !gpu_available() {
+        eprintln!("skipping cuda_eager_solve_uses_registered_linalg_runtime: no CUDA device");
+        return;
+    }
+
+    let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]);
+    let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]);
+    let upload_backend = CubeclBackend::new(0).unwrap();
+    let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
+    let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone());
+    let b = EagerTensor::from_tensor_in(b_gpu, ctx);
+
+    let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
+
+    let download_backend = CubeclBackend::new(0).unwrap();
+    let x_host = download_tensor(download_backend.runtime(), x.data()).unwrap();
+    assert_eq!(x_host.shape(), &[2, 1]);
+    assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);
 }

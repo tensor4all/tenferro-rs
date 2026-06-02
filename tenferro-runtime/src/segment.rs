@@ -131,43 +131,6 @@ pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
     segments
 }
 
-/// Evaluate an [`ExecProgram`] via segment-based dispatch.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::segment::eval_exec_segmented;
-/// use tenferro_runtime::exec::ExecProgram;
-/// use tenferro_cpu::CpuBackend;
-///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
-///     eval_exec_segmented::<CpuBackend>;
-/// ```
-pub fn eval_exec_segmented<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-) -> Result<Vec<Tensor>> {
-    eval_exec_segmented_with_cache(backend, program, inputs)
-}
-
-pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-) -> Result<Vec<Tensor>> {
-    let mut slots = Vec::new();
-    let mut backend_cache = B::RuntimeCache::default();
-    eval_exec_segmented_with_cache_and_workspace(
-        backend,
-        program,
-        inputs,
-        &mut slots,
-        &mut backend_cache,
-        None,
-    )
-}
-
 pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,

@@ -22,7 +22,6 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::compiler::compile_std_to_exec;
-use tenferro_runtime::exec::eval_exec_ir;
 use tenferro_runtime::shape_infer::{infer_output_dtype, infer_output_extents};
 use tenferro_runtime::traced_tensor::matmul;
 use tenferro_runtime::{GraphExecutor, TracedTensor};
@@ -249,8 +248,8 @@ fn eval_graph_outputs(
         })
         .collect();
     let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-    let mut backend = CpuBackend::new();
-    eval_exec_ir(&mut backend, &exec, inputs).unwrap()
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor.eval_exec_ir(&exec, inputs).unwrap()
 }
 
 fn scalar_f64_tensor(value: f64) -> Tensor {

@@ -55,6 +55,63 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     pub fn caches_mut(&mut self) -> &mut ExtensionCacheStore {
         self.caches
     }
+
+    /// Execute a core-only execution program one instruction at a time.
+    ///
+    /// This is for extension runtimes that lower their own operation into a
+    /// temporary `ExecProgram` containing only core tensor ops. Nested
+    /// `ExecOp::Extension` instructions are rejected so extension dispatch
+    /// cannot bypass the owning runtime registry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+    /// use tenferro_runtime::{
+    ///     DType, ExtensionCacheStore, ExtensionExecutionContext, Tensor,
+    /// };
+    ///
+    /// let program = ExecProgram {
+    ///     instructions: vec![ExecInstruction {
+    ///         op: ExecOp::Add,
+    ///         input_slots: vec![0, 1],
+    ///         output_slots: vec![2],
+    ///         dtype: DType::F64,
+    ///         output_shapes: vec![vec![]],
+    ///         output_extents: vec![vec![]],
+    ///         last_use: vec![true, true],
+    ///     }],
+    ///     input_slots: vec![0, 1],
+    ///     output_slots: vec![2],
+    ///     n_slots: 3,
+    /// };
+    /// let lhs = Tensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let rhs = Tensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let mut caches = ExtensionCacheStore::new();
+    /// let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
+    /// let outputs = ctx
+    ///     .execute_core_exec_program_unsegmented(&program, vec![lhs, rhs])
+    ///     .unwrap();
+    /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[3.0]);
+    /// ```
+    pub fn execute_core_exec_program_unsegmented(
+        &mut self,
+        program: &crate::exec::ExecProgram,
+        inputs: Vec<Tensor>,
+    ) -> crate::error::Result<Vec<Tensor>>
+    where
+        B: 'static,
+    {
+        crate::exec::ensure_core_exec_program(
+            program,
+            "ExtensionExecutionContext::execute_core_exec_program_unsegmented",
+        )?;
+        crate::exec::eval_exec_ir_unsegmented_with_cache(self.backend, program, inputs)
+    }
 }
 
 /// A backend-specific runtime executor for one extension family.
@@ -243,6 +300,9 @@ impl<B: TensorBackend + 'static> Default for ExtensionExecutor<B> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 fn is_valid_family_id(family_id: &str) -> bool {
     let mut parts = family_id.rsplitn(2, '.');

@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-#[cfg(feature = "autodiff")]
 use tenferro_tensor::{DType, Tensor};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
@@ -53,8 +52,9 @@ use std::sync::{OnceLock, RwLock};
 ///   + [`payload_eq`][Self::payload_eq];
 /// - fixed arity via [`input_count`][Self::input_count] / [`output_count`][Self::output_count];
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
-/// - forward dispatch via [`eager_execute`][Self::eager_execute] (used by both
-///   the eager and compiled paths);
+/// - host/reference forward execution via [`eager_execute`][Self::eager_execute];
+///   runtime-owned eager and compiled paths dispatch through registered
+///   extension runtimes instead of falling back to this method;
 /// - AD via a separately registered [`ExtensionAdRule`].
 ///
 /// # Downcast convention

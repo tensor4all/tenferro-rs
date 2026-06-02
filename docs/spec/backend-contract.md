@@ -28,8 +28,15 @@ CompiledProgram<StdTensorOp>
   ▼
 ExecProgram
   │
-  ├── eval_exec_ir_unsegmented()
-  └── eval_exec_ir() / eval_exec_segmented()
+  │ GraphExecutor::eval_exec_ir()
+  │   - owns backend runtime cache
+  │   - owns extension runtime registry/cache
+  │   - routes through segmented dispatch
+  ▼
+internal exec dispatch
+  │
+  ├── unsegmented core-only path
+  └── segmented path
          │
          ▼
   TensorBackend / BackendSession dispatch
@@ -183,9 +190,11 @@ einsum, and FFT register those runtimes from their owning crates.
 
 ## V. Segmented vs. Unsegmented Execution
 
-`eval_exec_ir_unsegmented()` evaluates one instruction at a time.
+`GraphExecutor::eval_exec_ir()` is the public execution entry point for an
+`ExecProgram`. It carries the backend cache, extension runtime registry, and
+extension runtime cache required to preserve dispatch invariants.
 
-`eval_exec_ir()` delegates to segmented execution:
+The segmented internal path groups fusible backend instructions:
 
 ```text
 ExecProgram
@@ -203,6 +212,12 @@ Segmented execution exists to:
 - reuse one backend execution session across consecutive backend ops
 - enable elementwise fusion planning where the backend supports it
 - preserve the same observable behavior as unsegmented execution
+
+The unsegmented internal path evaluates one instruction at a time and is used
+for parity checks and narrow owner-scoped extension-runtime composition. It is
+not a general public execution surface. Extension instructions must run through
+a registered `ExtensionRuntime`; missing runtime registration is an error, not
+a fallback to `ExtensionOp::eager_execute()`.
 
 The engine uses `last_use` metadata to reclaim buffers via
 `BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.

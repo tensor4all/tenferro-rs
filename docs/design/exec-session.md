@@ -7,19 +7,21 @@ backend-owned execution scope when the backend has one, such as a GPU runtime
 or the CPU backend's reusable buffer scope. Individual ops must not re-enter
 the same backend scope.
 
-`TensorBackend::with_backend_session` creates the scope. `eval_exec_ir` runs
-inside the session.
+`TensorBackend::with_backend_session` creates the scope. `GraphExecutor`
+owns backend cache and extension runtime state, then routes an `ExecProgram`
+through segmented execution. Consecutive backend-session instructions may run
+inside one backend session.
 
 ```
-eval_exec_ir(backend, program, inputs)
-  └── backend.with_backend_session(|exec| {
-          // ALL instructions run here — one scope entry
-          for inst in program {
-              exec.dot_general(...) // no per-op context switch
-              exec.transpose(...)
-              exec.reclaim_buffer(...)
-          }
-      })
+GraphExecutor::eval_exec_ir(program, inputs)
+  └── segmented execution
+        └── fused backend segment
+              └── backend.with_backend_session(|exec| {
+                      for inst in segment {
+                          exec.transpose(...)
+                          exec.reclaim_buffer(...)
+                      }
+                  })
 ```
 
 ## Why Sessions
@@ -28,8 +30,8 @@ Without sessions, each backend method independently prepares its execution
 state and scratch-buffer access. For N-ary einsum with hundreds of small GEMM
 steps, repeating that setup per instruction can dominate.
 
-Sessions amortize that setup by creating one `BackendSession` for the entire
-`eval_exec_ir` loop instead of one per instruction.
+Sessions amortize that setup by creating one `BackendSession` for a fused
+backend segment instead of one per instruction.
 
 ## Backend Mapping
 

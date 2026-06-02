@@ -30,6 +30,8 @@ mod ad;
 pub mod backend;
 mod cpu;
 #[cfg(feature = "autodiff")]
+mod eager_backend;
+#[cfg(feature = "autodiff")]
 pub mod eager_tensor;
 mod extension;
 #[cfg(feature = "cuda")]

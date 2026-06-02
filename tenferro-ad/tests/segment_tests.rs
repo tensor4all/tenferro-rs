@@ -1,10 +1,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::exec::{
-    eval_exec_ir, eval_exec_ir_unsegmented, ExecInstruction, ExecOp, ExecProgram,
-};
-use tenferro_runtime::segment::{eval_exec_segmented, segment_exec_program, Segment};
-use tenferro_runtime::DType;
+use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::segment::{segment_exec_program, Segment};
+use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, GraphExecutor};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 #[cfg(feature = "cuda")]
@@ -230,17 +228,25 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cpu() {
     let inputs = cpu_parity_inputs();
 
     let mut cpu_unsegmented = CpuBackend::new();
-    let unsegmented =
-        eval_exec_ir_unsegmented(&mut cpu_unsegmented, &program, inputs.clone()).unwrap();
+    let mut extension_caches = ExtensionCacheStore::new();
+    let mut unsegmented_context =
+        ExtensionExecutionContext::new(&mut cpu_unsegmented, &mut extension_caches);
+    let unsegmented = unsegmented_context
+        .execute_core_exec_program_unsegmented(&program, inputs.clone())
+        .unwrap();
 
-    let mut cpu_segmented = CpuBackend::new();
-    let segmented = eval_exec_segmented(&mut cpu_segmented, &program, inputs.clone()).unwrap();
+    let mut cpu_segmented = GraphExecutor::new(CpuBackend::new());
+    let segmented = cpu_segmented
+        .eval_exec_ir(&program, inputs.clone())
+        .unwrap();
 
-    let mut cpu_alias = CpuBackend::new();
-    let segmented_via_alias = eval_exec_ir(&mut cpu_alias, &program, inputs).unwrap();
+    let mut cpu_non_consuming = GraphExecutor::new(CpuBackend::new());
+    let segmented_non_consuming = cpu_non_consuming
+        .eval_exec_ir_non_consuming(&program, &inputs)
+        .unwrap();
 
     assert_tensor_vec_eq(&unsegmented, &segmented);
-    assert_tensor_vec_eq(&segmented, &segmented_via_alias);
+    assert_tensor_vec_eq(&segmented, &segmented_non_consuming);
 }
 
 #[cfg(feature = "cuda")]
@@ -362,14 +368,22 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cubecl_host_boundaries() {
 
     let mut gpu_unsegmented = CubeclBackend::new(0).unwrap();
     let unsegmented_inputs = upload_all(&gpu_unsegmented, &host_inputs);
-    let unsegmented =
-        eval_exec_ir_unsegmented(&mut gpu_unsegmented, &program, unsegmented_inputs).unwrap();
+    let mut extension_caches = ExtensionCacheStore::new();
+    let mut unsegmented_context =
+        ExtensionExecutionContext::new(&mut gpu_unsegmented, &mut extension_caches);
+    let unsegmented = unsegmented_context
+        .execute_core_exec_program_unsegmented(&program, unsegmented_inputs)
+        .unwrap();
+    drop(unsegmented_context);
     let unsegmented_host = download_all(&gpu_unsegmented, &unsegmented);
 
-    let mut gpu_segmented = CubeclBackend::new(0).unwrap();
-    let segmented_inputs = upload_all(&gpu_segmented, &host_inputs);
-    let segmented = eval_exec_segmented(&mut gpu_segmented, &program, segmented_inputs).unwrap();
-    let segmented_host = download_all(&gpu_segmented, &segmented);
+    let gpu_segmented_backend = CubeclBackend::new(0).unwrap();
+    let segmented_inputs = upload_all(&gpu_segmented_backend, &host_inputs);
+    let mut gpu_segmented = GraphExecutor::new(gpu_segmented_backend);
+    let segmented = gpu_segmented
+        .eval_exec_ir(&program, segmented_inputs)
+        .unwrap();
+    let segmented_host = download_all(gpu_segmented.backend(), &segmented);
 
     assert_tensor_vec_eq(&unsegmented_host, &segmented_host);
 }

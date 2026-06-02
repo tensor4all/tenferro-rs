@@ -7,6 +7,7 @@ use tenferro_runtime::compiler::{
     eliminate_dead_code, transpose_folding,
 };
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 #[path = "compiler_passes/dot_decomposer_tests.rs"]
@@ -698,8 +699,9 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
         rhs_data.clone(),
     ));
 
-    let mut backend = CpuBackend::default();
-    let mut outputs = tenferro_runtime::exec::eval_exec_ir(&mut backend, &exec, vec![lhs, rhs])
+    let mut executor = GraphExecutor::new(CpuBackend::default());
+    let mut outputs = executor
+        .eval_exec_ir(&exec, vec![lhs, rhs])
         .expect("executing decomposed program must not fail");
     let out = outputs.remove(0);
     let typed = match &out {

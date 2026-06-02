@@ -533,10 +533,11 @@ StdTensorOp::Extension(ext) => extension_executor.execute(backend, ext, inputs)?
 The eager path MUST NOT open a backend execution session for extension
 ops before handing control to the extension runtime; the extension runtime owns
 its execution model and receives the backend plus its runtime-owned cache store.
-The context-free `ExtensionOp::eager_execute` method is a compatibility
-fallback for direct execution helpers and for unregistered eager extension
-families. Built-in extensions with long-lived caches MUST register a runtime so
-`EagerRuntime`-attached execution uses the runtime-owned cache store.
+The context-free `ExtensionOp::eager_execute` method is a host/reference
+implementation for direct extension-op calls. Runtime-owned execution MUST NOT
+fall back to it when an extension family is unregistered; that is a missing
+runtime error. Built-in extensions with long-lived caches MUST register a
+runtime so `EagerRuntime`-attached execution uses the runtime-owned cache store.
 
 ### Compiled path
 
@@ -565,7 +566,8 @@ The compiled path runs through
   `last_use` markers. It does not invoke backend kernels.
 - **`eager_exec` / `eager_builder`** are responsible for: resolving
   inputs from the builder's tensor cache and calling the runtime-owned
-  extension executor when one is available.
+  extension executor for extension ops. If no extension executor is available,
+  extension execution is an error.
 - **Extension runtime (`ExtensionRuntime<B>`)** is responsible for: actual
   forward computation, backend use, runtime cache entries, and device placement
   of outputs. The core pipeline MUST NOT second-guess these choices.
@@ -578,7 +580,7 @@ avoids hidden thread-local or process-global state in extension crates.
 
 ### Failure signature
 
-- An extension whose `eager_execute` errors surfaces as
+- An extension whose registered runtime errors surfaces as
   `Error::backend_failure("extension", message)` (or a similar constant)
   with the `family_id` in `message`; see Section 12.
 - If a backend lacks a capability the extension needs (e.g.

@@ -22,7 +22,7 @@ mod context;
 mod eager;
 mod eager_backend;
 mod eager_builder;
-pub mod eager_exec;
+pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub mod eager_tensor;

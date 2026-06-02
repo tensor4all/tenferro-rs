@@ -55,7 +55,9 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOpTrait};
 use tenferro_runtime::{Error, Result, TracedTensor};
-use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{
+    Buffer, DType, DeviceKind, MemoryKind, Placement, Tensor, TensorBackend, TypedTensor,
+};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -253,60 +255,111 @@ impl ExtensionOpTrait for FftOp {
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        if inputs.len() != 1 {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "tenferro-fft",
-                message: format!("expected 1 input, got {}", inputs.len()),
+        execute_host_fft_op(self, inputs)
+    }
+}
+
+fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if inputs.len() != 1 {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "tenferro-fft",
+            message: format!("expected 1 input, got {}", inputs.len()),
+        });
+    }
+    validate_host_fft_input(fft_op_name(op.kind), inputs[0])?;
+
+    let output = match (op.kind, inputs[0]) {
+        (FftKind::C2C { forward }, Tensor::C64(input)) => {
+            Tensor::C64(TypedTensor::from_vec_col_major(
+                output_shape_c2c(input.shape(), op.axis, op.n)?,
+                execute_c2c(input, op.axis, op.n, forward, op.norm)?,
+            ))
+        }
+        (FftKind::C2C { forward }, Tensor::C32(input)) => {
+            Tensor::C32(TypedTensor::from_vec_col_major(
+                output_shape_c2c(input.shape(), op.axis, op.n)?,
+                execute_c2c(input, op.axis, op.n, forward, op.norm)?,
+            ))
+        }
+        (FftKind::R2C { onesided }, Tensor::F64(input)) => {
+            Tensor::C64(TypedTensor::from_vec_col_major(
+                output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
+                execute_r2c(input, op.axis, op.n, onesided, op.norm)?,
+            ))
+        }
+        (FftKind::R2C { onesided }, Tensor::F32(input)) => {
+            Tensor::C32(TypedTensor::from_vec_col_major(
+                output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
+                execute_r2c(input, op.axis, op.n, onesided, op.norm)?,
+            ))
+        }
+        (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
+            output_shape_c2r(input.shape(), op.axis, op.n)?,
+            execute_c2r(input, op.axis, op.n, op.norm)?,
+        )),
+        (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
+            output_shape_c2r(input.shape(), op.axis, op.n)?,
+            execute_c2r(input, op.axis, op.n, op.norm)?,
+        )),
+        (kind, other) => {
+            return Err(tenferro_tensor::Error::DTypeMismatch {
+                op: match kind {
+                    FftKind::C2C { .. } => "fft",
+                    FftKind::R2C { .. } => "rfft",
+                    FftKind::C2R => "irfft",
+                },
+                lhs: expected_dtype_for(kind),
+                rhs: other.dtype(),
             });
         }
+    };
+    Ok(vec![output])
+}
 
-        let output = match (self.kind, inputs[0]) {
-            (FftKind::C2C { forward }, Tensor::C64(input)) => {
-                Tensor::C64(TypedTensor::from_vec_col_major(
-                    output_shape_c2c(input.shape(), self.axis, self.n)?,
-                    execute_c2c(input, self.axis, self.n, forward, self.norm)?,
-                ))
-            }
-            (FftKind::C2C { forward }, Tensor::C32(input)) => {
-                Tensor::C32(TypedTensor::from_vec_col_major(
-                    output_shape_c2c(input.shape(), self.axis, self.n)?,
-                    execute_c2c(input, self.axis, self.n, forward, self.norm)?,
-                ))
-            }
-            (FftKind::R2C { onesided }, Tensor::F64(input)) => {
-                Tensor::C64(TypedTensor::from_vec_col_major(
-                    output_shape_r2c(input.shape(), self.axis, self.n, onesided)?,
-                    execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
-                ))
-            }
-            (FftKind::R2C { onesided }, Tensor::F32(input)) => {
-                Tensor::C32(TypedTensor::from_vec_col_major(
-                    output_shape_r2c(input.shape(), self.axis, self.n, onesided)?,
-                    execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
-                ))
-            }
-            (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
-                output_shape_c2r(input.shape(), self.axis, self.n)?,
-                execute_c2r(input, self.axis, self.n, self.norm)?,
-            )),
-            (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
-                output_shape_c2r(input.shape(), self.axis, self.n)?,
-                execute_c2r(input, self.axis, self.n, self.norm)?,
-            )),
-            (kind, other) => {
-                return Err(tenferro_tensor::Error::DTypeMismatch {
-                    op: match kind {
-                        FftKind::C2C { .. } => "fft",
-                        FftKind::R2C { .. } => "rfft",
-                        FftKind::C2R => "irfft",
-                    },
-                    lhs: expected_dtype_for(kind),
-                    rhs: other.dtype(),
-                });
-            }
-        };
-        Ok(vec![output])
+fn tensor_placement(input: &Tensor) -> &Placement {
+    match input {
+        Tensor::F32(t) => &t.placement,
+        Tensor::F64(t) => &t.placement,
+        Tensor::I32(t) => &t.placement,
+        Tensor::I64(t) => &t.placement,
+        Tensor::Bool(t) => &t.placement,
+        Tensor::C32(t) => &t.placement,
+        Tensor::C64(t) => &t.placement,
     }
+}
+
+fn tensor_has_backend_buffer(input: &Tensor) -> bool {
+    match input {
+        Tensor::F32(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::F64(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::I32(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::I64(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::Bool(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::C32(t) => matches!(&t.buffer, Buffer::Backend(_)),
+        Tensor::C64(t) => matches!(&t.buffer, Buffer::Backend(_)),
+    }
+}
+
+fn validate_host_fft_input(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
+    let placement = tensor_placement(input);
+    let is_device = matches!(placement.memory_kind, MemoryKind::Device);
+    if !is_device && !tensor_has_backend_buffer(input) {
+        return Ok(());
+    }
+
+    let location = match placement.device.as_ref().map(|device| &device.kind) {
+        Some(DeviceKind::Gpu(kind)) => format!("GPU backend {kind:?}"),
+        Some(kind) => format!("device kind {kind:?}"),
+        None if is_device => "device tensor without device metadata".to_string(),
+        None => "backend buffer".to_string(),
+    };
+    Err(tenferro_tensor::Error::backend_failure(
+        op,
+        format!(
+            "tenferro-fft supports host tensors only; unsupported {location} input; \
+             download the tensor to CPU before FFT"
+        ),
+    ))
 }
 
 #[cfg(feature = "autodiff")]
@@ -395,7 +448,7 @@ fn execute_fft_extension<B: TensorBackend + 'static>(
     inputs: &[&Tensor],
     _ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    op.eager_execute(inputs)
+    execute_host_fft_op(op, inputs)
 }
 
 define_extension_runtime! {
@@ -639,6 +692,15 @@ fn expected_dtype_for(kind: FftKind) -> DType {
     match kind {
         FftKind::C2C { .. } | FftKind::C2R => DType::C64,
         FftKind::R2C { .. } => DType::F64,
+    }
+}
+
+fn fft_op_name(kind: FftKind) -> &'static str {
+    match kind {
+        FftKind::C2C { forward: true } => "fft",
+        FftKind::C2C { forward: false } => "ifft",
+        FftKind::R2C { .. } => "rfft",
+        FftKind::C2R => "irfft",
     }
 }
 
