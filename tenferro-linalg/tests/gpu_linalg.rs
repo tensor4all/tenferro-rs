@@ -442,6 +442,18 @@ fn test_cubecl_svd_c32_reconstructs_input() {
 
 #[test]
 #[ignore]
+fn test_cubecl_svd_values_f64_matches_cpu() {
+    let input = tensor_f64(vec![3, 2], vec![1.0, 2.0, -0.5, 0.25, 3.0, -1.0]);
+    let mut cpu = cpu_backend();
+    let expected = cpu.svd_values(&input).unwrap();
+    let mut gpu = gpu_backend();
+    let actual = gpu.svd_values(&upload(&gpu, &input)).unwrap();
+    let actual = download(&gpu, &actual);
+    assert_tensor_close(&actual, &expected, 1e-9);
+}
+
+#[test]
+#[ignore]
 fn test_cubecl_qr_f32_reconstructs_input() {
     let input = tensor_f32(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0]);
     let mut gpu = gpu_backend();

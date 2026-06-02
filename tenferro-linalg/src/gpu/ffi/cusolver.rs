@@ -25,6 +25,7 @@ const CUBLAS_DEFAULT_PATHS: &[&str] = &[
 pub type CusolverDnHandleRaw = *mut c_void;
 pub type CublasHandleRaw = *mut c_void;
 pub type CudaStream = *mut c_void;
+type GesvdjInfoRaw = *mut c_void;
 
 type CusolverStatus = i32;
 type CublasStatus = i32;
@@ -444,6 +445,145 @@ type GesvdC64Fn = unsafe extern "C" fn(
     *mut i32,
 ) -> CusolverStatus;
 
+type CreateGesvdjInfoFn = unsafe extern "C" fn(*mut GesvdjInfoRaw) -> CusolverStatus;
+type DestroyGesvdjInfoFn = unsafe extern "C" fn(GesvdjInfoRaw) -> CusolverStatus;
+type GesvdjBufferSizeF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *const f32,
+    i32,
+    *const f32,
+    *const f32,
+    i32,
+    *const f32,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjBufferSizeF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *const f64,
+    i32,
+    *const f64,
+    *const f64,
+    i32,
+    *const f64,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjBufferSizeC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *const Complex32,
+    i32,
+    *const f32,
+    *const Complex32,
+    i32,
+    *const Complex32,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjBufferSizeC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *const Complex64,
+    i32,
+    *const f64,
+    *const Complex64,
+    i32,
+    *const Complex64,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjF32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjF64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut f64,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjC32Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut f32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+type GesvdjC64Fn = unsafe extern "C" fn(
+    CusolverDnHandleRaw,
+    CusolverEigMode,
+    i32,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut f64,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut i32,
+    GesvdjInfoRaw,
+) -> CusolverStatus;
+
 type SyevdBufferSizeF32Fn = unsafe extern "C" fn(
     CusolverDnHandleRaw,
     CusolverEigMode,
@@ -697,6 +837,16 @@ struct CusolverVtable {
     dgesvd: GesvdF64Fn,
     cgesvd: GesvdC32Fn,
     zgesvd: GesvdC64Fn,
+    create_gesvdj_info: CreateGesvdjInfoFn,
+    destroy_gesvdj_info: DestroyGesvdjInfoFn,
+    sgesvdj_buffer_size: GesvdjBufferSizeF32Fn,
+    dgesvdj_buffer_size: GesvdjBufferSizeF64Fn,
+    cgesvdj_buffer_size: GesvdjBufferSizeC32Fn,
+    zgesvdj_buffer_size: GesvdjBufferSizeC64Fn,
+    sgesvdj: GesvdjF32Fn,
+    dgesvdj: GesvdjF64Fn,
+    cgesvdj: GesvdjC32Fn,
+    zgesvdj: GesvdjC64Fn,
     ssyevd_buffer_size: SyevdBufferSizeF32Fn,
     dsyevd_buffer_size: SyevdBufferSizeF64Fn,
     cheevd_buffer_size: SyevdBufferSizeC32Fn,
@@ -753,6 +903,16 @@ impl CusolverVtable {
             dgesvd: load_symbol(lib, b"cusolverDnDgesvd\0", "cuSOLVER")?,
             cgesvd: load_symbol(lib, b"cusolverDnCgesvd\0", "cuSOLVER")?,
             zgesvd: load_symbol(lib, b"cusolverDnZgesvd\0", "cuSOLVER")?,
+            create_gesvdj_info: load_symbol(lib, b"cusolverDnCreateGesvdjInfo\0", "cuSOLVER")?,
+            destroy_gesvdj_info: load_symbol(lib, b"cusolverDnDestroyGesvdjInfo\0", "cuSOLVER")?,
+            sgesvdj_buffer_size: load_symbol(lib, b"cusolverDnSgesvdj_bufferSize\0", "cuSOLVER")?,
+            dgesvdj_buffer_size: load_symbol(lib, b"cusolverDnDgesvdj_bufferSize\0", "cuSOLVER")?,
+            cgesvdj_buffer_size: load_symbol(lib, b"cusolverDnCgesvdj_bufferSize\0", "cuSOLVER")?,
+            zgesvdj_buffer_size: load_symbol(lib, b"cusolverDnZgesvdj_bufferSize\0", "cuSOLVER")?,
+            sgesvdj: load_symbol(lib, b"cusolverDnSgesvdj\0", "cuSOLVER")?,
+            dgesvdj: load_symbol(lib, b"cusolverDnDgesvdj\0", "cuSOLVER")?,
+            cgesvdj: load_symbol(lib, b"cusolverDnCgesvdj\0", "cuSOLVER")?,
+            zgesvdj: load_symbol(lib, b"cusolverDnZgesvdj\0", "cuSOLVER")?,
             ssyevd_buffer_size: load_symbol(lib, b"cusolverDnSsyevd_bufferSize\0", "cuSOLVER")?,
             dsyevd_buffer_size: load_symbol(lib, b"cusolverDnDsyevd_bufferSize\0", "cuSOLVER")?,
             cheevd_buffer_size: load_symbol(lib, b"cusolverDnCheevd_bufferSize\0", "cuSOLVER")?,
@@ -987,6 +1147,25 @@ pub struct CusolverDnHandle {
 
 unsafe impl Send for CusolverDnHandle {}
 
+pub struct GesvdjInfo<'a> {
+    handle: &'a CusolverDnHandle,
+    raw: GesvdjInfoRaw,
+}
+
+impl<'a> GesvdjInfo<'a> {
+    fn raw(&self) -> GesvdjInfoRaw {
+        self.raw
+    }
+}
+
+impl Drop for GesvdjInfo<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            (self.handle.lib.vtable.destroy_gesvdj_info)(self.raw);
+        }
+    }
+}
+
 impl CusolverDnHandle {
     pub fn load() -> Result<Self> {
         let lib = CusolverLibrary::load()?;
@@ -999,6 +1178,14 @@ impl CusolverDnHandle {
     pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cusolverDnSetStream")
+    }
+
+    pub fn create_gesvdj_info(&self, op: &'static str) -> Result<GesvdjInfo<'_>> {
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { (self.lib.vtable.create_gesvdj_info)(&mut raw) };
+        self.lib
+            .check_status(status, op, "cusolverDnCreateGesvdjInfo")?;
+        Ok(GesvdjInfo { handle: self, raw })
     }
 
     pub fn potrf_buffer_size(
@@ -1447,6 +1634,97 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    pub fn gesvdj_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        econ: i32,
+        m: i32,
+        n: i32,
+        a: *const c_void,
+        lda: i32,
+        s: *const c_void,
+        u: *const c_void,
+        ldu: i32,
+        v: *const c_void,
+        ldv: i32,
+        params: &GesvdjInfo<'_>,
+        op: &'static str,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        let status = unsafe {
+            match dtype {
+                CudaDataType::F32 => (self.lib.vtable.sgesvdj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    &mut lwork,
+                    params.raw(),
+                ),
+                CudaDataType::F64 => (self.lib.vtable.dgesvdj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    &mut lwork,
+                    params.raw(),
+                ),
+                CudaDataType::Complex32 => (self.lib.vtable.cgesvdj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    &mut lwork,
+                    params.raw(),
+                ),
+                CudaDataType::Complex64 => (self.lib.vtable.zgesvdj_buffer_size)(
+                    self.raw,
+                    jobz,
+                    econ,
+                    m,
+                    n,
+                    a.cast(),
+                    lda,
+                    s.cast(),
+                    u.cast(),
+                    ldu,
+                    v.cast(),
+                    ldv,
+                    &mut lwork,
+                    params.raw(),
+                ),
+            }
+        };
+        self.lib
+            .check_status(status, op, "cusolverDn*gesvdj_bufferSize")?;
+        Ok(lwork)
+    }
+
     pub unsafe fn gesvd(
         &self,
         dtype: CudaDataType,
@@ -1542,6 +1820,103 @@ impl CusolverDnHandle {
             ),
         };
         self.lib.check_status(status, op, "cusolverDn*gesvd")
+    }
+
+    pub unsafe fn gesvdj(
+        &self,
+        dtype: CudaDataType,
+        jobz: CusolverEigMode,
+        econ: i32,
+        m: i32,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        s: *mut c_void,
+        u: *mut c_void,
+        ldu: i32,
+        v: *mut c_void,
+        ldv: i32,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+        params: &GesvdjInfo<'_>,
+        op: &'static str,
+    ) -> Result<()> {
+        let status = match dtype {
+            CudaDataType::F32 => (self.lib.vtable.sgesvdj)(
+                self.raw,
+                jobz,
+                econ,
+                m,
+                n,
+                a.cast(),
+                lda,
+                s.cast(),
+                u.cast(),
+                ldu,
+                v.cast(),
+                ldv,
+                workspace.cast(),
+                lwork,
+                info,
+                params.raw(),
+            ),
+            CudaDataType::F64 => (self.lib.vtable.dgesvdj)(
+                self.raw,
+                jobz,
+                econ,
+                m,
+                n,
+                a.cast(),
+                lda,
+                s.cast(),
+                u.cast(),
+                ldu,
+                v.cast(),
+                ldv,
+                workspace.cast(),
+                lwork,
+                info,
+                params.raw(),
+            ),
+            CudaDataType::Complex32 => (self.lib.vtable.cgesvdj)(
+                self.raw,
+                jobz,
+                econ,
+                m,
+                n,
+                a.cast(),
+                lda,
+                s.cast(),
+                u.cast(),
+                ldu,
+                v.cast(),
+                ldv,
+                workspace.cast(),
+                lwork,
+                info,
+                params.raw(),
+            ),
+            CudaDataType::Complex64 => (self.lib.vtable.zgesvdj)(
+                self.raw,
+                jobz,
+                econ,
+                m,
+                n,
+                a.cast(),
+                lda,
+                s.cast(),
+                u.cast(),
+                ldu,
+                v.cast(),
+                ldv,
+                workspace.cast(),
+                lwork,
+                info,
+                params.raw(),
+            ),
+        };
+        self.lib.check_status(status, op, "cusolverDn*gesvdj")
     }
 
     pub fn syevd_buffer_size(

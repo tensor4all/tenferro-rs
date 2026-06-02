@@ -46,6 +46,48 @@ fn matching_work_offset<Work: CubePrimitive, Out: CubePrimitive>(
     offset
 }
 
+#[cube]
+fn svd_v_to_vt_offset<E: CubePrimitive>(
+    out: &Tensor<E>,
+    v: &Tensor<E>,
+    flat: usize,
+    #[comptime] rank: usize,
+) -> usize {
+    let row = out.coordinate(flat, 0usize);
+    let col = out.coordinate(flat, 1usize);
+    let mut offset = col * v.stride(0usize) + row * v.stride(1usize);
+    #[unroll]
+    for axis in 2usize..rank {
+        let coord = out.coordinate(flat, axis);
+        offset += coord * v.stride(axis);
+    }
+    offset
+}
+
+#[cube(launch_unchecked)]
+pub fn svd_v_to_vt_real<E: CubePrimitive>(
+    out: &mut Tensor<E>,
+    v: &Tensor<E>,
+    #[comptime] rank: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        out[pos] = v[svd_v_to_vt_offset(out, v, pos, rank)];
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn svd_v_to_vt_complex<C: ComplexCore>(
+    out: &mut Tensor<C>,
+    v: &Tensor<C>,
+    #[comptime] rank: usize,
+) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        out[pos] = v[svd_v_to_vt_offset(out, v, pos, rank)].conj();
+    }
+}
+
 #[cube(launch_unchecked)]
 pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
     p_out: &mut Tensor<E>,
