@@ -3,7 +3,7 @@
 This document is developer-facing. Public user docs describe the GPU surface as
 the CUDA backend exposed from `tenferro_gpu::cubecl::{CubeclBackend,
 upload_tensor, download_tensor}`. The active implementation behind that public
-surface lives in `tenferro-gpu/src/cubecl/`, gated by the `cuda` feature. It
+surface lives in `crates/tenferro-gpu/src/cubecl/`, gated by the `cuda` feature. It
 targets NVIDIA CUDA devices through CubeCL and CubeCL-CUDA, with CUDA library
 support for cuTENSOR, cuSOLVER, and cuBLAS.
 
@@ -19,8 +19,8 @@ HIP/ROCm is still a feature stub rather than a supported execution path.
 
 See also:
 
-- `tenferro-gpu/src/cubecl/` for the implementation,
-- `tenferro-gpu/src/kernels/` for static CubeCL kernel definitions and kernel-level
+- `crates/tenferro-gpu/src/cubecl/` for the implementation,
+- `crates/tenferro-gpu/src/kernels/` for static CubeCL kernel definitions and kernel-level
   validation,
 - `AGENTS.md` for the current GPU status and local test command,
 - [backend-contract.md](../spec/backend-contract.md) for placement rules,
@@ -31,14 +31,14 @@ See also:
 ## Current Module Structure
 
 ```text
-tenferro-gpu/src/kernels/
+crates/tenferro-gpu/src/kernels/
     elementwise.rs         static elementwise CubeCL kernels
     structural.rs          static structural and conversion CubeCL kernels
     indexing.rs            static slice/gather/scatter/pad CubeCL kernels
     diagonal.rs            static diagonal and triangular-mask CubeCL kernels
     reduce/                reduction validation, launch helpers, and kernels
 
-tenferro-gpu/src/cubecl/
+crates/tenferro-gpu/src/cubecl/
     mod.rs                 CubeclBackend and TensorBackend implementation
     runtime.rs             CubeCL/CUDA runtime initialization and stream access
     memory.rs              upload_tensor, download_tensor, device pointer bridge
@@ -57,12 +57,12 @@ CubeCL fork and the CubeCL CUDA runtime.
 
 ## Kernel Ownership
 
-Static CubeCL kernel definitions live under `tenferro-gpu/src/kernels`. The
+Static CubeCL kernel definitions live under `crates/tenferro-gpu/src/kernels`. The
 tensor backend crate must not keep duplicate static kernels once they have been
 moved. This keeps copied/adapted CubeK-derived code, tenferro-specific kernel
 definitions, and third-party notices in one crate.
 
-`tenferro-gpu/src/cubecl/` still owns tensor values, device placement,
+`crates/tenferro-gpu/src/cubecl/` still owns tensor values, device placement,
 allocation, upload/download, CUDA library FFI, TensorBackend dispatch, and
 runtime-generated fused elementwise code. Those are backend integration
 concerns rather than reusable static kernels.
@@ -165,7 +165,7 @@ and no implicit global shape state.
 
 The caller owns validation that the buffer length matches the dense shape
 product before creating `TensorBinding` or raw array arguments. Existing helper
-functions in `tenferro-gpu/src/cubecl/dispatch.rs` are the current source of
+functions in `crates/tenferro-gpu/src/cubecl/dispatch.rs` are the current source of
 truth for this boundary.
 
 ## Launch Configuration Contract

@@ -37,7 +37,7 @@ This spec extends the three normative contracts that already exist in
 - [`ad-contract.md`](ad-contract.md) owns the `Primitive` trait. This
   document extends it by specifying how an `ExtensionOp` participates in
   AD **without** itself implementing `Primitive`: the dispatcher in
-  `tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
+  `crates/tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
   rule for `op.family_id()` in the active `ExtensionRuleSet`. The rule emits
   tangents and cotangents expressed in the core `StdTensorOp` vocabulary, or
   in extension helper families covered by Section 10's AD-closure rules. The
@@ -98,7 +98,7 @@ The `ExtensionOp` trait is the Rust trait that every extension
 implementation MUST satisfy. The core op enum carries one extension variant:
 
 ```rust
-// In tenferro-internal-ops/src/std_tensor_op.rs:
+// In crates/tenferro-internal-ops/src/std_tensor_op.rs:
 pub enum StdTensorOp {
     // ... existing variants ...
     Extension(std::sync::Arc<dyn ExtensionOp>),
@@ -170,7 +170,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// Returned vector length MUST equal `self.output_count()`. Shapes use
     /// graph-global `SymDim` (symbolic dimensions), consistent with
-    /// `TensorMeta::shape` in `tenferro-internal-ops/src/ad/context.rs`. Input
+    /// `TensorMeta::shape` in `crates/tenferro-internal-ops/src/ad/context.rs`. Input
     /// metadata is given as slices of `SymDim` / `DType`; see Section 7
     /// for the detailed invariants.
     fn infer_output_meta(
@@ -411,10 +411,10 @@ default choice is to add `Any` via a method-based helper to keep
 Every `ExtensionOp` MUST declare fixed `input_count` and `output_count` values
 whose return is independent of runtime input sizes. This aligns with the
 `StdTensorOp` arity dispatcher in
-`tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `input_count` for `DotGeneral` is
+`crates/tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `input_count` for `DotGeneral` is
 always `2`).
 
-The dispatcher integration in `tenferro-internal-ops/src/ad/mod.rs` MUST treat
+The dispatcher integration in `crates/tenferro-internal-ops/src/ad/mod.rs` MUST treat
 `StdTensorOp::Extension(op)` as having `op.input_count()` inputs and
 `op.output_count()` outputs. Validation:
 
@@ -467,7 +467,7 @@ fn infer_output_meta(
 ```
 
 This method's responsibility mirrors
-`tenferro-runtime/src/shape_infer.rs::infer_output_dtype` and
+`crates/tenferro-runtime/src/shape_infer.rs::infer_output_dtype` and
 `infer_output_shapes` for core ops, packaged as a single method per
 extension.
 
@@ -480,7 +480,7 @@ extension.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>` to match
-  `TensorMeta::shape` (see `tenferro-internal-ops/src/ad/context.rs:49-109`).
+  `TensorMeta::shape` (see `crates/tenferro-internal-ops/src/ad/context.rs:49-109`).
   Concrete and symbolic inputs use the same representation:
   `SymDim::from(usize)` for concrete extents, symbolic placeholders for
   unknown-at-build-time dimensions.
@@ -505,7 +505,7 @@ symbolic inputs. Total means:
 - An implementer that returns the wrong number of outputs causes
   `compile_std_to_exec` to panic when assigning output slot metadata
   (the panic already exists for core ops; see
-  `tenferro-runtime/src/compiler/mod.rs`). The same panic applies to
+  `crates/tenferro-runtime/src/compiler/mod.rs`). The same panic applies to
   extensions.
 - An implementer that panics on valid symbolic inputs surfaces as a
   hard crash in symbolic-shape composition tests. This is a contract violation.
@@ -520,7 +520,7 @@ both, with a normatively-split responsibility.
 ### Eager path
 
 The eager path runs through `EagerRuntime` and the runtime extension
-dispatcher in `tenferro-runtime/src/extension_runtime.rs`.
+dispatcher in `crates/tenferro-runtime/src/extension_runtime.rs`.
 When execution is attached to an `EagerRuntime` and a runtime is registered for
 the extension family, the implementation MUST route `StdTensorOp::Extension(op)`
 through that runtime's `ExtensionExecutor`:
@@ -542,8 +542,8 @@ runtime so `EagerRuntime`-attached execution uses the runtime-owned cache store.
 ### Compiled path
 
 The compiled path runs through
-`tenferro-runtime/src/compiler/mod.rs::compile_std_to_exec` and
-`tenferro-runtime/src/exec.rs`. The compiled path MUST include:
+`crates/tenferro-runtime/src/compiler/mod.rs::compile_std_to_exec` and
+`crates/tenferro-runtime/src/exec.rs`. The compiled path MUST include:
 
 1. An `ExecOp::Extension(Arc<dyn ExtensionOp>)` variant (or an
    equivalent carrier) in the execution IR, mirroring the `StdTensorOp`
@@ -551,10 +551,10 @@ The compiled path runs through
 2. Shape / dtype lowering in `compile_std_to_exec` that calls
    `op.infer_output_meta(...)` to populate
    `ExecInstruction::dtype` and `ExecInstruction::output_shapes`.
-3. An `execute_extension_op` dispatcher in `tenferro-runtime/src/exec.rs` that,
+3. An `execute_extension_op` dispatcher in `crates/tenferro-runtime/src/exec.rs` that,
    at runtime, calls the registered `ExtensionExecutor<B>`.
 4. A single-instruction-boundary category for extensions in
-   `tenferro-runtime/src/segment.rs` (similar to `DotGeneral`).
+   `crates/tenferro-runtime/src/segment.rs` (similar to `DotGeneral`).
    Extensions MUST NOT participate in elementwise fusion planning
    because their fusion semantics are implementer-defined.
 
@@ -726,7 +726,7 @@ graph while preserving the `Primitive` closure invariant at the
 
 Extension AD rules MUST use `ctx.shape_of(val)`, `ctx.dtype_of(val)`,
 and `ctx.metadata_of(val)` to query input metadata, exactly like the
-core AD rules (see `tenferro-internal-ops/src/ad/linalg.rs` for a reference
+core AD rules (see `crates/tenferro-internal-ops/src/ad/linalg.rs` for a reference
 implementation). They MUST NOT reach around the context to fetch
 metadata from elsewhere.
 

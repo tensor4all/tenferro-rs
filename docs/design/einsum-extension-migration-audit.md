@@ -43,24 +43,24 @@ not-needed    intentionally replaced or removed with reason
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| String/integer subscript parser core | `tenferro-einsum/src/syntax/subscripts.rs`, `syntax/notation.rs` | Keep in `tenferro-einsum`; do not duplicate parser in `tenferro` | `cargo test -p tenferro-einsum subscripts` | pending |
-| Nested contraction syntax | `tenferro-einsum/src/syntax/nested.rs` | Keep in `tenferro-einsum`; reuse for `EinsumOptimize::Nested` | `cargo test -p tenferro-einsum nested` | pending |
-| Contraction planning and optimizer options | `tenferro-einsum/src/planning/*` | Keep in `tenferro-einsum`; expose through traced API as needed | `cargo test -p tenferro-einsum planning` | pending |
-| Fragment lowering | `tenferro-einsum/src/builder.rs` | Reuse from extension executor/runtime path | `rg -n "build_einsum_fragment" tenferro-einsum/src` | pending |
-| Standalone eager tensor execution | `tenferro-einsum/src/eager.rs` | Keep as direct `tenferro_einsum::eager_*` APIs | `cargo test -p tenferro-einsum eager` | pending |
-| Typed eager facade | `tenferro-einsum/src/typed_eager.rs` | Keep in `tenferro-einsum`; remove `tenferro::typed_tensor::einsum*` facade | `cargo test -p tenferro-einsum typed_eager` | pending |
+| String/integer subscript parser core | `crates/tenferro-einsum/src/syntax/subscripts.rs`, `syntax/notation.rs` | Keep in `tenferro-einsum`; do not duplicate parser in `tenferro` | `cargo test -p tenferro-einsum subscripts` | pending |
+| Nested contraction syntax | `crates/tenferro-einsum/src/syntax/nested.rs` | Keep in `tenferro-einsum`; reuse for `EinsumOptimize::Nested` | `cargo test -p tenferro-einsum nested` | pending |
+| Contraction planning and optimizer options | `crates/tenferro-einsum/src/planning/*` | Keep in `tenferro-einsum`; expose through traced API as needed | `cargo test -p tenferro-einsum planning` | pending |
+| Fragment lowering | `crates/tenferro-einsum/src/builder.rs` | Reuse from extension executor/runtime path | `rg -n "build_einsum_fragment" crates/tenferro-einsum/src` | pending |
+| Standalone eager tensor execution | `crates/tenferro-einsum/src/eager.rs` | Keep as direct `tenferro_einsum::eager_*` APIs | `cargo test -p tenferro-einsum eager` | pending |
+| Typed eager facade | `crates/tenferro-einsum/src/typed_eager.rs` | Keep in `tenferro-einsum`; remove `tenferro::typed_tensor::einsum*` facade | `cargo test -p tenferro-einsum typed_eager` | pending |
 | Eager runtime plan cache | `tenferro/src/eager.rs`, `tenferro-internal-runtime/src/extension_runtime.rs` | Owned by `EagerRuntime` through `ExtensionExecutor<EagerBackend>`; direct `tenferro-einsum` eager APIs do not retain a hidden cache | `cargo test -p tenferro-einsum --test traced_graph_cache eager_einsum` | done |
 
 ## Move From `tenferro` To `tenferro-einsum`
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Integer-label public API wrapper `EinsumSubscripts` | `tenferro/src/einsum_subscripts.rs` | `tenferro-einsum/src/api/subscripts.rs` or folded into `Subscripts` API | `rg -n "EinsumSubscripts|parse_einsum_subscripts" tenferro-einsum/src tenferro-einsum/tests` | pending |
-| Traced public API `einsum`, `einsum_with`, `einsum_subscripts`, `einsum_subscripts_with` | `tenferro/src/einsum.rs` | `tenferro-einsum/src/traced.rs`; exported as `tenferro_einsum::traced_tensor::einsum*` with root compatibility re-exports | `rg -n "pub fn einsum" tenferro-einsum/src && ! rg -n "pub fn einsum" tenferro/src` | pending |
-| `EinsumOptimize` and strategy conversion | `tenferro/src/einsum.rs` | `tenferro-einsum/src/traced.rs` or `src/optimize.rs` | `rg -n "EinsumOptimize|resolve_strategy|nested_to_v1_pairs" tenferro-einsum/src` | pending |
+| Integer-label public API wrapper `EinsumSubscripts` | `tenferro/src/einsum_subscripts.rs` | `crates/tenferro-einsum/src/api/subscripts.rs` or folded into `Subscripts` API | `rg -n "EinsumSubscripts|parse_einsum_subscripts" crates/tenferro-einsum/src crates/tenferro-einsum/tests` | pending |
+| Traced public API `einsum`, `einsum_with`, `einsum_subscripts`, `einsum_subscripts_with` | `tenferro/src/einsum.rs` | `crates/tenferro-einsum/src/traced.rs`; exported as `tenferro_einsum::traced_tensor::einsum*` with root compatibility re-exports | `rg -n "pub fn einsum" crates/tenferro-einsum/src && ! rg -n "pub fn einsum" tenferro/src` | pending |
+| `EinsumOptimize` and strategy conversion | `tenferro/src/einsum.rs` | `crates/tenferro-einsum/src/traced.rs` or `src/optimize.rs` | `rg -n "EinsumOptimize|resolve_strategy|nested_to_v1_pairs" crates/tenferro-einsum/src` | pending |
 | Symbolic optimization validation | `tenferro/src/einsum.rs` | `tenferro-einsum` traced API, preserving current symbolic restrictions | `rg -n "symbolic einsum supports only default automatic optimization" tenferro-einsum` | pending |
-| Traced extension payload construction | `tenferro/src/einsum.rs`, `build_einsum_extension_tensor` | `tenferro-einsum` traced API using generic `tenferro::extension::apply` | `rg -n "build_einsum_extension_tensor|ExtensionOp" tenferro-einsum/src` | pending |
-| Eager AD-facing API for `EagerTensor` | `tenferro/src/eager_einsum.rs` | `tenferro-einsum/src/eager_tensor.rs`, under `autodiff` where needed | `rg -n "EagerTensor|requires_grad|StdTensorOp::Extension" tenferro-einsum/src` | pending |
+| Traced extension payload construction | `tenferro/src/einsum.rs`, `build_einsum_extension_tensor` | `tenferro-einsum` traced API using generic `tenferro::extension::apply` | `rg -n "build_einsum_extension_tensor|ExtensionOp" crates/tenferro-einsum/src` | pending |
+| Eager AD-facing API for `EagerTensor` | `tenferro/src/eager_einsum.rs` | `crates/tenferro-einsum/src/eager_tensor.rs`, under `autodiff` where needed | `rg -n "EagerTensor|requires_grad|StdTensorOp::Extension" crates/tenferro-einsum/src` | pending |
 | Tensor facade eager APIs | `tenferro/src/tensor.rs` | Remove from `tenferro`; direct users call `tenferro_einsum::eager_*` | `! rg -n "einsum" tenferro/src/tensor.rs` | pending |
 | TypedTensor facade eager APIs | `tenferro/src/typed_tensor.rs` | Remove from `tenferro`; direct users call `tenferro_einsum::typed_eager_*` | `! rg -n "einsum" tenferro/src/typed_tensor.rs` | pending |
 | EagerTensor facade APIs | `tenferro/src/eager_tensor.rs` | Remove from `tenferro`; direct users call `tenferro_einsum` | `! rg -n "einsum" tenferro/src/eager_tensor.rs` | pending |
@@ -69,26 +69,26 @@ not-needed    intentionally replaced or removed with reason
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Family identity | `tenferro/src/einsum_extension.rs`, `EINSUM_EXTENSION_FAMILY_ID` | `tenferro-einsum/src/extension.rs`, family `tenferro.einsum` plus schema version | `rg -n "tenferro\\.einsum|schema" tenferro-einsum/src` | pending |
-| Cache IDs: static plans, parse, runtime plans | `tenferro/src/einsum_extension.rs`, `EINSUM_*_CACHE_ID` | `tenferro-einsum` cache module with typed IDs | `rg -n "STATIC.*PLAN|PARSE|RUNTIME.*PLAN|ExtensionCache" tenferro-einsum/src` | pending |
-| Default cache capacity | `tenferro/src/einsum_extension.rs`, `DEFAULT_EINSUM_CACHE_CAPACITY` | `tenferro-einsum` cache module | `rg -n "DEFAULT_EINSUM_CACHE_CAPACITY|DEFAULT_.*CACHE" tenferro-einsum/src` | pending |
-| Parsed-subscript compile cache | `GraphCompilerExtensionCaches::cached_subscripts` | Extension compile cache through generic `ExtensionCacheStore` | `rg -n "cached_subscripts|ParsedEinsum" tenferro-einsum/src tenferro/src` | pending |
-| Static contraction-tree compile cache | `GraphCompilerExtensionCaches::cached_static_einsum_tree` | Extension compile cache through generic `ExtensionCacheStore` | `rg -n "cached_static_einsum_tree|static.*einsum" tenferro-einsum/src tenferro/src` | pending |
-| Runtime contraction-plan cache | `GraphExecutorExtensionCaches::runtime_einsum_plans` | Extension runtime cache through generic `ExtensionCacheStore` | `rg -n "runtime_einsum_plans|runtime.*plan" tenferro-einsum/src tenferro/src` | pending |
-| Cache stats retained-byte helpers | `einsum_subscripts_retained_bytes`, `einsum_plan_cache_stats`, `einsum_parse_cache_stats` | `tenferro-einsum` cache module | `rg -n "retained_bytes|cache_stats" tenferro-einsum/src` | pending |
-| Extension payload `EinsumExtensionOp` | `tenferro/src/einsum_extension.rs` | `tenferro-einsum/src/extension.rs` | `rg -n "struct EinsumExtensionOp|impl ExtensionOp for EinsumExtensionOp" tenferro-einsum/src` | pending |
-| Payload hashing/equality/clone | `impl ExtensionOp for EinsumExtensionOp` | Preserve in `tenferro-einsum` with structural hash; avoid pointer identity for cached tree | `rg -n "payload_hash|payload_eq|clone_arc" tenferro-einsum/src` | pending |
-| Shape and dtype inference | `EinsumExtensionOp::infer_output_meta` | Preserve in `tenferro-einsum`; tests move with symbolic cases | `rg -n "infer_output_meta" tenferro-einsum/src && cargo test -p tenferro-einsum symbolic` | pending |
-| Host reference execution | `EinsumExtensionOp::eager_execute` | Keep only as direct context-free reference execution; `EagerRuntime` execution routes through `ExtensionExecutor` and missing runtime registration errors | `rg -n "exec_op_on_tensors_with_extension_executor|register_extension" tenferro/src tenferro-einsum/src` | done |
-| Context-aware execution | `execute_einsum_extension`, `execute_einsum_extension_op`, `execute_einsum_tree` | `tenferro-einsum` runtime implementing `ExtensionRuntime<B>` | `rg -n "impl .*ExtensionRuntime|execute_einsum" tenferro-einsum/src` | done |
-| Runtime builder execution bridge | `execute_einsum_tree` using `build_einsum_fragment` and exec IR | Reuse in `tenferro-einsum`; expose any missing generic runtime helpers from `tenferro` | `rg -n "build_einsum_fragment|eval_exec" tenferro-einsum/src tenferro/src` | pending |
+| Family identity | `tenferro/src/einsum_extension.rs`, `EINSUM_EXTENSION_FAMILY_ID` | `crates/tenferro-einsum/src/extension.rs`, family `tenferro.einsum` plus schema version | `rg -n "tenferro\\.einsum|schema" crates/tenferro-einsum/src` | pending |
+| Cache IDs: static plans, parse, runtime plans | `tenferro/src/einsum_extension.rs`, `EINSUM_*_CACHE_ID` | `tenferro-einsum` cache module with typed IDs | `rg -n "STATIC.*PLAN|PARSE|RUNTIME.*PLAN|ExtensionCache" crates/tenferro-einsum/src` | pending |
+| Default cache capacity | `tenferro/src/einsum_extension.rs`, `DEFAULT_EINSUM_CACHE_CAPACITY` | `tenferro-einsum` cache module | `rg -n "DEFAULT_EINSUM_CACHE_CAPACITY|DEFAULT_.*CACHE" crates/tenferro-einsum/src` | pending |
+| Parsed-subscript compile cache | `GraphCompilerExtensionCaches::cached_subscripts` | Extension compile cache through generic `ExtensionCacheStore` | `rg -n "cached_subscripts|ParsedEinsum" crates/tenferro-einsum/src tenferro/src` | pending |
+| Static contraction-tree compile cache | `GraphCompilerExtensionCaches::cached_static_einsum_tree` | Extension compile cache through generic `ExtensionCacheStore` | `rg -n "cached_static_einsum_tree|static.*einsum" crates/tenferro-einsum/src tenferro/src` | pending |
+| Runtime contraction-plan cache | `GraphExecutorExtensionCaches::runtime_einsum_plans` | Extension runtime cache through generic `ExtensionCacheStore` | `rg -n "runtime_einsum_plans|runtime.*plan" crates/tenferro-einsum/src tenferro/src` | pending |
+| Cache stats retained-byte helpers | `einsum_subscripts_retained_bytes`, `einsum_plan_cache_stats`, `einsum_parse_cache_stats` | `tenferro-einsum` cache module | `rg -n "retained_bytes|cache_stats" crates/tenferro-einsum/src` | pending |
+| Extension payload `EinsumExtensionOp` | `tenferro/src/einsum_extension.rs` | `crates/tenferro-einsum/src/extension.rs` | `rg -n "struct EinsumExtensionOp|impl ExtensionOp for EinsumExtensionOp" crates/tenferro-einsum/src` | pending |
+| Payload hashing/equality/clone | `impl ExtensionOp for EinsumExtensionOp` | Preserve in `tenferro-einsum` with structural hash; avoid pointer identity for cached tree | `rg -n "payload_hash|payload_eq|clone_arc" crates/tenferro-einsum/src` | pending |
+| Shape and dtype inference | `EinsumExtensionOp::infer_output_meta` | Preserve in `tenferro-einsum`; tests move with symbolic cases | `rg -n "infer_output_meta" crates/tenferro-einsum/src && cargo test -p tenferro-einsum symbolic` | pending |
+| Host reference execution | `EinsumExtensionOp::eager_execute` | Keep only as direct context-free reference execution; `EagerRuntime` execution routes through `ExtensionExecutor` and missing runtime registration errors | `rg -n "exec_op_on_tensors_with_extension_executor|register_extension" tenferro/src crates/tenferro-einsum/src` | done |
+| Context-aware execution | `execute_einsum_extension`, `execute_einsum_extension_op`, `execute_einsum_tree` | `tenferro-einsum` runtime implementing `ExtensionRuntime<B>` | `rg -n "impl .*ExtensionRuntime|execute_einsum" crates/tenferro-einsum/src` | done |
+| Runtime builder execution bridge | `execute_einsum_tree` using `build_einsum_fragment` and exec IR | Reuse in `tenferro-einsum`; expose any missing generic runtime helpers from `tenferro` | `rg -n "build_einsum_fragment|eval_exec" crates/tenferro-einsum/src tenferro/src` | pending |
 
 ## Generic Runtime Work Remaining In `tenferro`
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Primal extension carrier | `tenferro-internal-ops/src/ext_op.rs` | Keep in `tenferro-internal-ops`; add schema version and remove long-term `eager_execute` dependency | `cargo test -p tenferro-internal-ops ext_op` | pending |
-| AD split for extension rules | `tenferro-internal-ops/src/ext_op.rs` | Split primal `ext_op` from `autodiff`-gated `ext_ad` | `cargo check -p tenferro-internal-ops --no-default-features` | pending |
+| Primal extension carrier | `crates/tenferro-internal-ops/src/ext_op.rs` | Keep in `tenferro-internal-ops`; add schema version and remove long-term `eager_execute` dependency | `cargo test -p tenferro-internal-ops ext_op` | pending |
+| AD split for extension rules | `crates/tenferro-internal-ops/src/ext_op.rs` | Split primal `ext_op` from `autodiff`-gated `ext_ad` | `cargo check -p tenferro-internal-ops --no-default-features` | pending |
 | Backend-typed executor registry | new generic runtime surface | `tenferro` or `tenferro-internal-ops` depending on dependency needs; no einsum names | `rg -n "ExtensionRegistry|ExtensionExecutor" tenferro tenferro-internal-ops` | pending |
 | Runtime execution context | new generic runtime surface | `tenferro`, with `BackendRuntimeState<B>` external to backend `B` | `rg -n "ExtensionExecutionContext|BackendRuntimeState" tenferro` | pending |
 | Generic cache store | current `tenferro/src/graph/cache.rs` plus experiment cache API | `tenferro` generic cache module; no hard-coded einsum fields | `rg -n "ExtensionCacheKey|ExtensionCacheStore|ExtensionCacheSelector" tenferro/src` | pending |
@@ -103,20 +103,20 @@ not-needed    intentionally replaced or removed with reason
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Built-in `StdTensorOp::NaryEinsum` variant | `tenferro-internal-ops/src/std_tensor_op.rs` | Remove; use `StdTensorOp::Extension(EinsumExtensionOp)` from `tenferro-einsum` | `! rg -n "NaryEinsum" tenferro-internal-ops/src` | pending |
-| N-ary einsum AD registration | `tenferro-internal-ops/src/ad/mod.rs`, `ad/contraction.rs` | Move/replace with `tenferro-einsum` extension AD rule under `autodiff` | `! rg -n "einsum|NaryEinsum" tenferro-internal-ops/src/ad` | pending |
-| Einsum AD support manifest | `tenferro-internal-ops/src/ad/support.rs` | Remove from core support manifest; extension crate owns support reporting | `! rg -n "einsum|NaryEinsum" tenferro-internal-ops/src/ad/support.rs` | pending |
-| Std op tests for `NaryEinsum` | `tenferro-internal-ops/src/tests/std_tensor_op_tests.rs` | Move relevant behavior to `tenferro-einsum` tests or extension tests | `! rg -n "NaryEinsum|einsum" tenferro-internal-ops/src/tests` | pending |
+| Built-in `StdTensorOp::NaryEinsum` variant | `crates/tenferro-internal-ops/src/std_tensor_op.rs` | Remove; use `StdTensorOp::Extension(EinsumExtensionOp)` from `tenferro-einsum` | `! rg -n "NaryEinsum" crates/tenferro-internal-ops/src` | pending |
+| N-ary einsum AD registration | `crates/tenferro-internal-ops/src/ad/mod.rs`, `ad/contraction.rs` | Move/replace with `tenferro-einsum` extension AD rule under `autodiff` | `! rg -n "einsum|NaryEinsum" crates/tenferro-internal-ops/src/ad` | pending |
+| Einsum AD support manifest | `crates/tenferro-internal-ops/src/ad/support.rs` | Remove from core support manifest; extension crate owns support reporting | `! rg -n "einsum|NaryEinsum" crates/tenferro-internal-ops/src/ad/support.rs` | pending |
+| Std op tests for `NaryEinsum` | `crates/tenferro-internal-ops/src/tests/std_tensor_op_tests.rs` | Move relevant behavior to `tenferro-einsum` tests or extension tests | `! rg -n "NaryEinsum|einsum" crates/tenferro-internal-ops/src/tests` | pending |
 
 ## AD Migration
 
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Einsum extension AD rule type | `EinsumExtensionAdRule` in `tenferro/src/einsum_extension.rs` | `tenferro-einsum/src/ad.rs`, gated by `autodiff` | `rg -n "EinsumExtensionAdRule|ExtensionAdRule" tenferro-einsum/src` | pending |
-| Rule registration | `ensure_einsum_extension_rule_registered` | `tenferro-einsum` registration helper, gated by `autodiff` | `rg -n "ensure_.*rule_registered|register_extension" tenferro-einsum/src` | pending |
-| Linearize rule | `linearize_einsum_extension` | `tenferro-einsum/src/ad.rs`; preserve output-shape hints | `rg -n "linearize_einsum_extension|linearize" tenferro-einsum/src` | pending |
-| Transpose rule | `transpose_einsum_extension` | `tenferro-einsum/src/ad.rs`; preserve repeated/new label behavior | `rg -n "transpose_einsum_extension|transpose" tenferro-einsum/src` | pending |
-| AD tests for traced einsum | `tenferro/tests/einsum_ad.rs` | `tenferro-einsum/tests/ad.rs`, gated by `autodiff` | `cargo test -p tenferro-einsum --features autodiff --test ad` | pending |
+| Einsum extension AD rule type | `EinsumExtensionAdRule` in `tenferro/src/einsum_extension.rs` | `crates/tenferro-einsum/src/ad.rs`, gated by `autodiff` | `rg -n "EinsumExtensionAdRule|ExtensionAdRule" crates/tenferro-einsum/src` | pending |
+| Rule registration | `ensure_einsum_extension_rule_registered` | `tenferro-einsum` registration helper, gated by `autodiff` | `rg -n "ensure_.*rule_registered|register_extension" crates/tenferro-einsum/src` | pending |
+| Linearize rule | `linearize_einsum_extension` | `crates/tenferro-einsum/src/ad.rs`; preserve output-shape hints | `rg -n "linearize_einsum_extension|linearize" crates/tenferro-einsum/src` | pending |
+| Transpose rule | `transpose_einsum_extension` | `crates/tenferro-einsum/src/ad.rs`; preserve repeated/new label behavior | `rg -n "transpose_einsum_extension|transpose" crates/tenferro-einsum/src` | pending |
+| AD tests for traced einsum | `tenferro/tests/einsum_ad.rs` | `crates/tenferro-einsum/tests/ad.rs`, gated by `autodiff` | `cargo test -p tenferro-einsum --features autodiff --test ad` | pending |
 | No-AD build boundary | `tenferro`, `tenferro-internal-ops`, `tenferro-einsum` Cargo features | Gate `tidu`, `chainrules-core`, `chainrules` behind `autodiff` | `cargo check --no-default-features && cargo tree --no-default-features -e normal -p tenferro` | pending |
 
 ## Runtime Wiring To Preserve Or Generalize
@@ -135,14 +135,14 @@ not-needed    intentionally replaced or removed with reason
 
 | Source test | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
-| Graph einsum static/runtime cache tests | `tenferro/tests/graph_einsum.rs` | `tenferro-einsum/tests/graph.rs` or `tests/cache.rs` | `cargo test -p tenferro-einsum --test graph` | pending |
+| Graph einsum static/runtime cache tests | `tenferro/tests/graph_einsum.rs` | `crates/tenferro-einsum/tests/graph.rs` or `tests/cache.rs` | `cargo test -p tenferro-einsum --test graph` | pending |
 | Extension cache management tests | `tenferro/tests/einsum_extension_cache.rs`, `tenferro/tests/cache_management.rs` | Split generic cache tests in `tenferro`, einsum cache behavior in `tenferro-einsum` | `cargo test -p tenferro cache_management && cargo test -p tenferro-einsum cache` | pending |
-| Symbolic einsum tests | `tenferro/tests/einsum_extension_symbolic.rs`, deleted `nary_einsum_symbolic.rs` | `tenferro-einsum/tests/symbolic.rs` | `cargo test -p tenferro-einsum symbolic` | pending |
-| Tensor eager facade tests | `tenferro/tests/tensor_einsum.rs`, `eager_tensor_einsum.rs` | Move to `tenferro-einsum/tests/eager_tensor.rs` or delete if facade removed | `cargo test -p tenferro-einsum eager_tensor` | pending |
-| Legacy einsum tests | `tenferro/tests/einsum.rs` | Move remaining API behavior to `tenferro-einsum/tests/traced.rs` | `cargo test -p tenferro-einsum traced` | pending |
+| Symbolic einsum tests | `tenferro/tests/einsum_extension_symbolic.rs`, deleted `nary_einsum_symbolic.rs` | `crates/tenferro-einsum/tests/symbolic.rs` | `cargo test -p tenferro-einsum symbolic` | pending |
+| Tensor eager facade tests | `tenferro/tests/tensor_einsum.rs`, `eager_tensor_einsum.rs` | Move to `crates/tenferro-einsum/tests/eager_tensor.rs` or delete if facade removed | `cargo test -p tenferro-einsum eager_tensor` | pending |
+| Legacy einsum tests | `tenferro/tests/einsum.rs` | Move remaining API behavior to `crates/tenferro-einsum/tests/traced.rs` | `cargo test -p tenferro-einsum traced` | pending |
 | CPU backend einsum reuse tests | `tenferro/tests/cpu_backend.rs` | Keep only generic backend/buffer-pool tests in `tenferro`; move einsum-specific cases | `! rg -n "einsum" tenferro/tests/cpu_backend.rs` | pending |
 | Compiler/executor cache capacity tests | `tenferro/tests/graph_compile.rs`, `graph_executor.rs` | Replace einsum-specific capacity assertions with generic extension cache tests | `! rg -n "einsum_cache|runtime_einsum" tenferro/tests/graph_compile.rs tenferro/tests/graph_executor.rs` | pending |
-| Extension op smoke tests | `tenferro/tests/extension_op.rs`, `tenferro-internal-ops/src/tests/ext_op_tests.rs` | Keep and update for new executor registry/context | `cargo test -p tenferro extension_op && cargo test -p tenferro-internal-ops ext_op` | pending |
+| Extension op smoke tests | `tenferro/tests/extension_op.rs`, `crates/tenferro-internal-ops/src/tests/ext_op_tests.rs` | Keep and update for new executor registry/context | `cargo test -p tenferro extension_op && cargo test -p tenferro-internal-ops ext_op` | pending |
 
 ## Cleanup Acceptance Checks
 
@@ -156,13 +156,13 @@ Run these before declaring the migration complete:
 ! rg -n 'tenferro-einsum' tenferro/Cargo.toml
 
 # tenferro-internal-ops must not contain the old built-in op or AD rule.
-! rg -n "NaryEinsum|einsum" tenferro-internal-ops/src/ad tenferro-internal-ops/src/std_tensor_op.rs
+! rg -n "NaryEinsum|einsum" crates/tenferro-internal-ops/src/ad crates/tenferro-internal-ops/src/std_tensor_op.rs
 
 # Generic runtime may mention extension caches, but not hard-coded einsum cache fields.
 ! rg -n "static_einsum_plans|einsum_parse|runtime_einsum_plans|einsum_cache" tenferro/src
 
 # The implementation must live in tenferro-einsum.
-rg -n "EinsumExtensionOp|ExtensionExecutor|tenferro\\.einsum|einsum" tenferro-einsum/src tenferro-einsum/tests
+rg -n "EinsumExtensionOp|ExtensionExecutor|tenferro\\.einsum|einsum" crates/tenferro-einsum/src crates/tenferro-einsum/tests
 ```
 
 Run these build checks:

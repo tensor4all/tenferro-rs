@@ -47,7 +47,7 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 ## CUDA Quickstart
 
-<!-- snippet-source: tenferro-gpu/examples/cuda_quickstart.rs -->
+<!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
 use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
 use tenferro_tensor::{Tensor, TensorElementwise};

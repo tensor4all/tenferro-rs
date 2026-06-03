@@ -1,7 +1,7 @@
 # Dot-General Fixed Overhead
 
 This note records the current interpretation of the
-`tenferro-tensor/benches/dot_general_overhead.rs` benchmark. It is a
+`crates/tenferro-tensor/benches/dot_general_overhead.rs` benchmark. It is a
 developer-facing performance note for small, repeated contractions such as MPS
 inner products.
 

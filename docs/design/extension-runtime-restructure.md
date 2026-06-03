@@ -394,13 +394,13 @@ Autodiff-gated pieces:
 Concrete current items to gate or move during implementation:
 
 ```text
-tenferro-internal-ops/src/std_tensor_op.rs
+crates/tenferro-internal-ops/src/std_tensor_op.rs
   impl PrimitiveOp for StdTensorOp
 
-tenferro-internal-ops/src/input_key.rs
+crates/tenferro-internal-ops/src/input_key.rs
   impl ADKey for TensorInputKey
 
-tenferro-internal-ops/src/ext_op.rs
+crates/tenferro-internal-ops/src/ext_op.rs
   ExtensionAdRule, ExtensionChainRule, AdValue,
   FruleBuilder, RRuleBuilder, AD support reporting
 
@@ -422,7 +422,7 @@ these impls and APIs are actually `#[cfg(feature = "autodiff")]` and
 `chainrules-core` and `chainrules` are the Cargo dependency names that need to
 disappear from primal-only builds.
 
-The current `tenferro-internal-ops/src/ext_op.rs` mixes primal extension and extension
+The current `crates/tenferro-internal-ops/src/ext_op.rs` mixes primal extension and extension
 AD. It should be split into an always-available primal module and an
 `autodiff`-gated module, for example:
 
@@ -760,7 +760,7 @@ Post-migration acceptance criterion:
 - `tenferro` exports nothing named `einsum*`,
 - `tenferro` has no hard-coded einsum cache fields or cache APIs,
 - no `pub` item in `tenferro` exists solely to support `tenferro-einsum`,
-- implementation and AD tests for einsum live in `tenferro-einsum/tests`.
+- implementation and AD tests for einsum live in `crates/tenferro-einsum/tests`.
 
 A `dev-dependency` from `tenferro` tests to `tenferro-einsum` is allowed only
 for runtime/extension integration coverage. It must not leak into normal
@@ -924,7 +924,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
      unless a compatibility crate is created,
    - remove all hard-coded einsum cache APIs from `GraphCompiler` and
      `GraphExecutor`,
-   - move tests into `tenferro-einsum/tests`,
+   - move tests into `crates/tenferro-einsum/tests`,
    - keep AD under `autodiff`,
    - verify the structured acceptance criteria from the Einsum section,
      including no normal `tenferro -> tenferro-einsum` dependency and no

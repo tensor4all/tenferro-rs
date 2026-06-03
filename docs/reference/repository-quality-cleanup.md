@@ -40,14 +40,14 @@ execution, cache ownership, backend glue, public API, or tests. Avoid arbitrary
 
 Known high-review files include:
 
-- `tenferro-tensor/src/types.rs`
-- `tenferro-gpu/src/cubecl/mod.rs`
-- `tenferro-linalg/src/cpu/linalg/faer_linalg.rs`
-- `tenferro-runtime/src/compiler/mod.rs`
-- `tenferro-cpu/src/gemm/mod.rs`
-- `tenferro-cpu/src/backend.rs`
-- `tenferro-tensor-core/src/lib.rs`
-- `tenferro-internal-ops/src/ad/registry.rs`
+- `crates/tenferro-tensor/src/types.rs`
+- `crates/tenferro-gpu/src/cubecl/mod.rs`
+- `crates/tenferro-linalg/src/cpu/linalg/faer_linalg.rs`
+- `crates/tenferro-runtime/src/compiler/mod.rs`
+- `crates/tenferro-cpu/src/gemm/mod.rs`
+- `crates/tenferro-cpu/src/backend.rs`
+- `crates/tenferro-tensor-core/src/lib.rs`
+- `crates/tenferro-internal-ops/src/ad/registry.rs`
 
 ### Public wrapper duplication
 

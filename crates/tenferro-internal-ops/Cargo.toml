@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Graph op vocabulary and AD rule implementations for the tenferro workspace."
 
 [lib]
@@ -18,9 +21,9 @@ cuda = ["gpu"]
 rocm = ["gpu"]
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops" }
-tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.1.0" }
 computegraph.workspace = true
 tidu = { workspace = true, optional = true }
 num-complex.workspace = true

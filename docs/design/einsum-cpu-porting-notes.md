@@ -300,7 +300,7 @@ parameter to `einsum` and related public functions. This allows output index
 labels that do not appear in any input operand (e.g., zero-padding or
 broadcasting output dimensions). The parameter is `None` for the common case.
 
-**Next action**: Update signatures in `tenferro-einsum/src/lib.rs`. The POC
+**Next action**: Update signatures in `crates/tenferro-einsum/src/lib.rs`. The POC
 stub for `einsum` must be updated to include the parameter. See also the
 revised signatures in P11 below.
 
@@ -315,11 +315,11 @@ an output-only label produces a correctly-shaped result tensor.
 
 **Decision**: Add `omeco` to `[workspace.dependencies]` in the root
 `Cargo.toml`, then reference it with `omeco.workspace = true` in
-`tenferro-einsum/Cargo.toml`. `ContractionTree::optimize()` delegates to the
+`crates/tenferro-einsum/Cargo.toml`. `ContractionTree::optimize()` delegates to the
 omeco greedy optimizer.
 
 **Next action**: Add `omeco` entry to workspace `Cargo.toml` and to
-`tenferro-einsum/Cargo.toml`. Verify version compatibility.
+`crates/tenferro-einsum/Cargo.toml`. Verify version compatibility.
 
 **Success condition**: `cargo build -p tenferro-einsum` succeeds with omeco as
 a dependency; `ContractionTree::optimize()` calls the omeco API without
@@ -338,7 +338,7 @@ state. See "Revised einsum Signatures" subsection below for the exact
 before/after signatures.
 
 **Next action**: Update all 9 einsum function stubs + all AD function stubs in
-`tenferro-einsum/src/lib.rs`. The `TensorPrims<A>` trait is defined in
+`crates/tenferro-einsum/src/lib.rs`. The `TensorPrims<A>` trait is defined in
 [tensor-prims.md](./tensor-prims.md); implementations live in `tenferro-prims`.
 
 **Success condition**: `cargo check -p tenferro-einsum` passes with the new

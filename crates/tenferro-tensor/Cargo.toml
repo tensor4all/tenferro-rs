@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Dense runtime tensors, views, backend traits, and backend-independent contracts for tenferro."
 
 [lib]
@@ -14,11 +17,11 @@ name = "tenferro_tensor"
 default = []
 
 [dependencies]
-tenferro-tensor-core = { path = "../tenferro-tensor-core" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.1.0" }
 num-traits.workspace = true
 num-complex.workspace = true
 smallvec.workspace = true
-tenferro-core-ops = { path = "../tenferro-core-ops" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }
 thiserror.workspace = true
 
 [dev-dependencies]
