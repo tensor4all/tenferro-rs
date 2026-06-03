@@ -117,7 +117,7 @@ elementwise work. Backends opt in by overriding
 `execute_elementwise_fusion`; the default implementation returns `Ok(None)`,
 allowing the segmented execution pipeline to run individual ops.
 
-CubeCL implements this hook through `tenferro-gpu/src/cubecl/fusion/` for
+CubeCL implements this hook through `crates/tenferro-gpu/src/cubecl/fusion/` for
 eligible GPU-resident plans. CPU currently relies on the ordinary op sequence.
 
 ## Einsum And DotGeneral
@@ -143,8 +143,8 @@ path.
 
 Linalg is not a separate backend crate today. Dense linalg operations are part
 of the linalg extension backend surface, with CPU implementations under
-`tenferro-linalg/src/cpu` and CubeCL/CUDA implementations under
-`tenferro-gpu/src/cubecl/linalg.rs`.
+`crates/tenferro-linalg/src/cpu` and CubeCL/CUDA implementations under
+`crates/tenferro-gpu/src/cubecl/linalg.rs`.
 
 General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
 `CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly

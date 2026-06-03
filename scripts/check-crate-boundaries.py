@@ -26,7 +26,8 @@ def check_tensor_has_no_gpu_runtime_deps() -> list[str]:
         "tenferro-gpu",
         "tenferro-internal-gpubackend",
     )
-    paths = [ROOT / "tenferro-tensor" / "Cargo.toml", ROOT / "tenferro-tensor" / "src"]
+    tensor = ROOT / "crates" / "tenferro-tensor"
+    paths = [tensor / "Cargo.toml", tensor / "src"]
     violations: list[str] = []
     for path in paths:
         for file_path in iter_files(path):
@@ -42,7 +43,8 @@ def check_tensor_has_no_gpu_runtime_deps() -> list[str]:
 
 def check_runtime_has_no_gpu_backend_deps() -> list[str]:
     forbidden = ("tenferro-gpu", "tenferro_gpu")
-    paths = [ROOT / "tenferro-runtime" / "Cargo.toml", ROOT / "tenferro-runtime" / "src"]
+    runtime = ROOT / "crates" / "tenferro-runtime"
+    paths = [runtime / "Cargo.toml", runtime / "src"]
     violations: list[str] = []
     for path in paths:
         for file_path in iter_files(path):
@@ -61,17 +63,22 @@ def check_internal_device_decomposed() -> list[str]:
     """Ensure the old catch-all device crate does not re-enter live crates."""
 
     violations: list[str] = []
-    manifest = ROOT / "tenferro-internal-device" / "Cargo.toml"
+    manifest = ROOT / "crates" / "tenferro-internal-device" / "Cargo.toml"
     if manifest.exists():
         violations.append(
-            "tenferro-internal-device/Cargo.toml: old device facade crate must be decomposed"
+            "crates/tenferro-internal-device/Cargo.toml: old device facade crate must be decomposed"
+        )
+    root_manifest = ROOT / "tenferro-internal-device" / "Cargo.toml"
+    if root_manifest.exists():
+        violations.append(
+            "tenferro-internal-device/Cargo.toml: old root-level device facade crate must be decomposed"
         )
 
     forbidden = ("tenferro-internal-device", "tenferro_device")
     paths = [
         ROOT / ".github" / "workflows",
-        ROOT / "tenferro-einsum" / "Cargo.toml",
-        ROOT / "tenferro-einsum" / "src",
+        ROOT / "crates" / "tenferro-einsum" / "Cargo.toml",
+        ROOT / "crates" / "tenferro-einsum" / "src",
     ]
     for path in paths:
         for file_path in iter_files(path):

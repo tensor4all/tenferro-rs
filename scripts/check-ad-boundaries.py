@@ -13,8 +13,9 @@ FORBIDDEN = re.compile(r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|
 
 def main() -> int:
     repo = Path(__file__).resolve().parents[1]
-    checked = [repo / "tenferro-runtime" / "Cargo.toml"]
-    checked.extend((repo / "tenferro-runtime" / "src").rglob("*.rs"))
+    runtime = repo / "crates" / "tenferro-runtime"
+    checked = [runtime / "Cargo.toml"]
+    checked.extend((runtime / "src").rglob("*.rs"))
     failed = False
     for path in checked:
         for line_no, line in enumerate(path.read_text().splitlines(), start=1):

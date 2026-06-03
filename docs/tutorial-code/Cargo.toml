@@ -11,9 +11,9 @@ cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas"]
 
 [dependencies]
-tenferro-ad = { path = "../../tenferro-ad", default-features = false }
-tenferro-cpu = { path = "../../tenferro-cpu", default-features = false }
-tenferro-runtime = { path = "../../tenferro-runtime", default-features = false }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 
 [[bin]]
 name = "typed_tensor_non_ad"

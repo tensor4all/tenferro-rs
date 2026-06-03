@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "CPU backend, kernels, provider selection, and CPU resource pools for tenferro."
 
 [lib]
@@ -21,7 +24,7 @@ src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
 
 [dependencies]
-tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0" }
 num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true

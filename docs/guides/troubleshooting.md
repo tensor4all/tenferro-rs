@@ -76,7 +76,7 @@ and `cpu-blas` can be enabled by itself or together with `cpu-faer`:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", features = ["cpu-blas"] }
 ```
 
 When both are compiled, `CpuBackend::new()` selects faer. Use

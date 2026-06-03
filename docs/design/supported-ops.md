@@ -58,7 +58,7 @@ subset of each op.
 The public GPU crate exposes this backend as
 `tenferro_gpu::cubecl::CubeclBackend` behind the `cuda` feature. It is backed
 by CubeCL/CubeCL-CUDA and runtime-loaded cuTENSOR, cuSOLVER, and cuBLAS.
-Static kernels live in `tenferro-gpu/src/kernels`.
+Static kernels live in `crates/tenferro-gpu/src/kernels`.
 
 Implemented GPU coverage is broad. The user-facing
 [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains the current
@@ -168,7 +168,7 @@ errors rather than silently falling back to CPU.
 ## AD Support Notes
 
 Current mainline AD coverage is intentionally narrower than primal execution.
-Core primitive rules live in `tenferro-internal-ops/src/ad/`; extension-specific rules
+Core primitive rules live in `crates/tenferro-internal-ops/src/ad/`; extension-specific rules
 live in the owning extension crate. Rules must have corresponding
 oracle/finite-difference coverage before being treated as supported mainline AD.
 

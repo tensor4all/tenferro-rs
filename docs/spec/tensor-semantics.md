@@ -242,12 +242,12 @@ The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
 
 Current implementation ownership:
 
-- `tenferro-tensor-core/src/lib.rs` for the host-only data model and
+- `crates/tenferro-tensor-core/src/lib.rs` for the host-only data model and
   metadata-only views
-- `tenferro-tensor/src/types.rs` for runtime dense tensor storage and
+- `crates/tenferro-tensor/src/types.rs` for runtime dense tensor storage and
   placement metadata
-- `tenferro-tensor/src/backend.rs` for backend traits
-- `tenferro-runtime/src/*` for graph execution and extension runtime dispatch
+- `crates/tenferro-tensor/src/backend.rs` for backend traits
+- `crates/tenferro-runtime/src/*` for graph execution and extension runtime dispatch
 
 If this document conflicts with those files, the implementation wins and this
 document should be updated.

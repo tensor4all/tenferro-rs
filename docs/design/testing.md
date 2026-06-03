@@ -152,7 +152,7 @@ Port from `tests/tropical.rs` and tropical-related tests in other files.
 ### tenferro-linalg
 
 The current linalg test suite is implemented directly in
-[`tenferro-linalg/tests/linalg_tests.rs`](../../tenferro-linalg/tests/linalg_tests.rs).
+[`crates/tenferro-linalg/tests/linalg_tests.rs`](../../crates/tenferro-linalg/tests/linalg_tests.rs).
 It is a handwritten test matrix, not a generated JSON-driven harness.
 
 The suite combines:
@@ -170,7 +170,7 @@ or general matrices defined in the test file.
 
 `tenferro-linalg` also has a crate-local benchmark entry point:
 
-- [`tenferro-linalg/benches/linalg_benchmarks.rs`](../../tenferro-linalg/benches/linalg_benchmarks.rs)
+- [`crates/tenferro-linalg/benches/linalg_benchmarks.rs`](../../crates/tenferro-linalg/benches/linalg_benchmarks.rs)
 
 Run with:
 
@@ -272,8 +272,8 @@ Hessian-vector product (hvp) across all differentiable operations.
 **Test ownership:**
 
 - Unit tests for each rule live in the crate that owns the rule:
-  - `tenferro-einsum/tests/` — einsum AD tests
-  - `tenferro-linalg/tests/` — linalg AD tests
+  - `crates/tenferro-einsum/tests/` — einsum AD tests
+  - `crates/tenferro-linalg/tests/` — linalg AD tests
   - `chainrules/tests/` — tape/tracking infrastructure tests
 - Workspace-level integration tests (in `tests/` at the workspace root) cover
   cross-crate AD scenarios: e.g., an einsum followed by an SVD inside a single

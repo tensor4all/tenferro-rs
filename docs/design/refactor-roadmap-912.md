@@ -170,7 +170,7 @@ only that GEMM portion stays in `tenferro-tensor`.
 - direct tensor helpers if needed, owned by the linalg crate
 
 `tenferro-linalg/cuda` enables `tenferro-gpu/cuda`; GPU linalg implementation
-lives under `tenferro-linalg/src/gpu/`. `tenferro-gpu` remains the backend,
+lives under `crates/tenferro-linalg/src/gpu/`. `tenferro-gpu` remains the backend,
 runtime, and buffer owner.
 
 ## Public API Consistency
@@ -283,19 +283,19 @@ Large files remaining above roughly 1000 lines are review triggers, not
 line-count-only split targets. The current retained cases are coherent concerns
 or vendor/API boundaries:
 
-- `tenferro-gpu/src/cubecl/mod.rs`: CUDA backend implementation surface and
+- `crates/tenferro-gpu/src/cubecl/mod.rs`: CUDA backend implementation surface and
   backend trait glue after linalg ownership moved out.
-- `tenferro-linalg/src/cpu/linalg/faer_linalg.rs`: faer-backed linalg adapter
+- `crates/tenferro-linalg/src/cpu/linalg/faer_linalg.rs`: faer-backed linalg adapter
   with shared batching, dtype, and error handling.
-- `tenferro-runtime/src/traced.rs`: public traced tensor construction and core
+- `crates/tenferro-runtime/src/traced.rs`: public traced tensor construction and core
   operation API surface.
-- `tenferro-tensor/src/types/strided_view.rs` and `tenferro-tensor/src/types.rs`:
+- `crates/tenferro-tensor/src/types/strided_view.rs` and `crates/tenferro-tensor/src/types.rs`:
   tensor value/view surface with tightly coupled documentation and doctests.
-- `tenferro-runtime/src/compiler/mod.rs`: pass pipeline implementation; future
+- `crates/tenferro-runtime/src/compiler/mod.rs`: pass pipeline implementation; future
   splits should follow pass ownership.
-- `tenferro-gpu/src/cubecl/ffi/cusolver.rs`: external cuSOLVER ABI boundary.
-- `tenferro-internal-ops/src/ad/registry.rs` and
-  `tenferro-internal-ops/src/ext_op.rs`: AD registry and extension contract
+- `crates/tenferro-gpu/src/cubecl/ffi/cusolver.rs`: external cuSOLVER ABI boundary.
+- `crates/tenferro-internal-ops/src/ad/registry.rs` and
+  `crates/tenferro-internal-ops/src/ext_op.rs`: AD registry and extension contract
   surfaces.
 
 Future splits should be by backend resource ownership, pass ownership, FFI

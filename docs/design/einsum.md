@@ -13,15 +13,15 @@ runtime with their executor.
 
 The implementation is split between:
 
-- `tenferro-einsum/src/traced.rs` for the user-facing traced API,
+- `crates/tenferro-einsum/src/traced.rs` for the user-facing traced API,
   contraction strategy selection, symbolic-shape handling, and graph cache
   integration,
-- `tenferro-einsum/src/extension.rs` for runtime extension execution,
-- `tenferro-einsum/src/syntax/` for subscript and nested-order parsing,
-- `tenferro-einsum/src/planning/` for contraction tree planning and per-step
+- `crates/tenferro-einsum/src/extension.rs` for runtime extension execution,
+- `crates/tenferro-einsum/src/syntax/` for subscript and nested-order parsing,
+- `crates/tenferro-einsum/src/planning/` for contraction tree planning and per-step
   lowering plans,
-- `tenferro-einsum/src/builder.rs` for graph-fragment lowering,
-- `tenferro-einsum/src/eager_tensor.rs` for eager tensor execution.
+- `crates/tenferro-einsum/src/builder.rs` for graph-fragment lowering,
+- `crates/tenferro-einsum/src/eager_tensor.rs` for eager tensor execution.
 
 Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 `tenferro-prims`, or the old nine-function einsum API are not current.
@@ -169,7 +169,7 @@ contiguous block for the underlying tensor backend.
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens
 when a compiled program is evaluated with `CubeclBackend` from
-`tenferro-gpu/src/cubecl/`.
+`crates/tenferro-gpu/src/cubecl/`.
 
 Current GPU status:
 
@@ -184,7 +184,7 @@ Current GPU status:
 
 Graph-level AD rules for einsum live in `tenferro-einsum` and are registered as
 extension AD rules. Primitive operations emitted by lowering still use the core
-AD rules from `tenferro-internal-ops/src/ad/`.
+AD rules from `crates/tenferro-internal-ops/src/ad/`.
 
 VJP construction preserves the primal planning policy. For explicit
 `EinsumOptimize::Path` payloads, the AD rule remaps the positional path to the

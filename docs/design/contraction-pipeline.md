@@ -58,7 +58,7 @@ column-major layout, which is the convention used by the CPU GEMM path.
 
 ## Strict Binary Lowering
 
-`tenferro-einsum/src/planning/strict_binary.rs` detects dense binary
+`crates/tenferro-einsum/src/planning/strict_binary.rs` detects dense binary
 contractions that can be represented as one canonical `DotGeneral` plus a final
 output transpose if needed.
 

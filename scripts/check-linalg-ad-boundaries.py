@@ -36,34 +36,36 @@ def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     findings: list[str] = []
 
-    removed_crate = repo / ("tenferro-linalg" + "-ad") / "Cargo.toml"
+    removed_crate = repo / "crates" / ("tenferro-linalg" + "-ad") / "Cargo.toml"
     if removed_crate.exists():
         findings.append(
-            "forbidden standalone linalg AD crate exists: " + "tenferro-linalg" + "-ad"
+            "forbidden standalone linalg AD crate exists: crates/"
+            + "tenferro-linalg"
+            + "-ad"
         )
 
-    linalg_manifest = repo / "tenferro-linalg" / "Cargo.toml"
+    linalg_manifest = repo / "crates" / "tenferro-linalg" / "Cargo.toml"
     if not has_line(linalg_manifest, "autodiff = ["):
-        findings.append("tenferro-linalg/Cargo.toml is missing the autodiff feature")
+        findings.append("crates/tenferro-linalg/Cargo.toml is missing the autodiff feature")
     optional_ad_dep = (
-        'tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }'
+        'tenferro-ad = { path = "../tenferro-ad", version = "0.1.0", default-features = false, optional = true }'
     )
     if not has_line(linalg_manifest, optional_ad_dep):
         findings.append("tenferro-linalg must keep tenferro-ad optional")
 
-    linalg_lib = repo / "tenferro-linalg" / "src" / "lib.rs"
+    linalg_lib = repo / "crates" / "tenferro-linalg" / "src" / "lib.rs"
     for needle in [
         '#[cfg(feature = "autodiff")]\nmod ad;',
         '#[cfg(feature = "autodiff")]\npub mod eager_tensor;',
         '#[cfg(feature = "autodiff")]\npub use ad::{ad_rules, register_extension_rule};',
     ]:
         if needle not in linalg_lib.read_text(encoding="utf-8"):
-            findings.append(f"tenferro-linalg/src/lib.rs missing gated item: {needle!r}")
+            findings.append(f"crates/tenferro-linalg/src/lib.rs missing gated item: {needle!r}")
 
     operation_manifests = [
-        repo / "tenferro-einsum" / "Cargo.toml",
-        repo / "tenferro-fft" / "Cargo.toml",
-        repo / "tenferro-linalg" / "Cargo.toml",
+        repo / "crates" / "tenferro-einsum" / "Cargo.toml",
+        repo / "crates" / "tenferro-fft" / "Cargo.toml",
+        repo / "crates" / "tenferro-linalg" / "Cargo.toml",
     ]
     for manifest in operation_manifests:
         text = manifest.read_text(encoding="utf-8")
@@ -75,7 +77,7 @@ def main() -> int:
             if feature not in text:
                 findings.append(f"{manifest.relative_to(repo)} is missing the {feature[:-4]} feature")
 
-    public_manifests = [repo / "tenferro-ad" / "Cargo.toml", *operation_manifests]
+    public_manifests = [repo / "crates" / "tenferro-ad" / "Cargo.toml", *operation_manifests]
     for manifest in public_manifests:
         for line_no, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), start=1):
             if line.startswith("gpu ="):

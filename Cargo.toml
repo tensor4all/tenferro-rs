@@ -1,22 +1,22 @@
 [workspace]
 members = [
     # v2 core crates
-    "tenferro-tensor-core",
-    "tenferro-tensor",
-    "tenferro-cpu",
-    "tenferro-gpu",
-    "tenferro-runtime",
-    "tenferro-ad",
-    "tenferro-internal-extension-macros",
-    "tenferro-core-ops",
-    "tenferro-internal-ops",
-    "tenferro-einsum",
-    "tenferro-linalg",
-    "tenferro-fft",
+    "crates/tenferro-tensor-core",
+    "crates/tenferro-tensor",
+    "crates/tenferro-cpu",
+    "crates/tenferro-gpu",
+    "crates/tenferro-runtime",
+    "crates/tenferro-ad",
+    "crates/tenferro-internal-extension-macros",
+    "crates/tenferro-core-ops",
+    "crates/tenferro-internal-ops",
+    "crates/tenferro-einsum",
+    "crates/tenferro-linalg",
+    "crates/tenferro-fft",
     "docs/tutorial-code",
 ]
 default-members = [
-    "tenferro-tensor",
+    "crates/tenferro-tensor",
 ]
 resolver = "2"
 
@@ -25,7 +25,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>", "GiggleLiu <cacate0129@gmail.com>"]
-publish = false
+publish = true
+readme = "README.md"
+repository = "https://github.com/tensor4all/tenferro-rs"
+homepage = "https://tensor4all.org/tenferro-rs/"
 
 [workspace.dependencies]
 num-complex = "0.4"

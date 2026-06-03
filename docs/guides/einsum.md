@@ -9,8 +9,8 @@ extension ops.
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime" }
-tenferro-einsum = { path = "../tenferro-einsum" }
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-einsum = { path = "../crates/tenferro-einsum" }
 ```
 
 ## Traced Matrix Multiply

@@ -43,8 +43,8 @@ The most relevant source files were:
 - `tenferro-rs/docs/design/supported-ops.md`
 - `tenferro-rs/docs/design/tensor-prims.md`
 - `tenferro-rs/tenferro-prims/src/families/*.rs`
-- `tenferro-rs/tenferro-linalg/src/lib.rs`
-- `tenferro-rs/tenferro-linalg/src/prims_bridge.rs`
+- `tenferro-rs/crates/tenferro-linalg/src/lib.rs`
+- `tenferro-rs/crates/tenferro-linalg/src/prims_bridge.rs`
 - `jax/jax/_src/interpreters/ad.py`
 - `jax/jax/_src/numpy/einsum.py`
 - `jax/jax/_src/lax/control_flow/solves.py`

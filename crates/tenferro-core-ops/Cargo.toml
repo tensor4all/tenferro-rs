@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Internal core primitive operation catalog used by graph, runtime, and backend dispatch."
 
 [lib]

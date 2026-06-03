@@ -52,6 +52,40 @@ help.
 | `grad`, `vjp`, and `jvp` on traced graphs, graph reuse, or repeated compile/run execution | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
 | CUDA execution | The same tensor API plus explicit CUDA upload/download and supported CUDA backend features |
 
+## Crates
+
+tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` facade crate; users depend on the crates they need directly.
+
+### Core User Crates
+
+| Crate | Use when you need |
+| --- | --- |
+| `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
+| `tenferro-cpu` | CPU backend execution |
+| `tenferro-gpu` | CUDA/ROCm backend support and explicit device transfers |
+| `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
+| `tenferro-ad` | Automatic differentiation |
+
+### Standard Operation Extensions
+
+| Crate | Use when you need |
+| --- | --- |
+| `tenferro-linalg` | Linear algebra operations |
+| `tenferro-einsum` | Einsum and contraction planning |
+| `tenferro-fft` | FFT operations |
+
+### Published Implementation Crates
+
+These crates are published so the user-facing crates can depend on them through
+crates.io. They are not recommended starting points for application code.
+
+| Crate | Role |
+| --- | --- |
+| `tenferro-tensor-core` | Low-level host tensor model and scalar/layout primitives |
+| `tenferro-core-ops` | Core primitive operation catalog |
+| `tenferro-internal-ops` | Internal graph op vocabulary and AD rule plumbing |
+| `tenferro-internal-extension-macros` | Extension registration procedural macros |
+
 ## Minimal CPU Example
 
 ```rust

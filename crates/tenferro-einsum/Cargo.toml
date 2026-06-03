@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Subscripts, contraction planning, traced/eager einsum APIs, extension runtime, and AD rule for tenferro."
 
 [features]
@@ -26,12 +29,12 @@ cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.1.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.1.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.1.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.1.0", default-features = false }
 computegraph.workspace = true
 tidu = { workspace = true, optional = true }
 lru.workspace = true
@@ -39,7 +42,7 @@ omeco.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
 criterion.workspace = true
 num-complex.workspace = true
 
