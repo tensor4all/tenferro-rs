@@ -12,7 +12,7 @@ evolving:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime" }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
 ```
 
 This uses the default `cpu-faer` backend. To use the LAPACK/BLAS CPU backend,
@@ -20,7 +20,7 @@ enable `cpu-blas` and select the BLAS provider at runtime:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
 ```
 
 CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
@@ -32,8 +32,8 @@ against OpenBLAS:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
-tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor", default-features = false, features = ["src-openblas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-tensor = { path = "/path/to/tenferro-rs/crates/tenferro-tensor", default-features = false, features = ["src-openblas"] }
 ```
 
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or
@@ -44,9 +44,9 @@ support:
 
 ```toml
 [dependencies]
-tenferro-ad = { path = "/path/to/tenferro-rs/tenferro-ad", features = ["cuda"] }
-tenferro-gpu = { path = "/path/to/tenferro-rs/tenferro-gpu", features = ["cuda"] }
-tenferro-linalg = { path = "/path/to/tenferro-rs/tenferro-linalg", features = ["autodiff", "cuda"] }
+tenferro-ad = { path = "/path/to/tenferro-rs/crates/tenferro-ad", features = ["cuda"] }
+tenferro-gpu = { path = "/path/to/tenferro-rs/crates/tenferro-gpu", features = ["cuda"] }
+tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", features = ["autodiff", "cuda"] }
 ```
 
 Switch to crates.io once published:
@@ -58,7 +58,7 @@ tenferro-runtime = "..."
 
 ## First CPU Program
 
-<!-- snippet-source: tenferro-runtime/examples/cpu_quickstart.rs -->
+<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};

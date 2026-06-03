@@ -24,7 +24,7 @@ compilation, or CUDA only when the workflow needs them.
 
 ## First CPU Example
 
-<!-- snippet-source: tenferro-runtime/examples/cpu_quickstart.rs -->
+<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};
