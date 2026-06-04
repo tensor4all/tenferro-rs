@@ -135,8 +135,8 @@ pub fn compile_std_to_exec(
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: instruction_dtype,
-                output_shapes,
-                output_extents,
+                output_shapes: output_shapes.into(),
+                output_extents: output_extents.into(),
                 last_use: Vec::new(),
             }
         })
@@ -527,8 +527,8 @@ impl ConjSinkingState<'_> {
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,
-            output_shapes: vec![meta.shape],
-            output_extents: vec![meta.extents],
+            output_shapes: vec![meta.shape].into(),
+            output_extents: vec![meta.extents].into(),
             last_use: Vec::new(),
         };
         record_producer(self.producer_by_slot, &instr);

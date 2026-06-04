@@ -387,8 +387,8 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         input_slots: vec![lhs_canon.slot, rhs_canon.slot],
         output_slots: vec![canonical_output_slot],
         dtype: instr.dtype,
-        output_shapes: vec![canonical_output_shape.clone()],
-        output_extents: vec![canonical_output_extents],
+        output_shapes: vec![canonical_output_shape.clone()].into(),
+        output_extents: vec![canonical_output_extents].into(),
         last_use: Vec::new(),
     });
 
@@ -420,7 +420,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             input_slots: vec![canonical_output_slot, lhs.slot, rhs.slot],
             output_slots: vec![instr.output_slots[0]],
             dtype: instr.dtype,
-            output_shapes: vec![metadata_shape],
+            output_shapes: vec![metadata_shape].into(),
             output_extents: instr.output_extents.clone(),
             last_use: Vec::new(),
         });
@@ -457,8 +457,8 @@ fn emit_transpose_if_needed(
         input_slots: vec![operand.slot],
         output_slots: vec![out_slot],
         dtype,
-        output_shapes: vec![transposed_shape.clone()],
-        output_extents: vec![transposed_extents.clone()],
+        output_shapes: vec![transposed_shape.clone()].into(),
+        output_extents: vec![transposed_extents.clone()].into(),
         last_use: Vec::new(),
     });
     EmittedOperand {
@@ -489,8 +489,8 @@ fn emit_merge_reshape(
         input_slots: vec![operand.slot],
         output_slots: vec![out_slot],
         dtype,
-        output_shapes: vec![output_shape_meta.clone()],
-        output_extents: vec![output_extents_meta.clone()],
+        output_shapes: vec![output_shape_meta.clone()].into(),
+        output_extents: vec![output_extents_meta.clone()].into(),
         last_use: Vec::new(),
     });
     EmittedOperand {

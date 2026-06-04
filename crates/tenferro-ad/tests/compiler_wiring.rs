@@ -72,7 +72,10 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         exec.instructions[0].op,
         ExecOp::ReduceProd { ref axes } if axes == &vec![0]
     ));
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2])]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[dim_shape(&[2])]
+    );
     assert!(matches!(
         exec.instructions[1].op,
         ExecOp::ReduceMax { ref axes } if axes == &vec![1]
@@ -81,7 +84,10 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         exec.instructions[2].op,
         ExecOp::ReduceMin { ref axes } if axes == &vec![0, 1]
     ));
-    assert_eq!(exec.instructions[2].output_shapes, vec![Vec::new()]);
+    assert_eq!(
+        exec.instructions[2].output_shapes.as_slice(),
+        &[Vec::<DimExpr>::new()]
+    );
     assert!(matches!(
         exec.instructions[3].op,
         ExecOp::Slice(ref config) if config == &slice
@@ -155,7 +161,10 @@ fn compile_std_to_exec_wires_indexing_ops() {
         exec.instructions[2].op,
         ExecOp::DynamicSlice { ref slice_sizes } if slice_sizes == &vec![2, 1]
     ));
-    assert_eq!(exec.instructions[2].output_shapes, vec![dim_shape(&[2, 1])]);
+    assert_eq!(
+        exec.instructions[2].output_shapes.as_slice(),
+        &[dim_shape(&[2, 1])]
+    );
     assert!(matches!(
         exec.instructions[3].op,
         ExecOp::Pad(ref config) if config == &pad
@@ -262,7 +271,10 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
         ExecOp::Constant { dtype: DType::F64, ref bytes }
             if bytes == &2.5_f64.to_le_bytes().to_vec()
     ));
-    assert_eq!(exec.instructions[0].output_shapes, vec![Vec::new()]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[Vec::<DimExpr>::new()]
+    );
     assert!(matches!(
         exec.instructions[1].op,
         ExecOp::Constant { dtype: DType::C64, ref bytes } if bytes == &complex_bytes
@@ -272,5 +284,8 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
         ExecOp::Convert { to: DType::C64 }
     ));
     assert_eq!(exec.instructions[2].dtype, DType::C64);
-    assert_eq!(exec.instructions[2].output_shapes, vec![dim_shape(&[2])]);
+    assert_eq!(
+        exec.instructions[2].output_shapes.as_slice(),
+        &[dim_shape(&[2])]
+    );
 }

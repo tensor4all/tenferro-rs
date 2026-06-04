@@ -19,8 +19,8 @@ fn dot_general_exec_instr(
         input_slots,
         output_slots: vec![output_slot],
         dtype: DType::F64,
-        output_extents: vec![exact_extents(&output_shape)],
-        output_shapes: vec![output_shape],
+        output_extents: vec![exact_extents(&output_shape)].into(),
+        output_shapes: vec![output_shape].into(),
         last_use: Vec::new(),
     }
 }
@@ -156,12 +156,13 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
         input_slots: vec![0, 1],
         output_slots: vec![2],
         dtype: DType::F64,
-        output_shapes: vec![truncate_shape.clone()],
+        output_shapes: vec![truncate_shape.clone()].into(),
         output_extents: vec![vec![
             ShapeExtent::upper_bound(DimExpr::Const(5)),
             ShapeExtent::exact(DimExpr::Const(3)),
             ShapeExtent::exact(DimExpr::Const(4)),
-        ]],
+        ]]
+        .into(),
         last_use: Vec::new(),
     };
     let dot = dot_general_exec_instr(

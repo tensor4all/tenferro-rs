@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use num_complex::{Complex32, Complex64};
+use smallvec::SmallVec;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
@@ -22,10 +23,13 @@ pub struct ExecInstruction {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub dtype: tenferro_tensor::DType,
-    pub output_shapes: Vec<Vec<DimExpr>>,
-    pub output_extents: Vec<Vec<ShapeExtent<DimExpr>>>,
+    pub output_shapes: ExecOutputShapes,
+    pub output_extents: ExecOutputExtents,
     pub last_use: Vec<bool>,
 }
+
+pub type ExecOutputShapes = SmallVec<[Vec<DimExpr>; 1]>;
+pub type ExecOutputExtents = SmallVec<[Vec<ShapeExtent<DimExpr>>; 1]>;
 
 #[derive(Clone, Debug)]
 pub struct ExecProgram {

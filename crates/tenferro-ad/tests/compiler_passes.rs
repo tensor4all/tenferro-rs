@@ -45,8 +45,8 @@ fn make_exec_instr(
         input_slots,
         output_slots: output_slots.clone(),
         dtype: DType::F64,
-        output_shapes: vec![Vec::new(); output_slots.len()],
-        output_extents: vec![Vec::new(); output_slots.len()],
+        output_shapes: vec![Vec::new(); output_slots.len()].into(),
+        output_extents: vec![Vec::new(); output_slots.len()].into(),
         last_use: Vec::new(),
     }
 }
@@ -66,8 +66,9 @@ fn make_exec_instr_with_meta(
         output_extents: output_shapes
             .iter()
             .map(|shape| exact_extents(shape))
-            .collect(),
-        output_shapes,
+            .collect::<Vec<_>>()
+            .into(),
+        output_shapes: output_shapes.into(),
         last_use: Vec::new(),
     }
 }
@@ -512,7 +513,10 @@ fn test_full_pipeline_matmul() {
         }
         other => panic!("expected DotGeneral, got {other:?}"),
     }
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[dim_shape(&[2, 4])]
+    );
 }
 
 #[test]
@@ -574,7 +578,10 @@ fn test_full_pipeline_transpose_matmul() {
         .filter(|i| matches!(i.op, ExecOp::Transpose { .. }))
         .count();
     assert_eq!(transpose_count, 0, "dead-code elimination failed");
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[dim_shape(&[2, 4])]
+    );
 }
 
 #[test]
@@ -628,8 +635,9 @@ fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
         exec.instructions
             .last()
             .expect("compiled program should have an output instruction")
-            .output_shapes,
-        vec![dim_shape(&[2, 4, 5])]
+            .output_shapes
+            .as_slice(),
+        &[dim_shape(&[2, 4, 5])]
     );
 }
 
