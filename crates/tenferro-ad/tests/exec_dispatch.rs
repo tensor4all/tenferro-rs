@@ -2,8 +2,8 @@ use num_complex::Complex64;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::GraphExecutor;
+use tenferro_runtime::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorRead, TracedTensor};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
     GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
@@ -644,4 +644,26 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 3.0);
     assert_eq!(executor.backend().reclaimed, 3);
+}
+
+#[test]
+fn graph_executor_does_not_reclaim_borrowed_input_slots() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = (&x + &x).neg();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let input = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
+
+    let outputs = executor
+        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .unwrap();
+
+    assert_eq!(executor.backend().calls, vec!["add", "neg"]);
+    assert_eq!(executor.backend().reclaimed, 1);
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_value(&outputs[0]), 3.0);
+    assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 }

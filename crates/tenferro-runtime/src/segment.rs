@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet};
 use crate::error::Result;
 use crate::exec::{
     can_run_in_single_exec_session, collect_outputs_from,
-    eval_exec_ir_single_session_with_workspace, eval_exec_ir_unsegmented_with_cache_and_workspace,
-    execute_backend_op, execute_ffi_instruction_cached, execute_host_instruction,
-    initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
-    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecProgram,
+    eval_exec_ir_single_session_slots_with_workspace,
+    eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
+    execute_ffi_instruction_cached, execute_host_instruction, initialize_exec_slots_in,
+    is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
+    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecProgram, ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend};
@@ -135,13 +136,35 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<Tensor>>,
+    slots: &mut Vec<Option<ExecSlot<'static>>>,
+    backend_cache: &mut B::RuntimeCache,
+    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+) -> Result<Vec<Tensor>> {
+    let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
+    eval_exec_segmented_slots_with_cache_and_workspace(
+        backend,
+        program,
+        inputs,
+        slots,
+        backend_cache,
+        extension_executor.as_deref_mut(),
+    )
+}
+
+pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
+    'input,
+    B: TensorBackend + 'static,
+>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let has_fused_segment = has_multi_instruction_fused_segment(program);
     if !has_fused_segment && can_run_in_single_exec_session(program) {
-        return eval_exec_ir_single_session_with_workspace(
+        return eval_exec_ir_single_session_slots_with_workspace(
             backend,
             program,
             inputs,
@@ -151,7 +174,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     }
 
     if !has_fused_segment {
-        return eval_exec_ir_unsegmented_with_cache_and_workspace(
+        return eval_exec_ir_unsegmented_slots_with_cache_and_workspace(
             backend,
             program,
             inputs,
@@ -161,7 +184,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     }
 
     let result = (|| {
-        initialize_slots_in(program, inputs, slots);
+        initialize_exec_slots_in(program, inputs, slots);
 
         let segments = segment_exec_program(program);
         let mut inst_idx = 0usize;
@@ -189,7 +212,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
                                     )));
                                 }
                                 for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
-                                    slots[slot] = Some(tensor);
+                                    slots[slot] = Some(ExecSlot::Owned(tensor));
                                 }
                                 reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
                                 return Ok(());
@@ -198,7 +221,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
 
                         for inst in instructions {
                             let result = execute_backend_op(exec, slots, inst)?;
-                            slots[inst.output_slots[0]] = Some(result);
+                            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
                             reclaim_last_use_inputs_exec(slots, inst, exec);
                         }
                         Ok(())
@@ -312,7 +335,7 @@ fn build_fused_segment(program: &ExecProgram, start: usize, end: usize) -> Segme
 }
 
 fn collect_segment_inputs<'a>(
-    slots: &'a [Option<Tensor>],
+    slots: &'a [Option<ExecSlot<'_>>],
     input_slots: &[usize],
 ) -> Result<Vec<&'a Tensor>> {
     input_slots
@@ -321,20 +344,23 @@ fn collect_segment_inputs<'a>(
             slots[slot]
                 .as_ref()
                 .ok_or(tenferro_tensor::Error::MissingValue { slot }.into())
+                .and_then(|value| value.as_tensor("elementwise_fusion"))
         })
         .collect()
 }
 
 fn reclaim_segment_inputs_exec(
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     input_slots: &[usize],
     last_use: &[bool],
     exec: &mut dyn tenferro_tensor::BackendSession,
 ) {
     for (&slot, &is_last_use) in input_slots.iter().zip(last_use.iter()) {
         if is_last_use {
-            if let Some(tensor) = slots[slot].take() {
-                exec.reclaim_buffer(tensor);
+            if let Some(value) = slots[slot].take() {
+                if let ExecSlot::Owned(tensor) = value {
+                    exec.reclaim_buffer(tensor);
+                }
             }
         }
     }

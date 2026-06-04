@@ -8,7 +8,7 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionOp, GatherConfig,
-    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TypedTensor,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TypedTensor,
 };
 
 use crate::extension_runtime::ExtensionExecutor;
@@ -45,32 +45,103 @@ pub(crate) enum DispatchMode {
     Segmented,
 }
 
-pub(crate) fn get<'a, T>(
-    slots: &'a [Option<T>],
-    input_slots: &[usize],
-    idx: usize,
-) -> Result<&'a T> {
-    let slot = input_slots[idx];
-    slots[slot]
-        .as_ref()
-        .ok_or(TensorError::MissingValue { slot }.into())
+pub(crate) enum ExecSlot<'a> {
+    Owned(Tensor),
+    Read(TensorRead<'a>),
 }
 
-pub(crate) fn initialize_slots_in(
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<Tensor>>,
-) {
-    slots.clear();
-    slots.resize_with(program.n_slots, || None);
-    for (i, tensor) in inputs.into_iter().enumerate() {
-        slots[program.input_slots[i]] = Some(tensor);
+impl<'a> ExecSlot<'a> {
+    pub(crate) fn dtype(&self) -> DType {
+        match self {
+            Self::Owned(tensor) => tensor.dtype(),
+            Self::Read(read) => read.dtype(),
+        }
+    }
+
+    pub(crate) fn as_read<'slot>(&'slot self) -> TensorRead<'slot>
+    where
+        'a: 'slot,
+    {
+        match self {
+            Self::Owned(tensor) => TensorRead::from_tensor(tensor),
+            Self::Read(read) => read.clone(),
+        }
+    }
+
+    pub(crate) fn as_tensor<'slot>(&'slot self, op: &'static str) -> Result<&'slot Tensor>
+    where
+        'a: 'slot,
+    {
+        match self {
+            Self::Owned(tensor) => Ok(tensor),
+            Self::Read(read) => read.as_tensor().ok_or_else(|| {
+                Error::Internal(format!(
+                    "{op}: borrowed TensorView reached an owned-only execution boundary"
+                ))
+            }),
+        }
+    }
+
+    pub(crate) fn shape(&self) -> &[usize] {
+        match self {
+            Self::Owned(tensor) => tensor.shape(),
+            Self::Read(read) => read.shape(),
+        }
+    }
+
+    pub(crate) fn into_tensor(self) -> Tensor {
+        match self {
+            Self::Owned(tensor) => tensor,
+            Self::Read(read) => read.to_tensor(),
+        }
     }
 }
 
-pub(crate) fn collect_outputs_from(
+pub(crate) fn get<'slot, 'input>(
+    slots: &'slot [Option<ExecSlot<'input>>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<&'slot Tensor>
+where
+    'input: 'slot,
+{
+    let slot = input_slots[idx];
+    slots[slot]
+        .as_ref()
+        .ok_or_else(|| TensorError::MissingValue { slot }.into())
+        .and_then(|value| value.as_tensor("get"))
+}
+
+pub(crate) fn get_read<'slot, 'input>(
+    slots: &'slot [Option<ExecSlot<'input>>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<TensorRead<'slot>>
+where
+    'input: 'slot,
+{
+    let slot = input_slots[idx];
+    slots[slot]
+        .as_ref()
+        .ok_or_else(|| TensorError::MissingValue { slot }.into())
+        .map(ExecSlot::as_read)
+}
+
+pub(crate) fn initialize_exec_slots_in<'input>(
     program: &ExecProgram,
-    slots: &mut [Option<Tensor>],
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+) {
+    slots.clear();
+    slots.resize_with(program.n_slots, || None);
+    for (i, input) in inputs.into_iter().enumerate() {
+        slots[program.input_slots[i]] = Some(input);
+    }
+}
+
+pub(crate) fn collect_outputs_from<'input>(
+    program: &ExecProgram,
+    slots: &mut [Option<ExecSlot<'input>>],
 ) -> Result<Vec<Tensor>> {
     program
         .output_slots
@@ -78,6 +149,7 @@ pub(crate) fn collect_outputs_from(
         .map(|&slot| {
             slots[slot]
                 .take()
+                .map(ExecSlot::into_tensor)
                 .ok_or(TensorError::MissingValue { slot }.into())
         })
         .collect()
@@ -96,7 +168,7 @@ pub(crate) fn is_exec_session_ffi_instruction(inst: &ExecInstruction) -> bool {
 }
 
 pub(crate) fn resolve_tensor_shape_exprs(
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     input_slots: &[usize],
     exprs: &[DimExpr],
 ) -> Result<Vec<usize>> {
@@ -140,11 +212,31 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<Tensor>>,
+    slots: &mut Vec<Option<ExecSlot<'static>>>,
+    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+) -> Result<Vec<Tensor>> {
+    let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
+    eval_exec_ir_unsegmented_slots_with_cache_and_workspace(
+        backend,
+        program,
+        inputs,
+        slots,
+        extension_executor.as_deref_mut(),
+    )
+}
+
+pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
+    'input,
+    B: TensorBackend + 'static,
+>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
-        initialize_slots_in(program, inputs, slots);
+        initialize_exec_slots_in(program, inputs, slots);
 
         for inst in &program.instructions {
             if is_host_instruction(inst) {
@@ -160,7 +252,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
             } else {
                 let result =
                     backend.with_backend_session(|exec| execute_backend_op(exec, slots, inst))?;
-                slots[inst.output_slots[0]] = Some(result);
+                slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
             }
             reclaim_last_use_inputs_backend(slots, inst, backend);
         }
@@ -178,15 +270,15 @@ pub(crate) fn can_run_in_single_exec_session(program: &ExecProgram) -> bool {
     })
 }
 
-pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
+pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<Tensor>>,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
-        initialize_slots_in(program, inputs, slots);
+        initialize_exec_slots_in(program, inputs, slots);
 
         backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
@@ -198,7 +290,7 @@ pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
                     execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
                 } else {
                     let result = execute_backend_op(exec, slots, inst)?;
-                    slots[inst.output_slots[0]] = Some(result);
+                    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
                 }
                 reclaim_last_use_inputs_exec(slots, inst, exec);
             }
@@ -213,7 +305,7 @@ pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
 
 pub(crate) fn execute_backend_op(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     dispatch::execute_backend_dispatch(exec, slots, inst)
@@ -221,7 +313,7 @@ pub(crate) fn execute_backend_op(
 
 pub(crate) fn execute_host_instruction<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     dispatch::execute_host_dispatch(backend, slots, inst)
@@ -229,7 +321,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
 
 pub(crate) fn execute_ffi_instruction<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     mode: DispatchMode,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -240,7 +332,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend + 'static>(
 pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
     backend: &mut B,
     backend_cache: &mut B::RuntimeCache,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     mode: DispatchMode,
     cache_slot: Option<usize>,
@@ -248,14 +340,14 @@ pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
 ) -> Result<()> {
     match &inst.op {
         ExecOp::DotGeneral(config) => {
-            let result = backend.dot_general_cached(
+            let result = backend.dot_general_read_cached(
                 backend_cache,
                 cache_slot,
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
+                get_read(slots, &inst.input_slots, 0)?,
+                get_read(slots, &inst.input_slots, 1)?,
                 config,
             )?;
-            slots[inst.output_slots[0]] = Some(result);
+            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
             Ok(())
         }
         ExecOp::DotGeneralWithConj {
@@ -263,16 +355,16 @@ pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
             lhs_conj,
             rhs_conj,
         } => {
-            let result = backend.dot_general_with_conj_cached(
+            let result = backend.dot_general_with_conj_read_cached(
                 backend_cache,
                 cache_slot,
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
+                get_read(slots, &inst.input_slots, 0)?,
+                get_read(slots, &inst.input_slots, 1)?,
                 config,
                 *lhs_conj,
                 *rhs_conj,
             )?;
-            slots[inst.output_slots[0]] = Some(result);
+            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
             Ok(())
         }
         _ => execute_ffi_instruction(backend, slots, inst, mode, extension_executor),
@@ -281,34 +373,34 @@ pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
 
 pub(crate) fn execute_ffi_instruction_exec(
     exec: &mut dyn BackendSession,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     cache_slot: Option<usize>,
 ) -> Result<()> {
     match &inst.op {
         ExecOp::DotGeneral(config) => {
-            let result = exec.dot_general_cached(
+            let result = exec.dot_general_read_cached(
                 cache_slot,
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
+                get_read(slots, &inst.input_slots, 0)?,
+                get_read(slots, &inst.input_slots, 1)?,
                 config,
             )?;
-            slots[inst.output_slots[0]] = Some(result);
+            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
         }
         ExecOp::DotGeneralWithConj {
             config,
             lhs_conj,
             rhs_conj,
         } => {
-            let result = exec.dot_general_with_conj_cached(
+            let result = exec.dot_general_with_conj_read_cached(
                 cache_slot,
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
+                get_read(slots, &inst.input_slots, 0)?,
+                get_read(slots, &inst.input_slots, 1)?,
                 config,
                 *lhs_conj,
                 *rhs_conj,
             )?;
-            slots[inst.output_slots[0]] = Some(result);
+            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
         }
         other => {
             return Err(Error::Internal(format!(
@@ -327,7 +419,7 @@ pub(crate) fn execute_ffi_instruction_exec(
 /// and the `family_id` included in the message.
 fn execute_extension_instruction<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     ext: &dyn ExtensionOp,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -364,21 +456,25 @@ fn execute_extension_instruction<B: TensorBackend + 'static>(
         ));
     }
     for (slot, tensor) in inst.output_slots.iter().copied().zip(outputs) {
-        slots[slot] = Some(tensor);
+        slots[slot] = Some(ExecSlot::Owned(tensor));
     }
     Ok(())
 }
 
-fn collect_tensor_refs<'a>(
-    slots: &'a [Option<Tensor>],
+fn collect_tensor_refs<'slot, 'input>(
+    slots: &'slot [Option<ExecSlot<'input>>],
     input_slots: &[usize],
-) -> Result<Vec<&'a Tensor>> {
+) -> Result<Vec<&'slot Tensor>>
+where
+    'input: 'slot,
+{
     let mut inputs = Vec::with_capacity(input_slots.len());
     for &slot in input_slots {
         inputs.push(
             slots[slot]
                 .as_ref()
-                .ok_or(TensorError::MissingValue { slot })?,
+                .ok_or(TensorError::MissingValue { slot })?
+                .as_tensor("extension")?,
         );
     }
     Ok(inputs)
@@ -450,28 +546,32 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
 }
 
 pub(crate) fn reclaim_last_use_inputs_exec(
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     exec: &mut dyn BackendSession,
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(tensor) = slots[inst.input_slots[i]].take() {
-                exec.reclaim_buffer(tensor);
+            if let Some(slot) = slots[inst.input_slots[i]].take() {
+                if let ExecSlot::Owned(tensor) = slot {
+                    exec.reclaim_buffer(tensor);
+                }
             }
         }
     }
 }
 
 pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     backend: &mut B,
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(tensor) = slots[inst.input_slots[i]].take() {
-                backend.reclaim_buffer(tensor);
+            if let Some(slot) = slots[inst.input_slots[i]].take() {
+                if let ExecSlot::Owned(tensor) = slot {
+                    backend.reclaim_buffer(tensor);
+                }
             }
         }
     }

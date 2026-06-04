@@ -5,24 +5,27 @@ use tenferro_tensor::{
 };
 
 use super::{
-    collect_tensor_refs, constant_tensor, execute_extension_instruction, get,
-    resolve_tensor_shape_exprs, DispatchMode, ExecInstruction, ExecOp,
+    collect_tensor_refs, constant_tensor, execute_extension_instruction, get, get_read,
+    resolve_tensor_shape_exprs, DispatchMode, ExecInstruction, ExecOp, ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 
-type BackendDispatchFn =
-    fn(&mut dyn BackendSession, &[Option<Tensor>], &ExecInstruction) -> Result<Tensor>;
+type BackendDispatchFn = for<'a> fn(
+    &mut dyn BackendSession,
+    &[Option<ExecSlot<'a>>],
+    &ExecInstruction,
+) -> Result<Tensor>;
 
 type FfiDispatchFn<B> = fn(
     &mut B,
-    &mut [Option<Tensor>],
+    &mut [Option<ExecSlot<'_>>],
     &ExecInstruction,
     DispatchMode,
     Option<&mut ExtensionExecutor<B>>,
 ) -> Result<()>;
 
-type HostDispatchFn<B> = fn(&mut B, &mut [Option<Tensor>], &ExecInstruction) -> Result<()>;
+type HostDispatchFn<B> = fn(&mut B, &mut [Option<ExecSlot<'_>>], &ExecInstruction) -> Result<()>;
 
 macro_rules! count_keys {
     ($key:ident) => {
@@ -237,7 +240,7 @@ pub(super) fn host_dispatch_entry<B: TensorBackend>(op: &ExecOp) -> Option<HostD
 
 pub(super) fn execute_backend_dispatch(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let Some(entry) = backend_dispatch_entry(&inst.op) else {
@@ -251,7 +254,7 @@ pub(super) fn execute_backend_dispatch(
 
 pub(super) fn execute_host_dispatch<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     let Some(entry) = host_dispatch_entry::<B>(&inst.op) else {
@@ -265,7 +268,7 @@ pub(super) fn execute_host_dispatch<B: TensorBackend>(
 
 pub(super) fn execute_ffi_dispatch<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     mode: DispatchMode,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -299,13 +302,13 @@ fn host_dispatch_mismatch(expected: HostDispatchKey, op: &ExecOp) -> Error {
 
 fn execute_shape_of_host<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     let ExecOp::ShapeOf { axis } = &inst.op else {
         return Err(host_dispatch_mismatch(HostDispatchKey::ShapeOf, &inst.op));
     };
-    let input = get(slots, &inst.input_slots, 0)?;
+    let input = get_read(slots, &inst.input_slots, 0)?;
     if *axis >= input.shape().len() {
         return Err(Error::Internal(format!(
             "ShapeOf: axis {} out of bounds for rank {}",
@@ -317,13 +320,13 @@ fn execute_shape_of_host<B: TensorBackend>(
         vec![],
         vec![input.shape()[*axis] as f64],
     ));
-    slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.upload_host_tensor(&host)?));
     Ok(())
 }
 
 fn execute_dynamic_truncate_host<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     let ExecOp::DynamicTruncate { axis } = &inst.op else {
@@ -351,13 +354,13 @@ fn execute_dynamic_truncate_host<B: TensorBackend>(
         limits,
         strides: vec![1; rank],
     };
-    slots[inst.output_slots[0]] = Some(backend.slice(input, &config)?);
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.slice(input, &config)?));
     Ok(())
 }
 
 fn execute_pad_to_match_host<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     let ExecOp::PadToMatch { axis } = &inst.op else {
@@ -378,7 +381,7 @@ fn execute_pad_to_match_host<B: TensorBackend>(
     let target_size = reference.shape()[*axis];
     let current_size = input.shape()[*axis];
     if current_size >= target_size {
-        slots[inst.output_slots[0]] = Some(input.clone());
+        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(input.clone()));
     } else {
         let rank = input.shape().len();
         let mut high = vec![0i64; rank];
@@ -388,27 +391,27 @@ fn execute_pad_to_match_host<B: TensorBackend>(
             edge_padding_high: high,
             interior_padding: vec![0i64; rank],
         };
-        slots[inst.output_slots[0]] = Some(backend.pad(input, &config)?);
+        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.pad(input, &config)?));
     }
     Ok(())
 }
 
 fn execute_constant_host<B: TensorBackend>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
     let ExecOp::Constant { dtype, bytes } = &inst.op else {
         return Err(host_dispatch_mismatch(HostDispatchKey::Constant, &inst.op));
     };
     let host = constant_tensor(*dtype, bytes);
-    slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.upload_host_tensor(&host)?));
     Ok(())
 }
 
 fn execute_dot_general_ffi<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
     _extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -416,18 +419,18 @@ fn execute_dot_general_ffi<B: TensorBackend + 'static>(
     let ExecOp::DotGeneral(config) = &inst.op else {
         return Err(ffi_dispatch_mismatch(FfiDispatchKey::DotGeneral, &inst.op));
     };
-    let result = backend.dot_general(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    let result = backend.dot_general_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
         config,
     )?;
-    slots[inst.output_slots[0]] = Some(result);
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
     Ok(())
 }
 
 fn execute_dot_general_with_conj_ffi<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
     _extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -443,20 +446,20 @@ fn execute_dot_general_with_conj_ffi<B: TensorBackend + 'static>(
             &inst.op,
         ));
     };
-    let result = backend.dot_general_with_conj(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    let result = backend.dot_general_with_conj_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
         config,
         *lhs_conj,
         *rhs_conj,
     )?;
-    slots[inst.output_slots[0]] = Some(result);
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
     Ok(())
 }
 
 fn execute_extension_ffi<B: TensorBackend + 'static>(
     backend: &mut B,
-    slots: &mut [Option<Tensor>],
+    slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
@@ -469,42 +472,42 @@ fn execute_extension_ffi<B: TensorBackend + 'static>(
 
 fn execute_transpose(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Transpose { perm } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Transpose, &inst.op));
     };
-    Ok(exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?)
+    Ok(exec.transpose_read(get_read(slots, &inst.input_slots, 0)?, perm)?)
 }
 
 fn execute_reshape(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Reshape { shape } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Reshape, &inst.op));
     };
     let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-    Ok(exec.reshape(get(slots, &inst.input_slots, 0)?, &shape)?)
+    Ok(exec.reshape_read(get_read(slots, &inst.input_slots, 0)?, &shape)?)
 }
 
 fn execute_broadcast_in_dim(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::BroadcastInDim { shape, dims } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::BroadcastInDim, &inst.op));
     };
     let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-    Ok(exec.broadcast_in_dim(get(slots, &inst.input_slots, 0)?, &shape, dims)?)
+    Ok(exec.broadcast_in_dim_read(get_read(slots, &inst.input_slots, 0)?, &shape, dims)?)
 }
 
 fn execute_convert(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Convert { to } = &inst.op else {
@@ -515,18 +518,18 @@ fn execute_convert(
 
 fn execute_reduce_sum(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::ReduceSum { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceSum, &inst.op));
     };
-    Ok(exec.reduce_sum(get(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_sum_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
 }
 
 fn execute_extract_diag(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::ExtractDiag { axis_a, axis_b } = &inst.op else {
@@ -537,7 +540,7 @@ fn execute_extract_diag(
 
 fn execute_embed_diag(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::EmbedDiag { axis_a, axis_b } = &inst.op else {
@@ -548,7 +551,7 @@ fn execute_embed_diag(
 
 fn execute_tril(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Tril { k } = &inst.op else {
@@ -559,7 +562,7 @@ fn execute_tril(
 
 fn execute_triu(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Triu { k } = &inst.op else {
@@ -570,216 +573,216 @@ fn execute_triu(
 
 fn execute_add(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.add(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.add_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_multiply(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.mul(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.mul_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_negate(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.neg(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.neg_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_conj(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.conj(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.conj_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_divide(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.div(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.div_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_abs(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.abs(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.abs_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_sign(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sign(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sign_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_maximum(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.maximum(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.maximum_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_minimum(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.minimum(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.minimum_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_compare(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Compare(dir) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Compare, &inst.op));
     };
-    Ok(exec.compare(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.compare_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
         dir,
     )?)
 }
 
 fn execute_select(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.select(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
-        get(slots, &inst.input_slots, 2)?,
+    Ok(exec.select_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
+        get_read(slots, &inst.input_slots, 2)?,
     )?)
 }
 
 fn execute_clamp(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.clamp(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
-        get(slots, &inst.input_slots, 2)?,
+    Ok(exec.clamp_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
+        get_read(slots, &inst.input_slots, 2)?,
     )?)
 }
 
 fn execute_exp(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.exp(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.exp_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_log(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.log(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.log_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_sin(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sin(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sin_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_cos(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.cos(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.cos_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_tanh(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.tanh(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.tanh_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_sqrt(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sqrt(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sqrt_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_rsqrt(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.rsqrt(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.rsqrt_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_pow(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.pow(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.pow_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
     )?)
 }
 
 fn execute_expm1(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.expm1(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.expm1_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_log1p(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.log1p(get(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.log1p_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_gather(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Gather(config) = &inst.op else {
@@ -794,7 +797,7 @@ fn execute_gather(
 
 fn execute_gather_dynamic_slice_sizes(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::GatherDynamicSliceSizes {
@@ -827,7 +830,7 @@ fn execute_gather_dynamic_slice_sizes(
 
 fn execute_scatter(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Scatter(config) = &inst.op else {
@@ -843,7 +846,7 @@ fn execute_scatter(
 
 fn execute_slice(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Slice(config) = &inst.op else {
@@ -854,7 +857,7 @@ fn execute_slice(
 
 fn execute_dynamic_slice(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::DynamicSlice { slice_sizes } = &inst.op else {
@@ -869,7 +872,7 @@ fn execute_dynamic_slice(
 
 fn execute_dynamic_update_slice(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     Ok(exec.dynamic_update_slice(
@@ -881,7 +884,7 @@ fn execute_dynamic_update_slice(
 
 fn execute_pad(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Pad(config) = &inst.op else {
@@ -892,7 +895,7 @@ fn execute_pad(
 
 fn execute_concatenate(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Concatenate { axis } = &inst.op else {
@@ -904,7 +907,7 @@ fn execute_concatenate(
 
 fn execute_reverse(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::Reverse { axes } = &inst.op else {
@@ -915,33 +918,33 @@ fn execute_reverse(
 
 fn execute_reduce_prod(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::ReduceProd { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceProd, &inst.op));
     };
-    Ok(exec.reduce_prod(get(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_prod_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
 }
 
 fn execute_reduce_max(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::ReduceMax { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceMax, &inst.op));
     };
-    Ok(exec.reduce_max(get(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_max_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
 }
 
 fn execute_reduce_min(
     exec: &mut dyn BackendSession,
-    slots: &[Option<Tensor>],
+    slots: &[Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let ExecOp::ReduceMin { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceMin, &inst.op));
     };
-    Ok(exec.reduce_min(get(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_min_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
 }

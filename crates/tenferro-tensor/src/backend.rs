@@ -449,6 +449,37 @@ pub trait TensorDot: TensorElementwise {
         };
         self.dot_general(lhs_ref, rhs_ref, config)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    fn dot_general_with_conj_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        if !lhs_conj && !rhs_conj {
+            return self.dot_general_read(lhs, rhs, config);
+        }
+
+        let lhs_tmp;
+        let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
+            tensor
+        } else {
+            lhs_tmp = lhs.to_tensor();
+            &lhs_tmp
+        };
+        let rhs_tmp;
+        let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
+            tensor
+        } else {
+            rhs_tmp = rhs.to_tensor();
+            &rhs_tmp
+        };
+        self.dot_general_with_conj(lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
+    }
 }
 
 /// Session-scoped cached dot-general operations.
@@ -472,6 +503,24 @@ pub trait SessionCachedDot: TensorDot {
         self.dot_general(lhs, rhs, config)
     }
 
+    #[doc(hidden)]
+    fn dot_general_read_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general_cached(cache_slot, lhs, rhs, config),
+            _ => {
+                let lhs = lhs.to_tensor();
+                let rhs = rhs.to_tensor();
+                self.dot_general_cached(cache_slot, &lhs, &rhs, config)
+            }
+        }
+    }
+
     // Mirrors the dot-general signature plus runtime-cache metadata.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
@@ -485,6 +534,39 @@ pub trait SessionCachedDot: TensorDot {
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
         self.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
+    // Mirrors the dot-general read signature plus runtime-cache metadata.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        if !lhs_conj && !rhs_conj {
+            return self.dot_general_read_cached(cache_slot, lhs, rhs, config);
+        }
+
+        let lhs_tmp;
+        let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
+            tensor
+        } else {
+            lhs_tmp = lhs.to_tensor();
+            &lhs_tmp
+        };
+        let rhs_tmp;
+        let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
+            tensor
+        } else {
+            rhs_tmp = rhs.to_tensor();
+            &rhs_tmp
+        };
+        self.dot_general_with_conj_cached(cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
     }
 }
 
@@ -653,6 +735,25 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         self.dot_general(lhs, rhs, config)
     }
 
+    #[doc(hidden)]
+    fn dot_general_read_cached(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general_cached(cache, cache_slot, lhs, rhs, config),
+            _ => {
+                let lhs = lhs.to_tensor();
+                let rhs = rhs.to_tensor();
+                self.dot_general_cached(cache, cache_slot, &lhs, &rhs, config)
+            }
+        }
+    }
+
     // Mirrors the dot-general signature plus runtime-cache metadata.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
@@ -667,6 +768,42 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
         self.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
+    // Mirrors the dot-general read signature plus runtime-cache metadata.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        if !lhs_conj && !rhs_conj {
+            return self.dot_general_read_cached(cache, cache_slot, lhs, rhs, config);
+        }
+
+        let lhs_tmp;
+        let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
+            tensor
+        } else {
+            lhs_tmp = lhs.to_tensor();
+            &lhs_tmp
+        };
+        let rhs_tmp;
+        let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
+            tensor
+        } else {
+            rhs_tmp = rhs.to_tensor();
+            &rhs_tmp
+        };
+        self.dot_general_with_conj_cached(
+            cache, cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj,
+        )
     }
 }
 
