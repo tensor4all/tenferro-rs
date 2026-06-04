@@ -6,6 +6,7 @@ use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
+use crate::eager::try_build_exact_output_binary_dot_config;
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
 };
@@ -24,6 +25,10 @@ pub fn einsum_subscripts(
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<EagerTensor> {
+    if let Some(result) = try_direct_binary_dot_general(inputs, subscripts) {
+        return result;
+    }
+
     ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
     if let Some(first) = inputs.first() {
         first
@@ -42,6 +47,32 @@ pub fn einsum_subscripts(
     outputs
         .pop()
         .ok_or_else(|| Error::Internal("einsum extension produced no eager output".to_string()))
+}
+
+fn try_direct_binary_dot_general(
+    inputs: &[&EagerTensor],
+    subscripts: &EinsumSubscripts,
+) -> Option<Result<EagerTensor>> {
+    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
+        return None;
+    }
+
+    let lhs_labels = &subscripts.inputs[0];
+    let rhs_labels = &subscripts.inputs[1];
+    if lhs_labels.len() != inputs[0].data().shape().len()
+        || rhs_labels.len() != inputs[1].data().shape().len()
+    {
+        return None;
+    }
+
+    if let Some(config) =
+        try_build_exact_output_binary_dot_config(lhs_labels, rhs_labels, &subscripts.output)
+    {
+        return Some(inputs[0].dot_general(inputs[1], config));
+    }
+
+    try_build_exact_output_binary_dot_config(rhs_labels, lhs_labels, &subscripts.output)
+        .map(|config| inputs[1].dot_general(inputs[0], config))
 }
 
 fn infer_eager_output_shape(
@@ -141,4 +172,32 @@ pub fn tensordot(
         &config,
     )?;
     lhs.dot_general(rhs, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use tenferro_ad::{EagerRuntime, EagerTensor};
+    use tenferro_cpu::CpuBackend;
+    use tenferro_tensor::Tensor;
+
+    use super::einsum;
+
+    #[test]
+    fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let lhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+            ctx.clone(),
+        );
+        let rhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]),
+            ctx.clone(),
+        );
+
+        let out = einsum(&[&lhs, &rhs], "ji,kj->ki").unwrap();
+
+        assert_eq!(out.data().shape(), &[4, 3]);
+        assert_eq!(out.data().as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
+        assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    }
 }

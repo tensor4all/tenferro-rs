@@ -187,6 +187,19 @@ fn try_build_binary_dot_fast_plan(
     })
 }
 
+pub(crate) fn try_build_exact_output_binary_dot_config(
+    lhs_labels: &[u32],
+    rhs_labels: &[u32],
+    output_labels: &[u32],
+) -> Option<DotGeneralConfig> {
+    let plan = try_build_binary_dot_fast_plan(lhs_labels, rhs_labels, output_labels)?;
+    if plan.result_labels == plan.target_labels {
+        Some(plan.config)
+    } else {
+        None
+    }
+}
+
 fn execute_binary_dot_fast_plan<'a>(
     exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,

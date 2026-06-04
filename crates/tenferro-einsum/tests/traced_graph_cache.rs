@@ -85,21 +85,21 @@ fn run_runtime_planned_matmul(
         .expect("run")
 }
 
-fn run_eager_matmul(
+fn run_eager_extension_matmul(
     ctx: &std::sync::Arc<EagerRuntime>,
     rows: usize,
     cols: usize,
     mid: usize,
 ) -> Tensor {
     let a = ctx.constant_from(Tensor::from_vec_col_major(
-        vec![rows, mid],
-        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+        vec![rows, rows, mid],
+        (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     ));
     let b = ctx.constant_from(Tensor::from_vec_col_major(
         vec![mid, cols],
         (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
     ));
-    eager_einsum(&[&a, &b], "ij,jk->ik")
+    eager_einsum(&[&a, &b], "iij,jk->ik")
         .expect("eager einsum")
         .data()
         .clone()
@@ -172,15 +172,15 @@ fn extension_compile_cache_limits_bound_static_einsum_entries() {
 fn eager_einsum_runtime_caches_are_owned_by_context() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 
-    let out = run_eager_matmul(&ctx, 2, 4, 3);
+    let out = run_eager_extension_matmul(&ctx, 2, 4, 3);
     assert_eq!(out.shape(), &[2, 4]);
     assert_eq!(ctx.cache_stats().extensions.entries, 2);
 
-    let _ = run_eager_matmul(&ctx, 2, 4, 3);
+    let _ = run_eager_extension_matmul(&ctx, 2, 4, 3);
     assert_eq!(ctx.cache_stats().extensions.entries, 2);
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let _ = run_eager_matmul(&other_ctx, 2, 4, 3);
+    let _ = run_eager_extension_matmul(&other_ctx, 2, 4, 3);
     assert_eq!(ctx.cache_stats().extensions.entries, 2);
     assert_eq!(other_ctx.cache_stats().extensions.entries, 2);
 }
@@ -191,7 +191,7 @@ fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
     ctx.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(3).unwrap()));
 
     for mid in 1..=5 {
-        let _ = run_eager_matmul(&ctx, 2, 2, mid);
+        let _ = run_eager_extension_matmul(&ctx, 2, 2, mid);
     }
 
     let stats = ctx.cache_stats();
