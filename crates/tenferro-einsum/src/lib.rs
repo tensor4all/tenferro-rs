@@ -42,6 +42,7 @@
 //! assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 //! ```
 
+mod binary_dot;
 mod builder;
 mod cache;
 mod eager;

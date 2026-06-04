@@ -6,6 +6,7 @@ use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
 
+use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::cache::{
     einsum_subscripts_retained_bytes, ParsedEinsum, EINSUM_EXTENSION_FAMILY_ID, EINSUM_PARSE_CACHE,
     EINSUM_STATIC_PLANS_CACHE,
@@ -90,9 +91,6 @@ pub fn einsum_subscripts_with(
     subscripts: &EinsumSubscripts,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
-    #[cfg(feature = "autodiff")]
-    ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
-
     if inputs.is_empty() {
         return Err(Error::ContractionError(
             "einsum requires at least one input tensor".into(),
@@ -107,6 +105,13 @@ pub fn einsum_subscripts_with(
     }
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
+    if let Some(result) = try_direct_binary_dot_general(inputs, subscripts, &optimize)? {
+        return Ok(result);
+    }
+
+    #[cfg(feature = "autodiff")]
+    ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
+
     let subs = Subscripts::from(subscripts);
 
     let (plan_spec, static_tree) = if let Some(shapes) = concrete_shapes(inputs) {
@@ -160,6 +165,74 @@ pub fn einsum_subscripts_with(
         .into_iter()
         .next()
         .ok_or_else(|| Error::Internal("einsum extension produced no output".into()))
+}
+
+fn try_direct_binary_dot_general(
+    inputs: &[&TracedTensor],
+    subscripts: &EinsumSubscripts,
+    optimize: &EinsumOptimize,
+) -> Result<Option<TracedTensor>> {
+    if !optimize_allows_direct_binary_dot(optimize)? {
+        return Ok(None);
+    }
+    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
+        return Ok(None);
+    }
+
+    let lhs_labels = &subscripts.inputs[0];
+    let rhs_labels = &subscripts.inputs[1];
+    if lhs_labels.len() != inputs[0].rank || rhs_labels.len() != inputs[1].rank {
+        return Ok(None);
+    }
+    validate_direct_binary_dot_label_dims(inputs, subscripts)?;
+
+    let Some(plan) =
+        try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)
+    else {
+        return Ok(None);
+    };
+
+    let result = match plan.operand_order {
+        BinaryDotOperandOrder::Original => inputs[0].dot_general(inputs[1], plan.config),
+        BinaryDotOperandOrder::Swapped => inputs[1].dot_general(inputs[0], plan.config),
+    };
+    Ok(Some(result))
+}
+
+fn validate_direct_binary_dot_label_dims(
+    inputs: &[&TracedTensor],
+    subscripts: &EinsumSubscripts,
+) -> Result<()> {
+    let mut label_dims = std::collections::HashMap::new();
+    for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
+        let Some(shape) = tensor.sym_shape() else {
+            continue;
+        };
+        for (&label, dim) in labels.iter().zip(shape.iter()) {
+            let Some(dim) = dim.constant_value() else {
+                continue;
+            };
+            if let Some(existing) = label_dims.insert(label, dim) {
+                if existing != dim {
+                    return Err(Error::ContractionError(format!(
+                        "einsum label {label} has inconsistent dimensions {existing} and {dim}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optimize_allows_direct_binary_dot(optimize: &EinsumOptimize) -> Result<bool> {
+    match optimize {
+        EinsumOptimize::Auto(options) => {
+            options.validate().map_err(to_tenferro_error)?;
+            Ok(true)
+        }
+        EinsumOptimize::False => Ok(true),
+        EinsumOptimize::Nested(_) | EinsumOptimize::Path(_) | EinsumOptimize::Tree(_) => Ok(false),
+    }
 }
 
 fn cached_subscripts(

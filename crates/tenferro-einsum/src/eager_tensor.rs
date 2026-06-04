@@ -6,7 +6,7 @@ use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
-use crate::eager::try_build_exact_output_binary_dot_config;
+use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
 };
@@ -65,14 +65,15 @@ fn try_direct_binary_dot_general(
         return None;
     }
 
-    if let Some(config) =
-        try_build_exact_output_binary_dot_config(lhs_labels, rhs_labels, &subscripts.output)
+    if let Some(plan) =
+        try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)
     {
-        return Some(inputs[0].dot_general(inputs[1], config));
+        return Some(match plan.operand_order {
+            BinaryDotOperandOrder::Original => inputs[0].dot_general(inputs[1], plan.config),
+            BinaryDotOperandOrder::Swapped => inputs[1].dot_general(inputs[0], plan.config),
+        });
     }
-
-    try_build_exact_output_binary_dot_config(rhs_labels, lhs_labels, &subscripts.output)
-        .map(|config| inputs[1].dot_general(inputs[0], config))
+    None
 }
 
 fn infer_eager_output_shape(

@@ -6,6 +6,7 @@ use tenferro_tensor::{
     BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorView,
 };
 
+use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
 use crate::{ContractionTree, Subscripts};
 
 mod profile;
@@ -89,122 +90,11 @@ impl LabeledTensor<'_> {
     }
 }
 
-#[derive(Debug)]
-struct BinaryDotFastPlan {
-    result_labels: Vec<u32>,
-    target_labels: Vec<u32>,
-    config: DotGeneralConfig,
-}
-
-fn small_contains(labels: &[u32], label: u32) -> bool {
-    labels.contains(&label)
-}
-
-fn labels_are_unique(labels: &[u32]) -> bool {
-    let mut seen = Vec::with_capacity(labels.len());
-    for &label in labels {
-        if small_contains(&seen, label) {
-            return false;
-        }
-        seen.push(label);
-    }
-    true
-}
-
-fn try_build_binary_dot_fast_plan(
-    lhs_labels: &[u32],
-    rhs_labels: &[u32],
-    output_labels: &[u32],
-) -> Option<BinaryDotFastPlan> {
-    if !labels_are_unique(lhs_labels)
-        || !labels_are_unique(rhs_labels)
-        || !labels_are_unique(output_labels)
-    {
-        return None;
-    }
-
-    let mut lhs_contracting_dims = Vec::new();
-    let mut rhs_contracting_dims = Vec::new();
-    let mut lhs_batch_dims = Vec::new();
-    let mut rhs_batch_dims = Vec::new();
-    let mut lhs_free_labels = Vec::new();
-    let mut rhs_free_labels = Vec::new();
-    let mut batch_labels = Vec::new();
-
-    for (lhs_axis, &label) in lhs_labels.iter().enumerate() {
-        let rhs_axis = rhs_labels.iter().position(|candidate| *candidate == label);
-        let in_output = small_contains(output_labels, label);
-        match (rhs_axis, in_output) {
-            (Some(rhs_axis), true) => {
-                lhs_batch_dims.push(lhs_axis);
-                rhs_batch_dims.push(rhs_axis);
-                batch_labels.push(label);
-            }
-            (Some(rhs_axis), false) => {
-                lhs_contracting_dims.push(lhs_axis);
-                rhs_contracting_dims.push(rhs_axis);
-            }
-            (None, true) => lhs_free_labels.push(label),
-            (None, false) => return None,
-        }
-    }
-
-    for &label in rhs_labels {
-        if !small_contains(lhs_labels, label) {
-            if small_contains(output_labels, label) {
-                rhs_free_labels.push(label);
-            } else {
-                return None;
-            }
-        }
-    }
-
-    if lhs_contracting_dims.is_empty() {
-        return None;
-    }
-
-    for &label in output_labels {
-        if !small_contains(lhs_labels, label) && !small_contains(rhs_labels, label) {
-            return None;
-        }
-    }
-
-    let mut result_labels =
-        Vec::with_capacity(lhs_free_labels.len() + rhs_free_labels.len() + batch_labels.len());
-    result_labels.extend(lhs_free_labels);
-    result_labels.extend(rhs_free_labels);
-    result_labels.extend(batch_labels);
-
-    Some(BinaryDotFastPlan {
-        result_labels,
-        target_labels: output_labels.to_vec(),
-        config: DotGeneralConfig {
-            lhs_contracting_dims,
-            rhs_contracting_dims,
-            lhs_batch_dims,
-            rhs_batch_dims,
-        },
-    })
-}
-
-pub(crate) fn try_build_exact_output_binary_dot_config(
-    lhs_labels: &[u32],
-    rhs_labels: &[u32],
-    output_labels: &[u32],
-) -> Option<DotGeneralConfig> {
-    let plan = try_build_binary_dot_fast_plan(lhs_labels, rhs_labels, output_labels)?;
-    if plan.result_labels == plan.target_labels {
-        Some(plan.config)
-    } else {
-        None
-    }
-}
-
 fn execute_binary_dot_fast_plan<'a>(
     exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
-    plan: BinaryDotFastPlan,
+    plan: BinaryDotPlan,
     reorder_result: bool,
 ) -> Result<LabeledTensor<'a>> {
     let tensor = profile_eager_einsum_section("binary.fast_dot_general", || {
@@ -485,7 +375,7 @@ fn binary_contract<'a>(
     survive_labels: &[u32],
     reorder_result: bool,
 ) -> Result<LabeledTensor<'a>> {
-    if let Some(plan) = try_build_binary_dot_fast_plan(&lhs.labels, &rhs.labels, survive_labels) {
+    if let Some(plan) = try_build_binary_dot_plan(&lhs.labels, &rhs.labels, survive_labels) {
         return profile_eager_einsum_section("binary.fast_path", || {
             execute_binary_dot_fast_plan(exec, lhs, rhs, plan, reorder_result)
         });
@@ -755,7 +645,7 @@ fn eager_einsum_exec_binary_read_fast(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
-    plan: BinaryDotFastPlan,
+    plan: BinaryDotPlan,
 ) -> Result<Tensor> {
     let lhs = LabeledTensor {
         tensor: tensor_value_from_read(inputs[0].clone()),
@@ -784,7 +674,7 @@ fn try_eager_einsum_binary_read_fast(
         return None;
     }
     let plan = profile_eager_einsum_section("fast.build_plan", || {
-        try_build_binary_dot_fast_plan(
+        try_build_binary_dot_plan(
             &subscripts.inputs[0],
             &subscripts.inputs[1],
             &subscripts.output,
