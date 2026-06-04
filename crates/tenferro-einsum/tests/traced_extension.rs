@@ -20,7 +20,7 @@ fn traced_einsum_executes_through_registered_extension_runtime() {
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
-    assert_eq!(executor.cache_stats().extensions.entries, 0);
+    assert_eq!(executor.cache_stats().extensions.entries, 1);
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn runtime_registration_is_idempotent() {
 }
 
 #[test]
-fn runtime_einsum_plan_cache_is_extension_owned() {
+fn runtime_einsum_caches_are_extension_owned() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let y = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let mut compiler = GraphCompiler::new();
@@ -59,7 +59,7 @@ fn runtime_einsum_plan_cache_is_extension_owned() {
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
-    assert_eq!(executor.cache_stats().extensions.entries, 1);
+    assert_eq!(executor.cache_stats().extensions.entries, 2);
 }
 
 #[test]

@@ -79,10 +79,12 @@ CPU provider features are additive:
 
 CPU execution uses strided-kernel for elementwise/reduction/structural work and
 faer or BLAS/LAPACK for GEMM and linalg. `CpuBackend` stores the runtime
-provider selection; when both providers are compiled, `CpuBackend::new()`
-selects faer and explicit construction can select BLAS. `CpuContext` stores the
-CPU thread count as the single source of truth for faer parallelism, but it does
-not own a Rayon thread pool.
+provider selection for an individual backend instance. `CpuBackend::new()`
+chooses the compiled default provider: BLAS if `cpu-blas` is compiled,
+otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
+`CpuBackend::try_with_threads_and_kind` can select any provider compiled into
+the binary. `CpuContext` stores the CPU thread count as the single source of
+truth for faer parallelism, but it does not own a Rayon thread pool.
 
 `CpuBackend::with_backend_session` runs the whole compiled program through
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session

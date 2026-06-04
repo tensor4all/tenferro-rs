@@ -604,6 +604,7 @@ GraphCompiler
 GraphExecutor<B> / EagerRuntime<B>
   owns backend runtime extension caches:
   - runtime contraction plans
+  - inner execution programs
   - FFT plans
   - backend workspace pools
   - backend-specific analysis caches

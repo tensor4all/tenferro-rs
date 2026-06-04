@@ -3,13 +3,13 @@ use std::time::Duration;
 use super::*;
 
 #[test]
-fn default_backend_kind_prefers_faer_when_compiled() {
+fn default_backend_kind_prefers_blas_when_compiled() {
     let backend = CpuBackend::new();
 
-    #[cfg(feature = "cpu-faer")]
-    assert_eq!(backend.kind(), CpuBackendKind::Faer);
-    #[cfg(all(not(feature = "cpu-faer"), feature = "cpu-blas"))]
+    #[cfg(feature = "cpu-blas")]
     assert_eq!(backend.kind(), CpuBackendKind::Blas);
+    #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+    assert_eq!(backend.kind(), CpuBackendKind::Faer);
 }
 
 #[test]

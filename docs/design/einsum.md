@@ -131,7 +131,11 @@ resolved planning policy or explicit path so repeated symbolic-shape runs with
 the same concrete shapes and policy amortize planning cost without conflating
 different optimizer settings. The same plan specification participates in
 traced extension payload identity, so otherwise identical ops that use
-different planner options or paths remain distinct extension ops.
+different planner options or paths remain distinct extension ops. Runtime
+extension execution also caches the compiled inner execution program keyed by
+subscripts, concrete input shapes, input dtypes, and the resolved planning
+policy, so repeated eager or traced extension runs do not rebuild and compile
+the lowered inner graph.
 
 ## Planning
 

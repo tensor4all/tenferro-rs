@@ -27,6 +27,7 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_tensor::{DType, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
@@ -34,7 +35,8 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
-    einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
+    einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID,
+    EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE, EINSUM_RUNTIME_PLANS_CACHE,
 };
 #[cfg(test)]
 use crate::optimize::default_auto_options;
@@ -893,6 +895,72 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         })?
     };
 
+    let cached = cached_runtime_exec_program(ctx, op, tree.as_ref(), inputs, &shapes)?;
+    let program_inputs = runtime_program_inputs(inputs, cached.input_indices.as_slice())?;
+    let mut outputs = tenferro_runtime::exec::eval_exec_ir_unsegmented(
+        ctx.backend_mut(),
+        &cached.program,
+        program_inputs,
+    )
+    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
+    if outputs.len() != 1 {
+        return Err(tenferro_tensor::Error::backend_failure(
+            "einsum_extension",
+            format!("expected 1 output, got {}", outputs.len()),
+        ));
+    }
+    Ok(vec![outputs.remove(0)])
+}
+
+struct CachedRuntimeExecProgram {
+    program: ExecProgram,
+    input_indices: Vec<usize>,
+}
+
+fn cached_runtime_exec_program<B: TensorBackend>(
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+    op: &EinsumExtensionOp,
+    tree: &ContractionTree,
+    inputs: &[&Tensor],
+    shapes: &[Vec<usize>],
+) -> tenferro_tensor::Result<Arc<CachedRuntimeExecProgram>> {
+    let input_dtypes: Vec<DType> = inputs.iter().map(|tensor| tensor.dtype()).collect();
+    let mut plan_hasher = std::collections::hash_map::DefaultHasher::new();
+    hash_einsum_plan_spec(op.plan_spec(), &mut plan_hasher);
+    let key_data = (
+        op.subscripts().clone(),
+        shapes.to_vec(),
+        input_dtypes.clone(),
+        plan_hasher.finish(),
+    );
+    let key = ExtensionCacheKey::new(
+        EINSUM_EXTENSION_FAMILY_ID,
+        EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE,
+        hash_value(&key_data),
+    );
+    if let Some(cached) = ctx.caches_mut().get::<Arc<CachedRuntimeExecProgram>>(&key) {
+        return Ok(Arc::clone(cached));
+    }
+
+    let cached = Arc::new(build_runtime_exec_program(tree, inputs, shapes)?);
+    let retained_bytes = einsum_subscripts_retained_bytes(op.subscripts())
+        + shapes
+            .iter()
+            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
+            .sum::<usize>()
+        + input_dtypes.capacity() * std::mem::size_of::<DType>()
+        + std::mem::size_of::<u64>()
+        + cached_runtime_exec_program_retained_bytes(&cached);
+    ctx.caches_mut()
+        .put(key, Arc::clone(&cached), retained_bytes);
+    Ok(cached)
+}
+
+fn build_runtime_exec_program(
+    tree: &ContractionTree,
+    inputs: &[&Tensor],
+    shapes: &[Vec<usize>],
+) -> tenferro_tensor::Result<CachedRuntimeExecProgram> {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut input_vals = Vec::with_capacity(inputs.len());
     for input_idx in 0..inputs.len() {
@@ -902,7 +970,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         input_vals.push(ValueRef::Local(local));
     }
 
-    let result_ref = build_einsum_graph(&mut builder, tree.as_ref(), &input_vals, &shapes)
+    let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
         .map_err(einsum_runtime_error)?;
     let result_local = match result_ref {
         ValueRef::Local(local) => local,
@@ -921,7 +989,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let graph = materialize_merge(&view, &[output_key]);
     let compiled = compile(&graph);
 
-    let mut program_inputs = Vec::with_capacity(graph.inputs.len());
+    let mut input_indices = Vec::with_capacity(graph.inputs.len());
     let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
     let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     for key in &graph.inputs {
@@ -934,7 +1002,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
                         format!("runtime input {input_idx} missing"),
                     )
                 })?;
-                program_inputs.push((*tensor).clone());
+                input_indices.push(input_idx);
                 input_dtypes.push(tensor.dtype());
                 input_shapes.push(tenferro_ops::dim_expr::DimExpr::from_concrete(
                     tensor.shape(),
@@ -951,18 +1019,71 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
 
     let program =
         tenferro_runtime::compiler::compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-    let mut outputs = ctx
-        .execute_core_exec_program_unsegmented(&program, program_inputs)
-        .map_err(|err| {
-            tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string())
+    Ok(CachedRuntimeExecProgram {
+        program,
+        input_indices,
+    })
+}
+
+fn runtime_program_inputs(
+    inputs: &[&Tensor],
+    input_indices: &[usize],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut program_inputs = Vec::with_capacity(input_indices.len());
+    for &input_idx in input_indices {
+        let tensor = inputs.get(input_idx).ok_or_else(|| {
+            tenferro_tensor::Error::backend_failure(
+                "einsum_extension",
+                format!("runtime input {input_idx} missing"),
+            )
         })?;
-    if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::backend_failure(
-            "einsum_extension",
-            format!("expected 1 output, got {}", outputs.len()),
-        ));
+        program_inputs.push((*tensor).clone());
     }
-    Ok(vec![outputs.remove(0)])
+    Ok(program_inputs)
+}
+
+fn cached_runtime_exec_program_retained_bytes(cached: &CachedRuntimeExecProgram) -> usize {
+    std::mem::size_of::<CachedRuntimeExecProgram>()
+        + exec_program_retained_bytes(&cached.program)
+        + vec_retained_bytes(&cached.input_indices)
+}
+
+fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
+    std::mem::size_of::<ExecProgram>()
+        + vec_retained_bytes(&program.instructions)
+        + program
+            .instructions
+            .iter()
+            .map(exec_instruction_retained_bytes)
+            .sum::<usize>()
+        + vec_retained_bytes(&program.input_slots)
+        + vec_retained_bytes(&program.output_slots)
+}
+
+fn exec_instruction_retained_bytes(inst: &ExecInstruction) -> usize {
+    std::mem::size_of::<ExecInstruction>()
+        + exec_op_retained_bytes(&inst.op)
+        + vec_retained_bytes(&inst.input_slots)
+        + vec_retained_bytes(&inst.output_slots)
+        + vec_of_vec_retained_bytes(&inst.output_shapes)
+        + vec_of_vec_retained_bytes(&inst.output_extents)
+        + vec_retained_bytes(&inst.last_use)
+}
+
+fn exec_op_retained_bytes(op: &ExecOp) -> usize {
+    match op {
+        ExecOp::Constant { bytes, .. } => vec_retained_bytes(bytes),
+        ExecOp::Extension(extension) => std::mem::size_of_val(extension),
+        _ => 0,
+    }
+}
+
+fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity() * std::mem::size_of::<T>()
+}
+
+fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
+    values.iter().map(vec_retained_bytes).sum()
 }
 
 fn cached_runtime_tree<B: TensorBackend>(

@@ -135,8 +135,9 @@ pub enum CpuBackendKind {
 impl CpuBackendKind {
     /// Return the default compiled CPU provider.
     ///
-    /// faer is preferred when both faer and BLAS are compiled in because it has
-    /// no external provider-link requirement.
+    /// BLAS is preferred when both BLAS and faer are compiled in because an
+    /// application that links a BLAS/LAPACK provider normally expects
+    /// provider-backed kernels to use it by default.
     ///
     /// # Examples
     ///
@@ -146,13 +147,13 @@ impl CpuBackendKind {
     /// let _kind = CpuBackendKind::default_compiled();
     /// ```
     pub fn default_compiled() -> Self {
-        #[cfg(feature = "cpu-faer")]
-        {
-            Self::Faer
-        }
-        #[cfg(all(not(feature = "cpu-faer"), feature = "cpu-blas"))]
+        #[cfg(feature = "cpu-blas")]
         {
             Self::Blas
+        }
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        {
+            Self::Faer
         }
     }
 

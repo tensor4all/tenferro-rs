@@ -59,10 +59,10 @@ Two extension ops that compare equal must remain interchangeable even if their
 caches are empty, warm, or independently owned.
 
 For einsum, `GraphCompiler` owns parse and static-plan caches, while
-`GraphExecutor` and `EagerRuntime` own runtime contraction-plan caches through
-their extension executors. These caches default to bounded LRU capacity 256 and
-expose capacity, clear, entry count, and retained-byte stats through the owning
-runtime.
+`GraphExecutor` and `EagerRuntime` own runtime contraction-plan and inner
+execution-program caches through their extension executors. These caches default
+to bounded LRU capacity 256 and expose capacity, clear, entry count, and
+retained-byte stats through the owning runtime.
 
 Avoid hidden process-global or thread-local caches in extension crates. If a
 cache lives longer than one call, make the owner explicit and bounded, and give

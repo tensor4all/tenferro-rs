@@ -121,7 +121,8 @@ assert_eq!(c.try_concrete_shape(), Some(vec![2, 2]));
 
 Einsum uses the shared extension cache infrastructure from `tenferro-runtime`.
 Compile-time extension caches live on `GraphCompiler`; runtime
-contraction-plan caches live on `GraphExecutor` and `EagerRuntime`.
+contraction-plan and inner execution-program caches live on `GraphExecutor`
+and `EagerRuntime`.
 Einsum plan cache identity includes the planning policy or explicit path, not
 only the subscripts and shapes. Traced extension operation identity also includes
 those planner options and paths, so two calls with different policies are not
