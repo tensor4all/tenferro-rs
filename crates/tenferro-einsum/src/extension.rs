@@ -895,6 +895,13 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         })?
     };
 
+    if is_binary_non_contracting(&subs) {
+        let output = ctx
+            .backend_mut()
+            .with_backend_session(|exec| crate::eager::eager_einsum_exec(exec, inputs, &tree))?;
+        return Ok(vec![output]);
+    }
+
     let cached = cached_runtime_exec_program(ctx, op, tree.as_ref(), inputs, &shapes)?;
     let program_inputs = runtime_program_inputs(inputs, cached.input_indices.as_slice())?;
     let mut outputs = tenferro_runtime::exec::eval_exec_ir_unsegmented(
@@ -910,6 +917,18 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         ));
     }
     Ok(vec![outputs.remove(0)])
+}
+
+fn is_binary_non_contracting(subs: &Subscripts) -> bool {
+    if subs.inputs.len() != 2 {
+        return false;
+    }
+
+    let lhs = &subs.inputs[0];
+    let rhs = &subs.inputs[1];
+    let output = &subs.output;
+    !lhs.iter()
+        .any(|label| rhs.contains(label) && !output.contains(label))
 }
 
 struct CachedRuntimeExecProgram {

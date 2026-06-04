@@ -81,6 +81,32 @@ fn find_label_size(label: u32, label_sizes: &[&[(u32, usize)]]) -> Result<usize>
     )))
 }
 
+fn select_outer_product_label_order(
+    canonical_labels: &[u32],
+    target_labels: Option<&[u32]>,
+) -> Vec<u32> {
+    let Some(target_labels) = target_labels else {
+        return canonical_labels.to_vec();
+    };
+    if target_labels.len() != canonical_labels.len() {
+        return canonical_labels.to_vec();
+    }
+
+    let mut used = vec![false; canonical_labels.len()];
+    for &label in target_labels {
+        let Some(axis) = canonical_labels
+            .iter()
+            .enumerate()
+            .find_map(|(axis, candidate)| (*candidate == label && !used[axis]).then_some(axis))
+        else {
+            return canonical_labels.to_vec();
+        };
+        used[axis] = true;
+    }
+
+    target_labels.to_vec()
+}
+
 fn labeled_operand<'a>(
     operands: &'a [LabeledVal],
     index: usize,
@@ -332,6 +358,7 @@ fn binary_contract(
             &lhs_free_labels,
             &rhs_free_labels,
             &label_to_size,
+            reorder_result.then_some(survive_labels),
         )?
     };
 
@@ -389,13 +416,15 @@ fn outer_product(
     lhs_free_labels: &[u32],
     rhs_free_labels: &[u32],
     label_to_size: &dyn Fn(u32) -> Result<usize>,
+    target_labels: Option<&[u32]>,
 ) -> Result<LabeledVal> {
-    let combined_labels: Vec<u32> = lhs_free_labels
+    let canonical_labels: Vec<u32> = lhs_free_labels
         .iter()
         .chain(rhs_free_labels.iter())
         .chain(batch_labels.iter())
         .copied()
         .collect();
+    let combined_labels = select_outer_product_label_order(&canonical_labels, target_labels);
     let combined_shape: Vec<usize> = combined_labels
         .iter()
         .map(|&l| label_to_size(l))
