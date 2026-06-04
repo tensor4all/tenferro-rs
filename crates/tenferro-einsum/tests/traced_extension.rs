@@ -41,6 +41,69 @@ fn traced_binary_col_major_matmul_uses_direct_dot_general_without_extension_runt
 }
 
 #[test]
+fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension_runtime() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let subs = tenferro_einsum::Subscripts::parse("ji,kj->ki").unwrap();
+    let lhs_shape = vec![2, 3];
+    let rhs_shape = vec![4, 2];
+    let shapes = [&lhs_shape[..], &rhs_shape[..]];
+    let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+    let mut compiler = GraphCompiler::new();
+
+    let c = tenferro_einsum::einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ji,kj->ki",
+        tenferro_einsum::EinsumOptimize::Tree(tree),
+    )
+    .unwrap();
+    let program = compiler.compile(&c).unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let out = executor.run(&program).unwrap();
+
+    assert_eq!(out.shape(), &[4, 3]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
+}
+
+#[test]
+fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension_runtime()
+{
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let subs = tenferro_einsum::Subscripts::parse("ji,kj->ki").unwrap();
+    let lhs_shape = vec![2, 3];
+    let rhs_shape = vec![4, 2];
+    let shapes = [&lhs_shape[..], &rhs_shape[..]];
+    let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+    let mut compiler = GraphCompiler::new();
+
+    let c = tenferro_einsum::einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ji,kj->ki",
+        tenferro_einsum::EinsumOptimize::Tree(tree),
+    )
+    .unwrap();
+    let program = compiler
+        .compile_with_input_specs(&c, &[(&a, DType::F64, &[2, 3]), (&b, DType::F64, &[4, 2])])
+        .unwrap();
+
+    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let out = executor
+        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value)])
+        .unwrap();
+
+    assert_eq!(out.shape(), &[4, 3]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
+}
+
+#[test]
 fn runtime_registration_is_idempotent() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 

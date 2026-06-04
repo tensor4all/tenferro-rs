@@ -56,8 +56,9 @@ pub fn einsum_subscripts(
 /// `optimize` is converted to a shape-independent plan specification carried
 /// by the extension payload. `EinsumOptimize::Path` uses JAX-style positions
 /// over the current shrinking operand list, so it works with symbolic traced
-/// inputs. `EinsumOptimize::Tree` requires concrete shapes; when accepted, the
-/// tree is converted to fixed contraction pairs for the payload.
+/// inputs. `EinsumOptimize::Tree` requires concrete shapes for N-ary extension
+/// execution; binary trees that lower exactly to `dot_general` bypass the
+/// extension path and may use symbolic traced inputs.
 ///
 /// Planner options, explicit paths, and fixed plan identities affect traced
 /// extension payload identity and the einsum compile/runtime plan caches.
@@ -78,8 +79,9 @@ pub fn einsum_with(
 /// `optimize` is converted to a shape-independent plan specification carried
 /// by the extension payload. `EinsumOptimize::Path` uses JAX-style positions
 /// over the current shrinking operand list, so it works with symbolic traced
-/// inputs. `EinsumOptimize::Tree` requires concrete shapes; when accepted, the
-/// tree is converted to fixed contraction pairs for the payload.
+/// inputs. `EinsumOptimize::Tree` requires concrete shapes for N-ary extension
+/// execution; binary trees that lower exactly to `dot_general` bypass the
+/// extension path and may use symbolic traced inputs.
 ///
 /// Planner options, explicit paths, and fixed plan identities affect traced
 /// extension payload identity and the einsum compile/runtime plan caches.
@@ -172,10 +174,10 @@ fn try_direct_binary_dot_general(
     subscripts: &EinsumSubscripts,
     optimize: &EinsumOptimize,
 ) -> Result<Option<TracedTensor>> {
-    if !optimize_allows_direct_binary_dot(optimize)? {
+    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
         return Ok(None);
     }
-    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
+    if !optimize_allows_direct_binary_dot(optimize)? {
         return Ok(None);
     }
 
@@ -231,7 +233,10 @@ fn optimize_allows_direct_binary_dot(optimize: &EinsumOptimize) -> Result<bool> 
             Ok(true)
         }
         EinsumOptimize::False => Ok(true),
-        EinsumOptimize::Nested(_) | EinsumOptimize::Path(_) | EinsumOptimize::Tree(_) => Ok(false),
+        EinsumOptimize::Tree(tree) => {
+            Ok(tree.step_count() == 1 && matches!(tree.step_pair(0), Some((0, 1)) | Some((1, 0))))
+        }
+        EinsumOptimize::Nested(_) | EinsumOptimize::Path(_) => Ok(false),
     }
 }
 

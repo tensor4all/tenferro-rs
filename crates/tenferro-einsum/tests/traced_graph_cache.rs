@@ -556,16 +556,18 @@ fn symbolic_einsum_accepts_custom_auto_options() {
 
 #[test]
 fn symbolic_einsum_rejects_precomputed_tree() {
-    let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk->ik").unwrap();
-    let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..]]).unwrap();
+    let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk,kl->il").unwrap();
+    let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..], &[4, 5][..]])
+        .unwrap();
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(
         &mut compiler,
-        &[&a, &b],
-        "ij,jk->ik",
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
         EinsumOptimize::Tree(tree),
     );
     let err = match result {

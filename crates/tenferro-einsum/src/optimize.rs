@@ -58,8 +58,11 @@ pub enum EinsumOptimize {
     ///
     /// A tree contains concrete shape-dependent planning results. It is
     /// accepted when shapes are concrete, then converted into fixed contraction
-    /// pairs for the extension payload. Use [`EinsumOptimize::Path`] instead
-    /// when building a traced graph from symbolic inputs.
+    /// pairs for the extension payload. A binary tree with the single pair
+    /// `(0, 1)` or `(1, 0)` may bypass the extension path and lower directly to
+    /// `dot_general`, including with symbolic traced inputs. Use
+    /// [`EinsumOptimize::Path`] instead when building a symbolic traced graph
+    /// for N-ary contraction.
     Tree(ContractionTree),
 }
 
