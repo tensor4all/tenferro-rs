@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TypedTensor};
 
 use super::cache::GraphExecutorCacheStats;
 use super::program::{GraphProgram, GraphProgramInput};
 use crate::error::{Error, Result};
-use crate::exec::ExecProgram;
+use crate::exec::{ExecProgram, ExecSlot};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
 use crate::traced::TracedTensor;
 
@@ -35,7 +35,7 @@ pub struct GraphExecutor<B: TensorBackend + 'static> {
     backend: B,
     backend_cache: B::RuntimeCache,
     extension_executor: ExtensionExecutor<B>,
-    slot_workspace: Vec<Option<Tensor>>,
+    slot_workspace: Vec<Option<ExecSlot<'static>>>,
 }
 
 impl<B: TensorBackend + 'static> GraphExecutor<B> {
@@ -72,6 +72,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// ```
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    /// Return output tensors to the executor backend's reusable buffer pool.
+    ///
+    /// This is useful for tight benchmark or serving loops that consume an
+    /// output before the next run and want backend-level output allocation
+    /// behavior to match caching allocators.
+    pub fn reclaim_outputs(&mut self, outputs: Vec<Tensor>) {
+        for tensor in outputs {
+            self.backend.reclaim_buffer(tensor);
+        }
     }
 
     /// Borrow the extension runtime executor owned by this graph executor.
@@ -185,6 +196,20 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         expect_single_output(&mut outputs)
     }
 
+    /// Run a one-output program with explicit borrowed runtime placeholder bindings.
+    ///
+    /// Unlike [`run_with_inputs`](Self::run_with_inputs), caller-owned input
+    /// tensors are read through [`TensorRead`] and are not cloned into executor
+    /// slots.
+    pub fn run_with_input_reads<'a>(
+        &mut self,
+        program: &'a GraphProgram,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<Tensor> {
+        let mut outputs = self.run_many_with_input_reads(program, bindings)?;
+        expect_single_output(&mut outputs)
+    }
+
     /// Run a program with explicit runtime placeholder bindings.
     ///
     /// # Examples
@@ -212,6 +237,20 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ) -> Result<Vec<Tensor>> {
         let input_tensors = resolve_inputs(program, bindings)?;
         self.eval_exec_ir(&program.exec, input_tensors)
+    }
+
+    /// Run a program with explicit borrowed runtime placeholder bindings.
+    ///
+    /// Bindings override program defaults and are validated against the input
+    /// specs captured in the compiled program. Bound tensors are borrowed by
+    /// the executor for this call instead of cloned into input slots.
+    pub fn run_many_with_input_reads<'a>(
+        &mut self,
+        program: &'a GraphProgram,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<Vec<Tensor>> {
+        let inputs = resolve_input_reads(program, bindings)?;
+        self.eval_exec_ir_slots(&program.exec, inputs)
     }
 
     /// Evaluate an execution program through this executor's backend state.
@@ -268,7 +307,28 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &ExecProgram,
         inputs: &[Tensor],
     ) -> Result<Vec<Tensor>> {
-        self.eval_exec_ir(program, inputs.to_vec())
+        let inputs = inputs
+            .iter()
+            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+            .collect();
+        self.eval_exec_ir_slots(program, inputs)
+    }
+
+    fn eval_exec_ir_slots<'a>(
+        &mut self,
+        program: &ExecProgram,
+        inputs: Vec<ExecSlot<'a>>,
+    ) -> Result<Vec<Tensor>> {
+        validate_exec_input_count(program, inputs.len())?;
+        let mut slot_workspace = Vec::new();
+        crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+            &mut self.backend,
+            program,
+            inputs,
+            &mut slot_workspace,
+            &mut self.backend_cache,
+            Some(&mut self.extension_executor),
+        )
     }
 
     /// Clear backend-specific runtime analysis cache entries.
@@ -422,6 +482,57 @@ fn resolve_inputs(
         .collect()
 }
 
+fn resolve_input_reads<'a>(
+    program: &'a GraphProgram,
+    bindings: &[(&TracedTensor, TensorRead<'a>)],
+) -> Result<Vec<ExecSlot<'a>>> {
+    let program_keys: HashSet<_> = program
+        .inputs
+        .iter()
+        .map(|input| input.key.clone())
+        .collect();
+    let tangent_root_specs = tangent_root_specs(&program.inputs);
+    let default_map: HashMap<_, _> = program
+        .inputs
+        .iter()
+        .filter_map(|input| {
+            input
+                .default_tensor
+                .as_ref()
+                .map(|tensor| (input.key.clone(), TensorRead::from_tensor(tensor.as_ref())))
+        })
+        .collect();
+    let mut binding_map = HashMap::new();
+    for (index, (placeholder, read)) in bindings.iter().enumerate() {
+        if placeholder.data.is_some() {
+            return Err(Error::UnexpectedBinding {
+                binding_index: index,
+            });
+        }
+        let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
+            binding_index: index,
+        })?;
+        validate_binding_placeholder_read(index, placeholder, read)?;
+        let is_program_input = program_keys.contains(&key);
+        if !is_program_input && !tangent_root_specs.contains_key(&key) {
+            return Err(Error::UnexpectedBinding {
+                binding_index: index,
+            });
+        }
+        if binding_map.insert(key.clone(), read.clone()).is_some() {
+            return Err(Error::DuplicateBinding {
+                input_key: format!("{:?}", key),
+            });
+        }
+    }
+
+    program
+        .inputs
+        .iter()
+        .map(|input| resolve_input_read(input, &binding_map, &default_map))
+        .collect()
+}
+
 fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &GraphProgramInput> {
     let mut specs = HashMap::new();
     for input in inputs {
@@ -452,6 +563,26 @@ fn resolve_input(
     };
     validate_input_tensor(input, &tensor)?;
     Ok(tensor)
+}
+
+fn resolve_input_read<'a>(
+    input: &GraphProgramInput,
+    bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
+    defaults: &HashMap<TensorInputKey, TensorRead<'a>>,
+) -> Result<ExecSlot<'a>> {
+    let slot = if let Some(bound) = bindings.get(&input.key) {
+        ExecSlot::Read(bound.clone())
+    } else if let Some(default) = defaults.get(&input.key) {
+        ExecSlot::Read(default.clone())
+    } else if let Some(zero) = deferred_zero_for_tangent_key_read(&input.key, bindings, defaults) {
+        ExecSlot::Owned(zero)
+    } else {
+        return Err(Error::UnboundPlaceholder {
+            input_key: format!("{:?}", input.key),
+        });
+    };
+    validate_input_slot(input, &slot)?;
+    Ok(slot)
 }
 
 fn validate_binding_placeholder(
@@ -491,6 +622,43 @@ fn validate_binding_placeholder(
     Ok(())
 }
 
+fn validate_binding_placeholder_read(
+    index: usize,
+    placeholder: &TracedTensor,
+    read: &TensorRead<'_>,
+) -> Result<()> {
+    if placeholder.data.is_some() {
+        return Err(Error::UnexpectedBinding {
+            binding_index: index,
+        });
+    }
+    if placeholder.dtype != read.dtype() {
+        return Err(Error::PlaceholderDtypeMismatch {
+            expected: placeholder.dtype,
+            actual: read.dtype(),
+        });
+    }
+    match placeholder.try_concrete_shape() {
+        Some(expected_shape) => {
+            if expected_shape.as_slice() != read.shape() {
+                return Err(Error::PlaceholderShapeMismatch {
+                    expected: expected_shape,
+                    actual: read.shape().to_vec(),
+                });
+            }
+        }
+        None => {
+            if placeholder.rank != read.shape().len() {
+                return Err(Error::PlaceholderRankMismatch {
+                    expected: placeholder.rank,
+                    actual: read.shape().len(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_input_tensor(input: &GraphProgramInput, tensor: &Tensor) -> Result<()> {
     if input.dtype != tensor.dtype() {
         return Err(Error::PlaceholderDtypeMismatch {
@@ -507,10 +675,39 @@ fn validate_input_tensor(input: &GraphProgramInput, tensor: &Tensor) -> Result<(
     Ok(())
 }
 
+fn validate_input_slot(input: &GraphProgramInput, slot: &ExecSlot<'_>) -> Result<()> {
+    if input.dtype != slot.dtype() {
+        return Err(Error::PlaceholderDtypeMismatch {
+            expected: input.dtype,
+            actual: slot.dtype(),
+        });
+    }
+    if input.shape.as_slice() != slot.shape() {
+        return Err(Error::PlaceholderShapeMismatch {
+            expected: input.shape.clone(),
+            actual: slot.shape().to_vec(),
+        });
+    }
+    Ok(())
+}
+
 fn deferred_zero_for_tangent_key(
     key: &TensorInputKey,
     bindings: &HashMap<TensorInputKey, &Tensor>,
     defaults: &HashMap<TensorInputKey, &Tensor>,
+) -> Option<Tensor> {
+    if !key.is_tangent() {
+        return None;
+    }
+    let root = tangent_primal_root(key);
+    let primal = bindings.get(root).or_else(|| defaults.get(root))?;
+    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
+}
+
+fn deferred_zero_for_tangent_key_read<'a>(
+    key: &TensorInputKey,
+    bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
+    defaults: &HashMap<TensorInputKey, TensorRead<'a>>,
 ) -> Option<Tensor> {
     if !key.is_tangent() {
         return None;

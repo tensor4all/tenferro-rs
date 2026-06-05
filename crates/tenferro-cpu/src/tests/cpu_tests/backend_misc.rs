@@ -41,6 +41,86 @@ fn test_elementwise_add_acquires_output_from_pool() {
 }
 
 #[test]
+fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_inputs() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![2.0, 3.0, 5.0],
+    ));
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 11.0]));
+
+    let out = backend
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&lhs),
+            &[3, 2],
+            &[0],
+            TensorRead::from_tensor(&rhs),
+            &[3, 2],
+            &[1],
+        )
+        .unwrap()
+        .expect("CPU backend should execute broadcast multiply directly");
+
+    assert_eq!(out.shape(), &[3, 2]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        &[14.0, 21.0, 35.0, 22.0, 33.0, 55.0]
+    );
+}
+
+#[test]
+fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
+    let tensors = [
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32])),
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64])),
+        Tensor::I32(TypedTensor::from_vec_col_major(vec![1], vec![1_i32])),
+        Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![1_i64])),
+        Tensor::Bool(TypedTensor::from_vec_col_major(vec![1], vec![true])),
+        Tensor::C32(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![Complex32::new(1.0, 0.0)],
+        )),
+        Tensor::C64(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![Complex64::new(1.0, 0.0)],
+        )),
+    ];
+
+    for tensor in &tensors {
+        let materialized =
+            crate::materialize_tensor_read("dot_general", TensorRead::from_tensor(tensor)).unwrap();
+        assert_eq!(materialized.dtype(), tensor.dtype());
+        assert_eq!(materialized.shape(), tensor.shape());
+    }
+
+    let shape = [1usize];
+    let f32s = [1.0_f32];
+    let f64s = [1.0_f64];
+    let i32s = [1_i32];
+    let i64s = [1_i64];
+    let bools = [true];
+    let c32s = [Complex32::new(1.0, 0.0)];
+    let c64s = [Complex64::new(1.0, 0.0)];
+    let views = [
+        TensorView::f32(&shape, &f32s).unwrap(),
+        TensorView::f64(&shape, &f64s).unwrap(),
+        TensorView::i32(&shape, &i32s).unwrap(),
+        TensorView::i64(&shape, &i64s).unwrap(),
+        TensorView::bool(&shape, &bools).unwrap(),
+        TensorView::c32(&shape, &c32s).unwrap(),
+        TensorView::c64(&shape, &c64s).unwrap(),
+    ];
+
+    for view in views {
+        let dtype = view.dtype();
+        let materialized =
+            crate::materialize_tensor_read("dot_general", TensorRead::from_view(view)).unwrap();
+        assert_eq!(materialized.dtype(), dtype);
+        assert_eq!(materialized.shape(), &[1]);
+    }
+}
+
+#[test]
 fn test_structural_transpose_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
     backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(

@@ -79,8 +79,9 @@ and `cpu-blas` can be enabled by itself or together with `cpu-faer`:
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", features = ["cpu-blas"] }
 ```
 
-When both are compiled, `CpuBackend::new()` selects faer. Use
-`CpuBackend::with_kind(CpuBackendKind::Blas)` when a linked BLAS/LAPACK
-provider should handle provider-backed kernels. See
+`CpuBackend::new()` selects the compiled default provider: BLAS when `cpu-blas`
+is compiled, otherwise faer. Use `CpuBackend::with_kind(CpuBackendKind::Faer)`
+when faer should handle provider-backed kernels in a build that includes faer.
+See
 [Parallelism and Caching](parallelism-and-caching.md) for thread-count and
 cache-retention controls.

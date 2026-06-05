@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use tenferro_tensor::{
-    BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorView,
+    BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRank, TensorRead,
+    TensorView, TypedTensorView,
 };
 
+use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
 use crate::{ContractionTree, Subscripts};
 
 mod profile;
@@ -48,11 +50,155 @@ impl TensorValue<'_> {
         }
     }
 
+    fn tensor_view(&self) -> TensorView<'_> {
+        match self {
+            Self::Borrowed(tensor) => tensor_as_view(tensor),
+            Self::View(view) => view.clone(),
+            Self::Owned(tensor) => tensor_as_view(tensor),
+        }
+    }
+
     fn reclaim_if_owned(self, exec: &mut dyn BackendSession) {
         if let Self::Owned(tensor) = self {
             exec.reclaim_buffer(tensor);
         }
     }
+}
+
+fn tensor_as_view(tensor: &Tensor) -> TensorView<'_> {
+    match tensor {
+        Tensor::F32(tensor) => TensorView::F32(tensor.as_view()),
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        Tensor::I32(tensor) => TensorView::I32(tensor.as_view()),
+        Tensor::I64(tensor) => TensorView::I64(tensor.as_view()),
+        Tensor::Bool(tensor) => TensorView::Bool(tensor.as_view()),
+        Tensor::C32(tensor) => TensorView::C32(tensor.as_view()),
+        Tensor::C64(tensor) => TensorView::C64(tensor.as_view()),
+    }
+}
+
+fn tensor_view_has_backend_buffer(view: &TensorView<'_>) -> bool {
+    match view {
+        TensorView::F32(view) => view.backend_buffer().is_some(),
+        TensorView::F64(view) => view.backend_buffer().is_some(),
+        TensorView::I32(view) => view.backend_buffer().is_some(),
+        TensorView::I64(view) => view.backend_buffer().is_some(),
+        TensorView::Bool(view) => view.backend_buffer().is_some(),
+        TensorView::C32(view) => view.backend_buffer().is_some(),
+        TensorView::C64(view) => view.backend_buffer().is_some(),
+    }
+}
+
+fn broadcast_shape_strides<T: 'static, R: TensorRank>(
+    view: &TypedTensorView<'_, T, R>,
+    shape: &[usize],
+    dims: &[usize],
+) -> Result<(Vec<usize>, Vec<isize>)> {
+    if dims.len() != view.shape().len() {
+        return Err(Error::RankMismatch {
+            op: EAGER_EINSUM_OP,
+            expected: view.shape().len(),
+            actual: dims.len(),
+        });
+    }
+
+    let mut seen = vec![false; shape.len()];
+    let mut strides = vec![0isize; shape.len()];
+    for (src_axis, &dst_axis) in dims.iter().enumerate() {
+        if dst_axis >= shape.len() {
+            return Err(Error::AxisOutOfBounds {
+                op: EAGER_EINSUM_OP,
+                axis: dst_axis,
+                rank: shape.len(),
+            });
+        }
+        if seen[dst_axis] {
+            return Err(Error::DuplicateAxis {
+                op: EAGER_EINSUM_OP,
+                axis: dst_axis,
+                role: "broadcast dims",
+            });
+        }
+        seen[dst_axis] = true;
+
+        let source_dim = view.shape()[src_axis];
+        let target_dim = shape[dst_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return Err(Error::ShapeMismatch {
+                op: EAGER_EINSUM_OP,
+                lhs: view.shape().to_vec(),
+                rhs: shape.to_vec(),
+            });
+        }
+        if source_dim == target_dim {
+            strides[dst_axis] = view.strides()[src_axis];
+        }
+    }
+
+    Ok((shape.to_vec(), strides))
+}
+
+fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
+    view: TypedTensorView<'a, T, R>,
+    shape: &[usize],
+    dims: &[usize],
+) -> Result<TypedTensorView<'a, T>> {
+    let (shape, strides) = broadcast_shape_strides(&view, shape, dims)?;
+    TypedTensorView::from_slice(shape, strides, view.offset(), view.as_physical_slice())
+}
+
+fn broadcast_tensor_view<'a>(
+    view: TensorView<'a>,
+    shape: &[usize],
+    dims: &[usize],
+) -> Result<TensorView<'a>> {
+    match view {
+        TensorView::F32(view) => Ok(TensorView::F32(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::F64(view) => Ok(TensorView::F64(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::I32(view) => Ok(TensorView::I32(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::I64(view) => Ok(TensorView::I64(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::Bool(view) => Ok(TensorView::Bool(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::C32(view) => Ok(TensorView::C32(broadcast_typed_view(view, shape, dims)?)),
+        TensorView::C64(view) => Ok(TensorView::C64(broadcast_typed_view(view, shape, dims)?)),
+    }
+}
+
+fn try_broadcast_tensor_read<'a>(
+    value: &'a TensorValue<'_>,
+    shape: &[usize],
+    dims: &[usize],
+) -> Option<Result<TensorRead<'a>>> {
+    let view = value.tensor_view();
+    if tensor_view_has_backend_buffer(&view) {
+        return None;
+    }
+    Some(broadcast_tensor_view(view, shape, dims).map(TensorRead::from_view))
+}
+
+fn select_outer_product_label_order(
+    canonical_labels: &[u32],
+    target_labels: Option<&[u32]>,
+) -> Vec<u32> {
+    let Some(target_labels) = target_labels else {
+        return canonical_labels.to_vec();
+    };
+    if target_labels.len() != canonical_labels.len() {
+        return canonical_labels.to_vec();
+    }
+
+    let mut used = vec![false; canonical_labels.len()];
+    for &label in target_labels {
+        let Some(axis) = canonical_labels
+            .iter()
+            .enumerate()
+            .find_map(|(axis, candidate)| (*candidate == label && !used[axis]).then_some(axis))
+        else {
+            return canonical_labels.to_vec();
+        };
+        used[axis] = true;
+    }
+
+    target_labels.to_vec()
 }
 
 struct LabeledTensor<'a> {
@@ -89,109 +235,11 @@ impl LabeledTensor<'_> {
     }
 }
 
-#[derive(Debug)]
-struct BinaryDotFastPlan {
-    result_labels: Vec<u32>,
-    target_labels: Vec<u32>,
-    config: DotGeneralConfig,
-}
-
-fn small_contains(labels: &[u32], label: u32) -> bool {
-    labels.contains(&label)
-}
-
-fn labels_are_unique(labels: &[u32]) -> bool {
-    let mut seen = Vec::with_capacity(labels.len());
-    for &label in labels {
-        if small_contains(&seen, label) {
-            return false;
-        }
-        seen.push(label);
-    }
-    true
-}
-
-fn try_build_binary_dot_fast_plan(
-    lhs_labels: &[u32],
-    rhs_labels: &[u32],
-    output_labels: &[u32],
-) -> Option<BinaryDotFastPlan> {
-    if !labels_are_unique(lhs_labels)
-        || !labels_are_unique(rhs_labels)
-        || !labels_are_unique(output_labels)
-    {
-        return None;
-    }
-
-    let mut lhs_contracting_dims = Vec::new();
-    let mut rhs_contracting_dims = Vec::new();
-    let mut lhs_batch_dims = Vec::new();
-    let mut rhs_batch_dims = Vec::new();
-    let mut lhs_free_labels = Vec::new();
-    let mut rhs_free_labels = Vec::new();
-    let mut batch_labels = Vec::new();
-
-    for (lhs_axis, &label) in lhs_labels.iter().enumerate() {
-        let rhs_axis = rhs_labels.iter().position(|candidate| *candidate == label);
-        let in_output = small_contains(output_labels, label);
-        match (rhs_axis, in_output) {
-            (Some(rhs_axis), true) => {
-                lhs_batch_dims.push(lhs_axis);
-                rhs_batch_dims.push(rhs_axis);
-                batch_labels.push(label);
-            }
-            (Some(rhs_axis), false) => {
-                lhs_contracting_dims.push(lhs_axis);
-                rhs_contracting_dims.push(rhs_axis);
-            }
-            (None, true) => lhs_free_labels.push(label),
-            (None, false) => return None,
-        }
-    }
-
-    for &label in rhs_labels {
-        if !small_contains(lhs_labels, label) {
-            if small_contains(output_labels, label) {
-                rhs_free_labels.push(label);
-            } else {
-                return None;
-            }
-        }
-    }
-
-    if lhs_contracting_dims.is_empty() {
-        return None;
-    }
-
-    for &label in output_labels {
-        if !small_contains(lhs_labels, label) && !small_contains(rhs_labels, label) {
-            return None;
-        }
-    }
-
-    let mut result_labels =
-        Vec::with_capacity(lhs_free_labels.len() + rhs_free_labels.len() + batch_labels.len());
-    result_labels.extend(lhs_free_labels);
-    result_labels.extend(rhs_free_labels);
-    result_labels.extend(batch_labels);
-
-    Some(BinaryDotFastPlan {
-        result_labels,
-        target_labels: output_labels.to_vec(),
-        config: DotGeneralConfig {
-            lhs_contracting_dims,
-            rhs_contracting_dims,
-            lhs_batch_dims,
-            rhs_batch_dims,
-        },
-    })
-}
-
 fn execute_binary_dot_fast_plan<'a>(
     exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
-    plan: BinaryDotFastPlan,
+    plan: BinaryDotPlan,
     reorder_result: bool,
 ) -> Result<LabeledTensor<'a>> {
     let tensor = profile_eager_einsum_section("binary.fast_dot_general", || {
@@ -415,11 +463,10 @@ fn outer_product<'a>(
     batch_labels: &[u32],
     lhs_free_labels: &[u32],
     rhs_free_labels: &[u32],
+    target_labels: Option<&[u32]>,
 ) -> Result<LabeledTensor<'a>> {
     if lhs.labels == rhs.labels {
-        let lhs_tensor = lhs.tensor_cow();
-        let rhs_tensor = rhs.tensor_cow();
-        let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
+        let tensor = exec.mul_read(lhs.tensor_read(), rhs.tensor_read())?;
         let labels = lhs.labels.clone();
         lhs.reclaim_if_owned(exec);
         rhs.reclaim_if_owned(exec);
@@ -429,12 +476,13 @@ fn outer_product<'a>(
         });
     }
 
-    let combined_labels: Vec<u32> = lhs_free_labels
+    let canonical_labels: Vec<u32> = lhs_free_labels
         .iter()
         .chain(rhs_free_labels.iter())
         .chain(batch_labels.iter())
         .copied()
         .collect();
+    let combined_labels = select_outer_product_label_order(&canonical_labels, target_labels);
     let combined_shape: Vec<usize> = combined_labels
         .iter()
         .map(|label| label_size(*label, &[&lhs, &rhs]))
@@ -450,15 +498,35 @@ fn outer_product<'a>(
         .map(|label| find_label_axis(&combined_labels, *label))
         .collect::<Result<_>>()?;
 
-    let lhs_input = lhs.tensor_cow();
-    let rhs_input = rhs.tensor_cow();
-    let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
-    let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
-    let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
+    let tensor = match exec.execute_broadcast_multiply(
+        lhs.tensor.tensor_read(),
+        &combined_shape,
+        &lhs_dims,
+        rhs.tensor.tensor_read(),
+        &combined_shape,
+        &rhs_dims,
+    )? {
+        Some(tensor) => tensor,
+        None => match (
+            try_broadcast_tensor_read(&lhs.tensor, &combined_shape, &lhs_dims),
+            try_broadcast_tensor_read(&rhs.tensor, &combined_shape, &rhs_dims),
+        ) {
+            (Some(lhs_read), Some(rhs_read)) => exec.mul_read(lhs_read?, rhs_read?)?,
+            _ => {
+                let lhs_input = lhs.tensor_cow();
+                let rhs_input = rhs.tensor_cow();
+                let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
+                let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
+                let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
+                exec.reclaim_buffer(lhs_tensor);
+                exec.reclaim_buffer(rhs_tensor);
+                tensor
+            }
+        },
+    };
+
     lhs.reclaim_if_owned(exec);
     rhs.reclaim_if_owned(exec);
-    exec.reclaim_buffer(lhs_tensor);
-    exec.reclaim_buffer(rhs_tensor);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),
         labels: combined_labels,
@@ -472,7 +540,7 @@ fn binary_contract<'a>(
     survive_labels: &[u32],
     reorder_result: bool,
 ) -> Result<LabeledTensor<'a>> {
-    if let Some(plan) = try_build_binary_dot_fast_plan(&lhs.labels, &rhs.labels, survive_labels) {
+    if let Some(plan) = try_build_binary_dot_plan(&lhs.labels, &rhs.labels, survive_labels) {
         return profile_eager_einsum_section("binary.fast_path", || {
             execute_binary_dot_fast_plan(exec, lhs, rhs, plan, reorder_result)
         });
@@ -551,6 +619,7 @@ fn binary_contract<'a>(
             &batch_labels,
             &lhs_free_labels,
             &rhs_free_labels,
+            reorder_result.then_some(survive_labels),
         )?
     } else {
         let (labels, config) = profile_eager_einsum_section("binary.build_dot_config", || {
@@ -701,7 +770,7 @@ fn eager_einsum_exec_values<'a>(
     Ok(reordered.tensor.into_tensor())
 }
 
-fn eager_einsum_exec(
+pub(crate) fn eager_einsum_exec(
     exec: &mut dyn BackendSession,
     inputs: &[&Tensor],
     tree: &ContractionTree,
@@ -742,7 +811,7 @@ fn eager_einsum_exec_binary_read_fast(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
-    plan: BinaryDotFastPlan,
+    plan: BinaryDotPlan,
 ) -> Result<Tensor> {
     let lhs = LabeledTensor {
         tensor: tensor_value_from_read(inputs[0].clone()),
@@ -771,7 +840,7 @@ fn try_eager_einsum_binary_read_fast(
         return None;
     }
     let plan = profile_eager_einsum_section("fast.build_plan", || {
-        try_build_binary_dot_fast_plan(
+        try_build_binary_dot_plan(
             &subscripts.inputs[0],
             &subscripts.inputs[1],
             &subscripts.output,

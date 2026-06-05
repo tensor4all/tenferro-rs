@@ -39,6 +39,7 @@ computegraph.workspace = true
 tidu = { workspace = true, optional = true }
 lru.workspace = true
 omeco.workspace = true
+smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

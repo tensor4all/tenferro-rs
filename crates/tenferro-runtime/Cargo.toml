@@ -26,6 +26,7 @@ computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
+smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

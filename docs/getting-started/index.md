@@ -15,8 +15,9 @@ evolving:
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
 ```
 
-This uses the default `cpu-faer` backend. To use the LAPACK/BLAS CPU backend,
-enable `cpu-blas` and select the BLAS provider at runtime:
+With default features, this compiles the `cpu-faer` provider, so
+`CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
+`cpu-blas` and link a BLAS/LAPACK provider:
 
 ```toml
 [dependencies]
@@ -24,11 +25,12 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", defa
 ```
 
 CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
-must be enabled, and builds may enable both. `CpuBackend::new()` selects faer
-when it is compiled in; use the BLAS constructor when BLAS/LAPACK execution is
-wanted. The `cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the
-system toolchain, or enable the provider feature on `tenferro-tensor` to build
-against OpenBLAS:
+must be enabled, and builds may enable both. `CpuBackend::new()` selects the
+compiled default provider: BLAS when `cpu-blas` is compiled, otherwise faer.
+Use `CpuBackend::with_kind` when a program needs explicit provider selection
+within a build that has multiple providers. The `cpu-blas` backend needs a
+BLAS/LAPACK provider. Link one from the system toolchain, or enable the provider
+feature on `tenferro-tensor` to build against OpenBLAS:
 
 ```toml
 [dependencies]

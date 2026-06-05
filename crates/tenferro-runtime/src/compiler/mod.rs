@@ -1,4 +1,5 @@
 use computegraph::compile::CompiledProgram;
+use smallvec::SmallVec;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
@@ -10,10 +11,24 @@ use crate::shape_infer::{
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
+pub mod optimizer;
+mod options;
+
+pub use options::{CompilerOptions, OptimizerConfig};
+
 pub fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
+) -> ExecProgram {
+    compile_std_to_exec_with_options(prog, input_dtypes, input_shapes, CompilerOptions::default())
+}
+
+pub fn compile_std_to_exec_with_options(
+    prog: &CompiledProgram<StdTensorOp>,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+    options: CompilerOptions,
 ) -> ExecProgram {
     assert_eq!(
         prog.input_slots.len(),
@@ -135,8 +150,8 @@ pub fn compile_std_to_exec(
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: instruction_dtype,
-                output_shapes,
-                output_extents,
+                output_shapes: output_shapes.into(),
+                output_extents: output_extents.into(),
                 last_use: Vec::new(),
             }
         })
@@ -148,12 +163,7 @@ pub fn compile_std_to_exec(
         output_slots: prog.output_slots.clone(),
         n_slots: prog.n_slots,
     };
-    conj_sinking(&mut program, input_dtypes, input_shapes);
-    dot_dimension_sorter(&mut program);
-    transpose_folding(&mut program);
-    dot_conj_folding(&mut program);
-    eliminate_dead_code(&mut program);
-    populate_last_use(&mut program);
+    optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer);
     program
 }
 
@@ -319,6 +329,7 @@ struct ProducerInfo {
 }
 
 type ProducerMap = Vec<Option<ProducerInfo>>;
+type AxisVec = SmallVec<[usize; 4]>;
 
 // ============================================================================
 // Pass 0: ConjSinking
@@ -527,8 +538,8 @@ impl ConjSinkingState<'_> {
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,
-            output_shapes: vec![meta.shape],
-            output_extents: vec![meta.extents],
+            output_shapes: vec![meta.shape].into(),
+            output_extents: vec![meta.extents].into(),
             last_use: Vec::new(),
         };
         record_producer(self.producer_by_slot, &instr);
@@ -680,8 +691,8 @@ fn is_sorted(dims: &[usize]) -> bool {
     dims.windows(2).all(|w| w[0] <= w[1])
 }
 
-fn argsort(dims: &[usize]) -> Vec<usize> {
-    let mut indices: Vec<usize> = (0..dims.len()).collect();
+fn argsort(dims: &[usize]) -> AxisVec {
+    let mut indices: AxisVec = (0..dims.len()).collect();
     indices.sort_by_key(|&i| dims[i]);
     indices
 }
@@ -691,7 +702,146 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 }
 
 // ============================================================================
-// Pass 2: TransposeFolding
+// Pass 2: AlgebraicLayoutSimplifier
+// ============================================================================
+//
+// Remove layout operations that are algebraically equivalent to identity.
+// This pass is intentionally small; more layout algebra belongs here as it is
+// split out of the fixed compile pipeline.
+
+/// Simplify algebraically redundant layout operations in place.
+pub fn algebraic_layout_simplifier(program: &mut ExecProgram) {
+    loop {
+        if !algebraic_layout_simplifier_one_pass(program) {
+            break;
+        }
+    }
+}
+
+fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
+    let producer_by_slot = producer_indices_by_slot(program);
+    let use_counts = slot_use_counts(program);
+    let mut changed = false;
+
+    for index in 0..program.instructions.len() {
+        if program.instructions[index].input_slots.len() != 1
+            || program.instructions[index].output_slots.len() != 1
+        {
+            continue;
+        }
+        let output_slot = program.instructions[index].output_slots[0];
+        if use_counts.get(output_slot).copied().unwrap_or(0) == 0 {
+            continue;
+        }
+
+        match program.instructions[index].op.clone() {
+            ExecOp::Transpose { perm } if is_identity_perm(&perm) => {
+                let from = output_slot;
+                let to = program.instructions[index].input_slots[0];
+                replace_slot_uses(program, from, to);
+                changed = true;
+            }
+            ExecOp::Reshape { shape } if is_identity_reshape_shape(&shape) => {
+                let from = output_slot;
+                let to = program.instructions[index].input_slots[0];
+                replace_slot_uses(program, from, to);
+                changed = true;
+            }
+            ExecOp::Transpose { perm } => {
+                let input_slot = program.instructions[index].input_slots[0];
+                let Some(producer_idx) = producer_by_slot.get(input_slot).copied().flatten() else {
+                    continue;
+                };
+                if producer_idx == index || use_counts.get(input_slot).copied().unwrap_or(0) != 1 {
+                    continue;
+                }
+                let Some(first_perm) =
+                    single_output_transpose_perm(&program.instructions[producer_idx])
+                else {
+                    continue;
+                };
+                let Some(composed) = compose_transpose_perms(first_perm, &perm) else {
+                    continue;
+                };
+                let source_slot = program.instructions[producer_idx].input_slots[0];
+                if is_identity_perm(&composed) {
+                    replace_slot_uses(program, output_slot, source_slot);
+                } else {
+                    program.instructions[index].input_slots[0] = source_slot;
+                    program.instructions[index].op = ExecOp::Transpose {
+                        perm: composed.into_vec(),
+                    };
+                }
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+
+    changed
+}
+
+fn is_identity_perm(perm: &[usize]) -> bool {
+    perm.iter()
+        .enumerate()
+        .all(|(axis, &mapped)| axis == mapped)
+}
+
+fn is_identity_reshape_shape(shape: &[DimExpr]) -> bool {
+    if shape.is_empty() {
+        return false;
+    }
+    shape.iter().enumerate().all(|(axis, dim)| {
+        matches!(
+            dim,
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: dim_axis
+            } if *dim_axis == axis
+        )
+    })
+}
+
+fn single_output_transpose_perm(instr: &ExecInstruction) -> Option<&[usize]> {
+    if instr.input_slots.len() != 1 || instr.output_slots.len() != 1 {
+        return None;
+    }
+    match &instr.op {
+        ExecOp::Transpose { perm } => Some(perm),
+        _ => None,
+    }
+}
+
+fn compose_transpose_perms(first: &[usize], second: &[usize]) -> Option<AxisVec> {
+    if first.len() != second.len()
+        || !is_valid_permutation(first, first.len())
+        || !is_valid_permutation(second, second.len())
+    {
+        return None;
+    }
+    Some(second.iter().map(|&axis| first[axis]).collect())
+}
+
+fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
+    if from == to {
+        return;
+    }
+    for instr in &mut program.instructions {
+        for slot in &mut instr.input_slots {
+            if *slot == from {
+                *slot = to;
+            }
+        }
+    }
+    for slot in &mut program.output_slots {
+        if *slot == from {
+            *slot = to;
+        }
+    }
+}
+
+// ============================================================================
+// Pass 3: TransposeFolding
 // ============================================================================
 //
 // Absorb Transpose instructions that feed directly into DotGeneral by
@@ -699,6 +849,18 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 
 /// Fold Transpose instructions into DotGeneral dimension numbers.
 pub fn transpose_folding(program: &mut ExecProgram) {
+    loop {
+        let producer_by_slot = producer_indices_by_slot(program);
+        let changed = transpose_fold_one_pass(program, &producer_by_slot);
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Fold layout chains into DotGeneral where the rewrite is known to preserve
+/// DotGeneral's free/contracting/batch axis order constraints.
+pub fn layout_chain_transpose_folding(program: &mut ExecProgram) {
     loop {
         let producer_by_slot = producer_indices_by_slot(program);
         let changed = transpose_fold_one_pass(program, &producer_by_slot);
@@ -816,7 +978,7 @@ fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[
         && is_role_group_order_preserved(batch_dims, perm)
 }
 
-fn free_axes(rank: usize, contracting_dims: &[usize], batch_dims: &[usize]) -> Option<Vec<usize>> {
+fn free_axes(rank: usize, contracting_dims: &[usize], batch_dims: &[usize]) -> Option<AxisVec> {
     let mut used = vec![false; rank];
     for &axis in contracting_dims.iter().chain(batch_dims.iter()) {
         if axis >= rank || used[axis] {
@@ -839,7 +1001,7 @@ fn is_valid_permutation(perm: &[usize], rank: usize) -> bool {
     true
 }
 
-fn map_axes(axes: &[usize], perm: &[usize]) -> Option<Vec<usize>> {
+fn map_axes(axes: &[usize], perm: &[usize]) -> Option<AxisVec> {
     axes.iter().map(|&axis| perm.get(axis).copied()).collect()
 }
 

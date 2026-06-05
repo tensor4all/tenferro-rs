@@ -1,10 +1,11 @@
 use computegraph::graph::GraphBuilder;
-use computegraph::types::ValueRef;
+use computegraph::types::{ValueKey, ValueRef};
 
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
-use crate::builder::build_einsum_graph;
+use crate::builder::{build_einsum_graph, build_einsum_graph_dim_expr};
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
 use crate::{Error, Result};
@@ -16,6 +17,14 @@ fn input_key(id: u64) -> TensorInputKey {
 fn make_tree(notation: &str, shapes: &[&[usize]]) -> ContractionTree {
     let subscripts = Subscripts::parse(notation).expect("bad notation");
     ContractionTree::optimize(&subscripts, shapes).expect("optimize failed")
+}
+
+#[test]
+fn builder_axis_vec_stays_inline_for_common_rank() {
+    let mut axes = crate::builder::AxisVec::new();
+    axes.extend(0..4);
+
+    assert!(!axes.spilled());
 }
 
 fn unwrap_local(result: Result<ValueRef<StdTensorOp>>) -> usize {
@@ -39,6 +48,37 @@ fn builder_reports_missing_output_label_instead_of_panicking() {
         err,
         Error::InvalidArgument(message)
             if message.contains("missing") && message.contains("label")
+    ));
+}
+
+#[test]
+fn graph_identity_external_input_is_localized() {
+    let tree = make_tree("ij->ij", &[&[2, 3]]);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+
+    let result = build_einsum_graph_dim_expr(
+        &mut builder,
+        &tree,
+        &[ValueRef::External(ValueKey::Input(input_key(0)))],
+        &[vec![
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 1,
+            },
+        ]],
+    );
+
+    let local = unwrap_local(result);
+    builder.set_outputs(vec![local]);
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    assert!(matches!(
+        graph.operations()[0].operation,
+        StdTensorOp::Reshape { .. }
     ));
 }
 
@@ -92,6 +132,123 @@ fn graph_outer_product_i_j_ij() {
     builder.set_outputs(vec![unwrap_local(result)]);
     let graph = builder.build();
     assert!(!graph.operations().is_empty());
+}
+
+#[test]
+fn graph_outer_product_accepts_symbolic_dim_expr_shapes() {
+    let tree = make_tree("i,j->ij", &[&[3], &[4]]);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+    let b = builder.add_input(input_key(1));
+
+    let result = build_einsum_graph_dim_expr(
+        &mut builder,
+        &tree,
+        &[ValueRef::Local(a), ValueRef::Local(b)],
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    );
+
+    builder.set_outputs(vec![unwrap_local(result)]);
+    let graph = builder.build();
+    let broadcasts: Vec<_> = graph
+        .operations()
+        .iter()
+        .filter_map(|node| match &node.operation {
+            StdTensorOp::BroadcastInDim { shape, dims } => Some((shape, dims)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(broadcasts.len(), 2);
+    assert!(broadcasts.iter().any(|(shape, dims)| {
+        dims.as_slice() == [0]
+            && matches!(
+                shape.as_slice(),
+                [
+                    DimExpr::InputDim {
+                        input_idx: 0,
+                        axis: 0
+                    },
+                    DimExpr::InputDim {
+                        input_idx: 1,
+                        axis: 0
+                    }
+                ]
+            )
+    }));
+    assert!(broadcasts.iter().any(|(shape, dims)| {
+        dims.as_slice() == [1]
+            && matches!(
+                shape.as_slice(),
+                [
+                    DimExpr::InputDim {
+                        input_idx: 1,
+                        axis: 0
+                    },
+                    DimExpr::InputDim {
+                        input_idx: 0,
+                        axis: 0
+                    }
+                ]
+            )
+    }));
+}
+
+#[test]
+fn graph_outer_product_uses_single_broadcast_input_when_secondary_shape_is_unused() {
+    let tree = make_tree("ij,j->ij", &[&[3, 4], &[4]]);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+    let b = builder.add_input(input_key(1));
+
+    let result = build_einsum_graph_dim_expr(
+        &mut builder,
+        &tree,
+        &[ValueRef::Local(a), ValueRef::Local(b)],
+        &[
+            vec![
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 1,
+                },
+            ],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    );
+
+    builder.set_outputs(vec![unwrap_local(result)]);
+    let graph = builder.build();
+    let broadcast_inputs: Vec<_> = graph
+        .operations()
+        .iter()
+        .filter_map(|node| match &node.operation {
+            StdTensorOp::BroadcastInDim { dims, .. } => Some((dims.as_slice(), node.inputs.len())),
+            _ => None,
+        })
+        .collect();
+
+    assert!(broadcast_inputs
+        .iter()
+        .any(|(dims, input_count)| *dims == [0, 1] && *input_count == 1));
+    assert!(broadcast_inputs
+        .iter()
+        .any(|(dims, input_count)| *dims == [1] && *input_count == 2));
 }
 
 #[test]

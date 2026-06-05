@@ -3,7 +3,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::GraphExecutor;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorRead, TracedTensor};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
     GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
@@ -75,8 +75,8 @@ fn single_instruction_program(op: ExecOp, input_count: usize) -> ExecProgram {
             input_slots: (0..input_count).collect(),
             output_slots: vec![input_count],
             dtype: DType::F64,
-            output_shapes: vec![Vec::new()],
-            output_extents: empty_extents(1),
+            output_shapes: vec![Vec::new()].into(),
+            output_extents: empty_extents(1).into(),
             last_use: vec![false; input_count],
         }],
         input_slots: (0..input_count).collect(),
@@ -474,8 +474,8 @@ fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
             input_slots: vec![0, 1, 2],
             output_slots: vec![3],
             dtype: DType::F64,
-            output_shapes: vec![Vec::new()],
-            output_extents: empty_extents(1),
+            output_shapes: vec![Vec::new()].into(),
+            output_extents: empty_extents(1).into(),
             last_use: vec![true, true, true],
         }],
         input_slots: vec![0, 1, 2],
@@ -508,8 +508,8 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
             input_slots: vec![],
             output_slots: vec![0],
             dtype: DType::F64,
-            output_shapes: vec![Vec::new()],
-            output_extents: empty_extents(1),
+            output_shapes: vec![Vec::new()].into(),
+            output_extents: empty_extents(1).into(),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -540,8 +540,8 @@ fn eval_exec_ir_materializes_complex_constants() {
             input_slots: vec![],
             output_slots: vec![0],
             dtype: DType::C64,
-            output_shapes: vec![Vec::new()],
-            output_extents: empty_extents(1),
+            output_shapes: vec![Vec::new()].into(),
+            output_extents: empty_extents(1).into(),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -587,8 +587,8 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
             input_slots: vec![0, 1],
             output_slots: vec![2],
             dtype: DType::F64,
-            output_shapes: vec![Vec::new()],
-            output_extents: empty_extents(1),
+            output_shapes: vec![Vec::new()].into(),
+            output_extents: empty_extents(1).into(),
             last_use: vec![false, false],
         }],
         input_slots: vec![0],
@@ -616,8 +616,8 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 input_slots: vec![0, 1],
                 output_slots: vec![2],
                 dtype: DType::F64,
-                output_shapes: vec![Vec::new()],
-                output_extents: empty_extents(1),
+                output_shapes: vec![Vec::new()].into(),
+                output_extents: empty_extents(1).into(),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -625,8 +625,8 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 input_slots: vec![2],
                 output_slots: vec![3],
                 dtype: DType::F64,
-                output_shapes: vec![Vec::new()],
-                output_extents: empty_extents(1),
+                output_shapes: vec![Vec::new()].into(),
+                output_extents: empty_extents(1).into(),
                 last_use: vec![true],
             },
         ],
@@ -644,4 +644,26 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 3.0);
     assert_eq!(executor.backend().reclaimed, 3);
+}
+
+#[test]
+fn graph_executor_does_not_reclaim_borrowed_input_slots() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = (&x + &x).neg();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let input = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let mut executor = GraphExecutor::new(FakeTensorBackend::default());
+
+    let outputs = executor
+        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .unwrap();
+
+    assert_eq!(executor.backend().calls, vec!["add", "neg"]);
+    assert_eq!(executor.backend().reclaimed, 1);
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_value(&outputs[0]), 3.0);
+    assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 }

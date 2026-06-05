@@ -16,7 +16,7 @@ use super::cache::{
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
-use crate::compiler::compile_std_to_exec;
+use crate::compiler::{compile_std_to_exec_with_options, CompilerOptions};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
@@ -49,6 +49,7 @@ struct InputDescriptor {
 pub struct GraphCompiler {
     compile_cache: LruCache<CacheKey, ExecProgram>,
     extension_cache: ExtensionCacheStore,
+    compiler_options: CompilerOptions,
 }
 
 impl GraphCompiler {
@@ -68,6 +69,33 @@ impl GraphCompiler {
                 NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
             ),
             extension_cache: ExtensionCacheStore::new(),
+            compiler_options: CompilerOptions::default(),
+        }
+    }
+
+    /// Create a compiler with explicit lowering and optimizer options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
+    /// use tenferro_runtime::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::with_compiler_options(CompilerOptions {
+    ///     optimizer: OptimizerConfig {
+    ///         dot_decomposer: true,
+    ///         ..OptimizerConfig::default()
+    ///     },
+    /// });
+    /// assert!(compiler.compiler_options().optimizer.dot_decomposer);
+    /// ```
+    pub fn with_compiler_options(compiler_options: CompilerOptions) -> Self {
+        Self {
+            compile_cache: LruCache::new(
+                NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
+            ),
+            extension_cache: ExtensionCacheStore::new(),
+            compiler_options,
         }
     }
 
@@ -203,6 +231,48 @@ impl GraphCompiler {
         self.compile_cache.resize(capacity);
     }
 
+    /// Return the compiler options used for future graph lowerings.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::compiler::CompilerOptions;
+    /// use tenferro_runtime::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::new();
+    /// assert_eq!(compiler.compiler_options(), CompilerOptions::default());
+    /// ```
+    pub fn compiler_options(&self) -> CompilerOptions {
+        self.compiler_options
+    }
+
+    /// Replace compiler options and clear compiled graph cache entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
+    /// use tenferro_runtime::GraphCompiler;
+    ///
+    /// let mut compiler = GraphCompiler::new();
+    /// let options = CompilerOptions {
+    ///     optimizer: OptimizerConfig {
+    ///         dot_decomposer: true,
+    ///         ..OptimizerConfig::default()
+    ///     },
+    /// };
+    /// compiler.set_compiler_options(options);
+    /// assert_eq!(compiler.compiler_options(), options);
+    /// assert_eq!(compiler.compile_cache_len(), 0);
+    /// ```
+    pub fn set_compiler_options(&mut self, compiler_options: CompilerOptions) {
+        if self.compiler_options == compiler_options {
+            return;
+        }
+        self.compiler_options = compiler_options;
+        self.clear_compile_cache();
+    }
+
     /// Clear the compiled-program cache.
     ///
     /// # Examples
@@ -333,7 +403,12 @@ impl GraphCompiler {
             ));
         }
 
-        let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
+        let exec = compile_std_to_exec_with_options(
+            &compiled,
+            &input_dtypes,
+            &input_shapes,
+            self.compiler_options,
+        );
         let exec = self.get_or_compile(exec);
         Ok(GraphProgram::new(exec, descriptors))
     }

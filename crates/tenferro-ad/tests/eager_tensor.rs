@@ -3,7 +3,9 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor};
+use tenferro_runtime::{
+    DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor, TensorRead, TensorView,
+};
 
 #[path = "eager_tensor/context_and_promotion.rs"]
 mod context_and_promotion;
@@ -106,6 +108,47 @@ fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
     CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()))
         .clone()
+}
+
+#[test]
+fn eager_tensor_exposes_metadata_read_and_materialization_without_data_accessor() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]),
+        test_ctx(),
+    );
+
+    assert_eq!(x.shape(), &[2, 3]);
+    assert_eq!(x.dtype(), DType::F64);
+
+    let read = x.tensor_read();
+    assert_eq!(read.shape(), &[2, 3]);
+    assert_eq!(read.dtype(), DType::F64);
+
+    let materialized = x.to_tensor().unwrap();
+    assert_eq!(materialized.shape(), &[2, 3]);
+    assert_eq!(f64_data(&materialized), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+}
+
+#[test]
+fn untracked_eager_transpose_is_exposed_as_borrowed_view_until_materialized() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]),
+        test_ctx(),
+    );
+
+    let transposed = x.transpose(&[1, 0]).unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+
+    match transposed.tensor_read() {
+        TensorRead::View(view) => {
+            assert_eq!(view.shape(), &[3, 2]);
+        }
+        TensorRead::Tensor(_) => panic!("untracked transpose should stay as a borrowed view"),
+    }
+
+    let materialized = transposed.to_tensor().unwrap();
+    assert_eq!(materialized.shape(), &[3, 2]);
+    assert_eq!(f64_data(&materialized), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
 
 #[test]
@@ -612,6 +655,54 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
 }
 
 #[test]
+fn eager_untracked_structural_ops_return_lazy_views() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        test_ctx(),
+    );
+
+    let transposed = x.transpose(&[1, 0]).unwrap();
+    match transposed.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[3, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+        }
+        other => panic!("expected transpose to remain a lazy f64 view, got {other:?}"),
+    }
+
+    let reshaped = x.reshape(&[6]).unwrap();
+    match reshaped.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[6]);
+            assert_eq!(view.strides(), &[1]);
+        }
+        other => panic!("expected reshape to remain a lazy f64 view, got {other:?}"),
+    }
+}
+
+#[test]
+fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        test_ctx(),
+    );
+
+    let transposed = x.transpose(&[1, 0]).unwrap();
+    match transposed.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[3, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+        }
+        other => panic!("expected tracked transpose to remain a lazy f64 view, got {other:?}"),
+    }
+
+    let loss = transposed.reduce_sum(&[0, 1]).unwrap();
+    let _cotangents = loss.backward().unwrap();
+    let grad = x.grad().unwrap();
+    assert_close_slice(f64_data(grad.as_ref()), &[1.0; 6], TOL);
+}
+
+#[test]
 fn eager_elementwise_primal_ops_div_abs_and_sin() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![8.0_f64, -6.0, 9.0]),
@@ -699,6 +790,36 @@ fn eager_slice_primal() {
 }
 
 #[test]
+fn eager_untracked_slice_returns_lazy_view() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(
+            vec![4, 3],
+            vec![
+                1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        ),
+        test_ctx(),
+    );
+
+    let y = x
+        .slice(SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![4, 3],
+            strides: vec![2, 2],
+        })
+        .unwrap();
+
+    match y.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[2, 2]);
+            assert_eq!(view.strides(), &[2, 8]);
+        }
+        other => panic!("expected slice to remain a lazy f64 view, got {other:?}"),
+    }
+    assert_close_slice(f64_data(y.data()), &[1.0, 3.0, 9.0, 11.0], TOL);
+}
+
+#[test]
 fn eager_broadcast_in_dim_primal() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
@@ -707,6 +828,24 @@ fn eager_broadcast_in_dim_primal() {
     let y = x.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 
     assert_eq!(y.data().shape(), &[3, 2]);
+    assert_close_slice(f64_data(y.data()), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0], TOL);
+}
+
+#[test]
+fn eager_untracked_broadcast_in_dim_returns_lazy_view() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
+    let y = x.broadcast_in_dim(&[3, 2], &[0]).unwrap();
+
+    match y.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[3, 2]);
+            assert_eq!(view.strides(), &[1, 0]);
+        }
+        other => panic!("expected broadcast_in_dim to remain a lazy f64 view, got {other:?}"),
+    }
     assert_close_slice(f64_data(y.data()), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0], TOL);
 }
 

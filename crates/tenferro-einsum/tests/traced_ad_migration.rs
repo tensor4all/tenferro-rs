@@ -2,7 +2,7 @@
 
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::einsum;
+use tenferro_einsum::EinsumOptimize;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -70,7 +70,13 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
     ));
     let mut compiler = GraphCompiler::new();
 
-    let y = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let y = tenferro_einsum::einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ij,jk->ik",
+        EinsumOptimize::Path(vec![(0, 1)]),
+    )
+    .unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
     let result = run_traced(&grad_a);
 

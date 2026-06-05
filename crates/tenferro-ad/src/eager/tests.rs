@@ -6,15 +6,19 @@ use computegraph::types::ValueKey;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::SymDim;
+use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::Tensor;
+use tenferro_tensor::{TensorFusion, TensorRead};
 use tidu::ADKey;
+
+use crate::eager_backend::EagerBackend;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,
 };
 use super::{
     eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
-    profile_eager_op_section, record_eager_op_profile, zero_like_tensor,
+    profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
 };
 
 #[test]
@@ -72,4 +76,69 @@ fn zero_like_tensor_covers_non_f64_dtypes() {
         let zero = zero_like_tensor(&input, &mut backend);
         assert_eq!(zero.shape(), input.shape());
     }
+}
+
+#[test]
+fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
+    let mut backend = EagerBackend::cpu(CpuBackend::new());
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]);
+
+    let out = backend
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&lhs),
+            &[2, 3],
+            &[0],
+            TensorRead::from_tensor(&rhs),
+            &[2, 3],
+            &[1],
+        )
+        .unwrap()
+        .expect("eager backend should delegate CPU broadcast multiply fusion");
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        &[10.0, 15.0, 14.0, 21.0, 22.0, 33.0]
+    );
+}
+
+#[test]
+fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx,
+    );
+    let x_t = x.transpose(&[1, 0]).unwrap();
+    assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
+    assert!(!x_t.materialized_cache_is_initialized());
+
+    let doubled = x_t.add(&x_t).unwrap();
+    assert!(!x_t.materialized_cache_is_initialized());
+    assert_eq!(
+        doubled.data().as_slice::<f64>().unwrap(),
+        &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
+    );
+
+    let reduced = x_t.reduce_sum(&[0]).unwrap();
+    assert!(!x_t.materialized_cache_is_initialized());
+    assert_eq!(reduced.data().as_slice::<f64>().unwrap(), &[9.0, 12.0]);
+
+    let dot = x_t
+        .dot_general(
+            &x,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
+    assert!(!x_t.materialized_cache_is_initialized());
+    assert_eq!(
+        dot.data().as_slice::<f64>().unwrap(),
+        &[5.0, 11.0, 17.0, 11.0, 25.0, 39.0, 17.0, 39.0, 61.0]
+    );
 }

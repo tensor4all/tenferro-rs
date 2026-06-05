@@ -4,6 +4,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::config::SliceConfig;
 use tenferro_tensor_core::SliceSpec as CoreSliceSpec;
 pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
 
@@ -375,6 +376,16 @@ impl<T: 'static> TensorBufferRefMut<'_, T> {
 }
 
 /// Read-only borrowed view of typed tensor storage with arbitrary strides.
+///
+/// `TypedTensorView` is the typed representation for layout-only tensor
+/// transformations. It borrows an existing host or backend allocation and
+/// carries a logical shape, strides, and an offset. Slicing, reshaping when
+/// stride-compatible, and [`transpose_view`](TypedTensorView::transpose_view)
+/// update only metadata and do not copy storage.
+///
+/// Use [`TypedTensorView::to_contiguous`] when a compact owned
+/// [`TypedTensor`] is required. Use [`TypedTensorView::as_slice`] only when the
+/// current view is contiguous in the requested layout.
 ///
 /// # Examples
 ///
@@ -2061,6 +2072,13 @@ pub enum TensorView<'a> {
 ///
 /// `TensorRead` lets kernels accept either an owned tensor reference or a
 /// borrowed [`TensorView`] without forcing callers to materialize first.
+/// The `View` variant preserves arbitrary strides and offsets, so kernels that
+/// support strided reads can consume transposes, slices, and broadcasts directly.
+///
+/// `TensorRead` is intentionally borrowed. It is an input-dispatch type, not an
+/// owned lazy tensor value. APIs that need to store a lazy layout result should
+/// keep an owned base tensor plus layout metadata, then expose a `TensorRead`
+/// only for the duration of kernel dispatch.
 ///
 /// # Examples
 ///
@@ -2079,6 +2097,316 @@ pub enum TensorView<'a> {
 pub enum TensorRead<'a> {
     Tensor(&'a Tensor),
     View(TensorView<'a>),
+}
+
+/// Owned lazy tensor view over a shared base tensor.
+///
+/// This stores only ownership of the base allocation plus logical layout
+/// metadata. Borrow it as [`TensorRead`] for kernels that understand strides,
+/// or materialize it explicitly with [`TensorOwnedView::to_tensor`].
+#[derive(Clone, Debug)]
+pub struct TensorOwnedView {
+    base: Arc<Tensor>,
+    layout: TensorLayout<DynRank>,
+}
+
+/// Owned tensor value that can be compact or a lazy view.
+///
+/// `TensorValue` is the owned counterpart to [`TensorRead`]. It is suitable for
+/// storing eager results that should remain lazy until an operation actually
+/// requires compact materialized storage.
+#[derive(Clone, Debug)]
+pub enum TensorValue {
+    Tensor(Arc<Tensor>),
+    View(TensorOwnedView),
+}
+
+impl TensorOwnedView {
+    /// Create an owned view preserving the base tensor's current layout.
+    pub fn from_tensor(base: Arc<Tensor>) -> Self {
+        let layout = tensor_layout(base.as_ref());
+        Self { base, layout }
+    }
+
+    /// Create an owned view with explicit layout metadata.
+    pub fn from_parts(
+        base: Arc<Tensor>,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> crate::Result<Self> {
+        let layout = TensorLayout::from_parts(
+            shape.into(),
+            strides.into(),
+            offset,
+            tensor_buffer_len(&base),
+        )
+        .map_err(|err| tensor_layout_error("TensorOwnedView::from_parts", err))?;
+        Ok(Self { base, layout })
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.base.dtype()
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        self.layout.shape()
+    }
+
+    pub fn strides(&self) -> &[isize] {
+        self.layout.strides()
+    }
+
+    pub fn offset(&self) -> isize {
+        self.layout.offset()
+    }
+
+    pub fn tensor_view(&self) -> TensorView<'_> {
+        tensor_view_with_layout(self.base.as_ref(), self.layout.clone())
+    }
+
+    pub fn tensor_read(&self) -> TensorRead<'_> {
+        TensorRead::from_view(self.tensor_view())
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        self.tensor_view().to_tensor()
+    }
+
+    pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
+        let layout = self
+            .layout
+            .transpose_view(axes)
+            .map_err(|err| tensor_layout_error("TensorOwnedView::transpose_view", err))?;
+        Ok(Self {
+            base: Arc::clone(&self.base),
+            layout,
+        })
+    }
+
+    pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
+        let layout = reshape_layout_dyn(
+            &self.layout,
+            shape,
+            tensor_buffer_len(&self.base),
+            "TensorOwnedView::reshape_view",
+        )?;
+        Ok(Self {
+            base: Arc::clone(&self.base),
+            layout,
+        })
+    }
+
+    pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
+        let op = "TensorOwnedView::slice_view";
+        if config.starts.len() != self.shape().len() {
+            return Err(crate::Error::RankMismatch {
+                op,
+                expected: self.shape().len(),
+                actual: config.starts.len(),
+            });
+        }
+        if config.limits.len() != self.shape().len() {
+            return Err(crate::Error::RankMismatch {
+                op,
+                expected: self.shape().len(),
+                actual: config.limits.len(),
+            });
+        }
+        if config.strides.len() != self.shape().len() {
+            return Err(crate::Error::RankMismatch {
+                op,
+                expected: self.shape().len(),
+                actual: config.strides.len(),
+            });
+        }
+
+        let mut slices = Vec::with_capacity(self.shape().len());
+        for ((&start, &limit), &stride) in config
+            .starts
+            .iter()
+            .zip(config.limits.iter())
+            .zip(config.strides.iter())
+        {
+            let start = isize::try_from(start).map_err(|_| crate::Error::InvalidConfig {
+                op,
+                message: format!("slice start {start} does not fit in isize"),
+            })?;
+            let limit = isize::try_from(limit).map_err(|_| crate::Error::InvalidConfig {
+                op,
+                message: format!("slice limit {limit} does not fit in isize"),
+            })?;
+            let stride = isize::try_from(stride).map_err(|_| crate::Error::InvalidConfig {
+                op,
+                message: format!("slice stride {stride} does not fit in isize"),
+            })?;
+            slices.push(StridedSliceSpec::new(start, Some(limit), stride));
+        }
+
+        let specs = core_slice_specs(&slices, self.shape(), op)?;
+        let layout = self
+            .layout
+            .slice_view(&specs, tensor_buffer_len(&self.base))
+            .map_err(|err| tensor_layout_error(op, err))?;
+        Ok(Self {
+            base: Arc::clone(&self.base),
+            layout,
+        })
+    }
+
+    pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
+        let layout = self
+            .layout
+            .broadcast_in_dim_view::<DynRank>(
+                shape.to_vec().into(),
+                dims,
+                tensor_buffer_len(&self.base),
+            )
+            .map_err(|err| tensor_layout_error("TensorOwnedView::broadcast_in_dim_view", err))?;
+        Ok(Self {
+            base: Arc::clone(&self.base),
+            layout,
+        })
+    }
+}
+
+impl TensorValue {
+    pub fn from_tensor(tensor: Tensor) -> Self {
+        Self::Tensor(Arc::new(tensor))
+    }
+
+    pub fn from_tensor_arc(tensor: Arc<Tensor>) -> Self {
+        Self::Tensor(tensor)
+    }
+
+    pub fn as_tensor_arc(&self) -> Option<&Arc<Tensor>> {
+        match self {
+            Self::Tensor(tensor) => Some(tensor),
+            Self::View(_) => None,
+        }
+    }
+
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::Tensor(tensor) => tensor.dtype(),
+            Self::View(view) => view.dtype(),
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.shape(),
+            Self::View(view) => view.shape(),
+        }
+    }
+
+    pub fn tensor_read(&self) -> TensorRead<'_> {
+        match self {
+            Self::Tensor(tensor) => TensorRead::from_tensor(tensor.as_ref()),
+            Self::View(view) => view.tensor_read(),
+        }
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        match self {
+            Self::Tensor(tensor) => tensor.as_ref().clone(),
+            Self::View(view) => view.to_tensor(),
+        }
+    }
+
+    pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
+        match self {
+            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
+                .transpose_view(axes)
+                .map(Self::View),
+            Self::View(view) => view.transpose_view(axes).map(Self::View),
+        }
+    }
+
+    pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
+        match self {
+            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
+                .reshape_view(shape)
+                .map(Self::View),
+            Self::View(view) => view.reshape_view(shape).map(Self::View),
+        }
+    }
+
+    pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
+        match self {
+            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
+                .slice_view(config)
+                .map(Self::View),
+            Self::View(view) => view.slice_view(config).map(Self::View),
+        }
+    }
+
+    pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
+        match self {
+            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
+                .broadcast_in_dim_view(shape, dims)
+                .map(Self::View),
+            Self::View(view) => view.broadcast_in_dim_view(shape, dims).map(Self::View),
+        }
+    }
+}
+
+fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
+    match tensor {
+        Tensor::F32(tensor) => tensor.layout.clone(),
+        Tensor::F64(tensor) => tensor.layout.clone(),
+        Tensor::I32(tensor) => tensor.layout.clone(),
+        Tensor::I64(tensor) => tensor.layout.clone(),
+        Tensor::Bool(tensor) => tensor.layout.clone(),
+        Tensor::C32(tensor) => tensor.layout.clone(),
+        Tensor::C64(tensor) => tensor.layout.clone(),
+    }
+}
+
+fn tensor_buffer_len(tensor: &Tensor) -> usize {
+    match tensor {
+        Tensor::F32(tensor) => buffer_len(&tensor.buffer),
+        Tensor::F64(tensor) => buffer_len(&tensor.buffer),
+        Tensor::I32(tensor) => buffer_len(&tensor.buffer),
+        Tensor::I64(tensor) => buffer_len(&tensor.buffer),
+        Tensor::Bool(tensor) => buffer_len(&tensor.buffer),
+        Tensor::C32(tensor) => buffer_len(&tensor.buffer),
+        Tensor::C64(tensor) => buffer_len(&tensor.buffer),
+    }
+}
+
+fn buffer_len<T: 'static>(buffer: &Buffer<T>) -> usize {
+    match buffer {
+        Buffer::Host(data) => data.len(),
+        Buffer::Backend(buffer) => buffer.len(),
+    }
+}
+
+fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
+    match tensor {
+        Tensor::F32(tensor) => TensorView::F32(typed_view_with_layout(tensor, layout)),
+        Tensor::F64(tensor) => TensorView::F64(typed_view_with_layout(tensor, layout)),
+        Tensor::I32(tensor) => TensorView::I32(typed_view_with_layout(tensor, layout)),
+        Tensor::I64(tensor) => TensorView::I64(typed_view_with_layout(tensor, layout)),
+        Tensor::Bool(tensor) => TensorView::Bool(typed_view_with_layout(tensor, layout)),
+        Tensor::C32(tensor) => TensorView::C32(typed_view_with_layout(tensor, layout)),
+        Tensor::C64(tensor) => TensorView::C64(typed_view_with_layout(tensor, layout)),
+    }
+}
+
+fn typed_view_with_layout<T: 'static>(
+    tensor: &TypedTensor<T>,
+    layout: TensorLayout<DynRank>,
+) -> TypedTensorView<'_, T> {
+    let buffer = match &tensor.buffer {
+        Buffer::Host(data) => TensorBufferRef::Host(data),
+        Buffer::Backend(buffer) => TensorBufferRef::Backend(Arc::clone(buffer)),
+    };
+    TypedTensorView {
+        buffer,
+        layout,
+        placement: tensor.placement.clone(),
+    }
 }
 
 /// Wrap an `f64` [`TypedTensor`] into the corresponding [`Tensor`] variant.

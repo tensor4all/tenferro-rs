@@ -19,14 +19,14 @@ fn register_runtime(executor: &mut GraphExecutor<CpuBackend>) {
 
 fn run_static_matmul(compiler: &mut GraphCompiler, rows: usize, cols: usize, mid: usize) {
     let a = TracedTensor::from_vec_col_major(
-        vec![rows, mid],
-        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+        vec![rows, rows, mid],
+        (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     );
     let b = TracedTensor::from_vec_col_major(
         vec![mid, cols],
         (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
     );
-    let _ = einsum(compiler, &[&a, &b], "ij,jk->ik").expect("einsum");
+    let _ = einsum(compiler, &[&a, &b], "iij,jk->ik").expect("einsum");
 }
 
 struct RuntimePlannedMatmul {
@@ -39,8 +39,8 @@ struct RuntimePlannedMatmul {
 
 fn runtime_matmul_values(rows: usize, cols: usize, mid: usize) -> (Tensor, Tensor) {
     let a = Tensor::from_vec_col_major(
-        vec![rows, mid],
-        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+        vec![rows, rows, mid],
+        (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     );
     let b = Tensor::from_vec_col_major(
         vec![mid, cols],
@@ -50,15 +50,15 @@ fn runtime_matmul_values(rows: usize, cols: usize, mid: usize) -> (Tensor, Tenso
 }
 
 fn compile_runtime_planned_matmul(rows: usize, cols: usize, mid: usize) -> RuntimePlannedMatmul {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 3);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
-    let out = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").expect("einsum");
+    let out = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").expect("einsum");
     let program = compiler
         .compile_with_input_specs(
             &out,
             &[
-                (&a, DType::F64, &[rows, mid]),
+                (&a, DType::F64, &[rows, rows, mid]),
                 (&b, DType::F64, &[mid, cols]),
             ],
         )
@@ -85,21 +85,21 @@ fn run_runtime_planned_matmul(
         .expect("run")
 }
 
-fn run_eager_matmul(
+fn run_eager_extension_matmul(
     ctx: &std::sync::Arc<EagerRuntime>,
     rows: usize,
     cols: usize,
     mid: usize,
 ) -> Tensor {
     let a = ctx.constant_from(Tensor::from_vec_col_major(
-        vec![rows, mid],
-        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+        vec![rows, rows, mid],
+        (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     ));
     let b = ctx.constant_from(Tensor::from_vec_col_major(
         vec![mid, cols],
         (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
     ));
-    eager_einsum(&[&a, &b], "ij,jk->ik")
+    eager_einsum(&[&a, &b], "iij,jk->ik")
         .expect("eager einsum")
         .data()
         .clone()
@@ -115,11 +115,11 @@ fn runtime_cache_entries(executor: &GraphExecutor<CpuBackend>) -> usize {
 
 #[test]
 fn traced_einsum_uses_extension_compile_caches_and_runtime() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
     let mut compiler = GraphCompiler::new();
 
-    let out = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let out = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
 
     assert!(extension_cache_entries(&compiler) >= 2);
 
@@ -129,10 +129,7 @@ fn traced_einsum_uses_extension_compile_caches_and_runtime() {
     let tensor = executor.run(&program).unwrap();
 
     assert_eq!(tensor.shape(), &[2, 2]);
-    assert_eq!(
-        tensor.as_slice::<f64>().unwrap(),
-        &[76.0, 100.0, 103.0, 136.0]
-    );
+    assert_eq!(tensor.as_slice::<f64>().unwrap(), &[3.0_f64; 4]);
 }
 
 #[test]
@@ -169,34 +166,34 @@ fn extension_compile_cache_limits_bound_static_einsum_entries() {
 }
 
 #[test]
-fn eager_einsum_runtime_plan_cache_is_owned_by_context() {
+fn eager_einsum_expansion_does_not_populate_extension_runtime_caches() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 
-    let out = run_eager_matmul(&ctx, 2, 4, 3);
+    let out = run_eager_extension_matmul(&ctx, 2, 4, 3);
     assert_eq!(out.shape(), &[2, 4]);
-    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
 
-    let _ = run_eager_matmul(&ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    let _ = run_eager_extension_matmul(&ctx, 2, 4, 3);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let _ = run_eager_matmul(&other_ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 1);
-    assert_eq!(other_ctx.cache_stats().extensions.entries, 1);
+    let _ = run_eager_extension_matmul(&other_ctx, 2, 4, 3);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    assert_eq!(other_ctx.cache_stats().extensions.entries, 0);
 }
 
 #[test]
-fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
+fn eager_einsum_expansion_respects_cache_limits_without_extension_entries() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     ctx.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(3).unwrap()));
 
     for mid in 1..=5 {
-        let _ = run_eager_matmul(&ctx, 2, 2, mid);
+        let _ = run_eager_extension_matmul(&ctx, 2, 2, mid);
     }
 
     let stats = ctx.cache_stats();
-    assert_eq!(stats.extensions.entries, 3);
-    assert!(stats.extensions.retained_bytes > 0);
+    assert_eq!(stats.extensions.entries, 0);
+    assert_eq!(stats.extensions.retained_bytes, 0);
     assert_eq!(
         ctx.extension_cache_limits().max_entries(),
         NonZeroUsize::new(3).unwrap()
@@ -207,20 +204,72 @@ fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
 }
 
 #[test]
-fn runtime_planned_einsum_reuses_extension_runtime_plan_cache() {
+fn runtime_planned_einsum_reuses_extension_runtime_caches() {
     let case = compile_runtime_planned_matmul(2, 2, 3);
     let mut executor = GraphExecutor::new(CpuBackend::new());
     register_runtime(&mut executor);
 
     let out = run_runtime_planned_matmul(&mut executor, &case);
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[10.0, 13.0, 28.0, 40.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[20.0, 29.0, 56.0, 92.0]);
     let before = runtime_cache_entries(&executor);
 
     let _ = run_runtime_planned_matmul(&mut executor, &case);
     let after = runtime_cache_entries(&executor);
 
-    assert_eq!(before, 1);
+    assert_eq!(before, 2);
     assert_eq!(after, before);
+}
+
+#[test]
+fn traced_static_tree_einsum_expands_without_runtime_exec_program_cache() {
+    let subs = tenferro_einsum::Subscripts::parse("ij,jk,kl->il").unwrap();
+    let tree = ContractionTree::from_pairs(
+        &subs,
+        &[&[2, 3][..], &[3, 4][..], &[4, 2][..]],
+        &[(1, 2), (0, 3)],
+    )
+    .unwrap();
+    let a = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
+    let b = TracedTensor::input_concrete_shape(DType::F64, &[3, 4]);
+    let c = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]);
+    let mut compiler = GraphCompiler::new();
+    let out = einsum_with(
+        &mut compiler,
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
+        EinsumOptimize::Tree(tree),
+    )
+    .unwrap();
+    let program = compiler
+        .compile_with_input_specs(
+            &out,
+            &[
+                (&a, DType::F64, &[2, 3]),
+                (&b, DType::F64, &[3, 4]),
+                (&c, DType::F64, &[4, 2]),
+            ],
+        )
+        .unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    register_runtime(&mut executor);
+    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b_value = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    let c_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+
+    let first = executor
+        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])
+        .unwrap();
+    assert_eq!(first.as_slice::<f64>().unwrap(), &[12.0; 4]);
+    let after_first = runtime_cache_entries(&executor);
+
+    let _ = executor
+        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])
+        .unwrap();
+    let after_second = runtime_cache_entries(&executor);
+
+    assert_eq!(after_first, 0);
+    assert_eq!(after_second, after_first);
 }
 
 #[test]
@@ -230,23 +279,26 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
     let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
 
-    let left_to_right = einsum_with(
+    let default_auto = einsum_with(
         &mut compiler,
         &[&a, &b, &c],
         "ij,jk,kl->il",
-        EinsumOptimize::False,
+        EinsumOptimize::Auto(Default::default()),
     )
     .unwrap();
-    let explicit_path = einsum_with(
+    let custom_auto = einsum_with(
         &mut compiler,
         &[&a, &b, &c],
         "ij,jk,kl->il",
-        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+        EinsumOptimize::Auto(ContractionOptimizerOptions {
+            ntrials: 2,
+            ..Default::default()
+        }),
     )
     .unwrap();
     let left_program = compiler
         .compile_with_input_specs(
-            &left_to_right,
+            &default_auto,
             &[
                 (&a, DType::F64, &[2, 3]),
                 (&b, DType::F64, &[3, 4]),
@@ -256,7 +308,7 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
         .unwrap();
     let path_program = compiler
         .compile_with_input_specs(
-            &explicit_path,
+            &custom_auto,
             &[
                 (&a, DType::F64, &[2, 3]),
                 (&b, DType::F64, &[3, 4]),
@@ -507,16 +559,18 @@ fn symbolic_einsum_accepts_custom_auto_options() {
 
 #[test]
 fn symbolic_einsum_rejects_precomputed_tree() {
-    let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk->ik").unwrap();
-    let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..]]).unwrap();
+    let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk,kl->il").unwrap();
+    let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..], &[4, 5][..]])
+        .unwrap();
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(
         &mut compiler,
-        &[&a, &b],
-        "ij,jk->ik",
+        &[&a, &b, &c],
+        "ij,jk,kl->il",
         EinsumOptimize::Tree(tree),
     );
     let err = match result {

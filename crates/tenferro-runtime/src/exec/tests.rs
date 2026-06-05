@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_ops::SymDim;
+use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor,
@@ -15,7 +15,7 @@ use super::dispatch::{
     backend_dispatch_entry, ffi_dispatch_entry, host_dispatch_entry, FfiDispatchKey,
     HostDispatchKey, BACKEND_DISPATCH_TABLE,
 };
-use super::ExecOp;
+use super::{ExecInstruction, ExecOp};
 use tenferro_cpu::CpuBackend;
 
 #[test]
@@ -118,6 +118,22 @@ fn host_dispatch_table_excludes_backend_and_ffi_exec_ops() {
         assert_eq!(HostDispatchKey::for_op(&op), None, "{op:?}");
         assert!(host_dispatch_entry::<CpuBackend>(&op).is_none(), "{op:?}");
     }
+}
+
+#[test]
+fn exec_instruction_single_output_metadata_stays_inline() {
+    let instr = ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![0],
+        output_slots: vec![1],
+        dtype: DType::F64,
+        output_shapes: vec![vec![DimExpr::Const(2)]].into(),
+        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(2))]].into(),
+        last_use: vec![true],
+    };
+
+    assert!(!instr.output_shapes.spilled());
+    assert!(!instr.output_extents.spilled());
 }
 
 fn backend_dispatch_cases() -> Vec<(ExecOp, PrimitiveOpKind)> {

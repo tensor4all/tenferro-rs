@@ -79,8 +79,8 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     ///         input_slots: vec![0, 1],
     ///         output_slots: vec![2],
     ///         dtype: DType::F64,
-    ///         output_shapes: vec![vec![]],
-    ///         output_extents: vec![vec![]],
+    ///         output_shapes: vec![vec![]].into(),
+    ///         output_extents: vec![vec![]].into(),
     ///         last_use: vec![true, true],
     ///     }],
     ///     input_slots: vec![0, 1],
@@ -111,6 +111,11 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
             "ExtensionExecutionContext::execute_core_exec_program_unsegmented",
         )?;
         crate::exec::eval_exec_ir_unsegmented_with_cache(self.backend, program, inputs)
+    }
+
+    /// Borrow backend and extension cache store as disjoint mutable parts.
+    pub fn parts_mut(&mut self) -> (&mut B, &mut ExtensionCacheStore) {
+        (self.backend, self.caches)
     }
 }
 

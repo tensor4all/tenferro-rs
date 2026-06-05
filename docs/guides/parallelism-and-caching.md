@@ -13,15 +13,27 @@ parallelism contract.
 At least one CPU provider feature must be compiled. `cpu-faer` is the default.
 `cpu-blas` can be compiled by itself or together with `cpu-faer`.
 
-When both providers are compiled, `CpuBackend::new()` selects faer. Select BLAS
-explicitly when you want provider-backed GEMM or LAPACK calls:
+`CpuBackend::new()` chooses a provider from the features compiled into the
+current binary:
+
+| Compiled CPU provider features | `CpuBackend::new()` provider |
+| --- | --- |
+| `cpu-faer` only | faer |
+| `cpu-blas` only | BLAS/LAPACK |
+| `cpu-faer` and `cpu-blas` | BLAS/LAPACK |
+
+This is the default provider for that backend instance, not a dynamic fallback
+chain. If both providers are compiled, select a provider explicitly when a
+specific call path should use faer or BLAS. Explicit selection returns a
+configuration error if the requested provider was not compiled into the binary:
 
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_cpu::CpuBackendKind;
 
-let backend = CpuBackend::try_with_threads_and_kind(4, CpuBackendKind::Blas).unwrap();
+let backend = CpuBackend::try_with_threads_and_kind(4, CpuBackendKind::Faer).unwrap();
 assert_eq!(backend.num_threads(), 4);
+assert_eq!(backend.kind(), CpuBackendKind::Faer);
 ```
 
 ## CPU Thread Count
@@ -87,10 +99,11 @@ For benchmarks, pin all relevant thread counts and report them with the result.
 
 Reuse execution objects when you repeat related work:
 
-- `EagerRuntime` retains eager extension plans across immediate operations.
+- `EagerRuntime` retains eager extension plans and compiled inner extension
+  programs across immediate operations.
 - `GraphCompiler` retains graph lowering and static extension planning caches.
-- `GraphExecutor<B>` retains runtime extension plans, backend analysis, and
-  reusable backend buffers.
+- `GraphExecutor<B>` retains runtime extension plans, compiled inner extension
+  programs, backend analysis, and reusable backend buffers.
 
 ```rust
 use tenferro_cpu::CpuBackend;

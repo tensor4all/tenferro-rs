@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TypedTensor, TypedTensorView,
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use tenferro_tensor::{
@@ -135,8 +135,9 @@ pub enum CpuBackendKind {
 impl CpuBackendKind {
     /// Return the default compiled CPU provider.
     ///
-    /// faer is preferred when both faer and BLAS are compiled in because it has
-    /// no external provider-link requirement.
+    /// BLAS is preferred when both BLAS and faer are compiled in because an
+    /// application that links a BLAS/LAPACK provider normally expects
+    /// provider-backed kernels to use it by default.
     ///
     /// # Examples
     ///
@@ -146,13 +147,13 @@ impl CpuBackendKind {
     /// let _kind = CpuBackendKind::default_compiled();
     /// ```
     pub fn default_compiled() -> Self {
-        #[cfg(feature = "cpu-faer")]
-        {
-            Self::Faer
-        }
-        #[cfg(all(not(feature = "cpu-faer"), feature = "cpu-blas"))]
+        #[cfg(feature = "cpu-blas")]
         {
             Self::Blas
+        }
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        {
+            Self::Faer
         }
     }
 
@@ -1462,7 +1463,39 @@ where
     }
 }
 
-impl TensorFusion for CpuBackend {}
+impl TensorFusion for CpuBackend {
+    fn execute_broadcast_multiply(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<Tensor>> {
+        self.install_with_pool(|buffers| {
+            elementwise::broadcast_multiply_read_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
+    }
+
+    fn execute_broadcast_multiply_value(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<TensorValue>> {
+        self.install_with_pool(|buffers| {
+            elementwise::broadcast_multiply_value_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
+    }
+}
 
 impl TensorDeviceTransfer for CpuBackend {}
 

@@ -1,5 +1,30 @@
 //! Core tensor types, views, backend traits, and backend-independent contracts.
 //!
+//! # Owned Tensors And Views
+//!
+//! [`TypedTensor<T>`](TypedTensor) and the dtype-erased [`Tensor`] enum are
+//! owned tensor values. They are the right representation when a result is
+//! materialized as compact column-major storage.
+//!
+//! [`TypedTensorView`] is a borrowed typed view over an existing tensor buffer.
+//! It carries logical shape, arbitrary strides, and an offset, so metadata-only
+//! layout changes such as transposes, slices, and broadcasts can be represented
+//! without copying. A view can be materialized explicitly with
+//! [`TypedTensorView::to_contiguous`] when a compact owned tensor is required.
+//!
+//! [`TensorRead`] is the dtype-erased borrowed input type used by eager kernels
+//! and backend dispatch. It can borrow either an owned [`Tensor`] or a
+//! [`TensorView`] with arbitrary strides. Prefer `TensorRead` for read-only
+//! operation inputs so callers are not forced to materialize layout-only views.
+//!
+//! [`TensorOwnedView`] and [`TensorValue`] are the owned lazy-value forms. Use
+//! them when an API must store a view result beyond the lifetime of a borrowed
+//! input, then expose a short-lived `TensorRead` at kernel-dispatch time.
+//!
+//! Use [`Tensor::as_slice`] or [`TypedTensorView::as_slice`] only when compact
+//! contiguous storage is part of the API contract. Use shape/stride-aware kernel
+//! paths or `TensorRead` otherwise.
+//!
 //! # Examples
 //!
 //! ```rust

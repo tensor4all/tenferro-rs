@@ -420,6 +420,36 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
     backend
         .dot_general_with_conj(&a, &b, &config, true, false)
         .unwrap();
+    let mut cache = ();
+    BackendCachedDot::dot_general_read_cached(
+        &mut backend,
+        &mut cache,
+        Some(0),
+        TensorRead::from_tensor(&a),
+        TensorRead::from_tensor(&b),
+        &config,
+    )
+    .unwrap();
+    BackendCachedDot::dot_general_read_cached(
+        &mut backend,
+        &mut cache,
+        Some(1),
+        TensorRead::from_view(TensorView::F64(view_source.as_view())),
+        TensorRead::from_tensor(&b),
+        &config,
+    )
+    .unwrap();
+    BackendCachedDot::dot_general_with_conj_read_cached(
+        &mut backend,
+        &mut cache,
+        Some(2),
+        TensorRead::from_tensor(&a),
+        TensorRead::from_tensor(&b),
+        &config,
+        true,
+        false,
+    )
+    .unwrap();
 
     let err = backend
         .add_read(

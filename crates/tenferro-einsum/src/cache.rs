@@ -11,6 +11,8 @@ pub(crate) const EINSUM_STATIC_PLANS_CACHE: &str = "static_plans";
 pub(crate) const EINSUM_PARSE_CACHE: &str = "parse";
 /// Executor-side runtime contraction-plan cache name.
 pub(crate) const EINSUM_RUNTIME_PLANS_CACHE: &str = "runtime_plans";
+/// Executor-side compiled inner execution program cache name.
+pub(crate) const EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE: &str = "runtime_exec_programs";
 
 /// Parsed einsum notation retained by parse caches.
 pub(crate) struct ParsedEinsum {

@@ -1,12 +1,14 @@
 use std::ops::{Add, Div, Mul, Neg};
+use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
-use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
+use strided_kernel::{batched_outer_product_into_seq, map_into, zip_map2_into, zip_map3_into};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
-    CompareDir, ConjElem, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, CompareDir, ConjElem, Tensor, TensorOwnedView, TensorRank, TensorRead,
+    TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{
@@ -444,7 +446,977 @@ pub(crate) fn mul_read_with_pool(
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
+    if let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) {
+        return mul_with_pool(buffers, lhs, rhs);
+    }
+
+    macro_rules! dispatch {
+        ($variant:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    let a = a.as_view();
+                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, &a, b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                ) => {
+                    let b = b.as_view();
+                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, a, &b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, a, b)?));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    macro_rules! dispatch_real_complex_scalar {
+        ($real_variant:ident, $complex_variant:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(Tensor::$real_variant(real)),
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_tensor(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, &scalar, complex,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$real_variant(real)),
+                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    let complex = complex.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, &scalar, &complex,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$real_variant(real)),
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, &scalar, complex,
+                    )?));
+                }
+                (
+                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
+                    TensorRead::View(TensorView::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let complex = complex.as_view();
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, &complex, &scalar,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                    TensorRead::Tensor(Tensor::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_tensor(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, complex, &scalar,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                    TensorRead::View(TensorView::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_mul_view_with_pool(
+                        buffers, complex, &scalar,
+                    )?));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch_real_complex_scalar!(F32, C32);
+    dispatch_real_complex_scalar!(F64, C64);
+
+    dispatch!(F32);
+    dispatch!(F64);
+    dispatch!(I32);
+    dispatch!(I64);
+    dispatch!(C32);
+    dispatch!(C64);
+
     binary_read_with_pool("mul", buffers, lhs, rhs, mul_with_pool)
+}
+
+enum CpuReadView<'a> {
+    F32(TypedTensorView<'a, f32>),
+    F64(TypedTensorView<'a, f64>),
+    I32(TypedTensorView<'a, i32>),
+    I64(TypedTensorView<'a, i64>),
+    Bool,
+    C32(TypedTensorView<'a, Complex<f32>>),
+    C64(TypedTensorView<'a, Complex<f64>>),
+}
+
+fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
+    match input {
+        TensorRead::Tensor(Tensor::F32(tensor)) => CpuReadView::F32(tensor.as_view()),
+        TensorRead::Tensor(Tensor::F64(tensor)) => CpuReadView::F64(tensor.as_view()),
+        TensorRead::Tensor(Tensor::I32(tensor)) => CpuReadView::I32(tensor.as_view()),
+        TensorRead::Tensor(Tensor::I64(tensor)) => CpuReadView::I64(tensor.as_view()),
+        TensorRead::Tensor(Tensor::Bool(_)) => CpuReadView::Bool,
+        TensorRead::Tensor(Tensor::C32(tensor)) => CpuReadView::C32(tensor.as_view()),
+        TensorRead::Tensor(Tensor::C64(tensor)) => CpuReadView::C64(tensor.as_view()),
+        TensorRead::View(TensorView::F32(view)) => CpuReadView::F32(view),
+        TensorRead::View(TensorView::F64(view)) => CpuReadView::F64(view),
+        TensorRead::View(TensorView::I32(view)) => CpuReadView::I32(view),
+        TensorRead::View(TensorView::I64(view)) => CpuReadView::I64(view),
+        TensorRead::View(TensorView::Bool(_)) => CpuReadView::Bool,
+        TensorRead::View(TensorView::C32(view)) => CpuReadView::C32(view),
+        TensorRead::View(TensorView::C64(view)) => CpuReadView::C64(view),
+    }
+}
+
+fn broadcast_typed_read_view<'a, T, R>(
+    view: TypedTensorView<'a, T, R>,
+    shape: &[usize],
+    dims: &[usize],
+) -> crate::Result<TypedTensorView<'a, T>>
+where
+    T: 'static,
+    R: TensorRank,
+{
+    if view.backend_buffer().is_some() {
+        return Err(crate::cpu_backend_buffer_error("broadcast_multiply"));
+    }
+    if view.shape().len() != dims.len() {
+        return Err(crate::Error::RankMismatch {
+            op: "broadcast_multiply",
+            expected: view.shape().len(),
+            actual: dims.len(),
+        });
+    }
+
+    let mut seen = vec![false; shape.len()];
+    let mut strides = vec![0isize; shape.len()];
+    for (src_axis, &dst_axis) in dims.iter().enumerate() {
+        if dst_axis >= shape.len() {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "broadcast_multiply",
+                axis: dst_axis,
+                rank: shape.len(),
+            });
+        }
+        if seen[dst_axis] {
+            return Err(crate::Error::DuplicateAxis {
+                op: "broadcast_multiply",
+                axis: dst_axis,
+                role: "dims",
+            });
+        }
+        seen[dst_axis] = true;
+
+        let source_dim = view.shape()[src_axis];
+        let target_dim = shape[dst_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return Err(crate::Error::ShapeMismatch {
+                op: "broadcast_multiply",
+                lhs: view.shape().to_vec(),
+                rhs: shape.to_vec(),
+            });
+        }
+        if source_dim == target_dim {
+            strides[dst_axis] = view.strides()[src_axis];
+        }
+    }
+
+    TypedTensorView::from_slice(shape, &strides, view.offset(), view.as_physical_slice())
+}
+
+#[derive(Clone, Copy)]
+enum SplitOuterProductLayout {
+    LhsPrefix,
+    RhsPrefix,
+}
+
+struct SplitOuterProductPlan {
+    #[allow(dead_code)]
+    rows: usize,
+    #[allow(dead_code)]
+    cols: usize,
+    #[allow(dead_code)]
+    batches: usize,
+    layout: SplitOuterProductLayout,
+    lhs_free_axes: Vec<usize>,
+    rhs_free_axes: Vec<usize>,
+    lhs_batch_axes: Vec<usize>,
+    rhs_batch_axes: Vec<usize>,
+}
+
+struct OuterProductAxisPartition {
+    lhs_free_output_axes: Vec<usize>,
+    rhs_free_output_axes: Vec<usize>,
+    batch_output_axes: Vec<usize>,
+    lhs_free_axes: Vec<usize>,
+    rhs_free_axes: Vec<usize>,
+    lhs_batch_axes: Vec<usize>,
+    rhs_batch_axes: Vec<usize>,
+}
+
+fn shape_matches_dims(source_shape: &[usize], output_shape: &[usize], dims: &[usize]) -> bool {
+    source_shape.len() == dims.len()
+        && source_shape
+            .iter()
+            .zip(dims.iter())
+            .all(|(&dim, &axis)| output_shape.get(axis).copied() == Some(dim))
+}
+
+fn axes_by_output(dims: &[usize], output_rank: usize) -> Option<Vec<Option<usize>>> {
+    let mut axes = vec![None; output_rank];
+    for (src_axis, &dst_axis) in dims.iter().enumerate() {
+        let slot = axes.get_mut(dst_axis)?;
+        if slot.replace(src_axis).is_some() {
+            return None;
+        }
+    }
+    Some(axes)
+}
+
+fn axes_shape_product<T>(
+    op: &'static str,
+    view: &TypedTensorView<'_, T>,
+    axes: &[usize],
+) -> crate::Result<usize>
+where
+    T: 'static,
+{
+    axes.iter().try_fold(1usize, |acc, &axis| {
+        acc.checked_mul(view.shape()[axis])
+            .ok_or_else(|| crate::Error::backend_failure(op, "shape size overflows usize"))
+    })
+}
+
+fn classify_outer_product_axes(
+    lhs_dims: &[usize],
+    rhs_dims: &[usize],
+    output_rank: usize,
+) -> Option<OuterProductAxisPartition> {
+    let lhs_axes_by_output = axes_by_output(lhs_dims, output_rank)?;
+    let rhs_axes_by_output = axes_by_output(rhs_dims, output_rank)?;
+
+    let mut lhs_free_output_axes = Vec::new();
+    let mut rhs_free_output_axes = Vec::new();
+    let mut batch_output_axes = Vec::new();
+    let mut lhs_free_axes = Vec::new();
+    let mut rhs_free_axes = Vec::new();
+    let mut lhs_batch_axes = Vec::new();
+    let mut rhs_batch_axes = Vec::new();
+
+    for output_axis in 0..output_rank {
+        match (
+            lhs_axes_by_output[output_axis],
+            rhs_axes_by_output[output_axis],
+        ) {
+            (Some(lhs_axis), Some(rhs_axis)) => {
+                batch_output_axes.push(output_axis);
+                lhs_batch_axes.push(lhs_axis);
+                rhs_batch_axes.push(rhs_axis);
+            }
+            (Some(lhs_axis), None) => {
+                lhs_free_output_axes.push(output_axis);
+                lhs_free_axes.push(lhs_axis);
+            }
+            (None, Some(rhs_axis)) => {
+                rhs_free_output_axes.push(output_axis);
+                rhs_free_axes.push(rhs_axis);
+            }
+            (None, None) => return None,
+        }
+    }
+
+    Some(OuterProductAxisPartition {
+        lhs_free_output_axes,
+        rhs_free_output_axes,
+        batch_output_axes,
+        lhs_free_axes,
+        rhs_free_axes,
+        lhs_batch_axes,
+        rhs_batch_axes,
+    })
+}
+
+fn output_axes_match_partition(output_rank: usize, groups: &[&[usize]]) -> bool {
+    groups
+        .iter()
+        .flat_map(|group| group.iter().copied())
+        .eq(0..output_rank)
+}
+
+fn split_outer_product_plan<T>(
+    lhs: &TypedTensorView<'_, T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<SplitOuterProductPlan>>
+where
+    T: 'static,
+{
+    let output_rank = lhs_shape.len();
+    if lhs_shape != rhs_shape
+        || !shape_matches_dims(lhs.shape(), lhs_shape, lhs_dims)
+        || !shape_matches_dims(rhs.shape(), rhs_shape, rhs_dims)
+        || lhs.backend_buffer().is_some()
+        || rhs.backend_buffer().is_some()
+        || lhs.offset() < 0
+        || rhs.offset() < 0
+        || lhs.strides().iter().any(|&stride| stride < 0)
+        || rhs.strides().iter().any(|&stride| stride < 0)
+    {
+        return Ok(None);
+    }
+
+    let Some(partition) = classify_outer_product_axes(lhs_dims, rhs_dims, output_rank) else {
+        return Ok(None);
+    };
+
+    let lhs_free_size = axes_shape_product("broadcast_multiply", lhs, &partition.lhs_free_axes)?;
+    let rhs_free_size = axes_shape_product("broadcast_multiply", rhs, &partition.rhs_free_axes)?;
+    if lhs_free_size <= 1 || rhs_free_size <= 1 {
+        return Ok(None);
+    }
+    let batches = axes_shape_product("broadcast_multiply", lhs, &partition.lhs_batch_axes)?;
+
+    let lhs_prefix = output_axes_match_partition(
+        output_rank,
+        &[
+            &partition.lhs_free_output_axes,
+            &partition.rhs_free_output_axes,
+            &partition.batch_output_axes,
+        ],
+    );
+    if lhs_prefix {
+        return Ok(Some(SplitOuterProductPlan {
+            rows: lhs_free_size,
+            cols: rhs_free_size,
+            batches,
+            layout: SplitOuterProductLayout::LhsPrefix,
+            lhs_free_axes: partition.lhs_free_axes,
+            rhs_free_axes: partition.rhs_free_axes,
+            lhs_batch_axes: partition.lhs_batch_axes,
+            rhs_batch_axes: partition.rhs_batch_axes,
+        }));
+    }
+
+    let rhs_prefix = output_axes_match_partition(
+        output_rank,
+        &[
+            &partition.rhs_free_output_axes,
+            &partition.lhs_free_output_axes,
+            &partition.batch_output_axes,
+        ],
+    );
+    if rhs_prefix {
+        return Ok(Some(SplitOuterProductPlan {
+            rows: rhs_free_size,
+            cols: lhs_free_size,
+            batches,
+            layout: SplitOuterProductLayout::RhsPrefix,
+            lhs_free_axes: partition.lhs_free_axes,
+            rhs_free_axes: partition.rhs_free_axes,
+            lhs_batch_axes: partition.lhs_batch_axes,
+            rhs_batch_axes: partition.rhs_batch_axes,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn try_outer_product_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    T: Copy + Clone + Mul<Output = T> + PoolScalar + 'static,
+{
+    let Some(plan) = split_outer_product_plan(lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)?
+    else {
+        return Ok(None);
+    };
+
+    // SAFETY: every element in the column-major output is assigned below.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+    let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
+    let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
+    match plan.layout {
+        SplitOuterProductLayout::LhsPrefix => {
+            let lhs_perm: Vec<_> = plan
+                .lhs_free_axes
+                .iter()
+                .chain(plan.lhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let rhs_perm: Vec<_> = plan
+                .rhs_free_axes
+                .iter()
+                .chain(plan.rhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let lhs_outer = lhs_view
+                .permute(&lhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            let rhs_outer = rhs_view
+                .permute(&rhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            batched_outer_product_into_seq(
+                &mut out.view_mut(),
+                &lhs_outer,
+                &rhs_outer,
+                plan.lhs_free_axes.len(),
+                plan.rhs_free_axes.len(),
+            )
+            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        }
+        SplitOuterProductLayout::RhsPrefix => {
+            let lhs_perm: Vec<_> = plan
+                .lhs_free_axes
+                .iter()
+                .chain(plan.lhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let rhs_perm: Vec<_> = plan
+                .rhs_free_axes
+                .iter()
+                .chain(plan.rhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let lhs_outer = lhs_view
+                .permute(&lhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            let rhs_outer = rhs_view
+                .permute(&rhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            batched_outer_product_into_seq(
+                &mut out.view_mut(),
+                &rhs_outer,
+                &lhs_outer,
+                plan.rhs_free_axes.len(),
+                plan.lhs_free_axes.len(),
+            )
+            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        }
+    }
+    Ok(Some(tensor_from_array(out)))
+}
+
+struct LazyOuterProduct<T> {
+    base: TypedTensor<T>,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+}
+
+fn axes_by_physical_stride<T>(view: &TypedTensorView<'_, T>, axes: &[usize]) -> Vec<usize>
+where
+    T: 'static,
+{
+    let mut sorted = axes.to_vec();
+    sorted.sort_by(|&lhs_axis, &rhs_axis| {
+        view.strides()[lhs_axis]
+            .cmp(&view.strides()[rhs_axis])
+            .then_with(|| lhs_axis.cmp(&rhs_axis))
+    });
+    sorted
+}
+
+fn append_axis_shapes<T>(shape: &mut Vec<usize>, view: &TypedTensorView<'_, T>, axes: &[usize])
+where
+    T: 'static,
+{
+    shape.extend(axes.iter().map(|&axis| view.shape()[axis]));
+}
+
+fn set_lazy_stride(
+    logical_strides: &mut [Option<isize>],
+    output_axis: usize,
+    stride: isize,
+) -> crate::Result<()> {
+    let rank = logical_strides.len();
+    let slot = logical_strides
+        .get_mut(output_axis)
+        .ok_or(crate::Error::AxisOutOfBounds {
+            op: "broadcast_multiply",
+            axis: output_axis,
+            rank,
+        })?;
+    if slot.replace(stride).is_some() {
+        return Err(crate::Error::DuplicateAxis {
+            op: "broadcast_multiply",
+            axis: output_axis,
+            role: "lazy output layout",
+        });
+    }
+    Ok(())
+}
+
+struct LazyOuterProductStrideSpec<'a> {
+    output_shape: &'a [usize],
+    base_shape: &'a [usize],
+    leading_axes: &'a [usize],
+    leading_dims: &'a [usize],
+    trailing_axes: &'a [usize],
+    trailing_dims: &'a [usize],
+    lhs_batch_axes: &'a [usize],
+    rhs_batch_axes: &'a [usize],
+    lhs_dims: &'a [usize],
+    rhs_dims: &'a [usize],
+}
+
+fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Result<Vec<isize>> {
+    let base_strides = col_major_strides(spec.base_shape);
+    let mut logical_strides = vec![None; spec.output_shape.len()];
+    let mut base_axis = 0usize;
+
+    for &axis in spec.leading_axes {
+        set_lazy_stride(
+            &mut logical_strides,
+            spec.leading_dims[axis],
+            base_strides[base_axis],
+        )?;
+        base_axis += 1;
+    }
+    for &axis in spec.trailing_axes {
+        set_lazy_stride(
+            &mut logical_strides,
+            spec.trailing_dims[axis],
+            base_strides[base_axis],
+        )?;
+        base_axis += 1;
+    }
+    for (&lhs_axis, &rhs_axis) in spec.lhs_batch_axes.iter().zip(spec.rhs_batch_axes.iter()) {
+        let output_axis = spec.lhs_dims[lhs_axis];
+        if spec.rhs_dims[rhs_axis] != output_axis {
+            return Err(crate::Error::backend_failure(
+                "broadcast_multiply",
+                "batch axes disagree while building lazy outer-product layout",
+            ));
+        }
+        set_lazy_stride(&mut logical_strides, output_axis, base_strides[base_axis])?;
+        base_axis += 1;
+    }
+
+    logical_strides
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                "broadcast_multiply",
+                "lazy outer-product layout did not cover every output axis",
+            )
+        })
+}
+
+fn lazy_outer_product_value(
+    tensor: Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+) -> crate::Result<TensorValue> {
+    Ok(TensorValue::View(TensorOwnedView::from_parts(
+        Arc::new(tensor),
+        shape,
+        strides,
+        0,
+    )?))
+}
+
+fn try_lazy_outer_product_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<LazyOuterProduct<T>>>
+where
+    T: Copy + Clone + Mul<Output = T> + PoolScalar + 'static,
+{
+    let Some(plan) = split_outer_product_plan(lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)?
+    else {
+        return Ok(None);
+    };
+
+    let lhs_free_axes = axes_by_physical_stride(lhs, &plan.lhs_free_axes);
+    let rhs_free_axes = axes_by_physical_stride(rhs, &plan.rhs_free_axes);
+    if lhs_free_axes == plan.lhs_free_axes && rhs_free_axes == plan.rhs_free_axes {
+        return Ok(None);
+    }
+
+    let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
+    let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
+
+    match plan.layout {
+        SplitOuterProductLayout::LhsPrefix => {
+            let lhs_perm: Vec<_> = lhs_free_axes
+                .iter()
+                .chain(plan.lhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let rhs_perm: Vec<_> = rhs_free_axes
+                .iter()
+                .chain(plan.rhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let lhs_outer = lhs_view
+                .permute(&lhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            let rhs_outer = rhs_view
+                .permute(&rhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+
+            let mut base_shape = Vec::with_capacity(lhs_shape.len());
+            append_axis_shapes(&mut base_shape, lhs, &lhs_free_axes);
+            append_axis_shapes(&mut base_shape, rhs, &rhs_free_axes);
+            append_axis_shapes(&mut base_shape, lhs, &plan.lhs_batch_axes);
+            let strides = lazy_outer_product_strides(LazyOuterProductStrideSpec {
+                output_shape: lhs_shape,
+                base_shape: &base_shape,
+                leading_axes: &lhs_free_axes,
+                leading_dims: lhs_dims,
+                trailing_axes: &rhs_free_axes,
+                trailing_dims: rhs_dims,
+                lhs_batch_axes: &plan.lhs_batch_axes,
+                rhs_batch_axes: &plan.rhs_batch_axes,
+                lhs_dims,
+                rhs_dims,
+            })?;
+
+            // SAFETY: every element in the physical base output is assigned below.
+            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
+            batched_outer_product_into_seq(
+                &mut base.view_mut(),
+                &lhs_outer,
+                &rhs_outer,
+                lhs_free_axes.len(),
+                rhs_free_axes.len(),
+            )
+            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            Ok(Some(LazyOuterProduct {
+                base: tensor_from_array(base),
+                shape: lhs_shape.to_vec(),
+                strides,
+            }))
+        }
+        SplitOuterProductLayout::RhsPrefix => {
+            let lhs_perm: Vec<_> = lhs_free_axes
+                .iter()
+                .chain(plan.lhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let rhs_perm: Vec<_> = rhs_free_axes
+                .iter()
+                .chain(plan.rhs_batch_axes.iter())
+                .copied()
+                .collect();
+            let lhs_outer = lhs_view
+                .permute(&lhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            let rhs_outer = rhs_view
+                .permute(&rhs_perm)
+                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+
+            let mut base_shape = Vec::with_capacity(lhs_shape.len());
+            append_axis_shapes(&mut base_shape, rhs, &rhs_free_axes);
+            append_axis_shapes(&mut base_shape, lhs, &lhs_free_axes);
+            append_axis_shapes(&mut base_shape, lhs, &plan.lhs_batch_axes);
+            let strides = lazy_outer_product_strides(LazyOuterProductStrideSpec {
+                output_shape: lhs_shape,
+                base_shape: &base_shape,
+                leading_axes: &rhs_free_axes,
+                leading_dims: rhs_dims,
+                trailing_axes: &lhs_free_axes,
+                trailing_dims: lhs_dims,
+                lhs_batch_axes: &plan.lhs_batch_axes,
+                rhs_batch_axes: &plan.rhs_batch_axes,
+                lhs_dims,
+                rhs_dims,
+            })?;
+
+            // SAFETY: every element in the physical base output is assigned below.
+            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
+            batched_outer_product_into_seq(
+                &mut base.view_mut(),
+                &rhs_outer,
+                &lhs_outer,
+                rhs_free_axes.len(),
+                lhs_free_axes.len(),
+            )
+            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            Ok(Some(LazyOuterProduct {
+                base: tensor_from_array(base),
+                shape: lhs_shape.to_vec(),
+                strides,
+            }))
+        }
+    }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_dim(
+    op: &'static str,
+    name: &'static str,
+    value: usize,
+) -> crate::Result<std::os::raw::c_int> {
+    value.try_into().map_err(|_| {
+        crate::Error::backend_failure(op, format!("{name}={value} exceeds BLAS c_int range"))
+    })
+}
+
+#[cfg(feature = "cpu-blas")]
+fn try_outer_product_blas_f64(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, f64>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, f64>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<TypedTensor<f64>>> {
+    try_outer_product_blas_real(
+        buffers,
+        lhs,
+        lhs_shape,
+        lhs_dims,
+        rhs,
+        rhs_shape,
+        rhs_dims,
+        cblas_sys::cblas_dgemm,
+    )
+}
+
+#[cfg(feature = "cpu-blas")]
+fn try_outer_product_blas_f32(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, f32>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, f32>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<TypedTensor<f32>>> {
+    try_outer_product_blas_real(
+        buffers,
+        lhs,
+        lhs_shape,
+        lhs_dims,
+        rhs,
+        rhs_shape,
+        rhs_dims,
+        cblas_sys::cblas_sgemm,
+    )
+}
+
+#[cfg(feature = "cpu-blas")]
+#[allow(clippy::too_many_arguments)]
+fn try_outer_product_blas_real<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensorView<'_, T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+    gemm: unsafe extern "C" fn(
+        cblas_sys::CBLAS_LAYOUT,
+        cblas_sys::CBLAS_TRANSPOSE,
+        cblas_sys::CBLAS_TRANSPOSE,
+        std::os::raw::c_int,
+        std::os::raw::c_int,
+        std::os::raw::c_int,
+        T,
+        *const T,
+        std::os::raw::c_int,
+        *const T,
+        std::os::raw::c_int,
+        T,
+        *mut T,
+        std::os::raw::c_int,
+    ),
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    T: Copy + Clone + PoolScalar + From<f32> + 'static,
+{
+    let Some(plan) = split_outer_product_plan(lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)?
+    else {
+        return Ok(None);
+    };
+    if plan.rows == 0 || plan.cols == 0 || plan.batches != 1 {
+        return Ok(None);
+    }
+    let Ok(lhs_data) = lhs.as_slice() else {
+        return Ok(None);
+    };
+    let Ok(rhs_data) = rhs.as_slice() else {
+        return Ok(None);
+    };
+    let (x, y) = match plan.layout {
+        SplitOuterProductLayout::LhsPrefix => (lhs_data, rhs_data),
+        SplitOuterProductLayout::RhsPrefix => (rhs_data, lhs_data),
+    };
+
+    // SAFETY: beta=0 makes GEMM initialize every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+
+    let m = blas_dim("broadcast_multiply", "m", plan.rows)?;
+    let n = blas_dim("broadcast_multiply", "n", plan.cols)?;
+    let k = blas_dim("broadcast_multiply", "k", 1)?;
+    let lda = m;
+    let ldb = k;
+    unsafe {
+        gemm(
+            cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            m,
+            n,
+            k,
+            T::from(1.0),
+            x.as_ptr(),
+            lda,
+            y.as_ptr(),
+            ldb,
+            T::from(0.0),
+            out.data_mut().as_mut_ptr(),
+            lda,
+        );
+    }
+    Ok(Some(tensor_from_array(out)))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn broadcast_multiply_read_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: TensorRead<'_>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<Tensor>> {
+    let lhs = read_as_cpu_view(lhs);
+    let rhs = read_as_cpu_view(rhs);
+
+    macro_rules! dispatch {
+        ($variant:ident, $lhs:expr, $rhs:expr) => {{
+            if let Some(out) = try_outer_product_with_pool(
+                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
+            )? {
+                return Ok(Some(Tensor::$variant(out)));
+            }
+            let lhs = broadcast_typed_read_view($lhs, lhs_shape, lhs_dims)?;
+            let rhs = broadcast_typed_read_view($rhs, rhs_shape, rhs_dims)?;
+            Ok(Some(Tensor::$variant(typed_mul_view_with_pool(
+                buffers, &lhs, &rhs,
+            )?)))
+        }};
+    }
+
+    match (lhs, rhs) {
+        (CpuReadView::F32(lhs), CpuReadView::F32(rhs)) => {
+            #[cfg(feature = "cpu-blas")]
+            if let Some(out) = try_outer_product_blas_f32(
+                buffers, &lhs, lhs_shape, lhs_dims, &rhs, rhs_shape, rhs_dims,
+            )? {
+                return Ok(Some(Tensor::F32(out)));
+            }
+            dispatch!(F32, lhs, rhs)
+        }
+        (CpuReadView::F64(lhs), CpuReadView::F64(rhs)) => {
+            #[cfg(feature = "cpu-blas")]
+            if let Some(out) = try_outer_product_blas_f64(
+                buffers, &lhs, lhs_shape, lhs_dims, &rhs, rhs_shape, rhs_dims,
+            )? {
+                return Ok(Some(Tensor::F64(out)));
+            }
+            dispatch!(F64, lhs, rhs)
+        }
+        (CpuReadView::I32(lhs), CpuReadView::I32(rhs)) => dispatch!(I32, lhs, rhs),
+        (CpuReadView::I64(lhs), CpuReadView::I64(rhs)) => dispatch!(I64, lhs, rhs),
+        (CpuReadView::C32(lhs), CpuReadView::C32(rhs)) => dispatch!(C32, lhs, rhs),
+        (CpuReadView::C64(lhs), CpuReadView::C64(rhs)) => dispatch!(C64, lhs, rhs),
+        _ => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn broadcast_multiply_value_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: TensorRead<'_>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<Option<TensorValue>> {
+    let lhs_view = read_as_cpu_view(lhs.clone());
+    let rhs_view = read_as_cpu_view(rhs.clone());
+
+    macro_rules! dispatch_lazy {
+        ($variant:ident, $lhs:expr, $rhs:expr) => {{
+            if let Some(out) = try_lazy_outer_product_with_pool(
+                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
+            )? {
+                return Ok(Some(lazy_outer_product_value(
+                    Tensor::$variant(out.base),
+                    out.shape,
+                    out.strides,
+                )?));
+            }
+        }};
+    }
+
+    match (lhs_view, rhs_view) {
+        (CpuReadView::F32(lhs_view), CpuReadView::F32(rhs_view)) => {
+            dispatch_lazy!(F32, lhs_view, rhs_view);
+        }
+        (CpuReadView::F64(lhs_view), CpuReadView::F64(rhs_view)) => {
+            dispatch_lazy!(F64, lhs_view, rhs_view);
+        }
+        (CpuReadView::I32(lhs_view), CpuReadView::I32(rhs_view)) => {
+            dispatch_lazy!(I32, lhs_view, rhs_view);
+        }
+        (CpuReadView::I64(lhs_view), CpuReadView::I64(rhs_view)) => {
+            dispatch_lazy!(I64, lhs_view, rhs_view);
+        }
+        (CpuReadView::C32(lhs_view), CpuReadView::C32(rhs_view)) => {
+            dispatch_lazy!(C32, lhs_view, rhs_view);
+        }
+        (CpuReadView::C64(lhs_view), CpuReadView::C64(rhs_view)) => {
+            dispatch_lazy!(C64, lhs_view, rhs_view);
+        }
+        _ => {}
+    }
+
+    broadcast_multiply_read_with_pool(buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)
+        .map(|tensor| tensor.map(TensorValue::from_tensor))
 }
 
 pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
@@ -952,6 +1924,58 @@ where
     }
 }
 
+pub(crate) fn typed_mul_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
+    L: TensorRank,
+    R: TensorRank,
+{
+    if lhs.shape() == rhs.shape() {
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("mul", lhs)?,
+            &typed_view_from_view("mul", rhs)?,
+            |x, y| x * y,
+        )
+        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        Ok(tensor_from_array(out))
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_view_from_view("mul", lhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("mul", rhs)?,
+            |x| scalar * x,
+        )
+        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        Ok(tensor_from_array(out))
+    } else if rhs.shape().is_empty() {
+        let scalar = typed_view_from_view("mul", rhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("mul", lhs)?,
+            |x| x * scalar,
+        )
+        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        Ok(tensor_from_array(out))
+    } else {
+        Err(crate::Error::ShapeMismatch {
+            op: "mul",
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        })
+    }
+}
+
 pub fn typed_div<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
@@ -1233,4 +2257,227 @@ where
     )
     .map_err(|err| crate::Error::backend_failure("clamp", err))?;
     Ok(tensor_from_array(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [7.0_f64, 8.0, 9.0, 10.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([2, 2], [1, 2], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 2, 2],
+            &[0, 1],
+            &rhs,
+            &[2, 3, 2, 2],
+            &[2, 3],
+        )
+        .unwrap()
+        .expect("rank-N x rank-M pure outer products should use the fast path");
+
+        assert_eq!(out.shape(), &[2, 3, 2, 2]);
+        let expected: Vec<f64> = (0..2)
+            .flat_map(|d| {
+                (0..2).flat_map(move |c| {
+                    (0..3).flat_map(move |b| {
+                        (0..2).map(move |a| lhs_data[a + 2 * b] * rhs_data[c + 2 * d])
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(out.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [
+            7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
+        ];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 3], [1, 4], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 4, 3],
+            &[0, 2],
+            &rhs,
+            &[2, 4, 3],
+            &[1, 2],
+        )
+        .unwrap()
+        .expect("shared-batch outer products should use the fast path");
+
+        assert_eq!(out.shape(), &[2, 4, 3]);
+        let expected: Vec<f64> = (0..3)
+            .flat_map(|t| {
+                (0..4).flat_map(move |o| {
+                    (0..2).map(move |j| lhs_data[j + 2 * t] * rhs_data[o + 4 * t])
+                })
+            })
+            .collect();
+        assert_eq!(out.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_degenerate_1x1_batched_elementwise() {
+        let lhs_data = [1.0_f64; 5];
+        let rhs_data = [2.0_f64; 5];
+        let lhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &rhs_data).unwrap();
+
+        let plan =
+            split_outer_product_plan(&lhs, &[1, 1, 5], &[0, 2], &rhs, &[1, 1, 5], &[1, 2]).unwrap();
+
+        assert!(
+            plan.is_none(),
+            "1x1 per batch should use the ordinary zip-map path"
+        );
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_scaling_and_unsupported_axis_layouts() {
+        let vector_data = vec![1.0_f64; 5];
+        let matrix_data = vec![2.0_f64; 15];
+        let vector = TypedTensorView::from_slice([5], [1], 0, &vector_data).unwrap();
+        let matrix = TypedTensorView::from_slice([5, 3], [1, 5], 0, &matrix_data).unwrap();
+
+        assert!(
+            split_outer_product_plan(&vector, &[5, 3], &[0], &matrix, &[5, 3], &[0, 1])
+                .unwrap()
+                .is_none(),
+            "lhs scaling over a shared axis is not an outer product"
+        );
+        assert!(
+            split_outer_product_plan(&matrix, &[5, 3], &[0, 1], &vector, &[5, 3], &[0])
+                .unwrap()
+                .is_none(),
+            "rhs scaling over a shared axis is not an outer product"
+        );
+
+        let lhs_data = vec![1.0_f64; 6];
+        let rhs_data = vec![2.0_f64; 20];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 5], [1, 4], 0, &rhs_data).unwrap();
+        assert!(
+            split_outer_product_plan(&lhs, &[2, 4, 3, 5], &[0, 2], &rhs, &[2, 4, 3, 5], &[1, 3],)
+                .unwrap()
+                .is_none(),
+            "interleaved free axes are not supported by the materialized fast path"
+        );
+
+        let lhs_data = [1.0_f64, 2.0];
+        let rhs_data = [3.0_f64, 4.0, 5.0];
+        let lhs = TypedTensorView::from_slice([2], [1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([3], [1], 0, &rhs_data).unwrap();
+        assert!(
+            split_outer_product_plan(&lhs, &[2, 3, 4], &[0], &rhs, &[2, 3, 4], &[1])
+                .unwrap()
+                .is_none(),
+            "every output axis must be covered by lhs, rhs, or a shared batch axis"
+        );
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_pure_shared_batch_elementwise() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64; 24];
+        let rhs_data = [2.0_f64; 24];
+        let lhs = TypedTensorView::from_slice([2, 3, 4], [1, 2, 6], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 2, 3], [1, 4, 8], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 4],
+            &[0, 1, 2],
+            &rhs,
+            &[2, 3, 4],
+            &[2, 0, 1],
+        )
+        .unwrap();
+
+        assert!(
+            out.is_none(),
+            "pure shared-batch elementwise should use the ordinary zip-map path"
+        );
+    }
+
+    #[test]
+    fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
+
+        let out = try_lazy_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 4],
+            &[0, 1],
+            &rhs,
+            &[2, 3, 4],
+            &[2],
+        )
+        .unwrap()
+        .expect("non-canonical lhs physical order should use lazy outer-product output");
+
+        assert_eq!(out.shape, vec![2, 3, 4]);
+        assert_ne!(out.strides, col_major_strides(&out.shape));
+        let value =
+            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+        let tensor = value.to_tensor();
+        let expected: Vec<f64> = (0..4)
+            .flat_map(|k| {
+                (0..3).flat_map(move |j| (0..2).map(move |i| lhs_data[i * 3 + j] * rhs_data[k]))
+            })
+            .collect();
+        assert_eq!(tensor.shape(), &[2, 3, 4]);
+        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
+    }
+
+    #[test]
+    fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
+
+        let out = try_lazy_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[4, 2, 3],
+            &[1, 2],
+            &rhs,
+            &[4, 2, 3],
+            &[0],
+        )
+        .unwrap()
+        .expect("rhs-prefix output should still support lazy non-canonical lhs order");
+
+        assert_eq!(out.shape, vec![4, 2, 3]);
+        assert_ne!(out.strides, col_major_strides(&out.shape));
+        let value =
+            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+        let tensor = value.to_tensor();
+        let expected: Vec<f64> = (0..3)
+            .flat_map(|j| {
+                (0..2).flat_map(move |i| (0..4).map(move |k| rhs_data[k] * lhs_data[i * 3 + j]))
+            })
+            .collect();
+        assert_eq!(tensor.shape(), &[4, 2, 3]);
+        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
+    }
 }

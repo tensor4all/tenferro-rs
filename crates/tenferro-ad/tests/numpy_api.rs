@@ -1,12 +1,59 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
     traced_tensor, CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
     TypedTensor,
 };
 
 use tenferro_ad::eager_tensor;
+
+#[derive(Clone, Debug)]
+struct TestExtensionOp;
+
+impl ExtensionOp for TestExtensionOp {
+    fn family_id(&self) -> &'static str {
+        "tenferro_ad_tests.identity.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
@@ -178,6 +225,95 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = eager_tensor::rsqrt(&x).unwrap();
     let _ = eager_tensor::expm1(&x).unwrap();
     let _ = eager_tensor::log1p(&x).unwrap();
+}
+
+#[test]
+fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        ctx.clone(),
+    );
+
+    let converted = eager_tensor::convert(&x, DType::F32).unwrap();
+    assert_eq!(converted.data().dtype(), DType::F32);
+    assert_eq!(converted.data().as_slice::<f32>().unwrap(), &[1.0, 2.0]);
+
+    let negated = eager_tensor::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
+    assert_eq!(negated.data().as_slice::<f64>().unwrap(), &[-1.0, -2.0]);
+
+    let extension_err =
+        eager_tensor::apply_standard_op(StdTensorOp::Extension(Arc::new(TestExtensionOp)), &[&x])
+            .err()
+            .unwrap();
+    assert!(
+        extension_err
+            .to_string()
+            .contains("does not accept Extension ops"),
+        "got: {extension_err}"
+    );
+
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let product = eager_tensor::matmul(&a, &b).unwrap();
+    assert_eq!(product.data().shape(), &[2, 2]);
+    assert_eq!(
+        product.data().as_slice::<f64>().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
+
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]),
+        ctx.clone(),
+    );
+    let fused = eager_tensor::try_backend_broadcast_multiply_untracked(
+        &lhs,
+        &[2, 3],
+        &[0],
+        &rhs,
+        &[2, 3],
+        &[1],
+    )
+    .unwrap()
+    .expect("CPU backend should fuse broadcast multiply for untracked tensors");
+    assert_eq!(fused.data().shape(), &[2, 3]);
+    assert_eq!(
+        fused.data().as_slice::<f64>().unwrap(),
+        &[10.0, 15.0, 14.0, 21.0, 22.0, 33.0]
+    );
+
+    let tracked = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]),
+        ctx.clone(),
+    );
+    let skipped = eager_tensor::try_backend_broadcast_multiply_untracked(
+        &tracked,
+        &[2, 3],
+        &[0],
+        &rhs,
+        &[2, 3],
+        &[1],
+    )
+    .unwrap();
+    assert!(skipped.is_none());
+
+    let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let other = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        other_ctx,
+    );
+    let err = eager_tensor::add(&x, &other).err().unwrap();
+    assert!(matches!(err, tenferro_ad::Error::ContextMismatch { .. }));
 }
 
 #[test]

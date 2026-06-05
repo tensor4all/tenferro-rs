@@ -544,42 +544,42 @@ fn einsum_cache_reuses_contraction_path() {
     let mut compiler = GraphCompiler::new();
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
-        vec![3, 4],
-        (1..=12).map(|x| x as f64).collect(),
+        vec![3, 3, 4],
+        (1..=36).map(|x| x as f64).collect(),
     ));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![4, 5],
         (1..=20).map(|x| (x * 2) as f64).collect(),
     ));
 
-    let c1 = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let c1 = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
     assert_eq!(c1.rank, 2);
     let entries_after_first = extension_cache_entries(&compiler);
     assert!(entries_after_first >= 2);
 
     let a2 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
-        vec![3, 4],
-        (21..=32).map(|x| x as f64).collect(),
+        vec![3, 3, 4],
+        (21..=56).map(|x| x as f64).collect(),
     ));
     let b2 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![4, 5],
         (41..=60).map(|x| x as f64).collect(),
     ));
 
-    let c2 = einsum(&mut compiler, &[&a2, &b2], "ij,jk->ik").unwrap();
+    let c2 = einsum(&mut compiler, &[&a2, &b2], "iij,jk->ik").unwrap();
     assert_eq!(c2.rank, 2);
     assert_eq!(extension_cache_entries(&compiler), entries_after_first);
 
     let a3 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
-        vec![5, 6],
-        (1..=30).map(|x| (x as f64) / 10.0).collect(),
+        vec![5, 5, 6],
+        (1..=150).map(|x| (x as f64) / 10.0).collect(),
     ));
     let b3 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![6, 7],
         (1..=42).map(|x| (x as f64) / 5.0).collect(),
     ));
 
-    let c3 = einsum(&mut compiler, &[&a3, &b3], "ij,jk->ik").unwrap();
+    let c3 = einsum(&mut compiler, &[&a3, &b3], "iij,jk->ik").unwrap();
     assert_eq!(c3.rank, 2);
     assert!(extension_cache_entries(&compiler) > entries_after_first);
 }

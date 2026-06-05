@@ -6,10 +6,11 @@ use num_complex::{Complex32, Complex64};
 use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
     ConjElem, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
-    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorRank,
-    TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
+    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
-use crate::Error;
+use crate::{Error, SliceConfig};
 
 mod strided_dynamic;
 
@@ -69,6 +70,151 @@ fn tensor_scalar_tensor_read_covers_all_variants() {
     let c32s =
         TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]);
     assert_eq!(Complex32::tensor_read(&c32s).dtype(), DType::C32);
+}
+
+#[test]
+fn tensor_value_keeps_owned_transpose_as_view_until_materialized() {
+    let tensor = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    ));
+    let value = TensorValue::from_tensor_arc(tensor);
+    let transposed = value.transpose_view([1, 0]).unwrap();
+
+    assert_eq!(transposed.shape(), &[3, 2]);
+    match transposed.tensor_read() {
+        TensorRead::View(view) => assert_eq!(view.shape(), &[3, 2]),
+        TensorRead::Tensor(_) => panic!("owned transpose should be exposed as a view"),
+    }
+
+    let materialized = transposed.to_tensor();
+    assert_eq!(materialized.shape(), &[3, 2]);
+    assert_eq!(
+        materialized.as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
+    let base = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let owned = TensorOwnedView::from_tensor(Arc::clone(&base));
+
+    assert_eq!(owned.dtype(), DType::F64);
+    assert_eq!(owned.shape(), &[2, 3]);
+    assert_eq!(owned.strides(), &[1, 2]);
+    assert_eq!(owned.offset(), 0);
+    match owned.tensor_view() {
+        TensorView::F64(view) => assert_eq!(view.get(&[1, 2]), Some(&6.0)),
+        other => panic!("expected f64 view, got {other:?}"),
+    }
+    match owned.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => assert_eq!(view.shape(), &[2, 3]),
+        other => panic!("owned view should expose TensorRead::View, got {other:?}"),
+    }
+    assert_eq!(
+        owned.to_tensor().as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+
+    let explicit =
+        TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+    assert_eq!(explicit.shape(), &[3, 2]);
+    assert_eq!(
+        explicit.to_tensor().as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+
+    let transposed = owned.transpose_view([1, 0]).unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(transposed.strides(), &[2, 1]);
+
+    let reshaped = owned.reshape_view(&[6]).unwrap();
+    assert_eq!(reshaped.shape(), &[6]);
+
+    let sliced = owned
+        .slice_view(&SliceConfig {
+            starts: vec![0, 1],
+            limits: vec![2, 3],
+            strides: vec![1, 1],
+        })
+        .unwrap();
+    assert_eq!(sliced.shape(), &[2, 2]);
+    assert_eq!(
+        sliced.to_tensor().as_slice::<f64>().unwrap(),
+        &[3.0, 4.0, 5.0, 6.0]
+    );
+
+    let vector = TensorOwnedView::from_parts(Arc::clone(&base), vec![2], vec![1], 0).unwrap();
+    let broadcast = vector.broadcast_in_dim_view(&[2, 3], &[0]).unwrap();
+    assert_eq!(broadcast.shape(), &[2, 3]);
+    assert_eq!(broadcast.strides(), &[1, 0]);
+
+    for bad_config in [
+        SliceConfig {
+            starts: vec![0],
+            limits: vec![2, 3],
+            strides: vec![1, 1],
+        },
+        SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![2],
+            strides: vec![1, 1],
+        },
+        SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![2, 3],
+            strides: vec![1],
+        },
+    ] {
+        assert!(matches!(
+            owned.slice_view(&bad_config),
+            Err(Error::RankMismatch { .. })
+        ));
+    }
+
+    let value = TensorValue::from_tensor_arc(Arc::clone(&base));
+    assert!(Arc::ptr_eq(value.as_tensor_arc().unwrap(), &base));
+    assert_eq!(value.dtype(), DType::F64);
+    assert_eq!(value.shape(), &[2, 3]);
+    assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
+    assert_eq!(
+        value.to_tensor().as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+
+    let view_value = value.transpose_view([1, 0]).unwrap();
+    assert!(view_value.as_tensor_arc().is_none());
+    assert_eq!(view_value.dtype(), DType::F64);
+    assert_eq!(view_value.shape(), &[3, 2]);
+    let original_order = view_value.transpose_view([1, 0]).unwrap();
+    assert_eq!(original_order.shape(), &[2, 3]);
+
+    let compact_view = value.reshape_view(&[6]).unwrap();
+    assert_eq!(compact_view.reshape_view(&[2, 3]).unwrap().shape(), &[2, 3]);
+    assert_eq!(
+        compact_view
+            .slice_view(&SliceConfig {
+                starts: vec![1],
+                limits: vec![5],
+                strides: vec![2],
+            })
+            .unwrap()
+            .to_tensor()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[2.0, 4.0]
+    );
+    assert_eq!(
+        compact_view
+            .broadcast_in_dim_view(&[6, 2], &[0])
+            .unwrap()
+            .shape(),
+        &[6, 2]
+    );
 }
 
 #[test]

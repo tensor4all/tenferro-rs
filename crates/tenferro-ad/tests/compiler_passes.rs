@@ -3,8 +3,9 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
 use tenferro_runtime::compiler::{
-    compile_std_to_exec, conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter,
-    eliminate_dead_code, transpose_folding,
+    algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
+    conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
+    layout_chain_transpose_folding, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::GraphExecutor;
@@ -45,8 +46,8 @@ fn make_exec_instr(
         input_slots,
         output_slots: output_slots.clone(),
         dtype: DType::F64,
-        output_shapes: vec![Vec::new(); output_slots.len()],
-        output_extents: vec![Vec::new(); output_slots.len()],
+        output_shapes: vec![Vec::new(); output_slots.len()].into(),
+        output_extents: vec![Vec::new(); output_slots.len()].into(),
         last_use: Vec::new(),
     }
 }
@@ -66,8 +67,9 @@ fn make_exec_instr_with_meta(
         output_extents: output_shapes
             .iter()
             .map(|shape| exact_extents(shape))
-            .collect(),
-        output_shapes,
+            .collect::<Vec<_>>()
+            .into(),
+        output_shapes: output_shapes.into(),
         last_use: Vec::new(),
     }
 }
@@ -82,6 +84,215 @@ fn make_std_instr(
         inputs,
         outputs,
     }
+}
+
+#[test]
+fn compile_default_options_match_default_entrypoint() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(
+            StdTensorOp::DotGeneral { config },
+            vec![0, 1],
+            vec![2],
+        )],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let dtypes = [DType::F64, DType::F64];
+    let shapes = [dim_shape(&[2, 3]), dim_shape(&[3, 4])];
+    let default = compile_std_to_exec(&program, &dtypes, &shapes);
+    let explicit =
+        compile_std_to_exec_with_options(&program, &dtypes, &shapes, CompilerOptions::default());
+
+    assert_eq!(default.instructions.len(), explicit.instructions.len());
+    assert_eq!(default.n_slots, explicit.n_slots);
+}
+
+#[test]
+fn algebraic_layout_simplifier_removes_identity_transpose() {
+    let transpose = make_exec_instr_with_meta(
+        ExecOp::Transpose { perm: vec![0, 1] },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let neg = make_exec_instr_with_meta(
+        ExecOp::Negate,
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let mut program = make_exec_program(vec![transpose, neg], vec![0], vec![2], 3);
+
+    algebraic_layout_simplifier(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
+    assert!(matches!(program.instructions[0].op, ExecOp::Negate));
+    assert_eq!(program.instructions[0].input_slots, vec![0]);
+}
+
+#[test]
+fn algebraic_layout_simplifier_composes_adjacent_inverse_transposes() {
+    let transpose_a = make_exec_instr_with_meta(
+        ExecOp::Transpose {
+            perm: vec![1, 2, 0],
+        },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[3, 4, 2])],
+    );
+    let transpose_b = make_exec_instr_with_meta(
+        ExecOp::Transpose {
+            perm: vec![2, 0, 1],
+        },
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2, 3, 4])],
+    );
+    let mut program = make_exec_program(vec![transpose_a, transpose_b], vec![0], vec![2], 3);
+
+    algebraic_layout_simplifier(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.output_slots, vec![0]);
+    assert!(program.instructions.is_empty());
+}
+
+#[test]
+fn algebraic_layout_simplifier_removes_identity_reshape() {
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: DimExpr::input_shape(0, 2),
+        },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let neg = make_exec_instr_with_meta(
+        ExecOp::Negate,
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let mut program = make_exec_program(vec![reshape, neg], vec![0], vec![2], 3);
+
+    algebraic_layout_simplifier(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
+    assert!(matches!(program.instructions[0].op, ExecOp::Negate));
+    assert_eq!(program.instructions[0].input_slots, vec![0]);
+}
+
+#[test]
+fn layout_chain_transpose_folding_ignores_non_identity_reshape_chain() {
+    let transpose = make_exec_instr_with_meta(
+        ExecOp::Transpose { perm: vec![1, 0] },
+        vec![0],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[3, 2])],
+    );
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: dim_shape(&[6]),
+        },
+        vec![2],
+        vec![3],
+        DType::F64,
+        vec![dim_shape(&[6])],
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr_with_meta(
+        ExecOp::DotGeneral(config.clone()),
+        vec![3, 1],
+        vec![4],
+        DType::F64,
+        vec![dim_shape(&[4])],
+    );
+    let mut program = make_exec_program(vec![transpose, reshape, dot], vec![0, 1], vec![4], 5);
+
+    layout_chain_transpose_folding(&mut program);
+
+    assert_eq!(program.instructions[1].input_slots, vec![2]);
+    assert_eq!(program.instructions[2].input_slots, vec![3, 1]);
+    match &program.instructions[2].op {
+        ExecOp::DotGeneral(actual) => assert_eq!(actual, &config),
+        other => panic!("expected DotGeneral, got {other:?}"),
+    }
+}
+
+#[test]
+fn dot_decomposer_is_disabled_by_default_and_opt_in() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![2],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(
+            StdTensorOp::DotGeneral {
+                config: config.clone(),
+            },
+            vec![0, 1],
+            vec![2],
+        )],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+    let dtypes = [DType::F64, DType::F64];
+    let shapes = [dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])];
+
+    let default_exec = compile_std_to_exec(&program, &dtypes, &shapes);
+    assert_eq!(
+        default_exec
+            .instructions
+            .iter()
+            .filter(|instr| matches!(instr.op, ExecOp::DotGeneral(_)))
+            .count(),
+        1
+    );
+    assert!(default_exec
+        .instructions
+        .iter()
+        .all(|instr| !matches!(instr.op, ExecOp::Reshape { .. })));
+
+    let decomposed = compile_std_to_exec_with_options(
+        &program,
+        &dtypes,
+        &shapes,
+        CompilerOptions {
+            optimizer: OptimizerConfig {
+                dot_decomposer: true,
+                ..OptimizerConfig::default()
+            },
+        },
+    );
+    assert!(decomposed
+        .instructions
+        .iter()
+        .any(|instr| matches!(instr.op, ExecOp::Reshape { .. })));
 }
 
 #[test]
@@ -512,7 +723,10 @@ fn test_full_pipeline_matmul() {
         }
         other => panic!("expected DotGeneral, got {other:?}"),
     }
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[dim_shape(&[2, 4])]
+    );
 }
 
 #[test]
@@ -574,7 +788,10 @@ fn test_full_pipeline_transpose_matmul() {
         .filter(|i| matches!(i.op, ExecOp::Transpose { .. }))
         .count();
     assert_eq!(transpose_count, 0, "dead-code elimination failed");
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+    assert_eq!(
+        exec.instructions[0].output_shapes.as_slice(),
+        &[dim_shape(&[2, 4])]
+    );
 }
 
 #[test]
@@ -628,8 +845,9 @@ fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
         exec.instructions
             .last()
             .expect("compiled program should have an output instruction")
-            .output_shapes,
-        vec![dim_shape(&[2, 4, 5])]
+            .output_shapes
+            .as_slice(),
+        &[dim_shape(&[2, 4, 5])]
     );
 }
 

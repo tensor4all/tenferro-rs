@@ -67,7 +67,14 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     }
 
     let op = StdTensorOp::Extension(op);
-    let concrete_inputs: Vec<&Tensor> = inputs.iter().map(|tensor| tensor.data.as_ref()).collect();
+    let concrete_input_arcs: Vec<_> = inputs
+        .iter()
+        .map(|tensor| tensor.materialized_arc())
+        .collect();
+    let concrete_inputs: Vec<&Tensor> = concrete_input_arcs
+        .iter()
+        .map(|tensor| tensor.as_ref())
+        .collect();
     let outputs = ctx.exec_outputs(&op, &concrete_inputs)?;
     if outputs.len() != op.output_count() {
         return Err(Error::Internal(format!(
