@@ -8,7 +8,8 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionOp, GatherConfig,
-    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TypedTensor,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue,
+    TypedTensor,
 };
 
 use crate::extension_runtime::ExtensionExecutor;
@@ -47,6 +48,7 @@ pub(crate) enum DispatchMode {
 
 pub(crate) enum ExecSlot<'a> {
     Owned(Tensor),
+    Value(TensorValue),
     Read(TensorRead<'a>),
 }
 
@@ -54,6 +56,7 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn dtype(&self) -> DType {
         match self {
             Self::Owned(tensor) => tensor.dtype(),
+            Self::Value(value) => value.dtype(),
             Self::Read(read) => read.dtype(),
         }
     }
@@ -64,6 +67,7 @@ impl<'a> ExecSlot<'a> {
     {
         match self {
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
+            Self::Value(value) => value.tensor_read(),
             Self::Read(read) => read.clone(),
         }
     }
@@ -74,6 +78,10 @@ impl<'a> ExecSlot<'a> {
     {
         match self {
             Self::Owned(tensor) => Ok(tensor),
+            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref()),
+            Self::Value(TensorValue::View(_)) => Err(Error::Internal(format!(
+                "{op}: owned TensorValue view reached an owned-only execution boundary"
+            ))),
             Self::Read(read) => read.as_tensor().ok_or_else(|| {
                 Error::Internal(format!(
                     "{op}: borrowed TensorView reached an owned-only execution boundary"
@@ -85,6 +93,7 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn shape(&self) -> &[usize] {
         match self {
             Self::Owned(tensor) => tensor.shape(),
+            Self::Value(value) => value.shape(),
             Self::Read(read) => read.shape(),
         }
     }
@@ -92,7 +101,16 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn into_tensor(self) -> Tensor {
         match self {
             Self::Owned(tensor) => tensor,
+            Self::Value(value) => value.to_tensor(),
             Self::Read(read) => read.to_tensor(),
+        }
+    }
+
+    pub(crate) fn into_value(self) -> TensorValue {
+        match self {
+            Self::Owned(tensor) => TensorValue::from_tensor(tensor),
+            Self::Value(value) => value,
+            Self::Read(read) => TensorValue::from_tensor(read.to_tensor()),
         }
     }
 }
@@ -153,6 +171,118 @@ pub(crate) fn collect_outputs_from<'input>(
                 .ok_or(TensorError::MissingValue { slot }.into())
         })
         .collect()
+}
+
+pub(crate) fn collect_output_values_from<'input>(
+    program: &ExecProgram,
+    slots: &mut [Option<ExecSlot<'input>>],
+) -> Result<Vec<TensorValue>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            slots[slot]
+                .take()
+                .map(ExecSlot::into_value)
+                .ok_or(TensorError::MissingValue { slot }.into())
+        })
+        .collect()
+}
+
+pub(crate) fn terminal_output_slots(program: &ExecProgram) -> Vec<bool> {
+    let mut consumed = vec![false; program.n_slots];
+    for inst in &program.instructions {
+        for &slot in &inst.input_slots {
+            if let Some(consumed) = consumed.get_mut(slot) {
+                *consumed = true;
+            }
+        }
+    }
+
+    let mut terminal = vec![false; program.n_slots];
+    for &slot in &program.output_slots {
+        if !consumed.get(slot).copied().unwrap_or(true) {
+            terminal[slot] = true;
+        }
+    }
+    terminal
+}
+
+pub(crate) fn try_execute_terminal_value_instruction<'input>(
+    slots: &mut [Option<ExecSlot<'input>>],
+    inst: &ExecInstruction,
+    terminal_slots: &[bool],
+) -> Result<bool> {
+    if inst.output_slots.len() != 1
+        || !terminal_slots
+            .get(inst.output_slots[0])
+            .copied()
+            .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+
+    let output = match &inst.op {
+        ExecOp::Transpose { perm } => {
+            let input_slot = inst.input_slots[0];
+            let consume_input = inst.last_use.first().copied().unwrap_or(false);
+            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            input.transpose_view(perm).map_err(Error::TensorRuntime)?
+        }
+        ExecOp::Reshape { shape } => {
+            let input_slot = inst.input_slots[0];
+            let consume_input = inst.last_use.first().copied().unwrap_or(false);
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
+            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            match input.reshape_view(&shape) {
+                Ok(value) => value,
+                Err(_) => {
+                    if consume_input {
+                        slots[input_slot] = Some(ExecSlot::Value(input));
+                    }
+                    return Ok(false);
+                }
+            }
+        }
+        ExecOp::BroadcastInDim { shape, dims } => {
+            let input_slot = inst.input_slots[0];
+            let consume_input = inst.last_use.first().copied().unwrap_or(false);
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
+            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            input
+                .broadcast_in_dim_view(&shape, dims)
+                .map_err(Error::TensorRuntime)?
+        }
+        ExecOp::Slice(config) => {
+            let input_slot = inst.input_slots[0];
+            let consume_input = inst.last_use.first().copied().unwrap_or(false);
+            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            input.slice_view(config).map_err(Error::TensorRuntime)?
+        }
+        _ => return Ok(false),
+    };
+    slots[inst.output_slots[0]] = Some(ExecSlot::Value(output));
+    Ok(true)
+}
+
+fn tensor_value_for_lazy_view<'input>(
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot: usize,
+    consume: bool,
+) -> Result<TensorValue> {
+    if consume {
+        return slots[slot]
+            .take()
+            .map(ExecSlot::into_value)
+            .ok_or(TensorError::MissingValue { slot }.into());
+    }
+
+    match slots[slot].as_ref() {
+        Some(ExecSlot::Owned(tensor)) => Ok(TensorValue::from_tensor(tensor.clone())),
+        Some(ExecSlot::Value(value)) => Ok(value.clone()),
+        Some(ExecSlot::Read(read)) => Ok(TensorValue::from_tensor(read.to_tensor())),
+        None => Err(TensorError::MissingValue { slot }.into()),
+    }
 }
 
 pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
@@ -276,6 +406,50 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
         }
 
         collect_outputs_from(program, slots)
+    })();
+    slots.clear();
+    result
+}
+
+pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
+    'input,
+    B: TensorBackend + 'static,
+>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    backend_cache: &mut B::RuntimeCache,
+    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+) -> Result<Vec<TensorValue>> {
+    let result = (|| {
+        initialize_exec_slots_in(program, inputs, slots);
+        let terminal_slots = terminal_output_slots(program);
+
+        for (inst_idx, inst) in program.instructions.iter().enumerate() {
+            if try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                // Already handled as a metadata-only TensorValue.
+            } else if is_host_instruction(inst) {
+                execute_host_instruction(backend, slots, inst)?;
+            } else if is_ffi_instruction(inst) {
+                execute_ffi_instruction_cached(
+                    backend,
+                    backend_cache,
+                    slots,
+                    inst,
+                    DispatchMode::Unsegmented,
+                    Some(inst_idx),
+                    extension_executor.as_deref_mut(),
+                )?;
+            } else {
+                let result =
+                    backend.with_backend_session(|exec| execute_backend_op(exec, slots, inst))?;
+                slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+            }
+            reclaim_last_use_inputs_backend(slots, inst, backend);
+        }
+
+        collect_output_values_from(program, slots)
     })();
     slots.clear();
     result
@@ -570,8 +744,8 @@ pub(crate) fn reclaim_last_use_inputs_exec(
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(ExecSlot::Owned(tensor)) = slots[inst.input_slots[i]].take() {
-                exec.reclaim_buffer(tensor);
+            if let Some(slot) = slots[inst.input_slots[i]].take() {
+                reclaim_exec_slot_with_session(slot, exec);
             }
         }
     }
@@ -584,10 +758,34 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(ExecSlot::Owned(tensor)) = slots[inst.input_slots[i]].take() {
+            if let Some(slot) = slots[inst.input_slots[i]].take() {
+                reclaim_exec_slot_with_backend(slot, backend);
+            }
+        }
+    }
+}
+
+fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSession) {
+    match slot {
+        ExecSlot::Owned(tensor) => exec.reclaim_buffer(tensor),
+        ExecSlot::Value(TensorValue::Tensor(tensor)) => {
+            if let Ok(tensor) = Arc::try_unwrap(tensor) {
+                exec.reclaim_buffer(tensor);
+            }
+        }
+        ExecSlot::Value(TensorValue::View(_)) | ExecSlot::Read(_) => {}
+    }
+}
+
+fn reclaim_exec_slot_with_backend<B: TensorBackend>(slot: ExecSlot<'_>, backend: &mut B) {
+    match slot {
+        ExecSlot::Owned(tensor) => backend.reclaim_buffer(tensor),
+        ExecSlot::Value(TensorValue::Tensor(tensor)) => {
+            if let Ok(tensor) = Arc::try_unwrap(tensor) {
                 backend.reclaim_buffer(tensor);
             }
         }
+        ExecSlot::Value(TensorValue::View(_)) | ExecSlot::Read(_) => {}
     }
 }
 

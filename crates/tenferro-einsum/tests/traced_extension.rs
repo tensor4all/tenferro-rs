@@ -1,7 +1,7 @@
 #[cfg(feature = "autodiff")]
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
 
 #[test]
 fn concrete_traced_einsum_executes_without_extension_runtime() {
@@ -63,6 +63,32 @@ fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension
     assert_eq!(out.shape(), &[4, 3]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
     assert_eq!(executor.cache_stats().extensions.entries, 0);
+}
+
+#[test]
+fn traced_einsum_final_permutation_can_return_lazy_value() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut compiler = GraphCompiler::new();
+
+    let out = tenferro_einsum::einsum(&mut compiler, &[&a], "ij->ji").unwrap();
+    let program = compiler.compile(&out).unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let values = executor.run_many_values(&program).unwrap();
+
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].shape(), &[3, 2]);
+    match &values[0] {
+        TensorValue::View(view) => {
+            assert_eq!(view.shape(), &[3, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+        }
+        TensorValue::Tensor(_) => panic!("final einsum permutation should stay as a lazy view"),
+    }
+    assert_eq!(
+        values[0].to_tensor().as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
 }
 
 #[test]

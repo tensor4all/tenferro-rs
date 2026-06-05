@@ -1,7 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
     tensor, DType, DotGeneralConfig, Error, GraphCompiler, GraphExecutor, Tensor, TensorRead,
-    TracedTensor,
+    TensorValue, TracedTensor,
 };
 
 #[test]
@@ -97,6 +97,44 @@ fn graph_executor_runs_dot_general_with_borrowed_inputs() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].shape(), &[2, 2]);
     assert_eq!(out[0].as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn graph_executor_can_return_final_transpose_as_lazy_value() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let y = (&x + &x).transpose(&[1, 0]);
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    let compact = executor
+        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .unwrap();
+    assert_eq!(
+        compact[0].as_slice::<f64>().unwrap(),
+        &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
+    );
+
+    let values = executor
+        .run_many_values_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .unwrap();
+
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].shape(), &[3, 2]);
+    match &values[0] {
+        TensorValue::View(view) => {
+            assert_eq!(view.shape(), &[3, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+        }
+        TensorValue::Tensor(_) => panic!("final transpose should stay as a lazy owned view"),
+    }
+    assert_eq!(
+        values[0].to_tensor().as_slice::<f64>().unwrap(),
+        &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
+    );
 }
 
 #[test]

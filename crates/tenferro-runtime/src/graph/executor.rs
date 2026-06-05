@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TypedTensor};
+use tenferro_tensor::{
+    DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
+};
 
 use super::cache::GraphExecutorCacheStats;
 use super::program::{GraphProgram, GraphProgramInput};
@@ -85,6 +88,20 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         }
     }
 
+    /// Return compact value outputs to the backend pool when ownership is unique.
+    ///
+    /// Lazy owned views are intentionally ignored because their base storage may
+    /// be aliased by view metadata.
+    pub fn reclaim_value_outputs(&mut self, outputs: Vec<TensorValue>) {
+        for value in outputs {
+            if let TensorValue::Tensor(tensor) = value {
+                if let Ok(tensor) = Arc::try_unwrap(tensor) {
+                    self.backend.reclaim_buffer(tensor);
+                }
+            }
+        }
+    }
+
     /// Borrow the extension runtime executor owned by this graph executor.
     ///
     /// # Examples
@@ -145,6 +162,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         expect_single_output(&mut outputs)
     }
 
+    /// Run a one-output program and preserve lazy owned output views.
+    pub fn run_value(&mut self, program: &GraphProgram) -> Result<TensorValue> {
+        let mut outputs = self.run_many_values(program)?;
+        expect_single_value(&mut outputs)
+    }
+
     /// Run a program using the program's default input tensors.
     ///
     /// # Examples
@@ -163,6 +186,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// ```
     pub fn run_many(&mut self, program: &GraphProgram) -> Result<Vec<Tensor>> {
         self.run_many_with_inputs(program, &[])
+    }
+
+    /// Run a program and preserve lazy owned output views.
+    pub fn run_many_values(&mut self, program: &GraphProgram) -> Result<Vec<TensorValue>> {
+        self.run_many_values_with_inputs(program, &[])
     }
 
     /// Run a one-output program with explicit runtime placeholder bindings.
@@ -196,6 +224,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         expect_single_output(&mut outputs)
     }
 
+    /// Run a one-output program with explicit bindings and preserve lazy output views.
+    pub fn run_value_with_inputs(
+        &mut self,
+        program: &GraphProgram,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<TensorValue> {
+        let mut outputs = self.run_many_values_with_inputs(program, bindings)?;
+        expect_single_value(&mut outputs)
+    }
+
     /// Run a one-output program with explicit borrowed runtime placeholder bindings.
     ///
     /// Unlike [`run_with_inputs`](Self::run_with_inputs), caller-owned input
@@ -208,6 +246,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ) -> Result<Tensor> {
         let mut outputs = self.run_many_with_input_reads(program, bindings)?;
         expect_single_output(&mut outputs)
+    }
+
+    /// Run a one-output program with borrowed bindings and preserve lazy output views.
+    pub fn run_value_with_input_reads<'a>(
+        &mut self,
+        program: &'a GraphProgram,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<TensorValue> {
+        let mut outputs = self.run_many_values_with_input_reads(program, bindings)?;
+        expect_single_value(&mut outputs)
     }
 
     /// Run a program with explicit runtime placeholder bindings.
@@ -239,6 +287,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         self.eval_exec_ir(&program.exec, input_tensors)
     }
 
+    /// Run a program with explicit bindings and preserve lazy output views.
+    pub fn run_many_values_with_inputs(
+        &mut self,
+        program: &GraphProgram,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<Vec<TensorValue>> {
+        let input_tensors = resolve_inputs(program, bindings)?;
+        self.eval_exec_ir_values(&program.exec, input_tensors)
+    }
+
     /// Run a program with explicit borrowed runtime placeholder bindings.
     ///
     /// Bindings override program defaults and are validated against the input
@@ -251,6 +309,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ) -> Result<Vec<Tensor>> {
         let inputs = resolve_input_reads(program, bindings)?;
         self.eval_exec_ir_slots(&program.exec, inputs)
+    }
+
+    /// Run a program with borrowed bindings and preserve lazy output views.
+    pub fn run_many_values_with_input_reads<'a>(
+        &mut self,
+        program: &'a GraphProgram,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<Vec<TensorValue>> {
+        let inputs = resolve_input_reads(program, bindings)?;
+        self.eval_exec_ir_slot_values(&program.exec, inputs)
     }
 
     /// Evaluate an execution program through this executor's backend state.
@@ -287,6 +355,24 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         )
     }
 
+    /// Evaluate an execution program and preserve lazy owned output views.
+    pub fn eval_exec_ir_values(
+        &mut self,
+        program: &ExecProgram,
+        inputs: Vec<Tensor>,
+    ) -> Result<Vec<TensorValue>> {
+        validate_exec_input_count(program, inputs.len())?;
+        let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
+        crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+            &mut self.backend,
+            program,
+            inputs,
+            &mut self.slot_workspace,
+            &mut self.backend_cache,
+            Some(&mut self.extension_executor),
+        )
+    }
+
     /// Evaluate an execution program without consuming caller-owned inputs.
     ///
     /// # Examples
@@ -314,6 +400,19 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         self.eval_exec_ir_slots(program, inputs)
     }
 
+    /// Evaluate an execution program without consuming inputs and preserve lazy outputs.
+    pub fn eval_exec_ir_non_consuming_values(
+        &mut self,
+        program: &ExecProgram,
+        inputs: &[Tensor],
+    ) -> Result<Vec<TensorValue>> {
+        let inputs = inputs
+            .iter()
+            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+            .collect();
+        self.eval_exec_ir_slot_values(program, inputs)
+    }
+
     fn eval_exec_ir_slots<'a>(
         &mut self,
         program: &ExecProgram,
@@ -322,6 +421,23 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         validate_exec_input_count(program, inputs.len())?;
         let mut slot_workspace = Vec::new();
         crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+            &mut self.backend,
+            program,
+            inputs,
+            &mut slot_workspace,
+            &mut self.backend_cache,
+            Some(&mut self.extension_executor),
+        )
+    }
+
+    fn eval_exec_ir_slot_values<'a>(
+        &mut self,
+        program: &ExecProgram,
+        inputs: Vec<ExecSlot<'a>>,
+    ) -> Result<Vec<TensorValue>> {
+        validate_exec_input_count(program, inputs.len())?;
+        let mut slot_workspace = Vec::new();
+        crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
             &mut self.backend,
             program,
             inputs,
@@ -420,6 +536,18 @@ fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()>
 }
 
 fn expect_single_output(outputs: &mut Vec<Tensor>) -> Result<Tensor> {
+    if outputs.len() != 1 {
+        return Err(Error::Internal(format!(
+            "expected 1 output, got {}",
+            outputs.len()
+        )));
+    }
+    outputs
+        .pop()
+        .ok_or_else(|| Error::Internal("missing graph output".to_string()))
+}
+
+fn expect_single_value(outputs: &mut Vec<TensorValue>) -> Result<TensorValue> {
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(
             "expected 1 output, got {}",
