@@ -1,11 +1,13 @@
 //! Coverage tests for `ext_op` registry + validation.
 
 use std::any::Any;
-use std::hash::Hasher;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use computegraph::GraphOperation;
 use tidu::{ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
@@ -31,6 +33,19 @@ struct NoInlineRuleOp;
 #[derive(Clone, Debug)]
 struct FamilyOnlyOp {
     family: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum WindowMode {
+    Valid,
+    Same,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PayloadOp {
+    axis: usize,
+    mode: WindowMode,
+    tensor_inputs: usize,
 }
 
 #[derive(ExtensionFamilyId)]
@@ -122,6 +137,56 @@ impl ExtensionOp for FamilyOnlyOp {
     }
 }
 
+impl ExtensionOp for PayloadOp {
+    fn family_id(&self) -> &'static str {
+        "covtest.payload.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write_usize(self.axis);
+        match self.mode {
+            WindowMode::Valid => hasher.write_u8(0),
+            WindowMode::Same => hasher.write_u8(1),
+        }
+        hasher.write_usize(self.tensor_inputs);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<PayloadOp>()
+            .is_some_and(|op| op == self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        self.tensor_inputs
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
 impl ExtensionAdRule for CoverageRule {
     fn family_id(&self) -> &'static str {
         self.family
@@ -152,9 +217,72 @@ impl ExtensionAdRule for CoverageRule {
     }
 }
 
+fn payload_op(axis: usize, mode: WindowMode, tensor_inputs: usize) -> StdTensorOp {
+    StdTensorOp::Extension(Arc::new(PayloadOp {
+        axis,
+        mode,
+        tensor_inputs,
+    }))
+}
+
+fn hash_std_tensor_op(op: &StdTensorOp) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    op.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[test]
 fn extension_family_id_macro_generates_stable_const() {
     assert_eq!(MacroRuleFamily::FAMILY_ID, "covtest.macro_rule.v1");
+}
+
+#[test]
+fn extension_payload_equal_when_semantic_fields_match() {
+    let lhs = payload_op(1, WindowMode::Valid, 1);
+    let rhs = payload_op(1, WindowMode::Valid, 1);
+
+    assert_eq!(lhs, rhs);
+}
+
+#[test]
+fn extension_payload_not_equal_when_axis_differs() {
+    let lhs = payload_op(1, WindowMode::Valid, 1);
+    let rhs = payload_op(2, WindowMode::Valid, 1);
+
+    assert_ne!(lhs, rhs);
+}
+
+#[test]
+fn extension_payload_not_equal_when_mode_differs() {
+    let lhs = payload_op(1, WindowMode::Valid, 1);
+    let rhs = payload_op(1, WindowMode::Same, 1);
+
+    assert_ne!(lhs, rhs);
+}
+
+#[test]
+fn extension_payload_hash_matches_for_equal_payloads() {
+    let lhs = payload_op(1, WindowMode::Valid, 1);
+    let rhs = payload_op(1, WindowMode::Valid, 1);
+
+    assert_eq!(hash_std_tensor_op(&lhs), hash_std_tensor_op(&rhs));
+}
+
+#[test]
+fn extension_payload_hash_changes_for_distinct_payloads() {
+    let lhs = payload_op(1, WindowMode::Valid, 1);
+    let rhs = payload_op(2, WindowMode::Valid, 1);
+
+    assert_ne!(hash_std_tensor_op(&lhs), hash_std_tensor_op(&rhs));
+}
+
+#[test]
+fn extension_payload_does_not_affect_tensor_input_arity() {
+    let lhs = payload_op(1, WindowMode::Valid, 2);
+    let rhs = payload_op(2, WindowMode::Same, 2);
+
+    assert_eq!(lhs.input_count(), 2);
+    assert_eq!(rhs.input_count(), 2);
 }
 
 #[test]
