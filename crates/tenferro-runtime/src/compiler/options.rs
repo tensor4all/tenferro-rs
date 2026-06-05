@@ -1,17 +1,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CompilerOptions {
     pub optimizer: OptimizerConfig,
-}
-
-impl Default for CompilerOptions {
-    fn default() -> Self {
-        Self {
-            optimizer: OptimizerConfig::default(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

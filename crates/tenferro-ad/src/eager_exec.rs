@@ -17,13 +17,13 @@ enum PromotedTensor<'a> {
 }
 
 enum PromotedTensorRead<'a> {
-    Borrowed(TensorRead<'a>),
+    Borrowed(Box<TensorRead<'a>>),
     Owned(Box<Tensor>),
 }
 
 enum ConcreteTensorRead<'a> {
     Borrowed(&'a Tensor),
-    Owned(Tensor),
+    Owned(Box<Tensor>),
 }
 
 impl<'a> PromotedTensor<'a> {
@@ -38,7 +38,7 @@ impl<'a> PromotedTensor<'a> {
 impl PromotedTensorRead<'_> {
     fn tensor_read(&self) -> TensorRead<'_> {
         match self {
-            Self::Borrowed(read) => read.clone(),
+            Self::Borrowed(read) => read.as_ref().clone(),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor.as_ref()),
         }
     }
@@ -98,7 +98,7 @@ fn materialize_tensor_read(input: TensorRead<'_>) -> Tensor {
 fn concrete_tensor_read(input: TensorRead<'_>) -> ConcreteTensorRead<'_> {
     match input {
         TensorRead::Tensor(tensor) => ConcreteTensorRead::Borrowed(tensor),
-        TensorRead::View(view) => ConcreteTensorRead::Owned(view.to_tensor()),
+        TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.to_tensor())),
     }
 }
 
@@ -115,10 +115,10 @@ fn concrete_promoted_read_to_dtype<'a>(
         Ok(concrete_tensor_read(input))
     } else {
         let input = concrete_tensor_read(input);
-        Ok(ConcreteTensorRead::Owned(
+        Ok(ConcreteTensorRead::Owned(Box::new(
             exec.convert(input.tensor(), promoted)
                 .map_err(Error::from)?,
-        ))
+        )))
     }
 }
 
@@ -128,7 +128,7 @@ fn promote_read_to_dtype<'a>(
     promoted: DType,
 ) -> Result<PromotedTensorRead<'a>> {
     if input.dtype() == promoted {
-        Ok(PromotedTensorRead::Borrowed(input))
+        Ok(PromotedTensorRead::Borrowed(Box::new(input)))
     } else {
         let input = concrete_tensor_read(input);
         Ok(PromotedTensorRead::Owned(Box::new(

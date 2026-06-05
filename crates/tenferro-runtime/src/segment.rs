@@ -201,7 +201,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     inputs: Vec<Tensor>,
     slots: &mut Vec<Option<ExecSlot<'static>>>,
     backend_cache: &mut B::RuntimeCache,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_segmented_slots_with_cache_and_workspace(
@@ -210,7 +210,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
         inputs,
         slots,
         backend_cache,
-        extension_executor.as_deref_mut(),
+        extension_executor,
     )
 }
 
@@ -477,10 +477,8 @@ fn reclaim_segment_inputs_exec(
 ) {
     for (&slot, &is_last_use) in input_slots.iter().zip(last_use.iter()) {
         if is_last_use {
-            if let Some(value) = slots[slot].take() {
-                if let ExecSlot::Owned(tensor) = value {
-                    exec.reclaim_buffer(tensor);
-                }
+            if let Some(ExecSlot::Owned(tensor)) = slots[slot].take() {
+                exec.reclaim_buffer(tensor);
             }
         }
     }

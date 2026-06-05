@@ -960,14 +960,13 @@ fn set_lazy_stride(
     stride: isize,
 ) -> crate::Result<()> {
     let rank = logical_strides.len();
-    let slot =
-        logical_strides
-            .get_mut(output_axis)
-            .ok_or_else(|| crate::Error::AxisOutOfBounds {
-                op: "broadcast_multiply",
-                axis: output_axis,
-                rank,
-            })?;
+    let slot = logical_strides
+        .get_mut(output_axis)
+        .ok_or(crate::Error::AxisOutOfBounds {
+            op: "broadcast_multiply",
+            axis: output_axis,
+            rank,
+        })?;
     if slot.replace(stride).is_some() {
         return Err(crate::Error::DuplicateAxis {
             op: "broadcast_multiply",
@@ -978,41 +977,43 @@ fn set_lazy_stride(
     Ok(())
 }
 
-fn lazy_outer_product_strides(
-    output_shape: &[usize],
-    base_shape: &[usize],
-    leading_axes: &[usize],
-    leading_dims: &[usize],
-    trailing_axes: &[usize],
-    trailing_dims: &[usize],
-    lhs_batch_axes: &[usize],
-    rhs_batch_axes: &[usize],
-    lhs_dims: &[usize],
-    rhs_dims: &[usize],
-) -> crate::Result<Vec<isize>> {
-    let base_strides = col_major_strides(base_shape);
-    let mut logical_strides = vec![None; output_shape.len()];
+struct LazyOuterProductStrideSpec<'a> {
+    output_shape: &'a [usize],
+    base_shape: &'a [usize],
+    leading_axes: &'a [usize],
+    leading_dims: &'a [usize],
+    trailing_axes: &'a [usize],
+    trailing_dims: &'a [usize],
+    lhs_batch_axes: &'a [usize],
+    rhs_batch_axes: &'a [usize],
+    lhs_dims: &'a [usize],
+    rhs_dims: &'a [usize],
+}
+
+fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Result<Vec<isize>> {
+    let base_strides = col_major_strides(spec.base_shape);
+    let mut logical_strides = vec![None; spec.output_shape.len()];
     let mut base_axis = 0usize;
 
-    for &axis in leading_axes {
+    for &axis in spec.leading_axes {
         set_lazy_stride(
             &mut logical_strides,
-            leading_dims[axis],
+            spec.leading_dims[axis],
             base_strides[base_axis],
         )?;
         base_axis += 1;
     }
-    for &axis in trailing_axes {
+    for &axis in spec.trailing_axes {
         set_lazy_stride(
             &mut logical_strides,
-            trailing_dims[axis],
+            spec.trailing_dims[axis],
             base_strides[base_axis],
         )?;
         base_axis += 1;
     }
-    for (&lhs_axis, &rhs_axis) in lhs_batch_axes.iter().zip(rhs_batch_axes.iter()) {
-        let output_axis = lhs_dims[lhs_axis];
-        if rhs_dims[rhs_axis] != output_axis {
+    for (&lhs_axis, &rhs_axis) in spec.lhs_batch_axes.iter().zip(spec.rhs_batch_axes.iter()) {
+        let output_axis = spec.lhs_dims[lhs_axis];
+        if spec.rhs_dims[rhs_axis] != output_axis {
             return Err(crate::Error::backend_failure(
                 "broadcast_multiply",
                 "batch axes disagree while building lazy outer-product layout",
@@ -1095,18 +1096,18 @@ where
             append_axis_shapes(&mut base_shape, lhs, &lhs_free_axes);
             append_axis_shapes(&mut base_shape, rhs, &rhs_free_axes);
             append_axis_shapes(&mut base_shape, lhs, &plan.lhs_batch_axes);
-            let strides = lazy_outer_product_strides(
-                lhs_shape,
-                &base_shape,
-                &lhs_free_axes,
+            let strides = lazy_outer_product_strides(LazyOuterProductStrideSpec {
+                output_shape: lhs_shape,
+                base_shape: &base_shape,
+                leading_axes: &lhs_free_axes,
+                leading_dims: lhs_dims,
+                trailing_axes: &rhs_free_axes,
+                trailing_dims: rhs_dims,
+                lhs_batch_axes: &plan.lhs_batch_axes,
+                rhs_batch_axes: &plan.rhs_batch_axes,
                 lhs_dims,
-                &rhs_free_axes,
                 rhs_dims,
-                &plan.lhs_batch_axes,
-                &plan.rhs_batch_axes,
-                lhs_dims,
-                rhs_dims,
-            )?;
+            })?;
 
             // SAFETY: every element in the physical base output is assigned below.
             let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
@@ -1146,18 +1147,18 @@ where
             append_axis_shapes(&mut base_shape, rhs, &rhs_free_axes);
             append_axis_shapes(&mut base_shape, lhs, &lhs_free_axes);
             append_axis_shapes(&mut base_shape, lhs, &plan.lhs_batch_axes);
-            let strides = lazy_outer_product_strides(
-                lhs_shape,
-                &base_shape,
-                &rhs_free_axes,
-                rhs_dims,
-                &lhs_free_axes,
+            let strides = lazy_outer_product_strides(LazyOuterProductStrideSpec {
+                output_shape: lhs_shape,
+                base_shape: &base_shape,
+                leading_axes: &rhs_free_axes,
+                leading_dims: rhs_dims,
+                trailing_axes: &lhs_free_axes,
+                trailing_dims: lhs_dims,
+                lhs_batch_axes: &plan.lhs_batch_axes,
+                rhs_batch_axes: &plan.rhs_batch_axes,
                 lhs_dims,
-                &plan.lhs_batch_axes,
-                &plan.rhs_batch_axes,
-                lhs_dims,
                 rhs_dims,
-            )?;
+            })?;
 
             // SAFETY: every element in the physical base output is assigned below.
             let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
@@ -1478,161 +1479,6 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_neg_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_neg_with_pool(buffers, t)?)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [7.0_f64, 8.0, 9.0, 10.0];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([2, 2], [1, 2], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 3, 2, 2],
-            &[0, 1],
-            &rhs,
-            &[2, 3, 2, 2],
-            &[2, 3],
-        )
-        .unwrap()
-        .expect("rank-N x rank-M pure outer products should use the fast path");
-
-        assert_eq!(out.shape(), &[2, 3, 2, 2]);
-        let expected: Vec<f64> = (0..2)
-            .flat_map(|d| {
-                (0..2).flat_map(move |c| {
-                    (0..3).flat_map(move |b| {
-                        (0..2).map(move |a| lhs_data[a + 2 * b] * rhs_data[c + 2 * d])
-                    })
-                })
-            })
-            .collect();
-        assert_eq!(out.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [
-            7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-        ];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 3], [1, 4], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 4, 3],
-            &[0, 2],
-            &rhs,
-            &[2, 4, 3],
-            &[1, 2],
-        )
-        .unwrap()
-        .expect("shared-batch outer products should use the fast path");
-
-        assert_eq!(out.shape(), &[2, 4, 3]);
-        let expected: Vec<f64> = (0..3)
-            .flat_map(|t| {
-                (0..4).flat_map(move |o| {
-                    (0..2).map(move |j| lhs_data[j + 2 * t] * rhs_data[o + 4 * t])
-                })
-            })
-            .collect();
-        assert_eq!(out.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_degenerate_1x1_batched_elementwise() {
-        let lhs_data = [1.0_f64; 5];
-        let rhs_data = [2.0_f64; 5];
-        let lhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &rhs_data).unwrap();
-
-        let plan =
-            split_outer_product_plan(&lhs, &[1, 1, 5], &[0, 2], &rhs, &[1, 1, 5], &[1, 2]).unwrap();
-
-        assert!(
-            plan.is_none(),
-            "1x1 per batch should use the ordinary zip-map path"
-        );
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_scaling_and_unsupported_axis_layouts() {
-        let vector_data = vec![1.0_f64; 5];
-        let matrix_data = vec![2.0_f64; 15];
-        let vector = TypedTensorView::from_slice([5], [1], 0, &vector_data).unwrap();
-        let matrix = TypedTensorView::from_slice([5, 3], [1, 5], 0, &matrix_data).unwrap();
-
-        assert!(
-            split_outer_product_plan(&vector, &[5, 3], &[0], &matrix, &[5, 3], &[0, 1])
-                .unwrap()
-                .is_none(),
-            "lhs scaling over a shared axis is not an outer product"
-        );
-        assert!(
-            split_outer_product_plan(&matrix, &[5, 3], &[0, 1], &vector, &[5, 3], &[0])
-                .unwrap()
-                .is_none(),
-            "rhs scaling over a shared axis is not an outer product"
-        );
-
-        let lhs_data = vec![1.0_f64; 6];
-        let rhs_data = vec![2.0_f64; 20];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 5], [1, 4], 0, &rhs_data).unwrap();
-        assert!(
-            split_outer_product_plan(&lhs, &[2, 4, 3, 5], &[0, 2], &rhs, &[2, 4, 3, 5], &[1, 3],)
-                .unwrap()
-                .is_none(),
-            "interleaved free axes are not supported by the materialized fast path"
-        );
-
-        let lhs_data = [1.0_f64, 2.0];
-        let rhs_data = [3.0_f64, 4.0, 5.0];
-        let lhs = TypedTensorView::from_slice([2], [1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([3], [1], 0, &rhs_data).unwrap();
-        assert!(
-            split_outer_product_plan(&lhs, &[2, 3, 4], &[0], &rhs, &[2, 3, 4], &[1])
-                .unwrap()
-                .is_none(),
-            "every output axis must be covered by lhs, rhs, or a shared batch axis"
-        );
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_pure_shared_batch_elementwise() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64; 24];
-        let rhs_data = [2.0_f64; 24];
-        let lhs = TypedTensorView::from_slice([2, 3, 4], [1, 2, 6], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 2, 3], [1, 4, 8], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 3, 4],
-            &[0, 1, 2],
-            &rhs,
-            &[2, 3, 4],
-            &[2, 0, 1],
-        )
-        .unwrap();
-
-        assert!(
-            out.is_none(),
-            "pure shared-batch elementwise should use the ordinary zip-map path"
-        );
     }
 }
 
@@ -2411,4 +2257,227 @@ where
     )
     .map_err(|err| crate::Error::backend_failure("clamp", err))?;
     Ok(tensor_from_array(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [7.0_f64, 8.0, 9.0, 10.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([2, 2], [1, 2], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 2, 2],
+            &[0, 1],
+            &rhs,
+            &[2, 3, 2, 2],
+            &[2, 3],
+        )
+        .unwrap()
+        .expect("rank-N x rank-M pure outer products should use the fast path");
+
+        assert_eq!(out.shape(), &[2, 3, 2, 2]);
+        let expected: Vec<f64> = (0..2)
+            .flat_map(|d| {
+                (0..2).flat_map(move |c| {
+                    (0..3).flat_map(move |b| {
+                        (0..2).map(move |a| lhs_data[a + 2 * b] * rhs_data[c + 2 * d])
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(out.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [
+            7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
+        ];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 3], [1, 4], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 4, 3],
+            &[0, 2],
+            &rhs,
+            &[2, 4, 3],
+            &[1, 2],
+        )
+        .unwrap()
+        .expect("shared-batch outer products should use the fast path");
+
+        assert_eq!(out.shape(), &[2, 4, 3]);
+        let expected: Vec<f64> = (0..3)
+            .flat_map(|t| {
+                (0..4).flat_map(move |o| {
+                    (0..2).map(move |j| lhs_data[j + 2 * t] * rhs_data[o + 4 * t])
+                })
+            })
+            .collect();
+        assert_eq!(out.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_degenerate_1x1_batched_elementwise() {
+        let lhs_data = [1.0_f64; 5];
+        let rhs_data = [2.0_f64; 5];
+        let lhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &rhs_data).unwrap();
+
+        let plan =
+            split_outer_product_plan(&lhs, &[1, 1, 5], &[0, 2], &rhs, &[1, 1, 5], &[1, 2]).unwrap();
+
+        assert!(
+            plan.is_none(),
+            "1x1 per batch should use the ordinary zip-map path"
+        );
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_scaling_and_unsupported_axis_layouts() {
+        let vector_data = vec![1.0_f64; 5];
+        let matrix_data = vec![2.0_f64; 15];
+        let vector = TypedTensorView::from_slice([5], [1], 0, &vector_data).unwrap();
+        let matrix = TypedTensorView::from_slice([5, 3], [1, 5], 0, &matrix_data).unwrap();
+
+        assert!(
+            split_outer_product_plan(&vector, &[5, 3], &[0], &matrix, &[5, 3], &[0, 1])
+                .unwrap()
+                .is_none(),
+            "lhs scaling over a shared axis is not an outer product"
+        );
+        assert!(
+            split_outer_product_plan(&matrix, &[5, 3], &[0, 1], &vector, &[5, 3], &[0])
+                .unwrap()
+                .is_none(),
+            "rhs scaling over a shared axis is not an outer product"
+        );
+
+        let lhs_data = vec![1.0_f64; 6];
+        let rhs_data = vec![2.0_f64; 20];
+        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 5], [1, 4], 0, &rhs_data).unwrap();
+        assert!(
+            split_outer_product_plan(&lhs, &[2, 4, 3, 5], &[0, 2], &rhs, &[2, 4, 3, 5], &[1, 3],)
+                .unwrap()
+                .is_none(),
+            "interleaved free axes are not supported by the materialized fast path"
+        );
+
+        let lhs_data = [1.0_f64, 2.0];
+        let rhs_data = [3.0_f64, 4.0, 5.0];
+        let lhs = TypedTensorView::from_slice([2], [1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([3], [1], 0, &rhs_data).unwrap();
+        assert!(
+            split_outer_product_plan(&lhs, &[2, 3, 4], &[0], &rhs, &[2, 3, 4], &[1])
+                .unwrap()
+                .is_none(),
+            "every output axis must be covered by lhs, rhs, or a shared batch axis"
+        );
+    }
+
+    #[test]
+    fn outer_product_fast_path_rejects_pure_shared_batch_elementwise() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64; 24];
+        let rhs_data = [2.0_f64; 24];
+        let lhs = TypedTensorView::from_slice([2, 3, 4], [1, 2, 6], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4, 2, 3], [1, 4, 8], 0, &rhs_data).unwrap();
+
+        let out = try_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 4],
+            &[0, 1, 2],
+            &rhs,
+            &[2, 3, 4],
+            &[2, 0, 1],
+        )
+        .unwrap();
+
+        assert!(
+            out.is_none(),
+            "pure shared-batch elementwise should use the ordinary zip-map path"
+        );
+    }
+
+    #[test]
+    fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
+
+        let out = try_lazy_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[2, 3, 4],
+            &[0, 1],
+            &rhs,
+            &[2, 3, 4],
+            &[2],
+        )
+        .unwrap()
+        .expect("non-canonical lhs physical order should use lazy outer-product output");
+
+        assert_eq!(out.shape, vec![2, 3, 4]);
+        assert_ne!(out.strides, col_major_strides(&out.shape));
+        let value =
+            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+        let tensor = value.to_tensor();
+        let expected: Vec<f64> = (0..4)
+            .flat_map(|k| {
+                (0..3).flat_map(move |j| (0..2).map(move |i| lhs_data[i * 3 + j] * rhs_data[k]))
+            })
+            .collect();
+        assert_eq!(tensor.shape(), &[2, 3, 4]);
+        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
+    }
+
+    #[test]
+    fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
+        let mut buffers = BufferPool::default();
+        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
+        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
+        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
+
+        let out = try_lazy_outer_product_with_pool(
+            &mut buffers,
+            &lhs,
+            &[4, 2, 3],
+            &[1, 2],
+            &rhs,
+            &[4, 2, 3],
+            &[0],
+        )
+        .unwrap()
+        .expect("rhs-prefix output should still support lazy non-canonical lhs order");
+
+        assert_eq!(out.shape, vec![4, 2, 3]);
+        assert_ne!(out.strides, col_major_strides(&out.shape));
+        let value =
+            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
+        let tensor = value.to_tensor();
+        let expected: Vec<f64> = (0..3)
+            .flat_map(|j| {
+                (0..2).flat_map(move |i| (0..4).map(move |k| rhs_data[k] * lhs_data[i * 3 + j]))
+            })
+            .collect();
+        assert_eq!(tensor.shape(), &[4, 2, 3]);
+        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
+    }
 }

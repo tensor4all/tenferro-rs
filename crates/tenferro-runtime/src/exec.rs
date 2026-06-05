@@ -231,7 +231,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
     program: &ExecProgram,
     inputs: Vec<Tensor>,
     slots: &mut Vec<Option<ExecSlot<'static>>>,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace(
@@ -239,7 +239,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
         program,
         inputs,
         slots,
-        extension_executor.as_deref_mut(),
+        extension_executor,
     )
 }
 
@@ -570,10 +570,8 @@ pub(crate) fn reclaim_last_use_inputs_exec(
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(slot) = slots[inst.input_slots[i]].take() {
-                if let ExecSlot::Owned(tensor) = slot {
-                    exec.reclaim_buffer(tensor);
-                }
+            if let Some(ExecSlot::Owned(tensor)) = slots[inst.input_slots[i]].take() {
+                exec.reclaim_buffer(tensor);
             }
         }
     }
@@ -586,10 +584,8 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {
-            if let Some(slot) = slots[inst.input_slots[i]].take() {
-                if let ExecSlot::Owned(tensor) = slot {
-                    backend.reclaim_buffer(tensor);
-                }
+            if let Some(ExecSlot::Owned(tensor)) = slots[inst.input_slots[i]].take() {
+                backend.reclaim_buffer(tensor);
             }
         }
     }
