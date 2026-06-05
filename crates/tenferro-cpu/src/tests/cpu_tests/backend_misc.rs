@@ -41,6 +41,34 @@ fn test_elementwise_add_acquires_output_from_pool() {
 }
 
 #[test]
+fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_inputs() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![2.0, 3.0, 5.0],
+    ));
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 11.0]));
+
+    let out = backend
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&lhs),
+            &[3, 2],
+            &[0],
+            TensorRead::from_tensor(&rhs),
+            &[3, 2],
+            &[1],
+        )
+        .unwrap()
+        .expect("CPU backend should execute broadcast multiply directly");
+
+    assert_eq!(out.shape(), &[3, 2]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        &[14.0, 21.0, 35.0, 22.0, 33.0, 55.0]
+    );
+}
+
+#[test]
 fn test_structural_transpose_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
     backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(

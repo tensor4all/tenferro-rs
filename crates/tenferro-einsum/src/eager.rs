@@ -498,8 +498,16 @@ fn outer_product<'a>(
         .map(|label| find_label_axis(&combined_labels, *label))
         .collect::<Result<_>>()?;
 
-    let tensor = {
-        match (
+    let tensor = match exec.execute_broadcast_multiply(
+        lhs.tensor.tensor_read(),
+        &combined_shape,
+        &lhs_dims,
+        rhs.tensor.tensor_read(),
+        &combined_shape,
+        &rhs_dims,
+    )? {
+        Some(tensor) => tensor,
+        None => match (
             try_broadcast_tensor_read(&lhs.tensor, &combined_shape, &lhs_dims),
             try_broadcast_tensor_read(&rhs.tensor, &combined_shape, &rhs_dims),
         ) {
@@ -514,7 +522,7 @@ fn outer_product<'a>(
                 exec.reclaim_buffer(rhs_tensor);
                 tensor
             }
-        }
+        },
     };
 
     lhs.reclaim_if_owned(exec);

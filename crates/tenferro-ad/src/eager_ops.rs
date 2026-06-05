@@ -4,13 +4,14 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
+    TensorValue,
 };
 
 use crate::eager::{
-    exec_single_output, maybe_print_eager_op_profile, profile_eager_op_section,
-    record_eager_op_profile, record_eager_outputs, EagerTensor,
+    exec_single_output, exec_single_output_read, maybe_print_eager_op_profile,
+    profile_eager_op_section, record_eager_op_profile, record_eager_outputs, EagerTensor,
 };
-use crate::eager_exec::exec_dot_general_with_conj_on_tensors;
+use crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads;
 use crate::error::{Error, Result};
 use crate::metadata::push_metadata_scope;
 
@@ -157,9 +158,9 @@ impl EagerTensor {
             let ctx = Arc::clone(&self.ctx);
             let output = {
                 let mut backend = ctx.backend.lock().unwrap();
-                exec_dot_general_with_conj_on_tensors(
-                    self.data.as_ref(),
-                    other.data.as_ref(),
+                exec_dot_general_with_conj_on_tensor_reads(
+                    self.tensor_read(),
+                    other.tensor_read(),
                     config,
                     lhs_conj,
                     rhs_conj,
@@ -211,8 +212,8 @@ impl EagerTensor {
     /// assert_eq!(c.data().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
     /// ```
     pub fn matmul(&self, other: &Self) -> Result<Self> {
-        let lhs_shape = self.data().shape();
-        let rhs_shape = other.data().shape();
+        let lhs_shape = self.shape();
+        let rhs_shape = other.shape();
         if lhs_shape.len() != 2 {
             return Err(tenferro_tensor::Error::RankMismatch {
                 op: "matmul",
@@ -267,9 +268,14 @@ impl EagerTensor {
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     /// ```
     pub fn transpose(&self, perm: &[usize]) -> Result<Self> {
-        self.unary_op(StdTensorOp::Transpose {
+        let op = StdTensorOp::Transpose {
             perm: perm.to_vec(),
-        })
+        };
+        let value = self
+            .value
+            .transpose_view(perm)
+            .map_err(Error::TensorRuntime)?;
+        Self::nary_value_op(&[self], op, value)
     }
 
     /// Reshape without changing element order.
@@ -291,9 +297,13 @@ impl EagerTensor {
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// ```
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
-        self.unary_op(StdTensorOp::Reshape {
+        let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
-        })
+        };
+        if let Ok(value) = self.value.reshape_view(shape) {
+            return Self::nary_value_op(&[self], op, value);
+        }
+        self.unary_op(op)
     }
 
     /// Slice with explicit start, limit, and stride per axis.
@@ -317,7 +327,11 @@ impl EagerTensor {
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     /// ```
     pub fn slice(&self, config: SliceConfig) -> Result<Self> {
-        self.unary_op(StdTensorOp::Slice(config))
+        let value = self
+            .value
+            .slice_view(&config)
+            .map_err(Error::TensorRuntime)?;
+        Self::nary_value_op(&[self], StdTensorOp::Slice(config), value)
     }
 
     /// Broadcast into a larger shape with explicit dimension placement.
@@ -335,10 +349,15 @@ impl EagerTensor {
     /// assert_eq!(y.data().shape(), &[3, 2]);
     /// ```
     pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Result<Self> {
-        self.unary_op(StdTensorOp::BroadcastInDim {
+        let op = StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
-        })
+        };
+        let value = self
+            .value
+            .broadcast_in_dim_view(shape, dims)
+            .map_err(Error::TensorRuntime)?;
+        Self::nary_value_op(&[self], op, value)
     }
 
     /// Convert the tensor to a different dtype.
@@ -358,7 +377,7 @@ impl EagerTensor {
     /// ```
     pub fn convert(&self, to: DType) -> Result<Self> {
         self.unary_op(StdTensorOp::Convert {
-            from: self.data.dtype(),
+            from: self.dtype(),
             to,
         })
     }
@@ -668,6 +687,54 @@ impl EagerTensor {
         Self::nary_op(&[self, b, c], op)
     }
 
+    pub(crate) fn nary_value_op(
+        tensors: &[&Self],
+        op: StdTensorOp,
+        value: TensorValue,
+    ) -> Result<Self> {
+        let Some(first) = tensors.first() else {
+            return Err(Error::Internal(
+                "nary eager value op requires at least one input tensor".to_string(),
+            ));
+        };
+
+        let ctx = Arc::clone(&first.ctx);
+        for tensor in tensors.iter().skip(1) {
+            if !first.same_context(tensor) {
+                return Err(Error::ContextMismatch {
+                    lhs: first.ctx_id(),
+                    rhs: tensor.ctx_id(),
+                });
+            }
+        }
+
+        if !tensors.iter().any(|tensor| tensor.requires_grad) {
+            return Ok(Self::new_untracked_value_result(ctx, value));
+        }
+
+        let output = Arc::new(value.to_tensor());
+        let outputs = vec![Arc::clone(&output)];
+        let mut recorded = record_eager_outputs(&op, &outputs, tensors);
+        let trace = recorded.traces.pop().ok_or_else(|| {
+            Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
+        })?;
+        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
+        for tensor in tensors {
+            for scope in &tensor.metadata_scopes {
+                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+            }
+        }
+
+        Ok(Self::new_result_value(
+            ctx,
+            trace.key,
+            value,
+            trace.requires_grad,
+            trace.trace,
+            metadata_scopes,
+        ))
+    }
+
     pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
         let total_started = std::time::Instant::now();
         let Some(first) = tensors.first() else {
@@ -689,16 +756,19 @@ impl EagerTensor {
             Ok(())
         })?;
 
-        let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
-            tensors.iter().map(|tensor| tensor.data.as_ref()).collect()
-        });
-        let output = profile_eager_op_section("nary_op.exec_single_output", || {
-            exec_single_output(&op, &inputs, &ctx)
-        })?;
         let any_requires_grad = profile_eager_op_section("nary_op.requires_grad_scan", || {
             tensors.iter().any(|tensor| tensor.requires_grad)
         });
         if !any_requires_grad {
+            let input_reads = profile_eager_op_section("nary_op.collect_input_reads", || {
+                tensors
+                    .iter()
+                    .map(|tensor| tensor.tensor_read())
+                    .collect::<Vec<_>>()
+            });
+            let output = profile_eager_op_section("nary_op.exec_single_output_read", || {
+                exec_single_output_read(&op, &input_reads, &ctx)
+            })?;
             let result = profile_eager_op_section("nary_op.new_untracked_result", || {
                 Self::new_untracked_result(ctx, output)
             });
@@ -706,6 +776,19 @@ impl EagerTensor {
             maybe_print_eager_op_profile();
             return Ok(result);
         }
+
+        let input_arcs = profile_eager_op_section("nary_op.materialize_inputs", || {
+            tensors
+                .iter()
+                .map(|tensor| tensor.materialized_arc())
+                .collect::<Vec<_>>()
+        });
+        let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
+            input_arcs.iter().map(|tensor| tensor.as_ref()).collect()
+        });
+        let output = profile_eager_op_section("nary_op.exec_single_output", || {
+            exec_single_output(&op, &inputs, &ctx)
+        })?;
 
         let output = Arc::new(output);
         let outputs = vec![Arc::clone(&output)];

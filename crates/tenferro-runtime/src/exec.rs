@@ -199,6 +199,24 @@ pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> R
     Ok(())
 }
 
+/// Evaluate an [`ExecProgram`] with caller-owned backend runtime cache state.
+pub fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<Tensor>> {
+    let mut slots = Vec::new();
+    crate::segment::eval_exec_segmented_with_cache_and_workspace(
+        backend,
+        program,
+        inputs,
+        &mut slots,
+        backend_cache,
+        None,
+    )
+}
+
 pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,

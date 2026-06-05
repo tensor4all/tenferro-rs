@@ -202,12 +202,11 @@ fn compile_std_to_exec_does_not_treat_dynamic_truncate_bound_as_exact() {
         &[dim_shape(&[5]), Vec::new()],
     );
 
+    assert_eq!(exec.instructions.len(), 1);
+    assert_eq!(exec.output_slots, vec![2]);
+    assert_eq!(exec.instructions[0].output_slots, vec![2]);
     assert_eq!(
         exec.instructions[0].output_extents[0][0],
-        ShapeExtent::upper_bound(DimExpr::Const(5))
-    );
-    assert_eq!(
-        exec.instructions[1].output_extents[0][0],
         ShapeExtent::upper_bound(DimExpr::Const(5))
     );
 }

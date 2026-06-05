@@ -221,7 +221,7 @@ impl EagerTensor {
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
-        let (indices, config) = index_select_config(self.data().shape(), axis, positions)?;
+        let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = self.ctx.constant_from(indices);
         self.gather(&indices, config)
     }
@@ -254,12 +254,12 @@ impl EagerTensor {
         })?;
         let shapes = tensors
             .iter()
-            .map(|tensor| tensor.data().shape())
+            .map(|tensor| tensor.shape())
             .collect::<Vec<_>>();
         validate_stack_shapes("stack", &shapes)?;
 
-        let axis = normalize_insert_axis("stack", dim, first.data().shape().len())?;
-        let mut expanded_shape = first.data().shape().to_vec();
+        let axis = normalize_insert_axis("stack", dim, first.shape().len())?;
+        let mut expanded_shape = first.shape().to_vec();
         expanded_shape.insert(axis, 1);
 
         let expanded = tensors

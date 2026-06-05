@@ -2,16 +2,25 @@
 
 use std::sync::Arc;
 
+use computegraph::compile::{compile, Instruction};
+use computegraph::graph::GraphBuilder;
+use computegraph::materialize::materialize_merge;
+use computegraph::resolve::resolve;
+use computegraph::types::{ValueKey, ValueRef};
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
+use crate::builder::build_einsum_graph;
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
 };
-use crate::optimize::{default_auto_options, EinsumPlanSpec};
-use crate::{parse_einsum_subscripts, EinsumSubscripts, TensorDotAxes};
+use crate::optimize::{default_auto_options, resolve_plan_spec, EinsumPlanSpec};
+use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes};
 
 /// Execute an einsum eagerly on [`EagerTensor`] values.
 pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
@@ -29,6 +38,11 @@ pub fn einsum_subscripts(
         return result;
     }
 
+    let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
+    if let Some(result) = try_expand_eager_einsum(inputs, subscripts)? {
+        return Ok(result);
+    }
+
     ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
     if let Some(first) = inputs.first() {
         first
@@ -37,7 +51,6 @@ pub fn einsum_subscripts(
             .map_err(|err| Error::Internal(err.to_string()))?;
     }
 
-    let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
     let op = Arc::new(EinsumExtensionOp::with_output_shape_hint(
         subscripts.clone(),
         output_shape_hint,
@@ -59,9 +72,7 @@ fn try_direct_binary_dot_general(
 
     let lhs_labels = &subscripts.inputs[0];
     let rhs_labels = &subscripts.inputs[1];
-    if lhs_labels.len() != inputs[0].data().shape().len()
-        || rhs_labels.len() != inputs[1].data().shape().len()
-    {
+    if lhs_labels.len() != inputs[0].shape().len() || rhs_labels.len() != inputs[1].shape().len() {
         return None;
     }
 
@@ -74,6 +85,214 @@ fn try_direct_binary_dot_general(
         });
     }
     None
+}
+
+fn try_expand_eager_einsum(
+    inputs: &[&EagerTensor],
+    subscripts: &EinsumSubscripts,
+) -> Result<Option<EagerTensor>> {
+    if inputs.len() <= 1 {
+        return Ok(None);
+    }
+
+    let shapes: Vec<Vec<usize>> = inputs
+        .iter()
+        .map(|tensor| tensor.shape().to_vec())
+        .collect();
+    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+    let subs = Subscripts::from(subscripts);
+    let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
+    let tree = resolve_plan_spec(&plan_spec, &subs, &shape_refs)
+        .map_err(|err| Error::ContractionError(err.to_string()))?;
+    execute_eager_einsum_graph(inputs, &tree, &shapes)
+}
+
+fn execute_eager_einsum_graph(
+    inputs: &[&EagerTensor],
+    tree: &crate::ContractionTree,
+    shapes: &[Vec<usize>],
+) -> Result<Option<EagerTensor>> {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut input_vals = Vec::with_capacity(inputs.len());
+    for input_idx in 0..inputs.len() {
+        let local = builder.add_input(TensorInputKey::User {
+            id: input_idx as u64,
+        });
+        input_vals.push(ValueRef::Local(local));
+    }
+
+    let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
+        .map_err(|err| Error::ContractionError(err.to_string()))?;
+    let ValueRef::Local(result_local) = result_ref else {
+        return Err(Error::Internal(
+            "expanded eager einsum returned an external value".into(),
+        ));
+    };
+    builder.set_outputs(vec![result_local]);
+    let graph = Arc::new(builder.build());
+    let output_key = graph.values()[result_local].key.clone();
+    let view = resolve(vec![graph]);
+    let graph = materialize_merge(&view, &[output_key]);
+    let compiled = compile(&graph);
+
+    let mut slots: Vec<Option<EagerTensor>> = vec![None; compiled.n_slots];
+    for (&slot, key) in compiled.input_slots.iter().zip(graph.inputs.iter()) {
+        let ValueKey::Input(TensorInputKey::User { id }) = key else {
+            return Err(Error::Internal(format!(
+                "expanded eager einsum saw unexpected input key: {key:?}"
+            )));
+        };
+        let input_idx = *id as usize;
+        let tensor = inputs.get(input_idx).ok_or_else(|| {
+            Error::Internal(format!(
+                "expanded eager einsum input {input_idx} is missing"
+            ))
+        })?;
+        slots[slot] = Some((*tensor).clone());
+    }
+
+    let mut instruction_idx = 0;
+    while instruction_idx < compiled.instructions.len() {
+        if let Some((output_slot, output)) = try_execute_eager_broadcast_multiply_pattern(
+            &compiled.instructions,
+            instruction_idx,
+            &slots,
+            &compiled.output_slots,
+        )? {
+            slots[output_slot] = Some(output);
+            instruction_idx += 3;
+            continue;
+        }
+
+        let instr = &compiled.instructions[instruction_idx];
+        if instr.outputs.len() != 1 {
+            return Err(Error::Internal(format!(
+                "expanded eager einsum expected single-output op, got {} outputs",
+                instr.outputs.len()
+            )));
+        }
+        let input_values: Vec<EagerTensor> = instr
+            .inputs
+            .iter()
+            .map(|&slot| {
+                slots
+                    .get(slot)
+                    .and_then(Option::as_ref)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "expanded eager einsum missing value for slot {slot}"
+                        ))
+                    })
+            })
+            .collect::<Result<_>>()?;
+        let input_refs: Vec<&EagerTensor> = input_values.iter().collect();
+        let output =
+            tenferro_ad::eager_tensor::apply_standard_op(instr.operation.clone(), &input_refs)?;
+        slots[instr.outputs[0]] = Some(output);
+        instruction_idx += 1;
+    }
+
+    let [output_slot] = compiled.output_slots.as_slice() else {
+        return Err(Error::Internal(format!(
+            "expanded eager einsum expected one graph output, got {}",
+            compiled.output_slots.len()
+        )));
+    };
+    slots
+        .get_mut(*output_slot)
+        .and_then(Option::take)
+        .map(Some)
+        .ok_or_else(|| Error::Internal("expanded eager einsum output slot is missing".into()))
+}
+
+fn try_execute_eager_broadcast_multiply_pattern(
+    instructions: &[Instruction<StdTensorOp>],
+    instruction_idx: usize,
+    slots: &[Option<EagerTensor>],
+    output_slots: &[usize],
+) -> Result<Option<(usize, EagerTensor)>> {
+    if instruction_idx + 2 >= instructions.len() {
+        return Ok(None);
+    }
+    let lhs_bc = &instructions[instruction_idx];
+    let rhs_bc = &instructions[instruction_idx + 1];
+    let multiply = &instructions[instruction_idx + 2];
+
+    let StdTensorOp::BroadcastInDim {
+        shape: lhs_shape_exprs,
+        dims: lhs_dims,
+    } = &lhs_bc.operation
+    else {
+        return Ok(None);
+    };
+    let StdTensorOp::BroadcastInDim {
+        shape: rhs_shape_exprs,
+        dims: rhs_dims,
+    } = &rhs_bc.operation
+    else {
+        return Ok(None);
+    };
+    if !matches!(multiply.operation, StdTensorOp::Mul)
+        || lhs_bc.outputs.len() != 1
+        || rhs_bc.outputs.len() != 1
+        || multiply.outputs.len() != 1
+        || multiply.inputs.len() != 2
+        || lhs_bc.inputs.is_empty()
+        || rhs_bc.inputs.is_empty()
+        || multiply.inputs[0] != lhs_bc.outputs[0]
+        || multiply.inputs[1] != rhs_bc.outputs[0]
+    {
+        return Ok(None);
+    }
+
+    let lhs_bc_slot = lhs_bc.outputs[0];
+    let rhs_bc_slot = rhs_bc.outputs[0];
+    if output_slots.contains(&lhs_bc_slot)
+        || output_slots.contains(&rhs_bc_slot)
+        || instructions[instruction_idx + 3..]
+            .iter()
+            .any(|instr| instr.inputs.contains(&lhs_bc_slot) || instr.inputs.contains(&rhs_bc_slot))
+    {
+        return Ok(None);
+    }
+
+    let lhs = slot_tensor(slots, lhs_bc.inputs[0])?;
+    let rhs = slot_tensor(slots, rhs_bc.inputs[0])?;
+    let lhs_shape = eval_shape_exprs(slots, &lhs_bc.inputs, lhs_shape_exprs)?;
+    let rhs_shape = eval_shape_exprs(slots, &rhs_bc.inputs, rhs_shape_exprs)?;
+    let Some(output) = tenferro_ad::eager_tensor::try_backend_broadcast_multiply_untracked(
+        lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some((multiply.outputs[0], output)))
+}
+
+fn eval_shape_exprs(
+    slots: &[Option<EagerTensor>],
+    input_slots: &[usize],
+    shape: &[DimExpr],
+) -> Result<Vec<usize>> {
+    let inputs = input_slots
+        .iter()
+        .map(|&slot| slot_tensor(slots, slot))
+        .collect::<Result<Vec<_>>>()?;
+    let input_shapes = inputs
+        .iter()
+        .map(|tensor| tensor.shape())
+        .collect::<Vec<_>>();
+    Ok(DimExpr::eval_all(shape, &input_shapes))
+}
+
+fn slot_tensor(slots: &[Option<EagerTensor>], slot: usize) -> Result<&EagerTensor> {
+    slots.get(slot).and_then(Option::as_ref).ok_or_else(|| {
+        Error::Internal(format!(
+            "expanded eager einsum missing value for slot {slot}"
+        ))
+    })
 }
 
 fn infer_eager_output_shape(
@@ -95,7 +314,7 @@ fn infer_eager_output_shape(
 
     let mut label_dims = std::collections::HashMap::new();
     for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
-        let shape = tensor.data().shape();
+        let shape = tensor.shape();
         if labels.len() != shape.len() {
             return Err(Error::ContractionError(format!(
                 "einsum input rank mismatch: labels={}, shape={}",
@@ -162,16 +381,8 @@ pub fn tensordot(
     rhs: &EagerTensor,
     axes: TensorDotAxes<'_>,
 ) -> Result<EagerTensor> {
-    let config = crate::tensordot::dot_general_config(
-        axes,
-        lhs.data().shape().len(),
-        rhs.data().shape().len(),
-    )?;
-    crate::tensordot::validate_concrete_contract_dims(
-        lhs.data().shape(),
-        rhs.data().shape(),
-        &config,
-    )?;
+    let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
+    crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
     lhs.dot_general(rhs, config)
 }
 
@@ -179,7 +390,7 @@ pub fn tensordot(
 mod tests {
     use tenferro_ad::{EagerRuntime, EagerTensor};
     use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::Tensor;
+    use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
     use super::einsum;
 
@@ -200,5 +411,132 @@ mod tests {
         assert_eq!(out.data().shape(), &[4, 3]);
         assert_eq!(out.data().as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
         assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    }
+
+    #[test]
+    fn nary_eager_einsum_expands_to_standard_ops_without_extension_cache() {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let a = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+            ctx.clone(),
+        );
+        let b = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]),
+            ctx.clone(),
+        );
+        let c = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]),
+            ctx.clone(),
+        );
+
+        let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+
+        assert_eq!(out.data().shape(), &[2, 5]);
+        assert_eq!(out.data().as_slice::<f64>().unwrap(), &[12.0_f64; 10]);
+        assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    }
+
+    #[test]
+    fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let a = EagerTensor::requires_grad_in(
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+            ctx.clone(),
+        );
+        let b = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]),
+            ctx.clone(),
+        );
+        let c = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]),
+            ctx,
+        );
+
+        let loss = einsum(&[&a, &b, &c], "ij,jk,kl->il")
+            .unwrap()
+            .reduce_sum(&[0, 1])
+            .unwrap();
+        let _ = loss.backward().unwrap();
+
+        assert_eq!(a.grad().unwrap().as_slice::<f64>().unwrap(), &[20.0; 6]);
+    }
+
+    #[test]
+    fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let lhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]),
+            ctx.clone(),
+        );
+        let rhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]),
+            ctx,
+        );
+
+        let out = tenferro_ad::eager_tensor::try_backend_broadcast_multiply_untracked(
+            &lhs,
+            &[2, 3],
+            &[0],
+            &rhs,
+            &[2, 3],
+            &[1],
+        )
+        .unwrap()
+        .expect("untracked CPU eager tensors should use backend broadcast multiply");
+
+        assert_eq!(out.data().shape(), &[2, 3]);
+        assert_eq!(
+            out.data().as_slice::<f64>().unwrap(),
+            &[10.0, 15.0, 14.0, 21.0, 22.0, 33.0]
+        );
+        assert!(!out.tracks_grad());
+    }
+
+    #[test]
+    fn eager_outer_product_can_return_lazy_noncompact_output() {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let k = 2;
+        let j = 3;
+        let o = 4;
+        let t = 5;
+        let lhs_data: Vec<f64> = (0..k * j * t).map(|idx| idx as f64 + 1.0).collect();
+        let rhs_data: Vec<f64> = (0..o * t).map(|idx| idx as f64 + 101.0).collect();
+        let lhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![k, j, t], lhs_data.clone()),
+            ctx.clone(),
+        );
+        let rhs = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![o, t], rhs_data.clone()),
+            ctx,
+        );
+
+        let out = einsum(&[&lhs, &rhs], "kjt,ot->jkot").unwrap();
+
+        assert_eq!(out.shape(), &[j, k, o, t]);
+        match out.tensor_read() {
+            TensorRead::View(TensorView::F64(view)) => {
+                assert_eq!(view.shape(), &[j, k, o, t]);
+                assert_eq!(
+                    view.strides(),
+                    &[k as isize, 1, (k * j) as isize, (k * j * o) as isize]
+                );
+            }
+            other => panic!("expected lazy f64 view, got {other:?}"),
+        }
+
+        let expected: Vec<f64> = (0..t)
+            .flat_map(|tt| {
+                let lhs_data = &lhs_data;
+                let rhs_data = &rhs_data;
+                (0..o).flat_map(move |oo| {
+                    (0..k).flat_map(move |kk| {
+                        (0..j).map(move |jj| {
+                            lhs_data[kk + k * jj + k * j * tt] * rhs_data[oo + o * tt]
+                        })
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(out.data().as_slice::<f64>().unwrap(), expected.as_slice());
     }
 }

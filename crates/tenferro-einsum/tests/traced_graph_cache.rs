@@ -166,24 +166,24 @@ fn extension_compile_cache_limits_bound_static_einsum_entries() {
 }
 
 #[test]
-fn eager_einsum_runtime_caches_are_owned_by_context() {
+fn eager_einsum_expansion_does_not_populate_extension_runtime_caches() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 
     let out = run_eager_extension_matmul(&ctx, 2, 4, 3);
     assert_eq!(out.shape(), &[2, 4]);
-    assert_eq!(ctx.cache_stats().extensions.entries, 2);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
 
     let _ = run_eager_extension_matmul(&ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 2);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let _ = run_eager_extension_matmul(&other_ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 2);
-    assert_eq!(other_ctx.cache_stats().extensions.entries, 2);
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    assert_eq!(other_ctx.cache_stats().extensions.entries, 0);
 }
 
 #[test]
-fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
+fn eager_einsum_expansion_respects_cache_limits_without_extension_entries() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     ctx.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(3).unwrap()));
 
@@ -192,8 +192,8 @@ fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
     }
 
     let stats = ctx.cache_stats();
-    assert_eq!(stats.extensions.entries, 3);
-    assert!(stats.extensions.retained_bytes > 0);
+    assert_eq!(stats.extensions.entries, 0);
+    assert_eq!(stats.extensions.retained_bytes, 0);
     assert_eq!(
         ctx.extension_cache_limits().max_entries(),
         NonZeroUsize::new(3).unwrap()
@@ -221,7 +221,7 @@ fn runtime_planned_einsum_reuses_extension_runtime_caches() {
 }
 
 #[test]
-fn traced_static_tree_einsum_caches_runtime_exec_program() {
+fn traced_static_tree_einsum_expands_without_runtime_exec_program_cache() {
     let subs = tenferro_einsum::Subscripts::parse("ij,jk,kl->il").unwrap();
     let tree = ContractionTree::from_pairs(
         &subs,
@@ -268,7 +268,7 @@ fn traced_static_tree_einsum_caches_runtime_exec_program() {
         .unwrap();
     let after_second = runtime_cache_entries(&executor);
 
-    assert_eq!(after_first, 1);
+    assert_eq!(after_first, 0);
     assert_eq!(after_second, after_first);
 }
 
@@ -279,23 +279,26 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
     let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
 
-    let left_to_right = einsum_with(
+    let default_auto = einsum_with(
         &mut compiler,
         &[&a, &b, &c],
         "ij,jk,kl->il",
-        EinsumOptimize::False,
+        EinsumOptimize::Auto(Default::default()),
     )
     .unwrap();
-    let explicit_path = einsum_with(
+    let custom_auto = einsum_with(
         &mut compiler,
         &[&a, &b, &c],
         "ij,jk,kl->il",
-        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+        EinsumOptimize::Auto(ContractionOptimizerOptions {
+            ntrials: 2,
+            ..Default::default()
+        }),
     )
     .unwrap();
     let left_program = compiler
         .compile_with_input_specs(
-            &left_to_right,
+            &default_auto,
             &[
                 (&a, DType::F64, &[2, 3]),
                 (&b, DType::F64, &[3, 4]),
@@ -305,7 +308,7 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
         .unwrap();
     let path_program = compiler
         .compile_with_input_specs(
-            &explicit_path,
+            &custom_auto,
             &[
                 (&a, DType::F64, &[2, 3]),
                 (&b, DType::F64, &[3, 4]),

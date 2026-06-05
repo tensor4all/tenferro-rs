@@ -79,6 +79,14 @@ fn payload_identity_includes_output_shape_hint() {
 }
 
 #[test]
+fn runtime_input_index_vec_stays_inline_for_common_arity() {
+    let mut indices = InputIndexVec::new();
+    indices.extend(0..4);
+
+    assert!(!indices.spilled());
+}
+
+#[test]
 #[cfg(feature = "autodiff")]
 fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
     let primal_op = EinsumExtensionOp::with_plan_spec(

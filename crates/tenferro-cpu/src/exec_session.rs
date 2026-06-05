@@ -1,5 +1,5 @@
 use crate::buffer_pool::BufferPool;
-use crate::{Tensor, TensorRead};
+use crate::{Tensor, TensorRead, TensorValue};
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -570,4 +570,44 @@ impl TensorBuffer for CpuExecSession<'_> {
     }
 }
 
-impl TensorFusion for CpuExecSession<'_> {}
+impl TensorFusion for CpuExecSession<'_> {
+    fn execute_broadcast_multiply(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<Tensor>> {
+        elementwise::broadcast_multiply_read_with_pool(
+            self.buffers,
+            lhs,
+            lhs_shape,
+            lhs_dims,
+            rhs,
+            rhs_shape,
+            rhs_dims,
+        )
+    }
+
+    fn execute_broadcast_multiply_value(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<TensorValue>> {
+        elementwise::broadcast_multiply_value_with_pool(
+            self.buffers,
+            lhs,
+            lhs_shape,
+            lhs_dims,
+            rhs,
+            rhs_shape,
+            rhs_dims,
+        )
+    }
+}

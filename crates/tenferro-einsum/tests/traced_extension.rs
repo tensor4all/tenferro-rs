@@ -4,7 +4,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]
-fn traced_einsum_executes_through_registered_extension_runtime() {
+fn concrete_traced_einsum_executes_without_extension_runtime() {
     let a = TracedTensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]);
     let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
     let mut compiler = GraphCompiler::new();
@@ -13,14 +13,11 @@ fn traced_einsum_executes_through_registered_extension_runtime() {
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_einsum::register_runtime)
-        .unwrap();
     let out = executor.run(&program).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0_f64; 4]);
-    assert_eq!(executor.cache_stats().extensions.entries, 1);
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
 }
 
 #[test]

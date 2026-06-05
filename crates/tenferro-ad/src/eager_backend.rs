@@ -6,7 +6,7 @@ use tenferro_tensor::{
     DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig, Result as TensorResult,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural,
+    TensorReduction, TensorStructural, TensorValue,
 };
 
 pub enum EagerBackend {
@@ -179,6 +179,8 @@ impl TensorBuffer for EagerBackend {
 impl TensorFusion for EagerBackend {
     delegate_tensor_backend_methods! {
         fn execute_elementwise_fusion(inputs: &[&Tensor], plan: &ElementwiseFusionPlan) -> TensorResult<Option<Vec<Tensor>>>;
+        fn execute_broadcast_multiply(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<Tensor>>;
+        fn execute_broadcast_multiply_value(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<TensorValue>>;
     }
 }
 

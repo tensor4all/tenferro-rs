@@ -15,12 +15,17 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
-use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorElementwise, TypedTensor};
+use tenferro_tensor::{
+    CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
+    TypedTensor,
+};
 use tidu::eager::{self, EagerInput, EagerOutput, KeySource, Recorder, Trace};
 
 use self::backward::TenferroBackwardCallbacks;
 use crate::eager_backend::EagerBackend;
-use crate::eager_exec::exec_op_on_tensors_with_extension_executor;
+use crate::eager_exec::{
+    exec_op_on_tensor_reads_with_extension_executor, exec_op_on_tensors_with_extension_executor,
+};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
     metadata_scopes_for_scope, register_scoped_metadata_batch, register_scoped_value_metadata,
@@ -380,6 +385,28 @@ impl EagerRuntime {
         })
     }
 
+    pub(crate) fn exec_outputs_read(
+        &self,
+        op: &StdTensorOp,
+        inputs: &[TensorRead<'_>],
+    ) -> Result<Vec<Tensor>> {
+        let mut backend = profile_eager_op_section("exec_outputs_read.lock_backend", || {
+            self.backend.lock().unwrap()
+        });
+        let mut extension_executor =
+            profile_eager_op_section("exec_outputs_read.lock_extensions", || {
+                self.extension_executor.lock().unwrap()
+            });
+        profile_eager_op_section("exec_outputs_read.exec_op", || {
+            exec_op_on_tensor_reads_with_extension_executor(
+                op,
+                inputs,
+                &mut *backend,
+                Some(&mut *extension_executor),
+            )
+        })
+    }
+
     pub(crate) fn register_grad_slot(&self, key: &ValueKey<StdTensorOp>, slot: &GradSlot) {
         self.grad_slots
             .lock()
@@ -534,7 +561,8 @@ impl EagerRuntime {
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor {
-    pub(crate) data: Arc<Tensor>,
+    pub(crate) value: Arc<TensorValue>,
+    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
     pub(crate) key: ValueKey<StdTensorOp>,
     pub(crate) trace: Option<Trace<StdTensorOp>>,
     pub(crate) requires_grad: bool,
@@ -606,13 +634,15 @@ impl EagerTensor {
         let key = eager_val_key();
         let metadata_scope =
             register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
+        let tensor = Arc::new(tensor);
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
         }
 
         Self {
-            data: Arc::new(tensor),
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            materialized_cache: Arc::new(OnceLock::new()),
             key,
             trace: None,
             requires_grad,
@@ -654,7 +684,33 @@ impl EagerTensor {
         }
 
         Self {
-            data: tensor,
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            materialized_cache: Arc::new(OnceLock::new()),
+            key,
+            trace,
+            requires_grad,
+            grad_slot,
+            metadata_scopes,
+            ctx,
+        }
+    }
+
+    pub(crate) fn new_result_value(
+        ctx: Arc<EagerRuntime>,
+        key: ValueKey<StdTensorOp>,
+        value: TensorValue,
+        requires_grad: bool,
+        trace: Option<Trace<StdTensorOp>>,
+        metadata_scopes: Vec<Arc<MetadataScope>>,
+    ) -> Self {
+        let grad_slot = Arc::new(Mutex::new(None));
+        if requires_grad {
+            ctx.register_grad_slot(&key, &grad_slot);
+        }
+
+        Self {
+            value: Arc::new(value),
+            materialized_cache: Arc::new(OnceLock::new()),
             key,
             trace,
             requires_grad,
@@ -666,6 +722,19 @@ impl EagerTensor {
 
     pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Self {
         Self::new_result(ctx, eager_val_key(), tensor, false, None, Vec::new())
+    }
+
+    pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue) -> Self {
+        Self {
+            value: Arc::new(value),
+            materialized_cache: Arc::new(OnceLock::new()),
+            key: eager_val_key(),
+            trace: None,
+            requires_grad: false,
+            grad_slot: Arc::new(Mutex::new(None)),
+            metadata_scopes: Vec::new(),
+            ctx,
+        }
     }
 
     /// Detach this tensor from the reverse graph.
@@ -687,7 +756,7 @@ impl EagerTensor {
     /// assert!(y.grad().is_none());
     /// ```
     pub fn detach(&self) -> Self {
-        Self::new_leaf(self.ctx.clone(), self.data.as_ref().clone(), false)
+        Self::new_untracked_value_result(self.ctx.clone(), self.value.as_ref().clone())
     }
 
     /// Detach this tensor from its graph and re-register it in a different
@@ -708,7 +777,7 @@ impl EagerTensor {
     /// assert_eq!(d.ctx_id(), ctx_b.id());
     /// ```
     pub fn detach_into(&self, ctx: &Arc<EagerRuntime>) -> Self {
-        Self::new_leaf(Arc::clone(ctx), self.data.as_ref().clone(), false)
+        Self::new_untracked_value_result(Arc::clone(ctx), self.value.as_ref().clone())
     }
 
     /// Borrow the concrete tensor value.
@@ -724,7 +793,58 @@ impl EagerTensor {
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
     pub fn data(&self) -> &Tensor {
-        self.data.as_ref()
+        if let Some(tensor) = self.value.as_tensor_arc() {
+            return tensor.as_ref();
+        }
+        self.materialized_cache
+            .get_or_init(|| Arc::new(self.value.to_tensor()))
+            .as_ref()
+    }
+
+    /// Return this tensor's scalar dtype without materializing through
+    /// [`data`](Self::data).
+    pub fn dtype(&self) -> DType {
+        self.value.dtype()
+    }
+
+    /// Return this tensor's logical shape without materializing through
+    /// [`data`](Self::data).
+    pub fn shape(&self) -> &[usize] {
+        self.value.shape()
+    }
+
+    /// Borrow this tensor value as a [`TensorRead`].
+    ///
+    /// This is the preferred borrowed input boundary for executor calls. It
+    /// preserves the option to replace eager storage with non-contiguous views
+    /// without forcing callers through [`data`](Self::data).
+    pub fn tensor_read(&self) -> TensorRead<'_> {
+        self.value.tensor_read()
+    }
+
+    /// Materialize this eager tensor as an owned [`Tensor`].
+    ///
+    /// Today eager tensors are stored as compact tensors, so this clones the
+    /// current value. This method is the intended compatibility boundary for
+    /// callers that need owned materialized data after lazy view storage is
+    /// introduced.
+    pub fn to_tensor(&self) -> Result<Tensor> {
+        Ok(self.value.to_tensor())
+    }
+
+    pub(crate) fn materialized_arc(&self) -> Arc<Tensor> {
+        if let Some(tensor) = self.value.as_tensor_arc() {
+            return Arc::clone(tensor);
+        }
+        Arc::clone(
+            self.materialized_cache
+                .get_or_init(|| Arc::new(self.value.to_tensor())),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn materialized_cache_is_initialized(&self) -> bool {
+        self.materialized_cache.get().is_some()
     }
 
     /// Return the accumulated gradient currently stored for this tensor.
@@ -863,15 +983,16 @@ impl EagerTensor {
     /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// ```
     pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
-        if !self.data.shape().is_empty() {
+        if !self.shape().is_empty() {
             return Err(Error::NonScalarGrad {
-                shape: self.data.shape().to_vec(),
+                shape: self.shape().to_vec(),
             });
         }
 
+        let value = self.materialized_arc();
         let mut backend = self.ctx.backend.lock().unwrap();
         let mut extension_executor = self.ctx.extension_executor.lock().unwrap();
-        let seed = Arc::new(one_like_tensor(self.data.as_ref(), &mut *backend));
+        let seed = Arc::new(one_like_tensor(value.as_ref(), &mut *backend));
         let mut callbacks = TenferroBackwardCallbacks::new(
             &mut *backend,
             Some(&mut *extension_executor),
@@ -912,7 +1033,7 @@ pub(crate) fn eager_value(tensor: &EagerTensor) -> EagerInput<StdTensorOp> {
         key: tensor.key.clone(),
         trace: tensor.trace.clone(),
         requires_grad: tensor.requires_grad,
-        data: Arc::clone(&tensor.data),
+        data: tensor.materialized_arc(),
     }
 }
 
@@ -964,6 +1085,25 @@ pub(crate) fn exec_single_output(
     }
     Ok(profile_eager_op_section(
         "exec_single_output.remove_output",
+        || outputs.remove(0),
+    ))
+}
+
+pub(crate) fn exec_single_output_read(
+    op: &StdTensorOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &EagerRuntime,
+) -> Result<Tensor> {
+    let mut outputs = ctx.exec_outputs_read(op, inputs)?;
+    if outputs.len() != 1 {
+        return Err(Error::Internal(format!(
+            "expected one eager output for {:?}, got {}",
+            op,
+            outputs.len()
+        )));
+    }
+    Ok(profile_eager_op_section(
+        "exec_single_output_read.remove_output",
         || outputs.remove(0),
     ))
 }

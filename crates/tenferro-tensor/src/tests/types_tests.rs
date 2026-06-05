@@ -7,7 +7,8 @@ use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
     ConjElem, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
     StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorRank,
-    TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 use crate::Error;
 
@@ -69,6 +70,29 @@ fn tensor_scalar_tensor_read_covers_all_variants() {
     let c32s =
         TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]);
     assert_eq!(Complex32::tensor_read(&c32s).dtype(), DType::C32);
+}
+
+#[test]
+fn tensor_value_keeps_owned_transpose_as_view_until_materialized() {
+    let tensor = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    ));
+    let value = TensorValue::from_tensor_arc(tensor);
+    let transposed = value.transpose_view([1, 0]).unwrap();
+
+    assert_eq!(transposed.shape(), &[3, 2]);
+    match transposed.tensor_read() {
+        TensorRead::View(view) => assert_eq!(view.shape(), &[3, 2]),
+        TensorRead::Tensor(_) => panic!("owned transpose should be exposed as a view"),
+    }
+
+    let materialized = transposed.to_tensor();
+    assert_eq!(materialized.shape(), &[3, 2]);
+    assert_eq!(
+        materialized.as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
 }
 
 #[test]

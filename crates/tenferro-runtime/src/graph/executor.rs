@@ -74,6 +74,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         &self.backend
     }
 
+    /// Return output tensors to the executor backend's reusable buffer pool.
+    ///
+    /// This is useful for tight benchmark or serving loops that consume an
+    /// output before the next run and want backend-level output allocation
+    /// behavior to match caching allocators.
+    pub fn reclaim_outputs(&mut self, outputs: Vec<Tensor>) {
+        for tensor in outputs {
+            self.backend.reclaim_buffer(tensor);
+        }
+    }
+
     /// Borrow the extension runtime executor owned by this graph executor.
     ///
     /// # Examples

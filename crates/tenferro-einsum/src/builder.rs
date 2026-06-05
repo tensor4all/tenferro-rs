@@ -38,6 +38,7 @@ use std::collections::{HashMap, HashSet};
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
+use smallvec::SmallVec;
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -46,15 +47,33 @@ use tenferro_tensor::DotGeneralConfig;
 use crate::planning::tree::ContractionTree;
 use crate::{Error, Result};
 
+pub(crate) type AxisVec = SmallVec<[usize; 4]>;
+
 #[derive(Clone, Debug)]
 struct LabeledVal {
     val: ValueRef<StdTensorOp>,
     labels: Vec<u32>,
-    shape: Vec<usize>,
+    shape: Vec<DimExpr>,
 }
 
-fn label_size_map(labels: &[u32], shape: &[usize]) -> Vec<(u32, usize)> {
-    labels.iter().copied().zip(shape.iter().copied()).collect()
+fn localize_value_ref(
+    builder: &mut GraphBuilder<StdTensorOp>,
+    val: ValueRef<StdTensorOp>,
+    shape: &[DimExpr],
+) -> ValueRef<StdTensorOp> {
+    match val {
+        ValueRef::Local(_) => val,
+        ValueRef::External(_) => {
+            let outputs = builder.add_operation(
+                StdTensorOp::Reshape {
+                    to_shape: shape.to_vec(),
+                },
+                vec![val],
+                OperationRole::Primary,
+            );
+            ValueRef::Local(outputs[0])
+        }
+    }
 }
 
 fn builder_invalid_argument(message: impl Into<String>) -> Error {
@@ -68,17 +87,8 @@ fn find_label_axis(labels: &[u32], label: u32) -> Result<usize> {
         .ok_or_else(|| builder_invalid_argument(format!("missing label {label} in {labels:?}")))
 }
 
-fn find_label_size(label: u32, label_sizes: &[&[(u32, usize)]]) -> Result<usize> {
-    for sizes in label_sizes {
-        for &(candidate, size) in *sizes {
-            if candidate == label {
-                return Ok(size);
-            }
-        }
-    }
-    Err(builder_invalid_argument(format!(
-        "missing size for label {label}"
-    )))
+fn local_shape(rank: usize) -> Vec<DimExpr> {
+    DimExpr::input_shape(0, rank)
 }
 
 fn select_outer_product_label_order(
@@ -125,7 +135,7 @@ fn reduce_val(
     if reduce_labels.is_empty() {
         return lv.clone();
     }
-    let reduce_axes: Vec<usize> = lv
+    let reduce_axes: AxisVec = lv
         .labels
         .iter()
         .enumerate()
@@ -143,15 +153,11 @@ fn reduce_val(
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &l)| l)
         .collect();
-    let new_shape: Vec<usize> = lv
-        .shape
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !reduce_set.contains(i))
-        .map(|(_, &s)| s)
-        .collect();
+    let new_shape = local_shape(new_labels.len());
     let outputs = builder.add_operation(
-        StdTensorOp::ReduceSum { axes: reduce_axes },
+        StdTensorOp::ReduceSum {
+            axes: reduce_axes.into_vec(),
+        },
         vec![lv.val.clone()],
         OperationRole::Primary,
     );
@@ -181,7 +187,6 @@ fn embed_repeated(
             let axis_a = find_label_axis(&result.labels, label)?;
             // Insert the new axis right after axis_a.
             let axis_b = axis_a + 1;
-            let n = result.shape[axis_a];
             let outputs = builder.add_operation(
                 StdTensorOp::EmbedDiag { axis_a, axis_b },
                 vec![result.val.clone()],
@@ -189,8 +194,7 @@ fn embed_repeated(
             );
             let mut new_labels = result.labels.clone();
             new_labels.insert(axis_b, label);
-            let mut new_shape = result.shape.clone();
-            new_shape.insert(axis_b, n);
+            let new_shape = local_shape(new_labels.len());
             result = LabeledVal {
                 val: ValueRef::Local(outputs[0]),
                 labels: new_labels,
@@ -218,8 +222,7 @@ fn diagonalize_repeated(builder: &mut GraphBuilder<StdTensorOp>, lv: &LabeledVal
             );
             let mut new_labels = lv.labels.clone();
             new_labels.remove(i);
-            let mut new_shape = lv.shape.clone();
-            new_shape.remove(i);
+            let new_shape = local_shape(new_labels.len());
             let result = LabeledVal {
                 val: ValueRef::Local(outputs[0]),
                 labels: new_labels,
@@ -291,38 +294,30 @@ fn binary_contract(
         }
     }
 
-    // Build label->size map
-    let lhs_sizes: Vec<(u32, usize)> = label_size_map(&lhs.labels, &lhs.shape);
-    let rhs_sizes: Vec<(u32, usize)> = label_size_map(&rhs.labels, &rhs.shape);
-
-    let label_to_size = |label: u32| -> Result<usize> {
-        find_label_size(label, &[lhs_sizes.as_slice(), rhs_sizes.as_slice()])
-    };
-
     let result = if !contracting_labels.is_empty() {
         // Use DotGeneral
-        let lhs_contracting_dims: Vec<usize> = contracting_labels
+        let lhs_contracting_dims: AxisVec = contracting_labels
             .iter()
             .map(|l| find_label_axis(&lhs.labels, *l))
             .collect::<Result<_>>()?;
-        let rhs_contracting_dims: Vec<usize> = contracting_labels
+        let rhs_contracting_dims: AxisVec = contracting_labels
             .iter()
             .map(|l| find_label_axis(&rhs.labels, *l))
             .collect::<Result<_>>()?;
-        let lhs_batch_dims: Vec<usize> = batch_labels
+        let lhs_batch_dims: AxisVec = batch_labels
             .iter()
             .map(|l| find_label_axis(&lhs.labels, *l))
             .collect::<Result<_>>()?;
-        let rhs_batch_dims: Vec<usize> = batch_labels
+        let rhs_batch_dims: AxisVec = batch_labels
             .iter()
             .map(|l| find_label_axis(&rhs.labels, *l))
             .collect::<Result<_>>()?;
 
         let config = DotGeneralConfig {
-            lhs_contracting_dims,
-            rhs_contracting_dims,
-            lhs_batch_dims,
-            rhs_batch_dims,
+            lhs_contracting_dims: lhs_contracting_dims.into_vec(),
+            rhs_contracting_dims: rhs_contracting_dims.into_vec(),
+            lhs_batch_dims: lhs_batch_dims.into_vec(),
+            rhs_batch_dims: rhs_batch_dims.into_vec(),
         };
 
         // DotGeneral output order: lhs_free + rhs_free + batch (col-major batch trailing)
@@ -332,10 +327,7 @@ fn binary_contract(
             .chain(batch_labels.iter())
             .copied()
             .collect();
-        let result_shape: Vec<usize> = result_labels
-            .iter()
-            .map(|&l| label_to_size(l))
-            .collect::<Result<_>>()?;
+        let result_shape = local_shape(result_labels.len());
 
         let outputs = builder.add_operation(
             StdTensorOp::DotGeneral { config },
@@ -357,7 +349,6 @@ fn binary_contract(
             &batch_labels,
             &lhs_free_labels,
             &rhs_free_labels,
-            &label_to_size,
             reorder_result.then_some(survive_labels),
         )?
     };
@@ -385,7 +376,7 @@ fn binary_contract(
     }
 
     // Build permutation
-    let perm: Vec<usize> = target_labels
+    let perm: AxisVec = target_labels
         .iter()
         .map(|l| find_label_axis(current_labels, *l))
         .collect::<Result<_>>()?;
@@ -394,9 +385,11 @@ fn binary_contract(
         return Ok(result);
     }
 
-    let new_shape: Vec<usize> = perm.iter().map(|&p| result.shape[p]).collect();
+    let new_shape = local_shape(target_labels.len());
     let outputs = builder.add_operation(
-        StdTensorOp::Transpose { perm },
+        StdTensorOp::Transpose {
+            perm: perm.into_vec(),
+        },
         vec![result.val.clone()],
         OperationRole::Primary,
     );
@@ -415,7 +408,6 @@ fn outer_product(
     batch_labels: &[u32],
     lhs_free_labels: &[u32],
     rhs_free_labels: &[u32],
-    label_to_size: &dyn Fn(u32) -> Result<usize>,
     target_labels: Option<&[u32]>,
 ) -> Result<LabeledVal> {
     let canonical_labels: Vec<u32> = lhs_free_labels
@@ -425,11 +417,6 @@ fn outer_product(
         .copied()
         .collect();
     let combined_labels = select_outer_product_label_order(&canonical_labels, target_labels);
-    let combined_shape: Vec<usize> = combined_labels
-        .iter()
-        .map(|&l| label_to_size(l))
-        .collect::<Result<_>>()?;
-
     if lhs.labels == rhs.labels {
         // Same labels: just Mul
         let outputs = builder.add_operation(
@@ -445,31 +432,36 @@ fn outer_product(
     }
 
     // Broadcast both to combined shape, then Mul
-    let lhs_dims: Vec<usize> = lhs
+    let lhs_dims: AxisVec = lhs
         .labels
         .iter()
         .map(|l| find_label_axis(&combined_labels, *l))
         .collect::<Result<_>>()?;
-    let rhs_dims: Vec<usize> = rhs
+    let rhs_dims: AxisVec = rhs
         .labels
         .iter()
         .map(|l| find_label_axis(&combined_labels, *l))
         .collect::<Result<_>>()?;
 
+    let lhs_shape =
+        combined_shape_for_broadcast(&combined_labels, lhs, rhs, BroadcastPrimary::Lhs)?;
+    let rhs_shape =
+        combined_shape_for_broadcast(&combined_labels, lhs, rhs, BroadcastPrimary::Rhs)?;
+
     let lhs_bc = builder.add_operation(
         StdTensorOp::BroadcastInDim {
-            shape: DimExpr::from_concrete(&combined_shape),
-            dims: lhs_dims,
+            shape: lhs_shape.clone(),
+            dims: lhs_dims.into_vec(),
         },
-        vec![lhs.val.clone()],
+        broadcast_inputs(lhs.val.clone(), rhs.val.clone(), &lhs_shape),
         OperationRole::Primary,
     );
     let rhs_bc = builder.add_operation(
         StdTensorOp::BroadcastInDim {
-            shape: DimExpr::from_concrete(&combined_shape),
-            dims: rhs_dims,
+            shape: rhs_shape.clone(),
+            dims: rhs_dims.into_vec(),
         },
-        vec![rhs.val.clone()],
+        broadcast_inputs(rhs.val.clone(), lhs.val.clone(), &rhs_shape),
         OperationRole::Primary,
     );
     let outputs = builder.add_operation(
@@ -477,11 +469,81 @@ fn outer_product(
         vec![ValueRef::Local(lhs_bc[0]), ValueRef::Local(rhs_bc[0])],
         OperationRole::Primary,
     );
+    let combined_rank = combined_labels.len();
     Ok(LabeledVal {
         val: ValueRef::Local(outputs[0]),
         labels: combined_labels,
-        shape: combined_shape,
+        shape: local_shape(combined_rank),
     })
+}
+
+#[derive(Clone, Copy)]
+enum BroadcastPrimary {
+    Lhs,
+    Rhs,
+}
+
+fn combined_shape_for_broadcast(
+    combined_labels: &[u32],
+    lhs: &LabeledVal,
+    rhs: &LabeledVal,
+    primary: BroadcastPrimary,
+) -> Result<Vec<DimExpr>> {
+    combined_labels
+        .iter()
+        .map(|&label| {
+            if let Some(axis) = lhs.labels.iter().position(|candidate| *candidate == label) {
+                let input_idx = match primary {
+                    BroadcastPrimary::Lhs => 0,
+                    BroadcastPrimary::Rhs => 1,
+                };
+                return Ok(DimExpr::InputDim { input_idx, axis });
+            }
+            if let Some(axis) = rhs.labels.iter().position(|candidate| *candidate == label) {
+                let input_idx = match primary {
+                    BroadcastPrimary::Lhs => 1,
+                    BroadcastPrimary::Rhs => 0,
+                };
+                return Ok(DimExpr::InputDim { input_idx, axis });
+            }
+            Err(builder_invalid_argument(format!(
+                "missing label {label} while building broadcast shape"
+            )))
+        })
+        .collect()
+}
+
+fn broadcast_inputs(
+    primary: ValueRef<StdTensorOp>,
+    secondary: ValueRef<StdTensorOp>,
+    shape: &[DimExpr],
+) -> Vec<ValueRef<StdTensorOp>> {
+    let mut inputs = vec![primary];
+    if shape_uses_input(shape, 1) {
+        inputs.push(secondary);
+    }
+    inputs
+}
+
+fn shape_uses_input(shape: &[DimExpr], input_idx: usize) -> bool {
+    shape.iter().any(|dim| dim_expr_uses_input(dim, input_idx))
+}
+
+fn dim_expr_uses_input(dim: &DimExpr, input_idx: usize) -> bool {
+    match dim {
+        DimExpr::Const(_) => false,
+        DimExpr::InputDim {
+            input_idx: actual, ..
+        } => *actual == input_idx,
+        DimExpr::Add(lhs, rhs)
+        | DimExpr::Sub(lhs, rhs)
+        | DimExpr::Mul(lhs, rhs)
+        | DimExpr::FloorDiv(lhs, rhs)
+        | DimExpr::Min(lhs, rhs)
+        | DimExpr::Max(lhs, rhs) => {
+            dim_expr_uses_input(lhs, input_idx) || dim_expr_uses_input(rhs, input_idx)
+        }
+    }
 }
 
 /// Lower a planned einsum contraction tree into a compute graph graph.
@@ -495,6 +557,19 @@ pub(crate) fn build_einsum_graph(
     tree: &ContractionTree,
     input_vals: &[ValueRef<StdTensorOp>],
     input_shapes: &[Vec<usize>],
+) -> Result<ValueRef<StdTensorOp>> {
+    let input_shapes: Vec<Vec<DimExpr>> = input_shapes
+        .iter()
+        .map(|shape| DimExpr::from_concrete(shape))
+        .collect();
+    build_einsum_graph_dim_expr(builder, tree, input_vals, &input_shapes)
+}
+
+pub(crate) fn build_einsum_graph_dim_expr(
+    builder: &mut GraphBuilder<StdTensorOp>,
+    tree: &ContractionTree,
+    input_vals: &[ValueRef<StdTensorOp>],
+    input_shapes: &[Vec<DimExpr>],
 ) -> Result<ValueRef<StdTensorOp>> {
     let subscripts = &tree.subscripts;
     let input_count = subscripts.inputs.len();
@@ -529,7 +604,7 @@ pub(crate) fn build_einsum_graph(
             Ok(LabeledVal {
                 val: val.clone(),
                 labels: labels.clone(),
-                shape: shape.clone(),
+                shape: local_shape(shape.len()),
             })
         })
         .collect::<Result<_>>()?;
@@ -556,17 +631,19 @@ pub(crate) fn build_einsum_graph(
 
         // Reorder if needed
         if result.labels == *output_labels {
-            return Ok(result.val);
+            return Ok(localize_value_ref(builder, result.val, &result.shape));
         }
-        let perm: Vec<usize> = output_labels
+        let perm: AxisVec = output_labels
             .iter()
             .map(|l| find_label_axis(&result.labels, *l))
             .collect::<Result<_>>()?;
         if perm.iter().enumerate().all(|(i, &p)| i == p) {
-            return Ok(result.val);
+            return Ok(localize_value_ref(builder, result.val, &result.shape));
         }
         let outputs = builder.add_operation(
-            StdTensorOp::Transpose { perm },
+            StdTensorOp::Transpose {
+                perm: perm.into_vec(),
+            },
             vec![result.val],
             OperationRole::Primary,
         );
@@ -614,22 +691,24 @@ pub(crate) fn build_einsum_graph(
 
     // Final reorder if needed
     if result.labels == *output_labels {
-        return Ok(result.val);
+        return Ok(localize_value_ref(builder, result.val, &result.shape));
     }
 
     if result.labels.is_empty() && output_labels.is_empty() {
-        return Ok(result.val);
+        return Ok(localize_value_ref(builder, result.val, &result.shape));
     }
 
-    let perm: Vec<usize> = output_labels
+    let perm: AxisVec = output_labels
         .iter()
         .map(|l| find_label_axis(&result.labels, *l))
         .collect::<Result<_>>()?;
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
-        return Ok(result.val);
+        return Ok(localize_value_ref(builder, result.val, &result.shape));
     }
     let outputs = builder.add_operation(
-        StdTensorOp::Transpose { perm },
+        StdTensorOp::Transpose {
+            perm: perm.into_vec(),
+        },
         vec![result.val.clone()],
         OperationRole::Primary,
     );

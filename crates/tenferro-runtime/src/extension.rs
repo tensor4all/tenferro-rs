@@ -26,6 +26,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 
 use crate::checkpoint::CheckpointNode;
+use crate::error::Result;
 use crate::metadata::{push_metadata_scope, register_scoped_graph_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
@@ -143,12 +144,49 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     let outputs = builder.add_operation(carrier, op_inputs, OperationRole::Primary);
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
+    traced_outputs_from_graph(inputs, graph, &outputs, output_metas)
+}
+
+/// Apply an extension-provided lowering as ordinary traced graph operations.
+///
+/// This is for extension crates whose operation can be expanded at graph-build
+/// time. It preserves the same parent graph and metadata merging behavior as
+/// [`apply`], but does not insert a `StdTensorOp::Extension` carrier.
+pub fn apply_expanded_graph(
+    inputs: &[&TracedTensor],
+    output_metas: Vec<(tenferro_tensor::DType, Vec<SymDim>)>,
+    build: impl FnOnce(&mut GraphBuilder<StdTensorOp>, &[ValueRef<StdTensorOp>]) -> Result<Vec<usize>>,
+) -> Result<Vec<TracedTensor>> {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    for input in inputs {
+        builder.add_parent(input.graph.clone());
+    }
+    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
+        .iter()
+        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
+        .collect();
+    let outputs = build(&mut builder, &op_inputs)?;
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    Ok(traced_outputs_from_graph(
+        inputs,
+        graph,
+        &outputs,
+        output_metas,
+    ))
+}
+
+fn traced_outputs_from_graph(
+    inputs: &[&TracedTensor],
+    graph: Arc<computegraph::graph::Graph<StdTensorOp>>,
+    outputs: &[usize],
+    output_metas: Vec<(tenferro_tensor::DType, Vec<SymDim>)>,
+) -> Vec<TracedTensor> {
     let metadata_scope = Arc::new(register_scoped_graph_metadata(
         graph.as_ref(),
         std::iter::empty(),
     ));
 
-    // Merge shared-state across all parent TracedTensors.
     let mut merged_map = HashMap::new();
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
@@ -164,15 +202,6 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     }
     let merged_map = Arc::new(merged_map);
 
-    // The primal dtype for the emitted `TracedTensor`s is the per-output
-    // dtype returned by `infer_output_meta`. For consistency with the rest
-    // of the tenferro public API the extension's output dtype is reported
-    // on the `TracedTensor::dtype` field of each output.
-    //
-    // `shape_hint` is preserved only if the output shape is fully concrete
-    // (no TensorAxis references). Otherwise we drop it to keep the hint
-    // invariant `Some(...) => fully known at build time` that the rest of
-    // the traced frontend relies on.
     let all_inputs_concrete = inputs.iter().all(|t| t.shape_hint.is_some());
     outputs
         .iter()
@@ -198,4 +227,41 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use computegraph::types::OperationRole;
+    use tenferro_tensor::DType;
+
+    use super::*;
+
+    #[test]
+    fn apply_expanded_graph_builds_standard_op_without_extension() {
+        let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+        let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+
+        let outputs =
+            apply_expanded_graph(
+                &[&x, &y],
+                vec![(DType::F64, vec![SymDim::from(2)])],
+                |builder, inputs| {
+                    Ok(builder.add_operation(
+                        StdTensorOp::Add,
+                        inputs.to_vec(),
+                        OperationRole::Primary,
+                    ))
+                },
+            )
+            .expect("expanded graph should build");
+
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].rank, 1);
+        assert_eq!(outputs[0].dtype, DType::F64);
+        assert!(outputs[0]
+            .graph
+            .operations()
+            .iter()
+            .all(|node| !matches!(node.operation, StdTensorOp::Extension(_))));
+    }
 }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TypedTensor, TypedTensorView,
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use tenferro_tensor::{
@@ -1463,7 +1463,39 @@ where
     }
 }
 
-impl TensorFusion for CpuBackend {}
+impl TensorFusion for CpuBackend {
+    fn execute_broadcast_multiply(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<Tensor>> {
+        self.install_with_pool(|buffers| {
+            elementwise::broadcast_multiply_read_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
+    }
+
+    fn execute_broadcast_multiply_value(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<TensorValue>> {
+        self.install_with_pool(|buffers| {
+            elementwise::broadcast_multiply_value_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
+    }
+}
 
 impl TensorDeviceTransfer for CpuBackend {}
 

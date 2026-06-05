@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::extension::{apply, ExtensionOpTrait};
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 use tenferro_runtime::{SymDim, Tensor};
@@ -130,6 +131,25 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
     assert_eq!(compiler.compile_cache_capacity().get(), 1);
     assert_eq!(stats.compile.entries, 1);
     assert!(stats.compile.retained_bytes > 0);
+}
+
+#[test]
+fn graph_compiler_compiler_options_setter_clears_compile_cache() {
+    let mut compiler = GraphCompiler::new();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let _ = compiler.compile(&x.neg()).unwrap();
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let options = CompilerOptions {
+        optimizer: OptimizerConfig {
+            dot_decomposer: true,
+            ..OptimizerConfig::default()
+        },
+    };
+    compiler.set_compiler_options(options);
+
+    assert_eq!(compiler.compiler_options(), options);
+    assert_eq!(compiler.compile_cache_len(), 0);
 }
 
 #[test]

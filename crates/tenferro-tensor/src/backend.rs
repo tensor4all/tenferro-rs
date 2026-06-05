@@ -2,7 +2,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
-use crate::{RuntimeCacheControl, Tensor, TensorRead};
+use crate::{RuntimeCacheControl, Tensor, TensorRead, TensorValue};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
     crate::Error::backend_failure(
@@ -665,6 +665,35 @@ pub trait TensorFusion {
     ) -> crate::Result<Option<Vec<Tensor>>> {
         Ok(None)
     }
+
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    fn execute_broadcast_multiply(
+        &mut self,
+        _lhs: TensorRead<'_>,
+        _lhs_shape: &[usize],
+        _lhs_dims: &[usize],
+        _rhs: TensorRead<'_>,
+        _rhs_shape: &[usize],
+        _rhs_dims: &[usize],
+    ) -> crate::Result<Option<Tensor>> {
+        Ok(None)
+    }
+
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    fn execute_broadcast_multiply_value(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<TensorValue>> {
+        self.execute_broadcast_multiply(lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)
+            .map(|tensor| tensor.map(TensorValue::from_tensor))
+    }
 }
 
 /// Backend buffer lifecycle operations.
@@ -710,7 +739,7 @@ pub trait TensorDeviceTransfer {
 /// ```
 pub trait BackendRuntimeCache {
     #[doc(hidden)]
-    type RuntimeCache: RuntimeCacheControl;
+    type RuntimeCache: RuntimeCacheControl + Send + Sync + 'static;
 }
 
 /// Backend-owned cached dot-general operations.

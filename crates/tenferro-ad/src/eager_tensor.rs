@@ -5,6 +5,7 @@
 
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_tensor::TensorFusion;
 
 pub use crate::eager::{EagerRuntime, EagerTensor};
 use crate::error::{Error, Result};
@@ -206,9 +207,57 @@ pub fn matmul(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     a.matmul(b)
 }
 
+/// Apply one standard tensor op eagerly and record it for AD when needed.
+///
+/// This is intended for extension crates that lower a composite operation into
+/// ordinary `StdTensorOp` nodes and want eager AD to see the expanded graph.
+pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<EagerTensor> {
+    if matches!(op, StdTensorOp::Extension(_)) {
+        return Err(Error::Internal(
+            "eager_tensor::apply_standard_op does not accept Extension ops".into(),
+        ));
+    }
+    EagerTensor::nary_op(inputs, op)
+}
+
+/// Try a backend fused broadcast-multiply for untracked eager tensors.
+///
+/// Returns `None` when either input participates in AD or the backend does not
+/// provide a fused implementation, so callers can fall back to ordinary eager
+/// `StdTensorOp` execution without changing gradients.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn try_backend_broadcast_multiply_untracked(
+    lhs: &EagerTensor,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &EagerTensor,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> Result<Option<EagerTensor>> {
+    ensure_same_context(lhs, rhs)?;
+    if lhs.tracks_grad() || rhs.tracks_grad() {
+        return Ok(None);
+    }
+
+    let value = {
+        let mut backend = lhs.runtime().backend.lock().unwrap();
+        backend.execute_broadcast_multiply_value(
+            lhs.tensor_read(),
+            lhs_shape,
+            lhs_dims,
+            rhs.tensor_read(),
+            rhs_shape,
+            rhs_dims,
+        )?
+    };
+
+    Ok(value.map(|value| EagerTensor::new_untracked_value_result(lhs.runtime().clone(), value)))
+}
+
 fn broadcast_binary(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     ensure_same_context(lhs, rhs)?;
-    let shape = broadcast_shape(lhs.data().shape(), rhs.data().shape())
+    let shape = broadcast_shape(lhs.shape(), rhs.shape())
         .map_err(|err| Error::Internal(err.to_string()))?;
     Ok((broadcast_to(lhs, &shape)?, broadcast_to(rhs, &shape)?))
 }
@@ -220,12 +269,8 @@ fn broadcast_ternary(
 ) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
     ensure_same_context(first, second)?;
     ensure_same_context(first, third)?;
-    let shape = broadcast_shapes([
-        first.data().shape(),
-        second.data().shape(),
-        third.data().shape(),
-    ])
-    .map_err(|err| Error::Internal(err.to_string()))?;
+    let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
+        .map_err(|err| Error::Internal(err.to_string()))?;
     Ok((
         broadcast_to(first, &shape)?,
         broadcast_to(second, &shape)?,
@@ -234,7 +279,7 @@ fn broadcast_ternary(
 }
 
 fn broadcast_to(input: &EagerTensor, target_shape: &[usize]) -> Result<EagerTensor> {
-    let input_shape = input.data().shape();
+    let input_shape = input.shape();
     if input_shape == target_shape {
         return Ok(input.clone());
     }
