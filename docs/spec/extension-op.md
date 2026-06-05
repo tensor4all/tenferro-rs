@@ -402,6 +402,77 @@ choose one convention and document it in the trait definition comment; the
 default choice is to add `Any` via a method-based helper to keep
 `ExtensionOp` object-safe.
 
+### Non-Tensor arguments and payload identity
+
+Tensor arguments are graph inputs. They may be AD-active and participate in
+graph construction through `ValueKey` dependencies.
+
+Non-Tensor arguments are not graph inputs. Extension implementations MUST
+capture them in the concrete `ExtensionOp` payload. Examples include axes,
+modes, tolerances, normalization choices, and small configuration structs.
+
+Any payload field that affects output values, output metadata, backend
+behavior, or AD behavior is semantic payload. Semantic payload MUST participate
+in both `payload_hash` and `payload_eq`. Equal payloads MUST be interchangeable
+for graph interning, graph equality, AD rule lookup, and compile/runtime cache
+identity.
+
+Runtime cache handles, vendor plans, warm cache state, allocation addresses,
+random UUIDs, closures, process-local counters, and mutable registries MUST NOT
+participate in semantic payload identity. If a large external resource is
+needed, the payload MAY contain a stable semantic key or content hash, but not
+a process-local handle as identity.
+
+`AttrValue` or another generic attribute container is not required by the
+current Rust-native extension API. Extension authors SHOULD prefer concrete
+Rust payload types whose equality and hashing match the operation semantics.
+
+Example:
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum WindowMode {
+    Valid,
+    Same,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WindowedReduceOp {
+    axis: usize,
+    mode: WindowMode,
+}
+
+impl ExtensionOp for WindowedReduceOp {
+    fn family_id(&self) -> &'static str {
+        "example.windowed_reduce.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
+        hasher.write_usize(self.axis);
+        match self.mode {
+            WindowMode::Valid => hasher.write_u8(0),
+            WindowMode::Same => hasher.write_u8(1),
+        }
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<WindowedReduceOp>()
+            .is_some_and(|op| op == self)
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    // Other required methods omitted.
+}
+```
+
+Here `axis` and `mode` are deterministic payload fields, not differentiable
+tensor inputs. `input_count()` returns only the number of tensor inputs.
+
 ---
 
 ## 6. Arity and I/O shape
