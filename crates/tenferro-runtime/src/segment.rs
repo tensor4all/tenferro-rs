@@ -16,7 +16,7 @@ use crate::exec::{
 };
 use crate::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{
-    ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend, TensorValue,
+    ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend, TensorRead, TensorValue,
 };
 
 /// A compiled execution segment.
@@ -131,6 +131,10 @@ pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
             flush_fused_segment(program, &mut segments, fused_start.take(), idx);
             segments.push(build_fused_segment(program, idx, idx + 3));
             idx += 3;
+        } else if is_single_broadcast_multiply_pair_at(program, idx) {
+            flush_fused_segment(program, &mut segments, fused_start.take(), idx);
+            segments.push(build_fused_segment(program, idx, idx + 2));
+            idx += 2;
         } else if fused_start.is_none() {
             fused_start = Some(idx);
             idx += 1;
@@ -160,6 +164,23 @@ fn is_broadcast_multiply_triplet_at(program: &ExecProgram, idx: usize) -> bool {
         && multiply.input_slots.len() == 2
         && multiply.input_slots[0] == lhs_bc.output_slots[0]
         && multiply.input_slots[1] == rhs_bc.output_slots[0]
+}
+
+fn is_single_broadcast_multiply_pair_at(program: &ExecProgram, idx: usize) -> bool {
+    let Some([broadcast, multiply]) = program.instructions.get(idx..idx + 2) else {
+        return false;
+    };
+    if !matches!(broadcast.op, ExecOp::BroadcastInDim { .. })
+        || !matches!(multiply.op, ExecOp::Multiply)
+        || broadcast.output_slots.len() != 1
+        || multiply.output_slots.len() != 1
+        || multiply.input_slots.len() != 2
+    {
+        return false;
+    }
+
+    let broadcast_output = broadcast.output_slots[0];
+    multiply.input_slots[0] == broadcast_output || multiply.input_slots[1] == broadcast_output
 }
 
 /// Evaluate an [`ExecProgram`] via segment-based dispatch.
@@ -295,6 +316,16 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                             reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
                             return Ok(());
                         }
+                        if let Some(output) = try_execute_single_broadcast_multiply_segment(
+                            exec,
+                            slots,
+                            instructions,
+                            output_slots,
+                        )? {
+                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+                            return Ok(());
+                        }
 
                         for inst in instructions {
                             let result = execute_backend_op(exec, slots, inst)?;
@@ -402,7 +433,30 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                             reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
                             return Ok(());
                         }
+                        if let Some(output) =
+                            try_execute_terminal_single_broadcast_multiply_value_segment(
+                                exec,
+                                slots,
+                                instructions,
+                                output_slots,
+                                &terminal_slots,
+                            )?
+                        {
+                            slots[output_slots[0]] = Some(ExecSlot::Value(output));
+                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+                            return Ok(());
+                        }
                         if let Some(output) = try_execute_broadcast_multiply_segment(
+                            exec,
+                            slots,
+                            instructions,
+                            output_slots,
+                        )? {
+                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+                            return Ok(());
+                        }
+                        if let Some(output) = try_execute_single_broadcast_multiply_segment(
                             exec,
                             slots,
                             instructions,
@@ -524,6 +578,128 @@ fn try_execute_broadcast_multiply_segment(
     )?)
 }
 
+#[derive(Clone, Copy)]
+enum SingleBroadcastMultiplyPair<'a> {
+    WithOther {
+        broadcast: &'a ExecInstruction,
+        other_slot: usize,
+        broadcast_is_lhs: bool,
+    },
+    ReusedBroadcast {
+        broadcast: &'a ExecInstruction,
+    },
+}
+
+fn single_broadcast_multiply_pair<'a>(
+    instructions: &'a [ExecInstruction],
+    output_slots: &[usize],
+) -> Option<SingleBroadcastMultiplyPair<'a>> {
+    let [broadcast, multiply] = instructions else {
+        return None;
+    };
+    if !matches!(broadcast.op, ExecOp::BroadcastInDim { .. })
+        || !matches!(multiply.op, ExecOp::Multiply)
+        || broadcast.output_slots.len() != 1
+        || multiply.output_slots.len() != 1
+        || multiply.input_slots.len() != 2
+        || output_slots != multiply.output_slots.as_slice()
+    {
+        return None;
+    }
+
+    let broadcast_output = broadcast.output_slots[0];
+    match (
+        multiply.input_slots[0] == broadcast_output,
+        multiply.input_slots[1] == broadcast_output,
+    ) {
+        (true, true) => Some(SingleBroadcastMultiplyPair::ReusedBroadcast { broadcast }),
+        (true, false) => Some(SingleBroadcastMultiplyPair::WithOther {
+            broadcast,
+            other_slot: multiply.input_slots[1],
+            broadcast_is_lhs: true,
+        }),
+        (false, true) => Some(SingleBroadcastMultiplyPair::WithOther {
+            broadcast,
+            other_slot: multiply.input_slots[0],
+            broadcast_is_lhs: false,
+        }),
+        (false, false) => None,
+    }
+}
+
+fn identity_dims(rank: usize) -> Vec<usize> {
+    (0..rank).collect()
+}
+
+fn read_slot<'slot, 'input>(
+    slots: &'slot [Option<ExecSlot<'input>>],
+    slot: usize,
+) -> Result<TensorRead<'slot>>
+where
+    'input: 'slot,
+{
+    slots
+        .get(slot)
+        .and_then(Option::as_ref)
+        .ok_or(tenferro_tensor::Error::MissingValue { slot }.into())
+        .map(|value| value.as_read())
+}
+
+fn try_execute_single_broadcast_multiply_segment(
+    exec: &mut dyn tenferro_tensor::BackendSession,
+    slots: &[Option<ExecSlot<'_>>],
+    instructions: &[ExecInstruction],
+    output_slots: &[usize],
+) -> Result<Option<Tensor>> {
+    let Some(pair) = single_broadcast_multiply_pair(instructions, output_slots) else {
+        return Ok(None);
+    };
+    let broadcast = match pair {
+        SingleBroadcastMultiplyPair::WithOther { broadcast, .. }
+        | SingleBroadcastMultiplyPair::ReusedBroadcast { broadcast } => broadcast,
+    };
+    let ExecOp::BroadcastInDim { shape, dims } = &broadcast.op else {
+        return Ok(None);
+    };
+
+    let target_shape = resolve_tensor_shape_exprs(slots, &broadcast.input_slots, shape)?;
+    let full_dims = identity_dims(target_shape.len());
+    let broadcast_read = get_read(slots, &broadcast.input_slots, 0)?;
+
+    match pair {
+        SingleBroadcastMultiplyPair::ReusedBroadcast { .. } => Ok(exec
+            .execute_broadcast_multiply(
+                broadcast_read.clone(),
+                &target_shape,
+                dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?),
+        SingleBroadcastMultiplyPair::WithOther {
+            other_slot,
+            broadcast_is_lhs,
+            ..
+        } if broadcast_is_lhs => Ok(exec.execute_broadcast_multiply(
+            broadcast_read,
+            &target_shape,
+            dims,
+            read_slot(slots, other_slot)?,
+            &target_shape,
+            &full_dims,
+        )?),
+        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => Ok(exec
+            .execute_broadcast_multiply(
+                read_slot(slots, other_slot)?,
+                &target_shape,
+                &full_dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?),
+    }
+}
+
 fn try_execute_terminal_broadcast_multiply_value_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
     slots: &[Option<ExecSlot<'_>>],
@@ -577,6 +753,69 @@ fn try_execute_terminal_broadcast_multiply_value_segment(
         &rhs_shape,
         rhs_dims,
     )?)
+}
+
+fn try_execute_terminal_single_broadcast_multiply_value_segment(
+    exec: &mut dyn tenferro_tensor::BackendSession,
+    slots: &[Option<ExecSlot<'_>>],
+    instructions: &[ExecInstruction],
+    output_slots: &[usize],
+    terminal_slots: &[bool],
+) -> Result<Option<TensorValue>> {
+    let [output_slot] = output_slots else {
+        return Ok(None);
+    };
+    if !terminal_slots.get(*output_slot).copied().unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let Some(pair) = single_broadcast_multiply_pair(instructions, output_slots) else {
+        return Ok(None);
+    };
+    let broadcast = match pair {
+        SingleBroadcastMultiplyPair::WithOther { broadcast, .. }
+        | SingleBroadcastMultiplyPair::ReusedBroadcast { broadcast } => broadcast,
+    };
+    let ExecOp::BroadcastInDim { shape, dims } = &broadcast.op else {
+        return Ok(None);
+    };
+
+    let target_shape = resolve_tensor_shape_exprs(slots, &broadcast.input_slots, shape)?;
+    let full_dims = identity_dims(target_shape.len());
+    let broadcast_read = get_read(slots, &broadcast.input_slots, 0)?;
+
+    match pair {
+        SingleBroadcastMultiplyPair::ReusedBroadcast { .. } => Ok(exec
+            .execute_broadcast_multiply_value(
+                broadcast_read.clone(),
+                &target_shape,
+                dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?),
+        SingleBroadcastMultiplyPair::WithOther {
+            other_slot,
+            broadcast_is_lhs,
+            ..
+        } if broadcast_is_lhs => Ok(exec.execute_broadcast_multiply_value(
+            broadcast_read,
+            &target_shape,
+            dims,
+            read_slot(slots, other_slot)?,
+            &target_shape,
+            &full_dims,
+        )?),
+        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => Ok(exec
+            .execute_broadcast_multiply_value(
+                read_slot(slots, other_slot)?,
+                &target_shape,
+                &full_dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?),
+    }
 }
 
 fn flush_fused_segment(
@@ -717,8 +956,9 @@ fn build_elementwise_fusion_plan(
 mod tests {
     use super::*;
     use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+    use tenferro_cpu::CpuBackend;
     use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
-    use tenferro_tensor::DType;
+    use tenferro_tensor::{DType, Tensor};
 
     fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
         ExecInstruction {
@@ -779,5 +1019,90 @@ mod tests {
                 matches!(segment, Segment::Fused { instructions, .. } if instructions.len() == 3)
             );
         }
+    }
+
+    #[test]
+    fn segmenter_isolates_single_broadcast_multiply_pairs() {
+        let program = ExecProgram {
+            instructions: vec![
+                broadcast(0, 4, vec![0]),
+                multiply(4, 1, 5),
+                broadcast(2, 6, vec![1]),
+                multiply(3, 6, 7),
+            ],
+            input_slots: vec![0, 1, 2, 3],
+            output_slots: vec![5, 7],
+            n_slots: 8,
+        };
+
+        let segments = segment_exec_program(&program);
+
+        assert_eq!(segments.len(), 2);
+        for segment in segments {
+            assert!(
+                matches!(segment, Segment::Fused { instructions, .. } if instructions.len() == 2)
+            );
+        }
+    }
+
+    #[test]
+    fn single_broadcast_multiply_pair_handles_reused_broadcast_output() {
+        let instructions = vec![broadcast(0, 4, vec![0]), multiply(4, 4, 5)];
+
+        let pair = single_broadcast_multiply_pair(&instructions, &[5]);
+
+        assert!(matches!(
+            pair,
+            Some(SingleBroadcastMultiplyPair::ReusedBroadcast { .. })
+        ));
+    }
+
+    #[test]
+    fn segmented_eval_executes_single_broadcast_multiply_pairs() {
+        let program = ExecProgram {
+            instructions: vec![
+                broadcast(0, 4, vec![0]),
+                multiply(4, 1, 5),
+                broadcast(2, 6, vec![1]),
+                multiply(3, 6, 7),
+            ],
+            input_slots: vec![0, 1, 2, 3],
+            output_slots: vec![5, 7],
+            n_slots: 8,
+        };
+        let mut backend = CpuBackend::new();
+        let inputs = vec![
+            Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]),
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+            Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        ];
+
+        let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
+
+        assert_eq!(
+            outputs[0].as_slice::<f64>().unwrap(),
+            &[10.0, 40.0, 30.0, 80.0]
+        );
+        assert_eq!(
+            outputs[1].as_slice::<f64>().unwrap(),
+            &[5.0, 10.0, 21.0, 28.0]
+        );
+    }
+
+    #[test]
+    fn segmented_eval_executes_reused_broadcast_multiply_pair() {
+        let program = ExecProgram {
+            instructions: vec![broadcast(0, 1, vec![0]), multiply(1, 1, 2)],
+            input_slots: vec![0],
+            output_slots: vec![2],
+            n_slots: 3,
+        };
+        let mut backend = CpuBackend::new();
+        let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])];
+
+        let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
+
+        assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 9.0, 4.0, 9.0]);
     }
 }
