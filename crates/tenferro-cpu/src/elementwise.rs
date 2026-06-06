@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
-use strided_kernel::{batched_outer_product_into_seq, map_into, zip_map2_into, zip_map3_into};
+use strided_kernel::{
+    batched_outer_product_into, broadcast_mul_into, map_into, mul_into, zip_map2_into,
+    zip_map3_into,
+};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
@@ -590,62 +593,6 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
     }
 }
 
-fn broadcast_typed_read_view<'a, T, R>(
-    view: TypedTensorView<'a, T, R>,
-    shape: &[usize],
-    dims: &[usize],
-) -> crate::Result<TypedTensorView<'a, T>>
-where
-    T: 'static,
-    R: TensorRank,
-{
-    if view.backend_buffer().is_some() {
-        return Err(crate::cpu_backend_buffer_error("broadcast_multiply"));
-    }
-    if view.shape().len() != dims.len() {
-        return Err(crate::Error::RankMismatch {
-            op: "broadcast_multiply",
-            expected: view.shape().len(),
-            actual: dims.len(),
-        });
-    }
-
-    let mut seen = vec![false; shape.len()];
-    let mut strides = vec![0isize; shape.len()];
-    for (src_axis, &dst_axis) in dims.iter().enumerate() {
-        if dst_axis >= shape.len() {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "broadcast_multiply",
-                axis: dst_axis,
-                rank: shape.len(),
-            });
-        }
-        if seen[dst_axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op: "broadcast_multiply",
-                axis: dst_axis,
-                role: "dims",
-            });
-        }
-        seen[dst_axis] = true;
-
-        let source_dim = view.shape()[src_axis];
-        let target_dim = shape[dst_axis];
-        if source_dim != target_dim && source_dim != 1 {
-            return Err(crate::Error::ShapeMismatch {
-                op: "broadcast_multiply",
-                lhs: view.shape().to_vec(),
-                rhs: shape.to_vec(),
-            });
-        }
-        if source_dim == target_dim {
-            strides[dst_axis] = view.strides()[src_axis];
-        }
-    }
-
-    TypedTensorView::from_slice(shape, &strides, view.offset(), view.as_physical_slice())
-}
-
 #[derive(Clone, Copy)]
 enum SplitOuterProductLayout {
     LhsPrefix,
@@ -887,7 +834,7 @@ where
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
                 .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
-            batched_outer_product_into_seq(
+            batched_outer_product_into(
                 &mut out.view_mut(),
                 &lhs_outer,
                 &rhs_outer,
@@ -915,7 +862,7 @@ where
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
                 .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
-            batched_outer_product_into_seq(
+            batched_outer_product_into(
                 &mut out.view_mut(),
                 &rhs_outer,
                 &lhs_outer,
@@ -1111,7 +1058,7 @@ where
 
             // SAFETY: every element in the physical base output is assigned below.
             let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
-            batched_outer_product_into_seq(
+            batched_outer_product_into(
                 &mut base.view_mut(),
                 &lhs_outer,
                 &rhs_outer,
@@ -1162,7 +1109,7 @@ where
 
             // SAFETY: every element in the physical base output is assigned below.
             let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
-            batched_outer_product_into_seq(
+            batched_outer_product_into(
                 &mut base.view_mut(),
                 &rhs_outer,
                 &lhs_outer,
@@ -1179,136 +1126,42 @@ where
     }
 }
 
-#[cfg(feature = "cpu-blas")]
-fn blas_dim(
-    op: &'static str,
-    name: &'static str,
-    value: usize,
-) -> crate::Result<std::os::raw::c_int> {
-    value.try_into().map_err(|_| {
-        crate::Error::backend_failure(op, format!("{name}={value} exceeds BLAS c_int range"))
-    })
-}
-
-#[cfg(feature = "cpu-blas")]
-fn try_outer_product_blas_f64(
-    buffers: &mut BufferPool,
-    lhs: &TypedTensorView<'_, f64>,
-    lhs_shape: &[usize],
-    lhs_dims: &[usize],
-    rhs: &TypedTensorView<'_, f64>,
-    rhs_shape: &[usize],
-    rhs_dims: &[usize],
-) -> crate::Result<Option<TypedTensor<f64>>> {
-    try_outer_product_blas_real(
-        buffers,
-        lhs,
-        lhs_shape,
-        lhs_dims,
-        rhs,
-        rhs_shape,
-        rhs_dims,
-        cblas_sys::cblas_dgemm,
-    )
-}
-
-#[cfg(feature = "cpu-blas")]
-fn try_outer_product_blas_f32(
-    buffers: &mut BufferPool,
-    lhs: &TypedTensorView<'_, f32>,
-    lhs_shape: &[usize],
-    lhs_dims: &[usize],
-    rhs: &TypedTensorView<'_, f32>,
-    rhs_shape: &[usize],
-    rhs_dims: &[usize],
-) -> crate::Result<Option<TypedTensor<f32>>> {
-    try_outer_product_blas_real(
-        buffers,
-        lhs,
-        lhs_shape,
-        lhs_dims,
-        rhs,
-        rhs_shape,
-        rhs_dims,
-        cblas_sys::cblas_sgemm,
-    )
-}
-
-#[cfg(feature = "cpu-blas")]
 #[allow(clippy::too_many_arguments)]
-fn try_outer_product_blas_real<T>(
+fn typed_broadcast_mul_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
-    lhs: &TypedTensorView<'_, T>,
+    lhs: &TypedTensorView<'_, T, L>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
-    rhs: &TypedTensorView<'_, T>,
+    rhs: &TypedTensorView<'_, T, R>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
-    gemm: unsafe extern "C" fn(
-        cblas_sys::CBLAS_LAYOUT,
-        cblas_sys::CBLAS_TRANSPOSE,
-        cblas_sys::CBLAS_TRANSPOSE,
-        std::os::raw::c_int,
-        std::os::raw::c_int,
-        std::os::raw::c_int,
-        T,
-        *const T,
-        std::os::raw::c_int,
-        *const T,
-        std::os::raw::c_int,
-        T,
-        *mut T,
-        std::os::raw::c_int,
-    ),
-) -> crate::Result<Option<TypedTensor<T>>>
+) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar + From<f32> + 'static,
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
+    L: TensorRank,
+    R: TensorRank,
 {
-    let Some(plan) = split_outer_product_plan(lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)?
-    else {
-        return Ok(None);
-    };
-    if plan.rows == 0 || plan.cols == 0 || plan.batches != 1 {
-        return Ok(None);
+    if lhs_shape != rhs_shape {
+        return Err(crate::Error::ShapeMismatch {
+            op: "broadcast_multiply",
+            lhs: lhs_shape.to_vec(),
+            rhs: rhs_shape.to_vec(),
+        });
     }
-    let Ok(lhs_data) = lhs.as_slice() else {
-        return Ok(None);
-    };
-    let Ok(rhs_data) = rhs.as_slice() else {
-        return Ok(None);
-    };
-    let (x, y) = match plan.layout {
-        SplitOuterProductLayout::LhsPrefix => (lhs_data, rhs_data),
-        SplitOuterProductLayout::RhsPrefix => (rhs_data, lhs_data),
-    };
 
-    // SAFETY: beta=0 makes GEMM initialize every output element.
+    // SAFETY: broadcast_mul_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
-
-    let m = blas_dim("broadcast_multiply", "m", plan.rows)?;
-    let n = blas_dim("broadcast_multiply", "n", plan.cols)?;
-    let k = blas_dim("broadcast_multiply", "k", 1)?;
-    let lda = m;
-    let ldb = k;
-    unsafe {
-        gemm(
-            cblas_sys::CBLAS_LAYOUT::CblasColMajor,
-            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
-            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
-            m,
-            n,
-            k,
-            T::from(1.0),
-            x.as_ptr(),
-            lda,
-            y.as_ptr(),
-            ldb,
-            T::from(0.0),
-            out.data_mut().as_mut_ptr(),
-            lda,
-        );
-    }
-    Ok(Some(tensor_from_array(out)))
+    let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
+    let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
+    broadcast_mul_into(
+        &mut out.view_mut(),
+        &lhs_view,
+        lhs_dims,
+        &rhs_view,
+        rhs_dims,
+    )
+    .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+    Ok(tensor_from_array(out))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1331,33 +1184,15 @@ pub(crate) fn broadcast_multiply_read_with_pool(
             )? {
                 return Ok(Some(Tensor::$variant(out)));
             }
-            let lhs = broadcast_typed_read_view($lhs, lhs_shape, lhs_dims)?;
-            let rhs = broadcast_typed_read_view($rhs, rhs_shape, rhs_dims)?;
-            Ok(Some(Tensor::$variant(typed_mul_view_with_pool(
-                buffers, &lhs, &rhs,
+            Ok(Some(Tensor::$variant(typed_broadcast_mul_view_with_pool(
+                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )?)))
         }};
     }
 
     match (lhs, rhs) {
-        (CpuReadView::F32(lhs), CpuReadView::F32(rhs)) => {
-            #[cfg(feature = "cpu-blas")]
-            if let Some(out) = try_outer_product_blas_f32(
-                buffers, &lhs, lhs_shape, lhs_dims, &rhs, rhs_shape, rhs_dims,
-            )? {
-                return Ok(Some(Tensor::F32(out)));
-            }
-            dispatch!(F32, lhs, rhs)
-        }
-        (CpuReadView::F64(lhs), CpuReadView::F64(rhs)) => {
-            #[cfg(feature = "cpu-blas")]
-            if let Some(out) = try_outer_product_blas_f64(
-                buffers, &lhs, lhs_shape, lhs_dims, &rhs, rhs_shape, rhs_dims,
-            )? {
-                return Ok(Some(Tensor::F64(out)));
-            }
-            dispatch!(F64, lhs, rhs)
-        }
+        (CpuReadView::F32(lhs), CpuReadView::F32(rhs)) => dispatch!(F32, lhs, rhs),
+        (CpuReadView::F64(lhs), CpuReadView::F64(rhs)) => dispatch!(F64, lhs, rhs),
         (CpuReadView::I32(lhs), CpuReadView::I32(rhs)) => dispatch!(I32, lhs, rhs),
         (CpuReadView::I64(lhs), CpuReadView::I64(rhs)) => dispatch!(I64, lhs, rhs),
         (CpuReadView::C32(lhs), CpuReadView::C32(rhs)) => dispatch!(C32, lhs, rhs),
@@ -1873,7 +1708,7 @@ where
 
 pub fn typed_mul<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar,
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
 {
     with_local_pool(|buffers| typed_mul_with_pool(buffers, lhs, rhs))
 }
@@ -1884,16 +1719,15 @@ pub(crate) fn typed_mul_with_pool<T>(
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar,
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
+        // SAFETY: mul_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
-        zip_map2_into(
+        mul_into(
             &mut out.view_mut(),
             &typed_view("mul", lhs)?,
             &typed_view("mul", rhs)?,
-            |x, y| x * y,
         )
         .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
@@ -1935,13 +1769,12 @@ where
     R: TensorRank,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
+        // SAFETY: mul_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
-        zip_map2_into(
+        mul_into(
             &mut out.view_mut(),
             &typed_view_from_view("mul", lhs)?,
             &typed_view_from_view("mul", rhs)?,
-            |x, y| x * y,
         )
         .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
@@ -2411,6 +2244,50 @@ mod tests {
             out.is_none(),
             "pure shared-batch elementwise should use the ordinary zip-map path"
         );
+    }
+
+    #[test]
+    fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materialization() {
+        let mut buffers = BufferPool::default();
+        let lhs_data: Vec<f64> = (0..24).map(|i| (i + 1) as f64).collect();
+        let rhs_data: Vec<f64> = (0..24).map(|i| (100 + i) as f64).collect();
+        let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
+            vec![2, 3, 4],
+            lhs_data.clone(),
+        ));
+        let rhs = Tensor::F64(TypedTensor::from_vec_col_major(
+            vec![4, 2, 3],
+            rhs_data.clone(),
+        ));
+
+        let out = broadcast_multiply_read_with_pool(
+            &mut buffers,
+            TensorRead::from_tensor(&lhs),
+            &[2, 3, 4],
+            &[0, 1, 2],
+            TensorRead::from_tensor(&rhs),
+            &[2, 3, 4],
+            &[2, 0, 1],
+        )
+        .unwrap()
+        .expect("same-rank permuted elementwise multiply should use fallback broadcast mul");
+
+        let expected: Vec<f64> = (0..4)
+            .flat_map(|k| {
+                let lhs_data = &lhs_data;
+                let rhs_data = &rhs_data;
+                (0..3).flat_map(move |j| {
+                    (0..2).map(move |i| {
+                        let lhs_offset = i + 2 * j + 6 * k;
+                        let rhs_offset = k + 4 * i + 8 * j;
+                        lhs_data[lhs_offset] * rhs_data[rhs_offset]
+                    })
+                })
+            })
+            .collect();
+
+        assert_eq!(out.shape(), &[2, 3, 4]);
+        assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
     }
 
     #[test]

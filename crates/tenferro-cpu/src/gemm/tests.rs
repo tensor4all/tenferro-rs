@@ -9,15 +9,18 @@ use super::blas_gemm::BlasGemm;
 use super::dot_general_blas_cached;
 #[cfg(feature = "cpu-faer")]
 use super::faer_gemm::FaerGemm;
-#[cfg(feature = "cpu-blas")]
+#[cfg(feature = "cpu-faer")]
+use super::{dot_general_faer_read_cached, strided_dot};
+#[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
 use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-faer")]
 use crate::CpuContext;
 #[cfg(feature = "cpu-blas")]
 use num_complex::Complex64;
-use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::RuntimeCacheControl;
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{DotGeneralConfig, TypedTensor};
+#[cfg(feature = "cpu-faer")]
+use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 #[test]
 fn try_fuse_dims_reversed_strides() {
@@ -152,6 +155,45 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
     let stats = cache.stats();
     assert_eq!(stats.entries, 1);
     assert!(stats.retained_bytes > 0);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
+    let lhs_source =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs_view = lhs_source.as_view().transpose_view([1, 0]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![3, 2],
+        vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
+    );
+    let rhs = Tensor::F64(rhs);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut buffers = BufferPool::new();
+    let mut cache = GemmAnalysisCache::default();
+    let ctx = CpuContext::with_threads(1);
+
+    let dispatch_count_before = strided_dot::test_dispatch_count();
+    let out = dot_general_faer_read_cached(
+        &mut buffers,
+        &mut cache,
+        Some(0),
+        &ctx,
+        TensorRead::from_view(TensorView::F64(lhs_view)),
+        TensorRead::from_tensor(&rhs),
+        &config,
+    )
+    .unwrap()
+    .expect("same-dtype f64 inputs should be handled directly");
+
+    assert!(strided_dot::test_dispatch_count() > dispatch_count_before);
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
 }
 
 #[cfg(feature = "cpu-blas")]

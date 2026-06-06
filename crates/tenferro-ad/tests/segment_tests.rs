@@ -3,7 +3,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::segment::{segment_exec_program, Segment};
 use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, GraphExecutor};
-use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorValue, TypedTensor};
 
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
@@ -16,6 +16,22 @@ fn scalar_extents(
     output_count: usize,
 ) -> Vec<Vec<tenferro_ops::ShapeExtent<tenferro_ops::dim_expr::DimExpr>>> {
     vec![Vec::new(); output_count]
+}
+
+fn const_shape(shape: &[usize]) -> Vec<tenferro_ops::dim_expr::DimExpr> {
+    shape
+        .iter()
+        .map(|&dim| tenferro_ops::dim_expr::DimExpr::Const(dim))
+        .collect()
+}
+
+fn exact_extents(
+    shape: &[usize],
+) -> Vec<tenferro_ops::ShapeExtent<tenferro_ops::dim_expr::DimExpr>> {
+    const_shape(shape)
+        .into_iter()
+        .map(tenferro_ops::ShapeExtent::exact)
+        .collect()
 }
 
 fn matmul_config() -> DotGeneralConfig {
@@ -247,6 +263,97 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cpu() {
 
     assert_tensor_vec_eq(&unsegmented, &segmented);
     assert_tensor_vec_eq(&segmented, &segmented_non_consuming);
+}
+
+fn terminal_noncompact_broadcast_multiply_program() -> ExecProgram {
+    let output_shape = vec![2, 2, 4, 3];
+    let output_exprs = const_shape(&output_shape);
+    let output_extents = exact_extents(&output_shape);
+
+    ExecProgram {
+        instructions: vec![
+            ExecInstruction {
+                op: ExecOp::BroadcastInDim {
+                    shape: output_exprs.clone(),
+                    dims: vec![1, 0, 3],
+                },
+                input_slots: vec![0],
+                output_slots: vec![2],
+                dtype: DType::F64,
+                output_shapes: vec![output_exprs.clone()].into(),
+                output_extents: vec![output_extents.clone()].into(),
+                last_use: vec![false],
+            },
+            ExecInstruction {
+                op: ExecOp::BroadcastInDim {
+                    shape: output_exprs.clone(),
+                    dims: vec![2, 3],
+                },
+                input_slots: vec![1],
+                output_slots: vec![3],
+                dtype: DType::F64,
+                output_shapes: vec![output_exprs.clone()].into(),
+                output_extents: vec![output_extents.clone()].into(),
+                last_use: vec![false],
+            },
+            ExecInstruction {
+                op: ExecOp::Multiply,
+                input_slots: vec![2, 3],
+                output_slots: vec![4],
+                dtype: DType::F64,
+                output_shapes: vec![output_exprs].into(),
+                output_extents: vec![output_extents].into(),
+                last_use: vec![true, true],
+            },
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![4],
+        n_slots: 5,
+    }
+}
+
+fn terminal_noncompact_broadcast_multiply_inputs() -> Vec<Tensor> {
+    vec![
+        f64_tensor(vec![2, 2, 3], (0..12).map(|idx| idx as f64 + 1.0).collect()),
+        f64_tensor(vec![4, 3], (0..12).map(|idx| idx as f64 + 101.0).collect()),
+    ]
+}
+
+#[test]
+fn segmented_value_dispatch_preserves_terminal_lazy_broadcast_multiply_view() {
+    let program = terminal_noncompact_broadcast_multiply_program();
+    let inputs = terminal_noncompact_broadcast_multiply_inputs();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let mut outputs = executor
+        .eval_exec_ir_non_consuming_values(&program, &inputs)
+        .unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        matches!(outputs[0], TensorValue::View(_)),
+        "terminal broadcast-multiply segment should preserve a lazy output view"
+    );
+
+    let output = outputs.pop().unwrap().to_tensor();
+    assert_eq!(output.shape(), &[2, 2, 4, 3]);
+    let Tensor::F64(output) = output else {
+        panic!("expected f64 output")
+    };
+    let lhs = inputs[0].as_slice::<f64>().unwrap();
+    let rhs = inputs[1].as_slice::<f64>().unwrap();
+    let actual = output.host_data();
+    for t in 0..3 {
+        for o in 0..4 {
+            for k in 0..2 {
+                for j in 0..2 {
+                    let out_idx = j + 2 * k + 4 * o + 16 * t;
+                    let lhs_idx = k + 2 * j + 4 * t;
+                    let rhs_idx = o + 4 * t;
+                    assert_eq!(actual[out_idx], lhs[lhs_idx] * rhs[rhs_idx]);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(feature = "cuda")]

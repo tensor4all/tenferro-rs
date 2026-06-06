@@ -20,6 +20,8 @@ use tenferro_tensor::{CacheStats, RuntimeCacheControl};
 mod blas_gemm;
 #[cfg(feature = "cpu-faer")]
 mod faer_gemm;
+#[cfg(feature = "cpu-faer")]
+mod strided_dot;
 
 #[cfg(feature = "cpu-blas")]
 use blas_gemm::BlasGemm;
@@ -709,7 +711,16 @@ pub(crate) fn dot_general_faer_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
+    T: FaerGemm
+        + PoolScalar
+        + Copy
+        + Clone
+        + Zero
+        + One
+        + PartialEq
+        + strided_einsum2::ScalarBase
+        + 'static,
+    strided_einsum2::backend::FaerBackend: strided_einsum2::Backend<T>,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
@@ -731,8 +742,26 @@ pub(crate) fn dot_general_faer_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
+    T: FaerGemm
+        + PoolScalar
+        + Copy
+        + Clone
+        + Zero
+        + One
+        + PartialEq
+        + strided_einsum2::ScalarBase
+        + 'static,
+    strided_einsum2::backend::FaerBackend: strided_einsum2::Backend<T>,
 {
+    if !lhs_conj && !rhs_conj {
+        return strided_dot::dot_general_strided_with_backend::<
+            _,
+            _,
+            _,
+            strided_einsum2::backend::FaerBackend,
+        >(buffers, lhs, rhs, config);
+    }
+
     if let Some(result) = typed_faer_gemm(
         buffers,
         cache,
@@ -789,6 +818,7 @@ pub(crate) fn dot_general_faer_read_cached(
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
 ) -> crate::Result<Option<crate::Tensor>> {
+    let _ = (cache, cache_slot, ctx);
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
             match (&lhs, &rhs) {
@@ -796,73 +826,49 @@ pub(crate) fn dot_general_faer_read_cached(
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
                 ) => {
-                    return typed_faer_gemm(
-                        buffers,
-                        cache,
-                        cache_slot,
-                        GemmAnalysisCacheKind::Direct,
-                        ctx,
-                        a,
-                        b,
-                        config,
-                        false,
-                        false,
-                    )
-                    .map(|result| result.map(crate::Tensor::$wrap));
+                    return strided_dot::dot_general_strided_with_backend::<
+                        _,
+                        _,
+                        _,
+                        strided_einsum2::backend::FaerBackend,
+                    >(buffers, a, b, config)
+                    .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::View(TensorView::$view(b)),
                 ) => {
-                    return typed_faer_gemm(
-                        buffers,
-                        cache,
-                        cache_slot,
-                        GemmAnalysisCacheKind::Direct,
-                        ctx,
-                        a,
-                        b,
-                        config,
-                        false,
-                        false,
-                    )
-                    .map(|result| result.map(crate::Tensor::$wrap));
+                    return strided_dot::dot_general_strided_with_backend::<
+                        _,
+                        _,
+                        _,
+                        strided_einsum2::backend::FaerBackend,
+                    >(buffers, a, b, config)
+                    .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::View(TensorView::$view(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
                 ) => {
-                    return typed_faer_gemm(
-                        buffers,
-                        cache,
-                        cache_slot,
-                        GemmAnalysisCacheKind::Direct,
-                        ctx,
-                        a,
-                        b,
-                        config,
-                        false,
-                        false,
-                    )
-                    .map(|result| result.map(crate::Tensor::$wrap));
+                    return strided_dot::dot_general_strided_with_backend::<
+                        _,
+                        _,
+                        _,
+                        strided_einsum2::backend::FaerBackend,
+                    >(buffers, a, b, config)
+                    .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::View(TensorView::$view(a)),
                     TensorRead::View(TensorView::$view(b)),
                 ) => {
-                    return typed_faer_gemm(
-                        buffers,
-                        cache,
-                        cache_slot,
-                        GemmAnalysisCacheKind::Direct,
-                        ctx,
-                        a,
-                        b,
-                        config,
-                        false,
-                        false,
-                    )
-                    .map(|result| result.map(crate::Tensor::$wrap));
+                    return strided_dot::dot_general_strided_with_backend::<
+                        _,
+                        _,
+                        _,
+                        strided_einsum2::backend::FaerBackend,
+                    >(buffers, a, b, config)
+                    .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 _ => {}
             }
