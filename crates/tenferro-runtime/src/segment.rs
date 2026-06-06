@@ -391,6 +391,17 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                                 return Ok(());
                             }
                         }
+                        if let Some(output) = try_execute_terminal_broadcast_multiply_value_segment(
+                            exec,
+                            slots,
+                            instructions,
+                            output_slots,
+                            &terminal_slots,
+                        )? {
+                            slots[output_slots[0]] = Some(ExecSlot::Value(output));
+                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+                            return Ok(());
+                        }
                         if let Some(output) = try_execute_broadcast_multiply_segment(
                             exec,
                             slots,
@@ -504,6 +515,61 @@ fn try_execute_broadcast_multiply_segment(
     let lhs_shape = resolve_tensor_shape_exprs(slots, &lhs_bc.input_slots, lhs_shape_exprs)?;
     let rhs_shape = resolve_tensor_shape_exprs(slots, &rhs_bc.input_slots, rhs_shape_exprs)?;
     Ok(exec.execute_broadcast_multiply(
+        get_read(slots, &lhs_bc.input_slots, 0)?,
+        &lhs_shape,
+        lhs_dims,
+        get_read(slots, &rhs_bc.input_slots, 0)?,
+        &rhs_shape,
+        rhs_dims,
+    )?)
+}
+
+fn try_execute_terminal_broadcast_multiply_value_segment(
+    exec: &mut dyn tenferro_tensor::BackendSession,
+    slots: &[Option<ExecSlot<'_>>],
+    instructions: &[ExecInstruction],
+    output_slots: &[usize],
+    terminal_slots: &[bool],
+) -> Result<Option<TensorValue>> {
+    let [output_slot] = output_slots else {
+        return Ok(None);
+    };
+    if !terminal_slots.get(*output_slot).copied().unwrap_or(false) {
+        return Ok(None);
+    }
+
+    let [lhs_bc, rhs_bc, multiply] = instructions else {
+        return Ok(None);
+    };
+    let ExecOp::BroadcastInDim {
+        shape: lhs_shape_exprs,
+        dims: lhs_dims,
+    } = &lhs_bc.op
+    else {
+        return Ok(None);
+    };
+    let ExecOp::BroadcastInDim {
+        shape: rhs_shape_exprs,
+        dims: rhs_dims,
+    } = &rhs_bc.op
+    else {
+        return Ok(None);
+    };
+    if !matches!(multiply.op, ExecOp::Multiply)
+        || lhs_bc.output_slots.len() != 1
+        || rhs_bc.output_slots.len() != 1
+        || multiply.output_slots.len() != 1
+        || multiply.input_slots.len() != 2
+        || multiply.input_slots[0] != lhs_bc.output_slots[0]
+        || multiply.input_slots[1] != rhs_bc.output_slots[0]
+        || output_slots != multiply.output_slots.as_slice()
+    {
+        return Ok(None);
+    }
+
+    let lhs_shape = resolve_tensor_shape_exprs(slots, &lhs_bc.input_slots, lhs_shape_exprs)?;
+    let rhs_shape = resolve_tensor_shape_exprs(slots, &rhs_bc.input_slots, rhs_shape_exprs)?;
+    Ok(exec.execute_broadcast_multiply_value(
         get_read(slots, &lhs_bc.input_slots, 0)?,
         &lhs_shape,
         lhs_dims,
