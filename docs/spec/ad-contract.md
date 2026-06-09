@@ -125,6 +125,35 @@ impl<Op: GraphOperation> LinearizedGraph<Op> {
    family registers an extension AD rule. Missing extension rules must report
    unsupported AD; they must not silently drop or zero gradients.
 
+## Complex AD convention
+
+tenferro follows the tidu/JAX-style complex AD convention.
+
+Forward mode treats complex primitives as real-linear maps. For a holomorphic
+elementwise map `f`, the JVP multiplies the tangent by the local derivative
+coefficient `f'(z)` without conjugating that coefficient.
+
+Reverse mode transposes real-linear maps under the real inner product
+`<a, b> = Re(conj(a) * b)`. Therefore the VJP for a holomorphic elementwise map
+uses the conjugated local derivative coefficient:
+
+```text
+primal: y = f(z)
+JVP:    dy = f'(z) * dz
+VJP:    dz_bar = y_bar * conj(f'(z))
+```
+
+The same rule applies to fixed derivative coefficients emitted by composite
+transpose rules. For example, if a binary holomorphic op emits a coefficient
+`c(x, y)` for one input in forward linearization, its transpose rule must
+multiply the output cotangent by `conj(c(x, y))` when the corresponding
+real-linear map is complex-valued. Do not conjugate those coefficients in JVP
+rules.
+
+This convention is the normative source for tenferro complex VJP behavior.
+Oracle comparisons and finite-difference tests must be interpreted under this
+real-inner-product convention.
+
 ## Owned by this document
 
 - `Primitive` trait signature
@@ -132,6 +161,7 @@ impl<Op: GraphOperation> LinearizedGraph<Op> {
 - Cotangent accumulation rule
 - Linear op rule
 - Primal reuse rule
+- Complex AD convention
 
 Other documents link here for the AD contract; they do not re-state
 these definitions.

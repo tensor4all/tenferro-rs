@@ -366,23 +366,22 @@ fn test_batched_complex_eigh() {
     let out = backend.eigh(&input).unwrap();
 
     assert_eq!(out.len(), 2);
+    assert_eq!(out[0].dtype(), DType::F64);
+    assert_eq!(out[1].dtype(), DType::C64);
     assert_eq!(out[0].shape(), &[2, 2]);
     assert_eq!(out[1].shape(), &[2, 2, 2]);
 
     for batch_idx in 0..2 {
-        let values = batch_vector_c64_from_tensor(&out[0], 2, batch_idx);
+        let values = batch_vector_f64_from_tensor(&out[0], 2, batch_idx);
         let vectors = batch_matrix_c64_from_tensor(&out[1], 2, 2, batch_idx);
         let recon = matmul_c64(
-            &matmul_c64(&vectors, &diag_c64(&values), 2, 2, 2),
+            &matmul_c64(&vectors, &diag_c64_from_real(&values), 2, 2, 2),
             &conjugate_transpose_c64(&vectors, 2, 2),
             2,
             2,
             2,
         );
         let expected = batch_matrix_c64_from_tensor(&input, 2, 2, batch_idx);
-        for value in &values {
-            assert_f64_close_tol(value.im, 0.0, 1.0e-12);
-        }
         for (actual, expected) in recon.iter().zip(expected.iter()) {
             assert_c64_close_tol(*actual, *expected, 1.0e-10);
         }

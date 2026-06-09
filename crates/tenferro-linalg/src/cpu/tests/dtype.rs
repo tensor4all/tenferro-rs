@@ -72,6 +72,14 @@ fn diag_c32(values: &[Complex32]) -> Vec<Complex32> {
     out
 }
 
+fn diag_c32_from_real(values: &[f32]) -> Vec<Complex32> {
+    let mut out = vec![Complex32::new(0.0, 0.0); values.len() * values.len()];
+    for (i, value) in values.iter().enumerate() {
+        out[col_major_index(values.len(), i, i)] = Complex32::new(*value, 0.0);
+    }
+    out
+}
+
 fn f32_data(tensor: &Tensor) -> &[f32] {
     match tensor {
         Tensor::F32(inner) => inner.host_data(),
@@ -307,9 +315,17 @@ fn cpu_linalg_accepts_c32_happy_paths() {
             spd.clone(),
         )))
         .unwrap();
+    assert_eq!(eigh[0].dtype(), DType::F32);
+    assert_eq!(eigh[1].dtype(), DType::C32);
     assert_c32_slice_close(
         &matmul_c32(
-            &matmul_c32(c32_data(&eigh[1]), &diag_c32(c32_data(&eigh[0])), 2, 2, 2),
+            &matmul_c32(
+                c32_data(&eigh[1]),
+                &diag_c32_from_real(f32_data(&eigh[0])),
+                2,
+                2,
+                2,
+            ),
             &conjugate_transpose_c32(c32_data(&eigh[1]), 2, 2),
             2,
             2,

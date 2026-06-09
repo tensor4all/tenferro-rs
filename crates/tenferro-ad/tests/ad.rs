@@ -542,6 +542,41 @@ fn assert_close_slice_c64(actual: &[Complex64], expected: &[Complex64]) {
     }
 }
 
+fn complex_unary_vjp_key(op: &StdTensorOp) -> TensorInputKey {
+    let tag = match op {
+        StdTensorOp::Exp => 1,
+        StdTensorOp::Log => 2,
+        StdTensorOp::Sin => 3,
+        StdTensorOp::Cos => 4,
+        StdTensorOp::Tanh => 5,
+        StdTensorOp::Sqrt => 6,
+        StdTensorOp::Rsqrt => 7,
+        StdTensorOp::Expm1 => 8,
+        StdTensorOp::Log1p => 9,
+        _ => panic!("unexpected complex unary VJP op: {op:?}"),
+    };
+    tensor_input_key(91_000 + tag)
+}
+
+fn assert_complex_unary_vjp(op: StdTensorOp, derivative: impl Fn(Complex64) -> Complex64) {
+    let input_key = complex_unary_vjp_key(&op);
+    let input_data = vec![Complex64::new(0.5, 0.75), Complex64::new(-0.25, 0.4)];
+    let cotangent_data = vec![Complex64::new(0.25, -1.2), Complex64::new(-0.5, 0.75)];
+    let grad = transpose_primal_unary_op_with_inputs(
+        op,
+        input_key,
+        c64_tensor(vec![2], input_data.clone()),
+        c64_tensor(vec![2], cotangent_data.clone()),
+    );
+
+    let expected: Vec<_> = input_data
+        .iter()
+        .zip(cotangent_data.iter())
+        .map(|(&x, &ct)| ct * derivative(x).conj())
+        .collect();
+    assert_close_slice_c64(get_c64_data(&grad), &expected);
+}
+
 fn assert_jvp_matches_finite_diff(
     actual: &[f64],
     base: &[f64],
@@ -917,6 +952,82 @@ fn scale_complex_eval_and_grad_complex_sum() {
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice_c64(get_c64_data(&grad_eval), &[factor.conj(), factor.conj()]);
+}
+
+#[test]
+fn complex_unary_vjps_conjugate_holomorphic_derivatives() {
+    assert_complex_unary_vjp(StdTensorOp::Exp, |x| x.exp());
+    assert_complex_unary_vjp(StdTensorOp::Log, |x| Complex64::new(1.0, 0.0) / x);
+    assert_complex_unary_vjp(StdTensorOp::Sin, |x| x.cos());
+    assert_complex_unary_vjp(StdTensorOp::Cos, |x| -x.sin());
+    assert_complex_unary_vjp(StdTensorOp::Tanh, |x| {
+        Complex64::new(1.0, 0.0) - x.tanh() * x.tanh()
+    });
+    assert_complex_unary_vjp(StdTensorOp::Sqrt, |x| {
+        Complex64::new(1.0, 0.0) / (Complex64::new(2.0, 0.0) * x.sqrt())
+    });
+    assert_complex_unary_vjp(StdTensorOp::Rsqrt, |x| {
+        -Complex64::new(1.0, 0.0) / (Complex64::new(2.0, 0.0) * x * x.sqrt())
+    });
+    assert_complex_unary_vjp(StdTensorOp::Expm1, |x| x.exp());
+    assert_complex_unary_vjp(StdTensorOp::Log1p, |x| {
+        Complex64::new(1.0, 0.0) / (Complex64::new(1.0, 0.0) + x)
+    });
+}
+
+#[test]
+fn complex_div_and_pow_vjps_conjugate_holomorphic_coefficients() {
+    let x_data = vec![Complex64::new(0.8, 0.35), Complex64::new(1.1, -0.2)];
+    let y_data = vec![Complex64::new(1.5, -0.25), Complex64::new(0.7, 0.45)];
+    let cotangent_data = vec![Complex64::new(-0.3, 0.9), Complex64::new(1.25, -0.5)];
+
+    let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], x_data.clone()));
+    let y = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], y_data.clone()));
+    let cotangent =
+        TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], cotangent_data.clone()));
+    let quotient = x.div(&y);
+
+    let div_vjp_x = eval_tensor(quotient.vjp(&x, &cotangent));
+    let div_vjp_y = eval_tensor(quotient.vjp(&y, &cotangent));
+
+    let expected_div_x: Vec<_> = y_data
+        .iter()
+        .zip(cotangent_data.iter())
+        .map(|(&y, &ct)| ct * (Complex64::new(1.0, 0.0) / y).conj())
+        .collect();
+    let expected_div_y: Vec<_> = x_data
+        .iter()
+        .zip(y_data.iter())
+        .zip(cotangent_data.iter())
+        .map(|((&x, &y), &ct)| ct * (-(x / (y * y))).conj())
+        .collect();
+    assert_close_slice_c64(get_c64_data(&div_vjp_x), &expected_div_x);
+    assert_close_slice_c64(get_c64_data(&div_vjp_y), &expected_div_y);
+
+    let pow = x.pow(&y);
+    let pow_vjp_x = eval_tensor(pow.vjp(&x, &cotangent));
+    let pow_vjp_y = eval_tensor(pow.vjp(&y, &cotangent));
+
+    let expected_pow_x: Vec<_> = x_data
+        .iter()
+        .zip(y_data.iter())
+        .zip(cotangent_data.iter())
+        .map(|((&x, &y), &ct)| {
+            let pow_xy = x.powc(y);
+            ct * (y * pow_xy / x).conj()
+        })
+        .collect();
+    let expected_pow_y: Vec<_> = x_data
+        .iter()
+        .zip(y_data.iter())
+        .zip(cotangent_data.iter())
+        .map(|((&x, &y), &ct)| {
+            let pow_xy = x.powc(y);
+            ct * (x.ln() * pow_xy).conj()
+        })
+        .collect();
+    assert_close_slice_c64(get_c64_data(&pow_vjp_x), &expected_pow_x);
+    assert_close_slice_c64(get_c64_data(&pow_vjp_y), &expected_pow_y);
 }
 
 #[test]

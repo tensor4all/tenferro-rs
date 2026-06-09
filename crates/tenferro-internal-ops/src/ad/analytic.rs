@@ -1,3 +1,5 @@
+use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::{conjugate_primal_if_any_dtype_complex, dtype_of_or_real};
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
@@ -98,6 +100,27 @@ fn emit_linear_div_fixed_denominator(
             active_mask: vec![true, false],
         },
     )[0]
+}
+
+fn conjugate_for_unary_input_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    inputs: &[ValueRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
+) -> ValueRef<StdTensorOp> {
+    let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    conjugate_primal_if_any_dtype_complex(builder, input, &[dtype])
+}
+
+fn conjugate_for_binary_input_dtypes(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    inputs: &[ValueRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
+) -> ValueRef<StdTensorOp> {
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    conjugate_primal_if_any_dtype_complex(builder, input, &[lhs_dtype, rhs_dtype])
 }
 
 fn unary_is_active(mode: &OperationRole) -> bool {
@@ -363,6 +386,7 @@ pub fn transpose_exp(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -370,11 +394,9 @@ pub fn transpose_exp(
     match cotangent_out[0] {
         Some(ct) => {
             let exp_x = emit_fixed_unary(builder, StdTensorOp::Exp, inputs[0].clone());
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(exp_x),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(exp_x), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -385,15 +407,18 @@ pub fn transpose_log(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
     }
     match cotangent_out[0] {
         Some(ct) => {
+            let denominator =
+                conjugate_for_unary_input_dtype(builder, inputs[0].clone(), inputs, ctx);
             let out = builder.add_operation(
                 StdTensorOp::Div,
-                vec![ValueRef::Local(ct), inputs[0].clone()],
+                vec![ValueRef::Local(ct), denominator],
                 OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
@@ -409,6 +434,7 @@ pub fn transpose_sin(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -416,11 +442,9 @@ pub fn transpose_sin(
     match cotangent_out[0] {
         Some(ct) => {
             let cos_x = emit_fixed_unary(builder, StdTensorOp::Cos, inputs[0].clone());
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(cos_x),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(cos_x), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -431,6 +455,7 @@ pub fn transpose_cos(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -439,11 +464,9 @@ pub fn transpose_cos(
         Some(ct) => {
             let sin_x = emit_fixed_unary(builder, StdTensorOp::Sin, inputs[0].clone());
             let neg_sin_x = emit_fixed_neg(builder, ValueRef::Local(sin_x));
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(neg_sin_x),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(neg_sin_x), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -454,6 +477,7 @@ pub fn transpose_tanh(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -465,11 +489,9 @@ pub fn transpose_tanh(
             let one = emit_one_like_fixed(builder, inputs[0].clone());
             let neg_tanh_sq = emit_fixed_neg(builder, ValueRef::Local(tanh_sq));
             let coeff = emit_fixed_add(builder, ValueRef::Local(one), ValueRef::Local(neg_tanh_sq));
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(coeff),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(coeff), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -480,6 +502,7 @@ pub fn transpose_sqrt(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -489,9 +512,11 @@ pub fn transpose_sqrt(
             let sqrt_x = emit_fixed_unary(builder, StdTensorOp::Sqrt, inputs[0].clone());
             let two_sqrt_x =
                 emit_fixed_add(builder, ValueRef::Local(sqrt_x), ValueRef::Local(sqrt_x));
+            let denominator =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(two_sqrt_x), inputs, ctx);
             let out = builder.add_operation(
                 StdTensorOp::Div,
-                vec![ValueRef::Local(ct), ValueRef::Local(two_sqrt_x)],
+                vec![ValueRef::Local(ct), denominator],
                 OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },
@@ -507,6 +532,7 @@ pub fn transpose_rsqrt(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -521,11 +547,9 @@ pub fn transpose_rsqrt(
                 ValueRef::Local(neg_rsqrt_x),
                 ValueRef::Local(two_x),
             );
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(coeff),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(coeff), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -536,6 +560,7 @@ pub fn transpose_pow(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -558,7 +583,8 @@ pub fn transpose_pow(
         );
         let pow_over_x = emit_fixed_div(builder, ValueRef::Local(pow_xy), inputs[0].clone());
         let coeff = emit_fixed_mul(builder, inputs[1].clone(), ValueRef::Local(pow_over_x));
-        result[0] = Some(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), ct));
+        let coeff = conjugate_for_binary_input_dtypes(builder, ValueRef::Local(coeff), inputs, ctx);
+        result[0] = Some(emit_linear_mul_fixed(builder, coeff, ct));
     }
 
     if active_mask[1] {
@@ -570,7 +596,8 @@ pub fn transpose_pow(
             inputs[1].clone(),
         );
         let coeff = emit_fixed_mul(builder, ValueRef::Local(log_x), ValueRef::Local(pow_xy));
-        result[1] = Some(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), ct));
+        let coeff = conjugate_for_binary_input_dtypes(builder, ValueRef::Local(coeff), inputs, ctx);
+        result[1] = Some(emit_linear_mul_fixed(builder, coeff, ct));
     }
 
     result
@@ -581,6 +608,7 @@ pub fn transpose_expm1(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -588,11 +616,9 @@ pub fn transpose_expm1(
     match cotangent_out[0] {
         Some(ct) => {
             let exp_x = emit_fixed_unary(builder, StdTensorOp::Exp, inputs[0].clone());
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(exp_x),
-                ct,
-            ))]
+            let coeff =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(exp_x), inputs, ctx);
+            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
         }
         None => vec![None],
     }
@@ -603,6 +629,7 @@ pub fn transpose_log1p(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
@@ -611,9 +638,11 @@ pub fn transpose_log1p(
         Some(ct) => {
             let one = emit_one_like_fixed(builder, inputs[0].clone());
             let denom = emit_fixed_add(builder, inputs[0].clone(), ValueRef::Local(one));
+            let denominator =
+                conjugate_for_unary_input_dtype(builder, ValueRef::Local(denom), inputs, ctx);
             let out = builder.add_operation(
                 StdTensorOp::Div,
-                vec![ValueRef::Local(ct), ValueRef::Local(denom)],
+                vec![ValueRef::Local(ct), denominator],
                 OperationRole::Linearized {
                     active_mask: vec![true, false],
                 },

@@ -462,7 +462,7 @@ fn eigh_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
     let n = shape[0].clone();
     let batch = &shape[2..];
     vec![
-        (dtype, vector_shape(n.clone(), batch)),
+        (singular_values_dtype(dtype), vector_shape(n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
     ]
 }

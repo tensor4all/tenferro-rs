@@ -111,6 +111,9 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         vec![3, 3, 2],
         vec![1.0_f64; 18],
     ));
+    let complex_square = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4]),
+    ));
     let ints = TracedTensor::from_tensor_concrete_shape(Tensor::I64(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]),
     ));
@@ -131,6 +134,11 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
     let (eigh_values, eigh_vectors) = tenferro_linalg::eigh(&square).unwrap();
     assert_eq!(eigh_values.concrete_shape(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape(), vec![3, 3, 2]);
+
+    let (complex_eigh_values, complex_eigh_vectors) =
+        tenferro_linalg::eigh(&complex_square).unwrap();
+    assert_eq!(complex_eigh_values.dtype, DType::F64);
+    assert_eq!(complex_eigh_vectors.dtype, DType::C64);
 }
 
 #[test]

@@ -2,6 +2,7 @@ use crate::backend::LinalgBackend;
 
 use super::linalg;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, DType, Error, Tensor, TensorElementwise, TensorStructural,
@@ -631,9 +632,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                            .map(eigh_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                            .map(eigh_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("eigh", input.dtype())),
                     })
                 }
@@ -650,10 +651,12 @@ impl LinalgBackend for CpuBackend {
                             .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                         Tensor::F64(t) => linalg::blas::eigh(buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-                        Tensor::C32(t) => linalg::blas::eigh(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-                        Tensor::C64(t) => linalg::blas::eigh(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                        Tensor::C32(t) => {
+                            linalg::blas::eigh(buffers, t).map(eigh_c32_outputs_to_public_tensors)
+                        }
+                        Tensor::C64(t) => {
+                            linalg::blas::eigh(buffers, t).map(eigh_c64_outputs_to_public_tensors)
+                        }
                         _ => Err(unsupported_dtype("eigh", input.dtype())),
                     })
                 }
@@ -966,6 +969,44 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
         Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
         Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
     }
+}
+
+fn complex32_real_part_tensor(values: TypedTensor<Complex32>) -> TypedTensor<f32> {
+    let mut out = TypedTensor::from_vec_col_major(
+        values.shape().to_vec(),
+        values.host_data().iter().map(|value| value.re).collect(),
+    );
+    out.placement = values.placement.clone();
+    out
+}
+
+fn complex64_real_part_tensor(values: TypedTensor<Complex64>) -> TypedTensor<f64> {
+    let mut out = TypedTensor::from_vec_col_major(
+        values.shape().to_vec(),
+        values.host_data().iter().map(|value| value.re).collect(),
+    );
+    out.placement = values.placement.clone();
+    out
+}
+
+fn eigh_c32_outputs_to_public_tensors(outputs: Vec<TypedTensor<Complex32>>) -> Vec<Tensor> {
+    let mut outputs = outputs.into_iter();
+    let values = outputs.next().expect("eigh returns eigenvalues");
+    let vectors = outputs.next().expect("eigh returns eigenvectors");
+    vec![
+        Tensor::F32(complex32_real_part_tensor(values)),
+        Tensor::C32(vectors),
+    ]
+}
+
+fn eigh_c64_outputs_to_public_tensors(outputs: Vec<TypedTensor<Complex64>>) -> Vec<Tensor> {
+    let mut outputs = outputs.into_iter();
+    let values = outputs.next().expect("eigh returns eigenvalues");
+    let vectors = outputs.next().expect("eigh returns eigenvectors");
+    vec![
+        Tensor::F64(complex64_real_part_tensor(values)),
+        Tensor::C64(vectors),
+    ]
 }
 
 fn apply_lu_pivots_cpu(
