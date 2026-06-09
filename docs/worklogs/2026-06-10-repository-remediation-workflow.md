@@ -44,6 +44,10 @@ remediation of repository-rule violations. The workflow is linked from
   alive through artificial references. This was added after reviewing an
   automated patch that otherwise preserved a dead helper only to avoid an
   unused-code warning.
+- After replacing graph compile-cache fingerprints, add a rule that cache-key
+  remediations must preserve exact equality and cannot use hash-only identity
+  unless collisions are still resolved by structural equality or an equivalent
+  payload-equality contract.
 
 ## Rejected Alternatives
 
@@ -69,6 +73,9 @@ remediation of repository-rule violations. The workflow is linked from
 - During the runtime/performance pass, verified that the obsolete-helper rule
   matched the actual integration review by removing the replaced einsum cost
   helper and rerunning focused tests.
+- During the compile-cache pass, verified the exact-equality rule with an
+  extension payload-hash collision test that still misses the cache when
+  `payload_eq` is false.
 
 ## Residual Risks
 
