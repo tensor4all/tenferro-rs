@@ -60,7 +60,7 @@ Status values:
 | #13 segment later-instruction scans | Auto Fix | fixed |
 | #16 publishable internal `tenferro_ops` crate | Design Gate | design-gated |
 | #19 public tensor representation hooks | Design Gate | design-gated |
-| #20 `ReduceProd` zero-input AD | Auto Fix | remaining-auto |
+| #20 `ReduceProd` zero-input AD | Auto Fix | fixed |
 | #21 broad indexing AD coverage | Verify First | verify-first |
 | #29 README ROCm support overclaim | Auto Fix | fixed |
 | #32 public `TracedTensor` fields | Design Gate | design-gated |
@@ -156,6 +156,14 @@ Implemented:
 - Added a regression for `x=0, y=2` in the traced gradient path, including
   finite-difference verification for the base cotangent.
 
+## Sixth Batch: ReduceProd Zero AD
+
+Implemented:
+
+- Replaced `ReduceProd` AD coefficients of the form `product / input` with a
+  zero-safe coefficient builder used by both JVP and VJP.
+- Added single-zero and multiple-zero regression coverage for reduced axes.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -175,6 +183,7 @@ Implemented:
 - `cargo test -p tenferro-runtime lazy`
 - `cargo test -p tenferro-runtime value`
 - `cargo test -p tenferro-ad grad_pow`
+- `cargo test -p tenferro-ad reduce_prod_ --test ad`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.

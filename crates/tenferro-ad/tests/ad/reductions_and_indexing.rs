@@ -27,6 +27,52 @@ fn test_reduce_prod_jvp() {
 }
 
 #[test]
+fn reduce_prod_jvp_handles_zero_containing_inputs() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![3usize];
+    let (graph, input_key, output_key) = build_unary_graph(op, tensor_input_key(60_006));
+    let x_data = vec![0.0, 2.0, 3.0];
+    let dx_data = vec![7.0, 11.0, 13.0];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), x_data.clone()),
+    );
+
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(input_shape, dx_data),
+    );
+
+    assert_close_slice(get_f64_data(&tangent), &[42.0]);
+}
+
+#[test]
+fn reduce_prod_jvp_returns_zero_with_multiple_reduced_zeros() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![3usize];
+    let (graph, input_key, output_key) = build_unary_graph(op, tensor_input_key(60_007));
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), vec![0.0, 2.0, 0.0]),
+    );
+
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(input_shape, vec![7.0, 11.0, 13.0]),
+    );
+
+    assert_close_slice(get_f64_data(&tangent), &[0.0]);
+}
+
+#[test]
 fn test_reduce_prod_vjp() {
     let op = StdTensorOp::ReduceProd { axes: vec![0] };
     let input_shape = vec![2usize, 3];
@@ -47,6 +93,23 @@ fn test_reduce_prod_vjp() {
             .map(|(value, weight)| value * weight)
             .sum()
     });
+}
+
+#[test]
+fn reduce_prod_vjp_handles_single_and_multiple_reduced_zeros() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![2usize, 3];
+    let input_key = tensor_input_key(60_008);
+    let x_data = vec![0.0, 2.0, 3.0, 4.0, 0.0, 0.0];
+    let cotangent = vec![0.5, -1.0, 2.0];
+    let grad = transpose_primal_unary_op_with_inputs(
+        op,
+        input_key,
+        f64_tensor(input_shape, x_data),
+        f64_tensor(vec![3], cotangent),
+    );
+
+    assert_close_slice(get_f64_data(&grad), &[1.0, 0.0, -4.0, -3.0, 0.0, 0.0]);
 }
 
 #[test]
