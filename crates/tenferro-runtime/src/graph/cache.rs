@@ -1,4 +1,3 @@
-use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -7,7 +6,7 @@ use lru::LruCache;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_tensor::CacheStats;
 
-use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
 
 /// Default capacity for compiled graph programs retained by a [`GraphCompiler`](super::GraphCompiler).
 // Public constant kept as the documented default; the crate-local alias below
@@ -67,7 +66,7 @@ pub struct GraphExecutorCacheStats {
 /// Cache key derived from compiled graph topology and execution metadata.
 #[derive(Clone, Debug)]
 pub(crate) struct CacheKey {
-    fingerprint: String,
+    fingerprint: ExecProgramKey,
     extensions: Vec<Arc<dyn ExtensionOp>>,
 }
 
@@ -94,9 +93,8 @@ impl Hash for CacheKey {
 }
 
 pub(crate) fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
-    let mut fingerprint = String::new();
     let mut extensions = Vec::new();
-    write_exec_program_fingerprint(exec, &mut fingerprint, &mut extensions);
+    let fingerprint = exec_program_key(exec, &mut extensions);
     CacheKey {
         fingerprint,
         extensions,
@@ -105,62 +103,263 @@ pub(crate) fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 
 fn cache_key_retained_bytes(key: &CacheKey) -> usize {
     size_of::<CacheKey>()
-        + key.fingerprint.capacity()
+        + exec_program_key_retained_bytes(&key.fingerprint)
         + key.extensions.capacity() * size_of::<Arc<dyn ExtensionOp>>()
 }
 
-fn write_exec_program_fingerprint(
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ExecProgramKey {
+    instructions: Vec<ExecInstructionKey>,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    n_slots: usize,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ExecInstructionKey {
+    op: ExecOpKey,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    dtype: tenferro_tensor::DType,
+    output_shapes: ExecOutputShapes,
+    output_extents: ExecOutputExtents,
+    last_use: Vec<bool>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+enum ExecOpKey {
+    Transpose {
+        perm: Vec<usize>,
+    },
+    Reshape {
+        shape: Vec<tenferro_ops::dim_expr::DimExpr>,
+    },
+    BroadcastInDim {
+        shape: Vec<tenferro_ops::dim_expr::DimExpr>,
+        dims: Vec<usize>,
+    },
+    Convert {
+        to: tenferro_tensor::DType,
+    },
+    Constant {
+        dtype: tenferro_tensor::DType,
+        bytes: Vec<u8>,
+    },
+    DotGeneral(tenferro_tensor::DotGeneralConfig),
+    DotGeneralWithConj {
+        config: tenferro_tensor::DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    },
+    ReduceSum {
+        axes: Vec<usize>,
+    },
+    ExtractDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
+    EmbedDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
+    Tril {
+        k: i64,
+    },
+    Triu {
+        k: i64,
+    },
+    Add,
+    Multiply,
+    Negate,
+    Conj,
+    Divide,
+    Abs,
+    Sign,
+    Maximum,
+    Minimum,
+    Compare(tenferro_tensor::CompareDir),
+    Select,
+    Clamp,
+    Exp,
+    Log,
+    Sin,
+    Cos,
+    Tanh,
+    Sqrt,
+    Rsqrt,
+    Pow,
+    Expm1,
+    Log1p,
+    Gather(tenferro_tensor::GatherConfig),
+    GatherDynamicSliceSizes {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<tenferro_ops::dim_expr::DimExpr>,
+    },
+    Scatter(tenferro_tensor::ScatterConfig),
+    Slice(tenferro_tensor::SliceConfig),
+    DynamicSlice {
+        slice_sizes: Vec<usize>,
+    },
+    DynamicUpdateSlice,
+    Pad(tenferro_tensor::PadConfig),
+    Concatenate {
+        axis: usize,
+    },
+    Reverse {
+        axes: Vec<usize>,
+    },
+    ShapeOf {
+        axis: usize,
+    },
+    DynamicTruncate {
+        axis: usize,
+    },
+    PadToMatch {
+        axis: usize,
+    },
+    ReduceProd {
+        axes: Vec<usize>,
+    },
+    ReduceMax {
+        axes: Vec<usize>,
+    },
+    ReduceMin {
+        axes: Vec<usize>,
+    },
+    Extension {
+        family_id: &'static str,
+        payload_hash: u64,
+    },
+}
+
+fn exec_program_key(
     exec: &ExecProgram,
-    out: &mut String,
     extensions: &mut Vec<Arc<dyn ExtensionOp>>,
-) {
-    let _ = write!(
-        out,
-        "program inputs={:?}; outputs={:?}; n_slots={}; instructions=[",
-        exec.input_slots, exec.output_slots, exec.n_slots
-    );
-    for inst in &exec.instructions {
-        write_exec_instruction_fingerprint(inst, out, extensions);
+) -> ExecProgramKey {
+    ExecProgramKey {
+        instructions: exec
+            .instructions
+            .iter()
+            .map(|inst| exec_instruction_key(inst, extensions))
+            .collect(),
+        input_slots: exec.input_slots.clone(),
+        output_slots: exec.output_slots.clone(),
+        n_slots: exec.n_slots,
     }
-    out.push(']');
 }
 
-fn write_exec_instruction_fingerprint(
+fn exec_instruction_key(
     inst: &ExecInstruction,
-    out: &mut String,
     extensions: &mut Vec<Arc<dyn ExtensionOp>>,
-) {
-    let _ = write!(
-        out,
-        "inst inputs={:?}; outputs={:?}; dtype={:?}; shapes={:?}; extents={:?}; last_use={:?}; op=",
-        inst.input_slots,
-        inst.output_slots,
-        inst.dtype,
-        inst.output_shapes,
-        inst.output_extents,
-        inst.last_use
-    );
-    write_exec_op_fingerprint(&inst.op, out, extensions);
-    out.push(';');
+) -> ExecInstructionKey {
+    ExecInstructionKey {
+        op: exec_op_key(&inst.op, extensions),
+        input_slots: inst.input_slots.clone(),
+        output_slots: inst.output_slots.clone(),
+        dtype: inst.dtype,
+        output_shapes: inst.output_shapes.clone(),
+        output_extents: inst.output_extents.clone(),
+        last_use: inst.last_use.clone(),
+    }
 }
 
-fn write_exec_op_fingerprint(
-    op: &ExecOp,
-    out: &mut String,
-    extensions: &mut Vec<Arc<dyn ExtensionOp>>,
-) {
+fn exec_op_key(op: &ExecOp, extensions: &mut Vec<Arc<dyn ExtensionOp>>) -> ExecOpKey {
     match op {
+        ExecOp::Transpose { perm } => ExecOpKey::Transpose { perm: perm.clone() },
+        ExecOp::Reshape { shape } => ExecOpKey::Reshape {
+            shape: shape.clone(),
+        },
+        ExecOp::BroadcastInDim { shape, dims } => ExecOpKey::BroadcastInDim {
+            shape: shape.clone(),
+            dims: dims.clone(),
+        },
+        ExecOp::Convert { to } => ExecOpKey::Convert { to: *to },
+        ExecOp::Constant { dtype, bytes } => ExecOpKey::Constant {
+            dtype: *dtype,
+            bytes: bytes.clone(),
+        },
+        ExecOp::DotGeneral(config) => ExecOpKey::DotGeneral(config.clone()),
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => ExecOpKey::DotGeneralWithConj {
+            config: config.clone(),
+            lhs_conj: *lhs_conj,
+            rhs_conj: *rhs_conj,
+        },
+        ExecOp::ReduceSum { axes } => ExecOpKey::ReduceSum { axes: axes.clone() },
+        ExecOp::ExtractDiag { axis_a, axis_b } => ExecOpKey::ExtractDiag {
+            axis_a: *axis_a,
+            axis_b: *axis_b,
+        },
+        ExecOp::EmbedDiag { axis_a, axis_b } => ExecOpKey::EmbedDiag {
+            axis_a: *axis_a,
+            axis_b: *axis_b,
+        },
+        ExecOp::Tril { k } => ExecOpKey::Tril { k: *k },
+        ExecOp::Triu { k } => ExecOpKey::Triu { k: *k },
+        ExecOp::Add => ExecOpKey::Add,
+        ExecOp::Multiply => ExecOpKey::Multiply,
+        ExecOp::Negate => ExecOpKey::Negate,
+        ExecOp::Conj => ExecOpKey::Conj,
+        ExecOp::Divide => ExecOpKey::Divide,
+        ExecOp::Abs => ExecOpKey::Abs,
+        ExecOp::Sign => ExecOpKey::Sign,
+        ExecOp::Maximum => ExecOpKey::Maximum,
+        ExecOp::Minimum => ExecOpKey::Minimum,
+        ExecOp::Compare(dir) => ExecOpKey::Compare(dir.clone()),
+        ExecOp::Select => ExecOpKey::Select,
+        ExecOp::Clamp => ExecOpKey::Clamp,
+        ExecOp::Exp => ExecOpKey::Exp,
+        ExecOp::Log => ExecOpKey::Log,
+        ExecOp::Sin => ExecOpKey::Sin,
+        ExecOp::Cos => ExecOpKey::Cos,
+        ExecOp::Tanh => ExecOpKey::Tanh,
+        ExecOp::Sqrt => ExecOpKey::Sqrt,
+        ExecOp::Rsqrt => ExecOpKey::Rsqrt,
+        ExecOp::Pow => ExecOpKey::Pow,
+        ExecOp::Expm1 => ExecOpKey::Expm1,
+        ExecOp::Log1p => ExecOpKey::Log1p,
+        ExecOp::Gather(config) => ExecOpKey::Gather(config.clone()),
+        ExecOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => ExecOpKey::GatherDynamicSliceSizes {
+            offset_dims: offset_dims.clone(),
+            collapsed_slice_dims: collapsed_slice_dims.clone(),
+            start_index_map: start_index_map.clone(),
+            index_vector_dim: *index_vector_dim,
+            slice_sizes: slice_sizes.clone(),
+        },
+        ExecOp::Scatter(config) => ExecOpKey::Scatter(config.clone()),
+        ExecOp::Slice(config) => ExecOpKey::Slice(config.clone()),
+        ExecOp::DynamicSlice { slice_sizes } => ExecOpKey::DynamicSlice {
+            slice_sizes: slice_sizes.clone(),
+        },
+        ExecOp::DynamicUpdateSlice => ExecOpKey::DynamicUpdateSlice,
+        ExecOp::Pad(config) => ExecOpKey::Pad(config.clone()),
+        ExecOp::Concatenate { axis } => ExecOpKey::Concatenate { axis: *axis },
+        ExecOp::Reverse { axes } => ExecOpKey::Reverse { axes: axes.clone() },
+        ExecOp::ShapeOf { axis } => ExecOpKey::ShapeOf { axis: *axis },
+        ExecOp::DynamicTruncate { axis } => ExecOpKey::DynamicTruncate { axis: *axis },
+        ExecOp::PadToMatch { axis } => ExecOpKey::PadToMatch { axis: *axis },
+        ExecOp::ReduceProd { axes } => ExecOpKey::ReduceProd { axes: axes.clone() },
+        ExecOp::ReduceMax { axes } => ExecOpKey::ReduceMax { axes: axes.clone() },
+        ExecOp::ReduceMin { axes } => ExecOpKey::ReduceMin { axes: axes.clone() },
         ExecOp::Extension(extension) => {
-            let payload_hash = extension_payload_hash(extension.as_ref());
-            let _ = write!(
-                out,
-                "Extension(family_id={:?}, payload_hash={payload_hash})",
-                extension.family_id()
-            );
+            let key = ExecOpKey::Extension {
+                family_id: extension.family_id(),
+                payload_hash: extension_payload_hash(extension.as_ref()),
+            };
             extensions.push(Arc::clone(extension));
-        }
-        other => {
-            let _ = write!(out, "{other:?}");
+            key
         }
     }
 }
@@ -197,6 +396,131 @@ fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
 
 fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
     values.iter().map(vec_retained_bytes).sum()
+}
+
+fn exec_program_key_retained_bytes(key: &ExecProgramKey) -> usize {
+    size_of::<ExecProgramKey>()
+        + vec_retained_bytes(&key.instructions)
+        + key
+            .instructions
+            .iter()
+            .map(exec_instruction_key_retained_bytes)
+            .sum::<usize>()
+        + vec_retained_bytes(&key.input_slots)
+        + vec_retained_bytes(&key.output_slots)
+}
+
+fn exec_instruction_key_retained_bytes(key: &ExecInstructionKey) -> usize {
+    size_of::<ExecInstructionKey>()
+        + exec_op_key_retained_bytes(&key.op)
+        + vec_retained_bytes(&key.input_slots)
+        + vec_retained_bytes(&key.output_slots)
+        + vec_of_vec_retained_bytes(&key.output_shapes)
+        + vec_of_vec_retained_bytes(&key.output_extents)
+        + vec_retained_bytes(&key.last_use)
+}
+
+fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
+    size_of::<ExecOpKey>()
+        + match key {
+            ExecOpKey::Transpose { perm } => vec_retained_bytes(perm),
+            ExecOpKey::Reshape { shape } => vec_retained_bytes(shape),
+            ExecOpKey::BroadcastInDim { shape, dims } => {
+                vec_retained_bytes(shape) + vec_retained_bytes(dims)
+            }
+            ExecOpKey::Constant { bytes, .. } => vec_retained_bytes(bytes),
+            ExecOpKey::DotGeneral(config) => dot_general_config_retained_bytes(config),
+            ExecOpKey::DotGeneralWithConj { config, .. } => {
+                dot_general_config_retained_bytes(config)
+            }
+            ExecOpKey::ReduceSum { axes }
+            | ExecOpKey::Reverse { axes }
+            | ExecOpKey::ReduceProd { axes }
+            | ExecOpKey::ReduceMax { axes }
+            | ExecOpKey::ReduceMin { axes } => vec_retained_bytes(axes),
+            ExecOpKey::Gather(config) => gather_config_retained_bytes(config),
+            ExecOpKey::GatherDynamicSliceSizes {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                slice_sizes,
+                ..
+            } => {
+                vec_retained_bytes(offset_dims)
+                    + vec_retained_bytes(collapsed_slice_dims)
+                    + vec_retained_bytes(start_index_map)
+                    + vec_retained_bytes(slice_sizes)
+            }
+            ExecOpKey::Scatter(config) => scatter_config_retained_bytes(config),
+            ExecOpKey::Slice(config) => slice_config_retained_bytes(config),
+            ExecOpKey::DynamicSlice { slice_sizes } => vec_retained_bytes(slice_sizes),
+            ExecOpKey::Pad(config) => pad_config_retained_bytes(config),
+            ExecOpKey::Convert { .. }
+            | ExecOpKey::ExtractDiag { .. }
+            | ExecOpKey::EmbedDiag { .. }
+            | ExecOpKey::Tril { .. }
+            | ExecOpKey::Triu { .. }
+            | ExecOpKey::Add
+            | ExecOpKey::Multiply
+            | ExecOpKey::Negate
+            | ExecOpKey::Conj
+            | ExecOpKey::Divide
+            | ExecOpKey::Abs
+            | ExecOpKey::Sign
+            | ExecOpKey::Maximum
+            | ExecOpKey::Minimum
+            | ExecOpKey::Compare(_)
+            | ExecOpKey::Select
+            | ExecOpKey::Clamp
+            | ExecOpKey::Exp
+            | ExecOpKey::Log
+            | ExecOpKey::Sin
+            | ExecOpKey::Cos
+            | ExecOpKey::Tanh
+            | ExecOpKey::Sqrt
+            | ExecOpKey::Rsqrt
+            | ExecOpKey::Pow
+            | ExecOpKey::Expm1
+            | ExecOpKey::Log1p
+            | ExecOpKey::DynamicUpdateSlice
+            | ExecOpKey::Concatenate { .. }
+            | ExecOpKey::ShapeOf { .. }
+            | ExecOpKey::DynamicTruncate { .. }
+            | ExecOpKey::PadToMatch { .. }
+            | ExecOpKey::Extension { .. } => 0,
+        }
+}
+
+fn dot_general_config_retained_bytes(config: &tenferro_tensor::DotGeneralConfig) -> usize {
+    vec_retained_bytes(&config.lhs_contracting_dims)
+        + vec_retained_bytes(&config.rhs_contracting_dims)
+        + vec_retained_bytes(&config.lhs_batch_dims)
+        + vec_retained_bytes(&config.rhs_batch_dims)
+}
+
+fn gather_config_retained_bytes(config: &tenferro_tensor::GatherConfig) -> usize {
+    vec_retained_bytes(&config.offset_dims)
+        + vec_retained_bytes(&config.collapsed_slice_dims)
+        + vec_retained_bytes(&config.start_index_map)
+        + vec_retained_bytes(&config.slice_sizes)
+}
+
+fn scatter_config_retained_bytes(config: &tenferro_tensor::ScatterConfig) -> usize {
+    vec_retained_bytes(&config.update_window_dims)
+        + vec_retained_bytes(&config.inserted_window_dims)
+        + vec_retained_bytes(&config.scatter_dims_to_operand_dims)
+}
+
+fn slice_config_retained_bytes(config: &tenferro_tensor::SliceConfig) -> usize {
+    vec_retained_bytes(&config.starts)
+        + vec_retained_bytes(&config.limits)
+        + vec_retained_bytes(&config.strides)
+}
+
+fn pad_config_retained_bytes(config: &tenferro_tensor::PadConfig) -> usize {
+    vec_retained_bytes(&config.edge_padding_low)
+        + vec_retained_bytes(&config.edge_padding_high)
+        + vec_retained_bytes(&config.interior_padding)
 }
 
 fn exec_op_retained_bytes(op: &ExecOp) -> usize {
@@ -240,3 +564,6 @@ pub(crate) fn compile_cache_stats(cache: &LruCache<CacheKey, ExecProgram>) -> Ca
             .sum(),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -56,7 +56,7 @@ Status values:
 | #4 coverage policy vs thresholds | Design Gate | design-gated |
 | #6 FFT C2C transpose/oracle coverage | Auto Fix | remaining-auto |
 | #10 `TensorDeviceTransfer` clone defaults | Design Gate | design-gated |
-| #12 compile-cache string fingerprint | Auto Fix | remaining-auto |
+| #12 compile-cache string fingerprint | Auto Fix | fixed |
 | #13 segment later-instruction scans | Auto Fix | fixed |
 | #16 publishable internal `tenferro_ops` crate | Design Gate | design-gated |
 | #19 public tensor representation hooks | Design Gate | design-gated |
@@ -125,6 +125,18 @@ Implemented:
   hot-path use, matching the remediation workflow's rule against artificial
   dead-code references.
 
+## Third Batch: Compile Cache Key
+
+Implemented:
+
+- Replaced graph compile-cache `String`/`Debug` fingerprints with private
+  structural keys for `ExecProgram`, `ExecInstruction`, and `ExecOp`.
+- Preserved extension payload collision safety by keeping extension payloads in
+  `CacheKey` and using `payload_eq` for final equality after family and payload
+  hash checks.
+- Updated compile-cache retained-byte accounting to include structural key
+  payloads instead of string capacity.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -137,6 +149,9 @@ Implemented:
 - `cargo test -p tenferro-einsum self_greedy`
 - `cargo test -p tenferro-fft --test fft_ops`
 - `cargo test -p tenferro-runtime segment`
+- `cargo test -p tenferro-runtime graph::cache`
+- `cargo test -p tenferro-runtime compile_cache`
+- `cargo test -p tenferro-einsum --test traced_graph_cache`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
