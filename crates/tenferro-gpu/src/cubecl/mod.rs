@@ -78,7 +78,8 @@
 
 use std::any::{Any, TypeId};
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -92,6 +93,7 @@ use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
+use tenferro_tensor::CacheStats;
 
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, TensorAnalytic, TensorBackend,
@@ -108,12 +110,13 @@ use crate::{
     TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
-#[doc(hidden)]
-pub mod dispatch;
+mod dispatch;
 #[doc(hidden)]
 pub mod ffi;
 mod fusion;
 mod gemm;
+#[doc(hidden)]
+pub mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
 mod runtime;
@@ -236,7 +239,61 @@ pub struct CubeclBackend {
 /// Type-indexed cache for CUDA extension-owned backend state.
 #[doc(hidden)]
 pub struct CudaExtensionCache {
-    entries: Mutex<HashMap<TypeId, Box<dyn Any + Send>>>,
+    inner: Mutex<CudaExtensionCacheInner>,
+}
+
+const DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES: usize = 16;
+
+struct CudaExtensionCacheEntry {
+    value: Box<dyn Any + Send>,
+    retained_bytes: usize,
+}
+
+struct CudaExtensionCacheInner {
+    max_entries: NonZeroUsize,
+    entries: HashMap<TypeId, CudaExtensionCacheEntry>,
+    order: VecDeque<TypeId>,
+    retained_bytes: usize,
+}
+
+impl CudaExtensionCacheInner {
+    fn new(max_entries: NonZeroUsize) -> Self {
+        Self {
+            max_entries,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            retained_bytes: 0,
+        }
+    }
+
+    fn evict_to_limit(&mut self) {
+        while self.entries.len() > self.max_entries.get() {
+            let Some(type_id) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&type_id) {
+                self.retained_bytes = self.retained_bytes.saturating_sub(entry.retained_bytes);
+            }
+        }
+    }
+
+    fn insert<T: Send + 'static>(&mut self, type_id: TypeId, value: T, retained_bytes: usize) {
+        self.entries.insert(
+            type_id,
+            CudaExtensionCacheEntry {
+                value: Box::new(value),
+                retained_bytes,
+            },
+        );
+        self.order.retain(|&existing| existing != type_id);
+        self.order.push_back(type_id);
+        self.retained_bytes = self
+            .entries
+            .values()
+            .map(|entry| entry.retained_bytes)
+            .sum();
+        self.evict_to_limit();
+    }
 }
 
 impl CudaExtensionCache {
@@ -251,8 +308,16 @@ impl CudaExtensionCache {
     /// assert!(cache.is_empty());
     /// ```
     pub fn new() -> Self {
+        Self::with_max_entries(
+            NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
+                .expect("default CUDA extension cache capacity is non-zero"),
+        )
+    }
+
+    /// Create an empty extension cache with an explicit entry bound.
+    pub fn with_max_entries(max_entries: NonZeroUsize) -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            inner: Mutex::new(CudaExtensionCacheInner::new(max_entries)),
         }
     }
 
@@ -266,10 +331,49 @@ impl CudaExtensionCache {
     /// assert!(CudaExtensionCache::new().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.entries
+        self.inner
             .lock()
-            .map(|entries| entries.is_empty())
+            .map(|inner| inner.entries.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Remove every cached CUDA extension state value.
+    pub fn clear(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.entries.clear();
+            inner.order.clear();
+            inner.retained_bytes = 0;
+        }
+    }
+
+    /// Snapshot the number of retained entries and logical retained bytes.
+    pub fn stats(&self) -> CacheStats {
+        self.inner
+            .lock()
+            .map(|inner| CacheStats {
+                entries: inner.entries.len(),
+                retained_bytes: inner.retained_bytes,
+            })
+            .unwrap_or_else(|_| CacheStats::empty())
+    }
+
+    /// Return the configured entry bound.
+    pub fn max_entries(&self) -> NonZeroUsize {
+        self.inner
+            .lock()
+            .map(|inner| inner.max_entries)
+            .unwrap_or_else(|_| {
+                NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
+                    .expect("default CUDA extension cache capacity is non-zero")
+            })
+    }
+
+    /// Replace the entry bound and evict oldest entries if needed.
+    pub fn set_max_entries(&self, max_entries: NonZeroUsize) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.max_entries = max_entries;
+            inner.evict_to_limit();
+        }
     }
 
     /// Get or lazily initialize one cache entry keyed by `T`.
@@ -291,14 +395,14 @@ impl CudaExtensionCache {
         T: Send + 'static,
     {
         let type_id = TypeId::of::<T>();
-        let mut entries = self.entries.lock().map_err(|_| {
+        let mut inner = self.inner.lock().map_err(|_| {
             crate::Error::backend_failure("cuda_extension_cache", "extension cache lock poisoned")
         })?;
-        if !entries.contains_key(&type_id) {
-            entries.insert(type_id, Box::new(init()?));
+        if !inner.entries.contains_key(&type_id) {
+            inner.insert(type_id, init()?, std::mem::size_of::<T>());
         }
         Ok(CudaExtensionCacheGuard {
-            entries,
+            inner,
             type_id,
             _marker: std::marker::PhantomData,
         })
@@ -314,7 +418,7 @@ impl Default for CudaExtensionCache {
 /// Borrow guard for one cached CUDA extension state value.
 #[doc(hidden)]
 pub struct CudaExtensionCacheGuard<'a, T> {
-    entries: MutexGuard<'a, HashMap<TypeId, Box<dyn Any + Send>>>,
+    inner: MutexGuard<'a, CudaExtensionCacheInner>,
     type_id: TypeId,
     _marker: std::marker::PhantomData<&'a T>,
 }
@@ -323,9 +427,10 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.entries
+        self.inner
+            .entries
             .get(&self.type_id)
-            .and_then(|entry| entry.downcast_ref::<T>())
+            .and_then(|entry| entry.value.downcast_ref::<T>())
             .expect("CudaExtensionCache stored value under the wrong TypeId")
     }
 }
@@ -374,6 +479,26 @@ impl CubeclBackend {
     #[doc(hidden)]
     pub fn cuda_extension_cache(&self) -> &CudaExtensionCache {
         &self.extension_cache
+    }
+
+    /// Clear CUDA extension-owned backend state.
+    pub fn clear_cuda_extension_cache(&self) {
+        self.extension_cache.clear();
+    }
+
+    /// Return CUDA extension cache stats.
+    pub fn cuda_extension_cache_stats(&self) -> CacheStats {
+        self.extension_cache.stats()
+    }
+
+    /// Return the CUDA extension cache entry bound.
+    pub fn cuda_extension_cache_max_entries(&self) -> NonZeroUsize {
+        self.extension_cache.max_entries()
+    }
+
+    /// Configure the CUDA extension cache entry bound.
+    pub fn set_cuda_extension_cache_max_entries(&self, max_entries: NonZeroUsize) {
+        self.extension_cache.set_max_entries(max_entries);
     }
 
     fn transpose_typed<T>(

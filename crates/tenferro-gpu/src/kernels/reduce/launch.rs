@@ -18,9 +18,9 @@
 use cubecl::{features::Plane, prelude::*};
 
 use super::{
+    definition::validate_keepdims_output_shape,
     kernels,
     routines::{unit_launch_settings, ReduceProblem},
-    validate_keepdims_output_shape,
 };
 use crate::kernels::{CubeclKernelError, Result};
 
@@ -28,23 +28,10 @@ use crate::kernels::{CubeclKernelError, Result};
 mod tests;
 
 /// Launch strategy for a single-axis reduction.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::kernels::reduce::ReduceStrategy;
-///
-/// let strategy = ReduceStrategy::Auto;
-/// assert_eq!(format!("{strategy:?}"), "Auto");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReduceStrategy {
+pub(crate) enum ReduceStrategy {
     /// Let the launcher choose the kernel strategy.
     Auto,
-    /// Use one worker per keepdims output element.
-    Unit,
-    /// Use one hardware plane/subgroup per keepdims output element.
-    Plane,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,8 +183,6 @@ fn resolve_launch_settings<R: Runtime>(
     strategy: ReduceStrategy,
 ) -> Result<ResolvedReduceLaunch> {
     match strategy {
-        ReduceStrategy::Unit => Ok(launch_with_unit_settings(client, problem)),
-        ReduceStrategy::Plane => launch_with_plane_settings(client, problem),
         ReduceStrategy::Auto => match auto_reduce_strategy(client, problem)? {
             ResolvedReduceStrategy::Unit => Ok(launch_with_unit_settings(client, problem)),
             ResolvedReduceStrategy::Plane => launch_with_plane_settings(client, problem),
@@ -206,21 +191,7 @@ fn resolve_launch_settings<R: Runtime>(
 }
 
 /// Launch a floating-point sum reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_sum_float, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_sum_float::<R, f32>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
+pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -264,21 +235,7 @@ pub fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer sum reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_sum_int, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_sum_int::<R, i64>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
+pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -322,22 +279,7 @@ pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
 }
 
 /// Launch a complex sum reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use num_complex::Complex64;
-/// # use tenferro_gpu::kernels::reduce::{launch_sum_complex, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_sum_complex::<R, Complex64>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
+pub(crate) fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -381,21 +323,7 @@ pub fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
 }
 
 /// Launch a floating-point product reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_prod_float, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_prod_float::<R, f64>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
+pub(crate) fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -439,21 +367,7 @@ pub fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch an integer product reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_prod_int, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_prod_int::<R, i64>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
+pub(crate) fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -497,22 +411,7 @@ pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
 }
 
 /// Launch a complex product reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use num_complex::Complex32;
-/// # use tenferro_gpu::kernels::reduce::{launch_prod_complex, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_prod_complex::<R, Complex32>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
+pub(crate) fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -556,21 +455,7 @@ pub fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
 }
 
 /// Launch a floating-point maximum reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_max_float, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_max_float::<R, f32>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_max_float<R: Runtime, F: Float + CubeElement>(
+pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -614,21 +499,7 @@ pub fn launch_max_float<R: Runtime, F: Float + CubeElement>(
 }
 
 /// Launch a floating-point minimum reduction.
-///
-/// # Examples
-///
-/// ```
-/// # use cubecl::prelude::*;
-/// # use tenferro_gpu::kernels::reduce::{launch_min_float, ReduceStrategy};
-/// # fn example<R: Runtime>(
-/// #     client: &ComputeClient<R>,
-/// #     input: TensorBinding<R>,
-/// #     output: TensorBinding<R>,
-/// # ) -> tenferro_gpu::kernels::Result<()> {
-/// launch_min_float::<R, f64>(client, input, output, 0, ReduceStrategy::Auto)
-/// # }
-/// ```
-pub fn launch_min_float<R: Runtime, F: Float + CubeElement>(
+pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,

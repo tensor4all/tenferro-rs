@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::segment::{segment_exec_program, Segment};
+use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, GraphExecutor};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorValue, TypedTensor};
 
@@ -137,52 +136,6 @@ fn cpu_parity_inputs() -> Vec<Tensor> {
     ]
 }
 
-fn segment_classification_program() -> ExecProgram {
-    ExecProgram {
-        instructions: vec![
-            ExecInstruction {
-                op: ExecOp::Add,
-                input_slots: vec![0, 1],
-                output_slots: vec![2],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new()].into(),
-                output_extents: scalar_extents(1).into(),
-                last_use: vec![false, false],
-            },
-            ExecInstruction {
-                op: ExecOp::Negate,
-                input_slots: vec![2],
-                output_slots: vec![3],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new()].into(),
-                output_extents: scalar_extents(1).into(),
-                last_use: vec![true],
-            },
-            ExecInstruction {
-                op: ExecOp::ShapeOf { axis: 0 },
-                input_slots: vec![3],
-                output_slots: vec![4],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new()].into(),
-                output_extents: scalar_extents(1).into(),
-                last_use: vec![true],
-            },
-            ExecInstruction {
-                op: ExecOp::DotGeneral(matmul_config()),
-                input_slots: vec![0, 1],
-                output_slots: vec![5],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new()].into(),
-                output_extents: scalar_extents(1).into(),
-                last_use: vec![true, true],
-            },
-        ],
-        input_slots: vec![0, 1],
-        output_slots: vec![4, 5],
-        n_slots: 6,
-    }
-}
-
 fn assert_tensor_eq(lhs: &Tensor, rhs: &Tensor) {
     assert_eq!(lhs.shape(), rhs.shape());
     match (lhs, rhs) {
@@ -199,43 +152,6 @@ fn assert_tensor_vec_eq(lhs: &[Tensor], rhs: &[Tensor]) {
     for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
         assert_tensor_eq(lhs, rhs);
     }
-}
-
-#[test]
-fn segment_exec_program_groups_fusible_and_boundary_ops() {
-    let program = segment_classification_program();
-    let segments = segment_exec_program(&program);
-
-    assert_eq!(segments.len(), 3);
-    match &segments[0] {
-        Segment::Fused {
-            instructions,
-            input_slots,
-            output_slots,
-            last_use,
-        } => {
-            assert_eq!(instructions.len(), 2);
-            assert_eq!(input_slots, &vec![0, 1]);
-            assert_eq!(output_slots, &vec![3]);
-            assert_eq!(last_use, &vec![false, false]);
-        }
-        other => panic!("expected fused segment, got {other:?}"),
-    }
-    assert!(matches!(
-        &segments[1],
-        Segment::Host(ExecInstruction {
-            op: ExecOp::ShapeOf { axis: 0 },
-            ..
-        })
-    ));
-    assert!(matches!(
-        &segments[2],
-        Segment::Ffi(ExecInstruction {
-            op: ExecOp::DotGeneral(_),
-            output_slots,
-            ..
-        }) if output_slots.len() == 1
-    ));
 }
 
 #[test]

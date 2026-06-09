@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::extension::{apply, ExtensionOpTrait};
+use tenferro_runtime::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 use tenferro_runtime::{SymDim, Tensor};
 

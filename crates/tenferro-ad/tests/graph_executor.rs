@@ -1,7 +1,7 @@
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]

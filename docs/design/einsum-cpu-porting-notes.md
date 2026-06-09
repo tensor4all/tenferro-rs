@@ -410,9 +410,8 @@ where
     B: TensorPrims<A>,
 ```
 
-This applies to all 9 variants (einsum, einsum_with_subscripts,
-einsum_with_plan, einsum_into, einsum_owned, etc.) and all AD functions
-(tracked_einsum, dual_einsum, einsum_rrule, einsum_frule, einsum_hvp).
+This applied to all historical eager/traced variants and the legacy explicit AD
+helpers recorded in the pre-extension-runtime design.
 
 `ctx` provides access to `PlanCache` (P7).
 `B` enables compile-time backend selection without global state.

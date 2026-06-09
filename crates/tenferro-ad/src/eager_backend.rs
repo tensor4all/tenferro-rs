@@ -158,7 +158,10 @@ impl TensorIndexing for EagerBackend {
 }
 
 impl BackendSessionHost for EagerBackend {
-    fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
         dispatch!(self, with_backend_session(f))
     }
 }

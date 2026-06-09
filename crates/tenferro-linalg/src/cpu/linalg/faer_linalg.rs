@@ -6,7 +6,7 @@ use faer::{
 use num_complex::{Complex32, Complex64};
 use std::ops::Range;
 
-use tenferro_cpu::buffer_pool::{BufferPool, PoolScalar};
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuContext;
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -124,6 +124,21 @@ fn tensor_from_vec_with_template<T: Clone, U>(
     let mut tensor = TypedTensor::from_vec_col_major(shape, data);
     tensor.placement = template.placement.clone();
     tensor
+}
+
+fn tensor_from_pooled_slice_with_template<T: Clone + PoolScalar, U>(
+    buffers: &mut BufferPool,
+    shape: Vec<usize>,
+    data: &[T],
+    template: &TypedTensor<U>,
+) -> TypedTensor<T> {
+    let mut owned = buffers.acquire_with_capacity::<T>(data.len());
+    owned.extend_from_slice(data);
+    tensor_from_vec_with_template(shape, owned, template)
+}
+
+fn refill_tensor_from_slice<T: Copy>(tensor: &mut TypedTensor<T>, data: &[T]) {
+    tensor.host_data_mut().copy_from_slice(data);
 }
 
 fn col_major_vec_from_mat<T: Copy + PoolScalar>(
@@ -521,13 +536,19 @@ where
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
+    let mut batch_input = tensor_from_pooled_slice_with_template(
+        buffers,
+        core_shape.to_vec(),
+        &input.host_data()[first_range],
+        input,
+    );
+
     for batch_idx in 0..batch_count {
-        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-        let batch_input = tensor_from_vec_with_template(
-            core_shape.to_vec(),
-            input.host_data()[range].to_vec(),
-            input,
-        );
+        if batch_idx > 0 {
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+        }
         let batch_output = op(buffers, &batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
@@ -593,13 +614,19 @@ where
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<T>> = Vec::new();
 
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
+    let mut batch_input = tensor_from_pooled_slice_with_template(
+        buffers,
+        core_shape.to_vec(),
+        &input.host_data()[first_range],
+        input,
+    );
+
     for batch_idx in 0..batch_count {
-        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-        let batch_input = tensor_from_vec_with_template(
-            core_shape.to_vec(),
-            input.host_data()[range].to_vec(),
-            input,
-        );
+        if batch_idx > 0 {
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+        }
         let batch_outputs = op(buffers, &batch_input)?;
 
         if out_shapes.is_empty() {
@@ -656,7 +683,7 @@ fn batched_multi_convert_result<InT, OutT, F>(
     op: F,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<OutT>>>
 where
-    InT: Clone,
+    InT: Clone + PoolScalar,
     OutT: Clone + PoolScalar,
     F: Fn(&mut BufferPool, &TypedTensor<InT>) -> tenferro_tensor::Result<Vec<TypedTensor<OutT>>>,
 {
@@ -677,13 +704,19 @@ where
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<OutT>> = Vec::new();
 
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
+    let mut batch_input = tensor_from_pooled_slice_with_template(
+        buffers,
+        core_shape.to_vec(),
+        &input.host_data()[first_range],
+        input,
+    );
+
     for batch_idx in 0..batch_count {
-        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-        let batch_input = tensor_from_vec_with_template(
-            core_shape.to_vec(),
-            input.host_data()[range].to_vec(),
-            input,
-        );
+        if batch_idx > 0 {
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+        }
         let batch_outputs = op(buffers, &batch_input)?;
 
         if out_shapes.is_empty() {
@@ -776,20 +809,28 @@ where
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
-    for batch_idx in 0..batch_count {
-        let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
-        let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
+    let first_a_range = checked_slice_range(op_name, 0, a_slice_size)?;
+    let first_b_range = checked_slice_range(op_name, 0, b_slice_size)?;
+    let mut batch_a = tensor_from_pooled_slice_with_template(
+        buffers,
+        a_core_shape.to_vec(),
+        &a.host_data()[first_a_range],
+        a,
+    );
+    let mut batch_b = tensor_from_pooled_slice_with_template(
+        buffers,
+        b_core_shape.to_vec(),
+        &b.host_data()[first_b_range],
+        b,
+    );
 
-        let batch_a = tensor_from_vec_with_template(
-            a_core_shape.to_vec(),
-            a.host_data()[a_range].to_vec(),
-            a,
-        );
-        let batch_b = tensor_from_vec_with_template(
-            b_core_shape.to_vec(),
-            b.host_data()[b_range].to_vec(),
-            b,
-        );
+    for batch_idx in 0..batch_count {
+        if batch_idx > 0 {
+            let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
+            let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
+            refill_tensor_from_slice(&mut batch_a, &a.host_data()[a_range]);
+            refill_tensor_from_slice(&mut batch_b, &b.host_data()[b_range]);
+        }
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
         if let Some(expected_shape) = &out_core_shape {
@@ -2455,14 +2496,20 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     let mut pivot_data = Vec::with_capacity(k * batch_total);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
 
+    let first_range = 0..matrix_len;
+    let mut batch_input = tensor_from_pooled_slice_with_template(
+        buffers,
+        vec![m, n],
+        &input.host_data()[first_range],
+        input,
+    );
+
     for batch in 0..batch_total {
-        let start = batch * matrix_len;
-        let end = start + matrix_len;
-        let batch_input = tensor_from_vec_with_template(
-            vec![m, n],
-            input.host_data()[start..end].to_vec(),
-            input,
-        );
+        if batch > 0 {
+            let start = batch * matrix_len;
+            let end = start + matrix_len;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()[start..end]);
+        }
         let (packed, pivots, parity) = T::lu_factor_2d(ctx, buffers, &batch_input)?;
         lu_data.extend_from_slice(packed.host_data());
         pivot_data.extend_from_slice(pivots.host_data());

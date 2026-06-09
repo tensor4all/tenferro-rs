@@ -354,8 +354,8 @@ Tests follow implementation ownership.
   | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
 
 - Exceptions with dedicated implementations are `reshape` (metadata-only),
-  `embed_diagonal`, and indexing ops such as gather, scatter, slice, pad,
-  concatenate, and reverse.
+  `embed_diagonal`, index-dependent triangular masks (`tril`/`triu`), and
+  indexing ops such as gather, scatter, slice, pad, concatenate, and reverse.
 - CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
   must be enabled; enabling both is valid and must compile. `CpuBackend` owns
   the runtime provider selection. `CpuBackend::new()` selects the default

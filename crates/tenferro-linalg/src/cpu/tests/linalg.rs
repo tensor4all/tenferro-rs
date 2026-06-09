@@ -5,7 +5,7 @@ fn svd_canonicalizes_transposed_host_view_before_lapack() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone());
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let outputs = CpuBackend::new().svd_view(TensorView::F64(view)).unwrap();
+    let outputs = CpuBackend::new().svd_read(TensorView::F64(view)).unwrap();
 
     assert_eq!(outputs[0].shape(), &[3, 2]);
     assert_eq!(outputs[1].shape(), &[2]);

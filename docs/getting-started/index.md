@@ -7,12 +7,13 @@ the feature-gated CUDA backend.
 
 ## Setup
 
-Start with the runtime crate. Use a local checkout while the crates are still
-evolving:
+Start with the runtime crate and CPU backend crate. Use a local checkout while
+the crates are still evolving:
 
 ```toml
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu" }
 ```
 
 With default features, this compiles the `cpu-faer` provider, so
@@ -22,6 +23,7 @@ With default features, this compiles the `cpu-faer` provider, so
 ```toml
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["cpu-blas"] }
 ```
 
 CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
@@ -30,12 +32,12 @@ compiled default provider: BLAS when `cpu-blas` is compiled, otherwise faer.
 Use `CpuBackend::with_kind` when a program needs explicit provider selection
 within a build that has multiple providers. The `cpu-blas` backend needs a
 BLAS/LAPACK provider. Link one from the system toolchain, or enable the provider
-feature on `tenferro-tensor` to build against OpenBLAS:
+feature on `tenferro-cpu` to build against OpenBLAS:
 
 ```toml
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
-tenferro-tensor = { path = "/path/to/tenferro-rs/crates/tenferro-tensor", default-features = false, features = ["src-openblas"] }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["src-openblas"] }
 ```
 
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or

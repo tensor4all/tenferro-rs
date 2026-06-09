@@ -154,9 +154,9 @@ fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
 }
 
 #[test]
-fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
+fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    let svd_view_source = source_section(&source, "fn svd_view", "fn qr");
+    let svd_read_source = source_section(&source, "fn svd_read", "fn qr");
 
     for needle in [
         "self.to_contiguous(&view)?",
@@ -164,8 +164,8 @@ fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
         "self.svd(&input)",
     ] {
         assert!(
-            svd_view_source.contains(needle),
-            "CubeCL svd_view should canonicalize borrowed GPU views on the backend: missing {needle}"
+            svd_read_source.contains(needle),
+            "CubeCL svd_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }

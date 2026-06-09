@@ -3,8 +3,8 @@ use num_complex::Complex64;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
-use tenferro_runtime::compiler::compile_std_to_exec;
-use tenferro_runtime::exec::ExecOp;
+use tenferro_runtime::extension::compile_std_to_exec;
+use tenferro_runtime::extension::ExecOp;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {

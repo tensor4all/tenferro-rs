@@ -1,6 +1,5 @@
 #![allow(dead_code, unused_imports)]
 
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::{ffi::OsString, sync::MutexGuard};
@@ -11,7 +10,7 @@ use num_complex::{Complex32, Complex64};
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
 #[cfg(feature = "cpu-faer")]
-use tenferro_cpu::buffer_pool::BufferPool;
+use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,

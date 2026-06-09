@@ -36,6 +36,16 @@ fn reduce_all(tensor: &TracedTensor) -> TracedTensor {
     tensor.reduce_sum(&axes)
 }
 
+fn weighted_square_sum(
+    tensor: &TracedTensor,
+    shape: Vec<usize>,
+    weights: Vec<f64>,
+) -> TracedTensor {
+    let weights = TracedTensor::from_tensor_concrete_shape(f64_tensor(shape, weights));
+    let squared = tensor * tensor;
+    reduce_all(&(&squared * &weights))
+}
+
 fn assert_finite_tensor(tensor: &Tensor) {
     if let Some(values) = tensor.as_slice::<f64>() {
         assert!(values.iter().all(|value| value.is_finite()), "{values:?}");
@@ -62,6 +72,27 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
             "idx {idx}: expected {expected}, got {actual}, diff {diff}"
         );
     }
+}
+
+fn assert_close_scalar(name: &str, actual: f64, expected: f64, tol: f64) {
+    let diff = (actual - expected).abs();
+    assert!(
+        diff <= tol,
+        "{name}: expected {expected}, got {actual}, diff {diff}"
+    );
+}
+
+fn assert_close_complex_scalar(
+    name: &str,
+    actual: num_complex::Complex64,
+    expected: num_complex::Complex64,
+    tol: f64,
+) {
+    let diff = (actual - expected).norm();
+    assert!(
+        diff <= tol,
+        "{name}: expected {expected}, got {actual}, diff {diff}"
+    );
 }
 
 fn ad_context() -> AdContext {
@@ -143,22 +174,25 @@ fn svd_values_grad_matches_finite_diff() {
 }
 
 #[test]
-fn remaining_linalg_ops_jvp_use_extension_ad_rule() {
+fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
     let ad = ad_context();
 
     let spd_data = vec![3.0, 0.2, 0.2, 4.0];
+    let dspd_data = vec![0.3, 0.1, 0.1, -0.2];
     let spd = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], spd_data.clone()));
-    let dspd =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.3, 0.1, 0.1, -0.2]));
+    let dspd = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], dspd_data.clone()));
 
     let general_data = vec![2.0, 0.5, 0.25, 3.0];
+    let dgeneral_data = vec![0.2, 0.1, -0.1, 0.4];
     let general =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], general_data.clone()));
     let dgeneral =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.2, 0.1, -0.1, 0.4]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], dgeneral_data.clone()));
 
-    let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
-    let drhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![0.4, -0.3]));
+    let rhs_data = vec![1.0, 2.0];
+    let drhs_data = vec![0.4, -0.3];
+    let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], rhs_data.clone()));
+    let drhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], drhs_data.clone()));
 
     let chol_loss = reduce_all(&tenferro_linalg::cholesky(&spd).unwrap());
     let chol_tangent = ad.jvp(&chol_loss, &spd, &dspd).unwrap();
@@ -203,12 +237,293 @@ fn remaining_linalg_ops_jvp_use_extension_ad_rule() {
     ];
     let results = eval_many(&outputs);
 
-    for result in &results {
-        assert_eq!(result.shape(), &[] as &[usize]);
-        assert_finite_tensor(result);
-    }
+    assert_close_scalar(
+        "cholesky directional JVP",
+        get_f64_data(&results[0])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let loss = reduce_all(&tenferro_linalg::cholesky(&input).unwrap());
+                get_f64_data(&eval(&loss))[0]
+            },
+            &spd_data,
+            &dspd_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_scalar(
+        "qr directional JVP",
+        get_f64_data(&results[1])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let (q, r) = tenferro_linalg::qr(&input).unwrap();
+                let loss = &reduce_all(&q) + &reduce_all(&r);
+                get_f64_data(&eval(&loss))[0]
+            },
+            &general_data,
+            &dgeneral_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_scalar(
+        "eigh directional JVP",
+        get_f64_data(&results[2])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let (values, _vectors) = tenferro_linalg::eigh(&input).unwrap();
+                get_f64_data(&eval(&reduce_all(&values)))[0]
+            },
+            &spd_data,
+            &dspd_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_complex_scalar(
+        "eig directional JVP",
+        get_c64_data(&results[3])[0],
+        finite_diff_directional_complex(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let (values, _vectors) = tenferro_linalg::eig(&input).unwrap();
+                get_c64_data(&eval(&reduce_all(&values)))[0]
+            },
+            &general_data,
+            &dgeneral_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_scalar(
+        "solve rhs directional JVP",
+        get_f64_data(&results[4])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let rhs =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], xs.to_vec()));
+                let loss = reduce_all(&tenferro_linalg::solve(&general, &rhs).unwrap());
+                get_f64_data(&eval(&loss))[0]
+            },
+            &rhs_data,
+            &drhs_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_scalar(
+        "triangular_solve rhs directional JVP",
+        get_f64_data(&results[5])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let rhs =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], xs.to_vec()));
+                let loss = reduce_all(
+                    &tenferro_linalg::triangular_solve(&general, &rhs, true, true, false, false)
+                        .unwrap(),
+                );
+                get_f64_data(&eval(&loss))[0]
+            },
+            &rhs_data,
+            &drhs_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+    assert_close_scalar(
+        "lu directional JVP",
+        get_f64_data(&results[6])[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let (_p, l, u, _parity) = tenferro_linalg::lu(&input).unwrap();
+                let loss = &reduce_all(&l) + &reduce_all(&u);
+                get_f64_data(&eval(&loss))[0]
+            },
+            &general_data,
+            &dgeneral_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
 
-    assert_eq!(get_c64_data(&results[3]).len(), 1);
+    assert_eq!(results[7].shape(), &[] as &[usize]);
+    assert_finite_tensor(&results[7]);
+}
+
+#[test]
+fn solve_matrix_operand_jvp_matches_finite_diff() {
+    let ad = ad_context();
+
+    let matrix_data = vec![2.0, 0.5, 0.25, 3.0];
+    let matrix_tangent_data = vec![0.1, -0.05, 0.2, -0.1];
+    let rhs_data = vec![1.0, 2.0];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], matrix_data.clone()));
+    let matrix_tangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 2],
+        matrix_tangent_data.clone(),
+    ));
+    let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], rhs_data.clone()));
+
+    let loss = reduce_all(&tenferro_linalg::solve(&matrix, &rhs).unwrap());
+    let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
+    let result = eval(&tangent);
+
+    assert_close_scalar(
+        "solve matrix directional JVP",
+        get_f64_data(&result)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let matrix =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+                    vec![2, 1],
+                    rhs_data.clone(),
+                ));
+                let loss = reduce_all(&tenferro_linalg::solve(&matrix, &rhs).unwrap());
+                get_f64_data(&eval(&loss))[0]
+            },
+            &matrix_data,
+            &matrix_tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+}
+
+#[test]
+fn triangular_solve_matrix_operand_jvp_matches_finite_diff() {
+    let ad = ad_context();
+
+    let matrix_data = vec![2.0, 0.25, 0.0, 3.0];
+    let matrix_tangent_data = vec![0.1, -0.05, 0.0, -0.2];
+    let rhs_data = vec![1.0, 2.0];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], matrix_data.clone()));
+    let matrix_tangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 2],
+        matrix_tangent_data.clone(),
+    ));
+    let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], rhs_data.clone()));
+
+    let loss = reduce_all(
+        &tenferro_linalg::triangular_solve(&matrix, &rhs, true, true, false, false).unwrap(),
+    );
+    let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
+    let result = eval(&tangent);
+
+    assert_close_scalar(
+        "triangular_solve matrix directional JVP",
+        get_f64_data(&result)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let matrix =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+                    vec![2, 1],
+                    rhs_data.clone(),
+                ));
+                let loss = reduce_all(
+                    &tenferro_linalg::triangular_solve(&matrix, &rhs, true, true, false, false)
+                        .unwrap(),
+                );
+                get_f64_data(&eval(&loss))[0]
+            },
+            &matrix_data,
+            &matrix_tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+}
+
+#[test]
+fn svd_vector_observable_jvp_matches_finite_diff() {
+    let ad = ad_context();
+
+    let matrix_data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
+    let matrix_tangent_data = vec![0.05, -0.03, 0.02, 0.04, -0.06, 0.01];
+    let u_weights = vec![0.7, 1.1, -0.3, 0.2, -0.5, 0.9];
+    let vt_weights = vec![1.2, -0.4, 0.6, 0.8];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], matrix_data.clone()));
+    let matrix_tangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![3, 2],
+        matrix_tangent_data.clone(),
+    ));
+
+    let (u, _s, vt) = tenferro_linalg::svd(&matrix).unwrap();
+    let u_loss = weighted_square_sum(&u, vec![3, 2], u_weights.clone());
+    let vt_loss = weighted_square_sum(&vt, vec![2, 2], vt_weights.clone());
+    let loss = &u_loss + &vt_loss;
+    let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
+    let result = eval(&tangent);
+
+    assert_close_scalar(
+        "svd vector observable directional JVP",
+        get_f64_data(&result)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let matrix =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()));
+                let (u, _s, vt) = tenferro_linalg::svd(&matrix).unwrap();
+                let u_loss = weighted_square_sum(&u, vec![3, 2], u_weights.clone());
+                let vt_loss = weighted_square_sum(&vt, vec![2, 2], vt_weights.clone());
+                get_f64_data(&eval(&(&u_loss + &vt_loss)))[0]
+            },
+            &matrix_data,
+            &matrix_tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+}
+
+#[test]
+fn eigh_vector_observable_jvp_matches_finite_diff() {
+    let ad = ad_context();
+
+    let matrix_data = vec![2.0, 0.2, 0.2, 4.0];
+    let matrix_tangent_data = vec![0.1, 0.03, 0.03, -0.2];
+    let vector_weights = vec![0.6, -0.7, 1.3, 0.4];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], matrix_data.clone()));
+    let matrix_tangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 2],
+        matrix_tangent_data.clone(),
+    ));
+
+    let (_values, vectors) = tenferro_linalg::eigh(&matrix).unwrap();
+    let loss = weighted_square_sum(&vectors, vec![2, 2], vector_weights.clone());
+    let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
+    let result = eval(&tangent);
+
+    assert_close_scalar(
+        "eigh vector observable directional JVP",
+        get_f64_data(&result)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let matrix =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let (_values, vectors) = tenferro_linalg::eigh(&matrix).unwrap();
+                let loss = weighted_square_sum(&vectors, vec![2, 2], vector_weights.clone());
+                get_f64_data(&eval(&loss))[0]
+            },
+            &matrix_data,
+            &matrix_tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
 }
 
 #[test]
@@ -264,5 +579,35 @@ fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, base: &[f64], index: usize, ste
     let mut minus = base.to_vec();
     plus[index] += step;
     minus[index] -= step;
+    (f(&plus) - f(&minus)) / (2.0 * step)
+}
+
+fn finite_diff_directional_scalar(
+    f: impl Fn(&[f64]) -> f64,
+    base: &[f64],
+    tangent: &[f64],
+    step: f64,
+) -> f64 {
+    let mut plus = base.to_vec();
+    let mut minus = base.to_vec();
+    for ((plus, minus), &direction) in plus.iter_mut().zip(minus.iter_mut()).zip(tangent) {
+        *plus += step * direction;
+        *minus -= step * direction;
+    }
+    (f(&plus) - f(&minus)) / (2.0 * step)
+}
+
+fn finite_diff_directional_complex(
+    f: impl Fn(&[f64]) -> num_complex::Complex64,
+    base: &[f64],
+    tangent: &[f64],
+    step: f64,
+) -> num_complex::Complex64 {
+    let mut plus = base.to_vec();
+    let mut minus = base.to_vec();
+    for ((plus, minus), &direction) in plus.iter_mut().zip(minus.iter_mut()).zip(tangent) {
+        *plus += step * direction;
+        *minus -= step * direction;
+    }
     (f(&plus) - f(&minus)) / (2.0 * step)
 }

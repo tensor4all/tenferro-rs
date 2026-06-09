@@ -2,8 +2,8 @@
 //!
 //! This crate owns graph construction, lowering to execution IR, graph
 //! execution, and backend-parametric extension runtime dispatch. Standard
-//! operations live in `tenferro-internal-ops`; tensor storage and backend
-//! kernels live in `tenferro-tensor`.
+//! operations are lowered through the runtime's internal operation vocabulary;
+//! tensor storage and backend kernels live in `tenferro-tensor`.
 //!
 //! # Examples
 //!
@@ -22,9 +22,9 @@
 #[doc(hidden)]
 pub mod ad_support;
 mod checkpoint;
-pub mod compiler;
+mod compiler;
 pub mod error;
-pub mod exec;
+mod exec;
 pub mod extension;
 pub mod extension_cache;
 pub mod extension_runtime;
@@ -32,8 +32,8 @@ pub mod graph;
 mod metadata;
 #[doc(hidden)]
 pub mod scalar_semantics;
-pub mod segment;
-pub mod shape_infer;
+mod segment;
+mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
 pub mod tensor;
@@ -41,6 +41,7 @@ pub mod traced;
 pub mod traced_tensor;
 pub mod typed_tensor;
 
+pub use compiler::{CompilerOptions, OptimizerConfig};
 pub use error::{ContextId, Error, Result};
 pub use extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,

@@ -10,16 +10,11 @@
 /// Panics if `axis` is out of bounds for `input_shape` or if `input.len()` does
 /// not match the product of the dimensions in `input_shape`.
 ///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::kernels::reduce::cpu_reference::reduce_sum_i64_keepdims;
-///
-/// let input = vec![1, 2, 3, 4, 5, 6];
-/// assert_eq!(reduce_sum_i64_keepdims(&input, &[2, 3], 0), vec![3, 7, 11]);
-/// assert_eq!(reduce_sum_i64_keepdims(&input, &[2, 3], 1), vec![9, 12]);
-/// ```
-pub fn reduce_sum_i64_keepdims(input: &[i64], input_shape: &[usize], axis: usize) -> Vec<i64> {
+pub(crate) fn reduce_sum_i64_keepdims(
+    input: &[i64],
+    input_shape: &[usize],
+    axis: usize,
+) -> Vec<i64> {
     reduce_keepdims(input, input_shape, axis, 0_i64, |acc, value| acc + value)
 }
 

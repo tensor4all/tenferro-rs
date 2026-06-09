@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use tenferro_cpu::{buffer_pool::BufferPool, CpuBackend, CpuContext};
+use tenferro_cpu::{linalg_interop::BufferPool, CpuBackend, CpuContext};
 use tenferro_tensor::BackendRuntimeCache;
 
 fn bench_cpu_context_entry_overhead(c: &mut Criterion) {

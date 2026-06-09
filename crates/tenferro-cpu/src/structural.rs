@@ -8,9 +8,11 @@ use crate::{
 };
 use tenferro_tensor::{DType, Tensor, TensorRank, TypedTensor, TypedTensorView};
 
+#[cfg(test)]
+use super::typed_array_uninit;
 use super::{
-    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit, typed_array_uninit_from_pool,
-    typed_view, typed_view_from_view,
+    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit_from_pool, typed_view,
+    typed_view_from_view,
 };
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -347,7 +349,8 @@ pub(crate) fn triu_with_pool(
     )
 }
 
-pub fn typed_transpose<T: Copy + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_transpose<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -425,7 +428,8 @@ pub fn typed_reshape<T: Clone + 'static>(
     ))
 }
 
-pub fn typed_broadcast_in_dim<T: Copy + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
@@ -516,7 +520,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub fn typed_extract_diagonal<T: Copy + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_extract_diagonal<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -558,7 +563,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -635,7 +641,8 @@ where
     Ok(out)
 }
 
-pub fn typed_tril<T: Copy + Zero + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_tril<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     k: i64,
 ) -> crate::Result<TypedTensor<T>> {
@@ -653,7 +660,8 @@ where
     typed_triangular_mask_with_fill_pool(buffers, tensor, k, false, T::zero())
 }
 
-pub fn typed_triu<T: Copy + Zero + Clone>(
+#[cfg(test)]
+pub(crate) fn typed_triu<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     k: i64,
 ) -> crate::Result<TypedTensor<T>> {
@@ -671,6 +679,7 @@ where
     typed_triangular_mask_with_fill_pool(buffers, tensor, k, true, T::zero())
 }
 
+#[cfg(test)]
 fn typed_triangular_mask<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     k: i64,

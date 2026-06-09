@@ -45,8 +45,8 @@ impl CacheStats {
 
 /// Control surface required for backend runtime caches owned by higher-level runtimes.
 ///
-/// Backend caches use this trait so an `Engine` can clear and inspect the cache
-/// without knowing backend-specific entry types.
+/// Backend caches use this trait so higher-level runtimes and executors can
+/// clear and inspect the cache without knowing backend-specific entry types.
 ///
 /// # Examples
 ///

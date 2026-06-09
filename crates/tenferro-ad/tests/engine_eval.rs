@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{DType, GraphExecutor, Tensor, TypedTensor};
 
 #[test]

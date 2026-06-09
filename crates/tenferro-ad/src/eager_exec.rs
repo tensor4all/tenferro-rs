@@ -221,17 +221,15 @@ pub(crate) fn exec_op_on_tensor_reads_with_extension_executor<B: TensorBackend +
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
+        let Some(extension_executor) = extension_executor else {
+            return Err(missing_extension_executor_error(ext.as_ref()));
+        };
         let input_tensors = concrete_tensor_reads(inputs);
         let input_refs: Vec<&Tensor> = input_tensors
             .iter()
             .map(ConcreteTensorRead::tensor)
             .collect();
-        let outputs = match extension_executor {
-            Some(extension_executor) if extension_executor.registry().contains(ext.family_id()) => {
-                extension_executor.execute(backend, ext.as_ref(), &input_refs)
-            }
-            _ => ext.eager_execute(&input_refs),
-        };
+        let outputs = extension_executor.execute(backend, ext.as_ref(), &input_refs);
         return outputs.map_err(|err| extension_error(ext.as_ref(), err));
     }
 

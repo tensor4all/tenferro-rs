@@ -28,8 +28,9 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
+use tenferro_runtime::extension::{
+    ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
+};
 use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
@@ -907,7 +908,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     }
 
     let (backend, caches) = ctx.parts_mut();
-    let compiler_options = tenferro_runtime::compiler::CompilerOptions::default();
+    let compiler_options = tenferro_runtime::extension::CompilerOptions::default();
     let optimizer_fingerprint = compiler_options.optimizer.fingerprint();
     let key = runtime_exec_program_cache_key(op, inputs, &shapes, optimizer_fingerprint);
     if caches
@@ -929,7 +930,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
             )
         })?;
     let program_inputs = runtime_program_inputs(inputs, cached.input_indices.as_slice())?;
-    let mut outputs = tenferro_runtime::exec::eval_exec_ir_with_backend_cache(
+    let mut outputs = tenferro_runtime::extension::execute_lowered_program_with_backend_cache(
         backend,
         &cached.program,
         program_inputs,
@@ -1006,7 +1007,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
     tree: &ContractionTree,
     inputs: &[&Tensor],
     shapes: &[Vec<usize>],
-    compiler_options: tenferro_runtime::compiler::CompilerOptions,
+    compiler_options: tenferro_runtime::extension::CompilerOptions,
 ) -> tenferro_tensor::Result<CachedRuntimeExecProgram<B::RuntimeCache>> {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut input_vals = Vec::with_capacity(inputs.len());
@@ -1064,7 +1065,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
         }
     }
 
-    let program = tenferro_runtime::compiler::compile_std_to_exec_with_options(
+    let program = tenferro_runtime::extension::compile_std_to_exec_with_options(
         &compiled,
         &input_dtypes,
         &input_shapes,

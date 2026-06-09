@@ -36,6 +36,7 @@ use crate::extension::{LinalgExtensionOp, LinalgOp};
 use crate::LINALG_EXTENSION_FAMILY_ID;
 
 mod rules;
+pub mod support;
 
 /// Return the explicit linalg extension AD rule set.
 ///

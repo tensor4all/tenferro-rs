@@ -38,21 +38,20 @@ dimension varies fastest in memory. This matches Fortran, Julia, MATLAB, and
 LAPACK-oriented workflows, and makes trailing batch axes natural for batched
 linear algebra and contractions.
 
+<!-- snippet-source: crates/tenferro-runtime/examples/column_major_memory.rs -->
 ```rust
 use tenferro_runtime::{Tensor, TypedTensor};
 
-let typed = TypedTensor::<f64>::from_vec_col_major(
-    vec![2, 3],
-    vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
-);
-assert_eq!(typed.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+fn main() {
+    let typed =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    assert_eq!(typed.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
-let dynamic = Tensor::from_vec_row_major(
-    vec![2, 3],
-    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
-assert_eq!(dynamic.as_slice::<f64>().unwrap(), typed.as_slice());
+    let dynamic = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(dynamic.as_slice::<f64>().unwrap(), typed.as_slice());
+}
 ```
+<!-- end-snippet-source -->
 
 Use `from_vec_row_major` for data copied from PyTorch, NumPy, JAX, or C-style
 examples. Use `from_vec_col_major` when the flat buffer is already in tenferro's

@@ -12,14 +12,12 @@ use crate::types::{
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
-#[doc(hidden)]
-pub fn cube_count_for_len(len: usize) -> CubeCount {
+pub(crate) fn cube_count_for_len(len: usize) -> CubeCount {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize) as u32;
     CubeCount::Static(cubes.max(1), 1, 1)
 }
 
-#[doc(hidden)]
-pub fn cube_dim_1d() -> CubeDim {
+pub(crate) fn cube_dim_1d() -> CubeDim {
     CubeDim::new_1d(DEFAULT_CUBE_DIM_X)
 }
 
@@ -34,8 +32,7 @@ where
     out
 }
 
-#[doc(hidden)]
-pub fn cubecl_buffer<'a, T: 'static>(
+pub(crate) fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
@@ -60,8 +57,7 @@ pub fn cubecl_buffer<'a, T: 'static>(
     }
 }
 
-#[doc(hidden)]
-pub fn cubecl_view_buffer<'a, T: 'static>(
+pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
     view: &'a TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
@@ -86,8 +82,7 @@ pub fn cubecl_view_buffer<'a, T: 'static>(
         })
 }
 
-#[doc(hidden)]
-pub fn cubecl_view_mut_buffer<'a, T: 'static>(
+pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
     view: &'a TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
@@ -145,12 +140,13 @@ fn validate_cubecl_buffer_len<T>(
     op: &'static str,
 ) -> crate::Result<()> {
     let expected_len = checked_shape_product(op, tensor.shape())?;
-    if expected_len != buffer.len {
+    let actual_len = buffer.element_len();
+    if expected_len != actual_len {
         return Err(crate::Error::backend_failure(
             op,
             format!(
                 "expected shape product {expected_len} elements, actual CubeclBuffer::len {}",
-                buffer.len
+                actual_len
             ),
         ));
     }
@@ -187,8 +183,7 @@ fn validate_raw_ternary_shapes<TA, TB, TC>(
     ensure_same_shape(op, c.shape(), out_shape)
 }
 
-#[doc(hidden)]
-pub fn typed_tensor_binding<T: CubeElement + Clone>(
+pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CudaRuntime>> {
@@ -196,13 +191,13 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
     validate_cubecl_buffer_len(tensor, buffer, op)?;
     let (shape, strides) = cubecl_shape_and_strides(tensor.shape());
 
-    // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
-    // The checked invariant above proves `buffer.len` equals the dense
+    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
+    // The checked invariant above proves `buffer.element_len()` equals the dense
     // element count of `tensor.shape`; `strides` is the matching dense
     // column-major layout metadata, so kernel indexing stays within that
     // allocation.
     Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle.clone(), strides.into(), shape.into())
+        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
     })
 }
 
@@ -273,8 +268,7 @@ fn ensure_placement_resident_on_runtime(
     }
 }
 
-#[doc(hidden)]
-pub fn typed_from_cubecl<T: Send + Sync + 'static>(
+pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
     device_ordinal: usize,
@@ -292,8 +286,7 @@ pub fn typed_from_cubecl<T: Send + Sync + 'static>(
     )
 }
 
-#[doc(hidden)]
-pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
+pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CubeclRuntime,
     shape: &[usize],
 ) -> TypedTensor<T> {
@@ -316,23 +309,21 @@ pub(crate) fn alloc_bool_output(rt: &CubeclRuntime, shape: &[usize]) -> TypedTen
     )
 }
 
-#[doc(hidden)]
-pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
+pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
 
-    // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
-    // `validate_cubecl_buffer_len` proves `buffer.len` equals the dense shape
+    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
+    // `validate_cubecl_buffer_len` proves `buffer.element_len()` equals the dense shape
     // product, so raw linear kernels that index `0..out.len()` cannot observe
     // an array longer than the logical tensor allocation.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
 }
 
-#[doc(hidden)]
-pub fn typed_view_array_arg<T: CubeElement + Clone>(
+pub(crate) fn typed_view_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
@@ -342,11 +333,10 @@ pub fn typed_view_array_arg<T: CubeElement + Clone>(
     // reachable logical offsets are within this backing allocation. Kernels
     // using this raw array also receive the validated signed layout metadata
     // because CubeCL TensorBinding cannot express signed view strides.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
 }
 
-#[doc(hidden)]
-pub fn typed_view_mut_array_arg<T: CubeElement + Clone>(
+pub(crate) fn typed_view_mut_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
@@ -355,7 +345,7 @@ pub fn typed_view_mut_array_arg<T: CubeElement + Clone>(
     // SAFETY: `TypedTensorViewMut` construction validates both reachable
     // offsets and no-overlap. The raw array length covers the backing
     // allocation, while the kernel launch domain covers only the logical view.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
 }
 
 pub(crate) fn bool_tensor_array_arg(
@@ -368,7 +358,7 @@ pub(crate) fn bool_tensor_array_arg(
     // SAFETY: CubeCL bool tensors are stored as one-byte predicate buffers by
     // `memory::upload_bool` and `alloc_bool_output`. The validated buffer
     // length is the logical element count consumed by raw Array<bool> kernels.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
 }
 
 pub(crate) fn typed_tensor_array_arg_as<T, U>(
@@ -389,14 +379,14 @@ where
         )
     })?;
     let available_bytes = buffer
-        .len
+        .element_len()
         .checked_mul(core::mem::size_of::<T>())
         .ok_or_else(|| {
             crate::Error::backend_failure(
                 op,
                 format!(
                     "CubeCL buffer byte length overflow for {} elements",
-                    buffer.len
+                    buffer.element_len()
                 ),
             )
         })?;
@@ -412,7 +402,7 @@ where
     // allocation. Kernels using this helper are responsible for using a
     // representation-compatible scalar view, for example complex values as
     // their real and imaginary scalar parts.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), len) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), len) })
 }
 
 pub(crate) fn launch_unary<TIn, TOut>(

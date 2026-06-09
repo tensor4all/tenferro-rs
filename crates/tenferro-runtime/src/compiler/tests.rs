@@ -1,17 +1,17 @@
-use computegraph::compile::{CompiledProgram, Instruction};
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ShapeExtent;
-use tenferro_runtime::compiler::{
+use super::{
     algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
     conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
     layout_chain_transpose_folding, transpose_folding, CompilerOptions, OptimizerConfig,
 };
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::GraphExecutor;
+use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+use crate::GraphExecutor;
+use computegraph::compile::{CompiledProgram, Instruction};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
-#[path = "compiler_passes/dot_decomposer_tests.rs"]
+#[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
@@ -875,8 +875,8 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     // End-to-end: build a traced graph with multiple free dims, compile,
     // and run it through the CPU backend. Compare the output to the
     // equivalent matmul result.
+    use crate::{Tensor, TypedTensor};
     use tenferro_cpu::CpuBackend;
-    use tenferro_runtime::{Tensor, TypedTensor};
 
     // LHS [M1, M2, K] * RHS [K, N] => [M1, M2, N]. The compile pipeline
     // should emit a canonical DotGeneral + output Reshape. Run end-to-end

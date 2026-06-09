@@ -64,6 +64,7 @@ fn expect_duplicate_axis(result: crate::Result<Tensor>, op: &'static str) {
 
 #[test]
 fn cpu_indexing_dispatch_covers_supported_dtypes() {
+    let mut backend = CpuBackend::new();
     let indices = Tensor::from_vec_col_major(vec![2], vec![0_i64, 2]);
 
     let f32_operand = Tensor::F32(TypedTensor::from_vec_col_major(
@@ -214,33 +215,23 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         strides: vec![1],
     };
     assert_eq!(
-        crate::indexing::slice(&f32_operand, &slice_cfg)
-            .unwrap()
-            .shape(),
+        backend.slice(&f32_operand, &slice_cfg).unwrap().shape(),
         &[2]
     );
     assert_eq!(
-        crate::indexing::slice(&i64_operand, &slice_cfg)
-            .unwrap()
-            .shape(),
+        backend.slice(&i64_operand, &slice_cfg).unwrap().shape(),
         &[2]
     );
     assert_eq!(
-        crate::indexing::slice(&bool_operand, &slice_cfg)
-            .unwrap()
-            .shape(),
+        backend.slice(&bool_operand, &slice_cfg).unwrap().shape(),
         &[2]
     );
     assert_eq!(
-        crate::indexing::slice(&c32_operand, &slice_cfg)
-            .unwrap()
-            .shape(),
+        backend.slice(&c32_operand, &slice_cfg).unwrap().shape(),
         &[2]
     );
     assert_eq!(
-        crate::indexing::slice(&c64_operand, &slice_cfg)
-            .unwrap()
-            .shape(),
+        backend.slice(&c64_operand, &slice_cfg).unwrap().shape(),
         &[2]
     );
 

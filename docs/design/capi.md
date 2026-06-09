@@ -1,13 +1,15 @@
-# C-API (FFI)
+# Planned C-API (FFI)
 
-C-API for Julia, Python (JAX, PyTorch), and other languages. Exposes
-tensor lifecycle, einsum, SVD (with AD rules), and DLPack interop.
+Design notes for a future C-API for Julia, Python (JAX, PyTorch), and other
+languages. The current workspace does not contain a `tenferro-capi` crate, so
+function names in this document are proposed ABI names rather than current
+public API.
 
 ---
 
 ## Position in Workspace Architecture
 
-`tenferro-capi` sits at Layer 5, the topmost layer:
+The planned `tenferro-capi` crate would sit at Layer 5, the topmost layer:
 
 ```
 Layer 5: tenferro-capi          ← this crate
@@ -104,13 +106,13 @@ immediately if import validation rejects the input.
 | Function | Description |
 |----------|-------------|
 | `tfe_einsum_f64(subscripts, operands, n, status)` | Einsum (returns new tensor) |
-| `tfe_einsum_rrule_f64(subscripts, operands, n, cotangent, grads_out, status)` | Reverse-mode AD |
-| `tfe_einsum_frule_f64(subscripts, primals, n, tangents, status)` | Forward-mode AD |
+| `tfe_einsum_vjp_f64(subscripts, operands, n, cotangent, grads_out, status)` | Proposed reverse-mode AD |
+| `tfe_einsum_jvp_f64(subscripts, primals, n, tangents, status)` | Proposed forward-mode AD |
 
-rrule: `grads_out` is a caller-provided array of `n` pointers. Each
+Reverse-mode AD: `grads_out` is a caller-provided array of `n` pointers. Each
 returned gradient tensor must be released by the caller.
 
-frule: `tangents` elements may be null (zero tangent for that operand).
+Forward-mode AD: `tangents` elements may be null (zero tangent for that operand).
 
 ### SVD
 
@@ -239,7 +241,7 @@ consistent across CPU and GPU backends.
    Other decompositions can be added as needed.
 
 3. **No tape/tracked types exposed.** Host languages already have their
-   own AD systems. Exposing stateless rrule/frule lets each host
+   own AD systems. Exposing stateless VJP/JVP functions lets each host
    integrate naturally (Julia ChainRules, PyTorch custom_vjp, JAX
    custom_vjp).
 
@@ -265,13 +267,13 @@ consistent across CPU and GPU backends.
 - Exit criteria: Round-trip test (Rust -> DLPack -> Rust) preserves data, shape, strides; deleter is called exactly once
 
 ### Phase 3: Einsum + SVD + AD
-- Implement: `tfe_einsum_f64`, `_rrule`, `_frule`; `tfe_svd_f64`, `_rrule`, `_frule`
-- Exit criteria: Gradient check passes for einsum rrule/frule; SVD round-trip U*S*Vt ~= A
+- Implement: `tfe_einsum_f64`, proposed VJP/JVP variants; `tfe_svd_f64`, proposed VJP/JVP variants
+- Exit criteria: Gradient check passes for einsum VJP/JVP; SVD round-trip U*S*Vt ~= A
 
 ### Phase 4: Tropical C-API
-- Implement: `tfe_tropical_einsum_maxplus_f64` etc. + `_rrule` variants
-- No `_frule` for tropical (rrule-only policy)
-- Exit criteria: Tropical einsum matches CPU reference; rrule gradient check passes
+- Implement: `tfe_tropical_einsum_maxplus_f64` etc. + proposed reverse-mode variants
+- No forward-mode AD for tropical
+- Exit criteria: Tropical einsum matches CPU reference; reverse-mode gradient check passes
 
 ---
 
@@ -308,7 +310,7 @@ Status message: human-readable, non-empty. Written to an internal thread-local b
 | DLPack | Unsupported dtype, device mismatch, deleter called exactly once |
 | Ownership | Double release (must not crash), release after to_dlpack (must not crash) |
 | Panic safety | Internal panic caught and converted to TFE_INTERNAL_ERROR |
-| AD error paths | Tropical frule returns TFE_INVALID_ARGUMENT; NULL cotangent in rrule |
+| AD error paths | Tropical forward-mode AD returns TFE_INVALID_ARGUMENT; NULL cotangent in reverse mode |
 
 See [testing.md](./testing.md) for the workspace-level testing strategy.
 
@@ -317,7 +319,7 @@ See [testing.md](./testing.md) for the workspace-level testing strategy.
 ## ABI Policy
 
 ### Header Generation
-C headers are generated via `cbindgen` from the two FFI crates:
+C headers would be generated via `cbindgen` from the two planned FFI crates:
 
 ```bash
 cbindgen --config cbindgen.toml --crate tenferro-capi --output tenferro.h

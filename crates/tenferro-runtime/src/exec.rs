@@ -330,7 +330,7 @@ pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> R
 }
 
 /// Evaluate an [`ExecProgram`] with caller-owned backend runtime cache state.
-pub fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
+pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,

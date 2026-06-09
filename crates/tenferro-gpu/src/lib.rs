@@ -27,8 +27,7 @@ use std::any::Any;
 #[cfg(feature = "cuda")]
 pub mod cubecl;
 #[cfg(feature = "cuda")]
-#[doc(hidden)]
-pub mod kernels;
+mod kernels;
 
 #[cfg(feature = "cuda")]
 pub use cubecl::{
@@ -56,7 +55,10 @@ pub(crate) mod types {
 
 /// CubeCL-managed GPU buffer.
 ///
-/// This wraps a CubeCL server handle that owns the underlying GPU allocation.
+/// This is the backend-owned buffer type stored inside tensors uploaded to a
+/// CubeCL CUDA runtime. Application code should treat it as opaque and use
+/// [`upload_tensor`], [`download_tensor`], and [`device_ptr`] instead of
+/// constructing or inspecting buffers directly.
 ///
 /// # Examples
 ///
@@ -73,17 +75,15 @@ pub(crate) mod types {
 ///         let Tensor::F64(tensor) = gpu else { unreachable!() };
 ///         let Buffer::Backend(buffer) = &tensor.buffer else { unreachable!() };
 ///         let cubecl = buffer.as_any().downcast_ref::<CubeclBuffer<f64>>().unwrap();
-///         assert_eq!(cubecl.len, 2);
+///         assert_eq!(cubecl.backend_family(), "cubecl");
 ///     }
 /// }
 /// ```
 #[cfg(feature = "cuda")]
 #[derive(Clone)]
 pub struct CubeclBuffer<T> {
-    /// CubeCL server handle that owns the GPU allocation.
-    pub handle: cubecl_runtime::server::Handle,
-    /// Number of elements stored in the allocation.
-    pub len: usize,
+    handle: cubecl_runtime::server::Handle,
+    len: usize,
     pub(crate) _marker: std::marker::PhantomData<T>,
 }
 
@@ -91,7 +91,6 @@ pub struct CubeclBuffer<T> {
 impl<T> std::fmt::Debug for CubeclBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
-            .field("handle", &self.handle)
             .field("len", &self.len)
             .finish()
     }
@@ -99,36 +98,20 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
 
 #[cfg(feature = "cuda")]
 impl<T> CubeclBuffer<T> {
-    /// Create a CubeCL buffer wrapper from a handle and element count.
-    ///
-    /// This is a low-level constructor for backend integrations that already
-    /// own a CubeCL handle. Most callers should use [`upload_tensor`] instead.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #[cfg(feature = "cuda")]
-    /// {
-    ///     use tenferro_gpu::{gpu_available, upload_tensor, CubeclBackend, CubeclBuffer};
-    ///     use tenferro_tensor::{BackendBuffer, Buffer, Tensor};
-    ///
-    ///     if gpu_available() {
-    ///         let backend = CubeclBackend::new(0).unwrap();
-    ///         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    ///         let gpu = upload_tensor(backend.runtime(), &host).unwrap();
-    ///         let Tensor::F64(tensor) = gpu else { unreachable!() };
-    ///         let Buffer::Backend(buffer) = &tensor.buffer else { unreachable!() };
-    ///         let cubecl = buffer.as_any().downcast_ref::<CubeclBuffer<f64>>().unwrap();
-    ///         assert_eq!(cubecl.backend_family(), "cubecl");
-    ///     }
-    /// }
-    /// ```
-    pub fn new(handle: cubecl_runtime::server::Handle, len: usize) -> Self {
+    pub(crate) fn new(handle: cubecl_runtime::server::Handle, len: usize) -> Self {
         Self {
             handle,
             len,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub(crate) fn handle(&self) -> &cubecl_runtime::server::Handle {
+        &self.handle
+    }
+
+    pub(crate) fn element_len(&self) -> usize {
+        self.len
     }
 }
 

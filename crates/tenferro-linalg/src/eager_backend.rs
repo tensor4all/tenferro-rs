@@ -61,8 +61,8 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, svd_values(input))
     }
 
-    fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        dispatch_linalg!(self, svd_view(input))
+    fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, svd_read(input))
     }
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {

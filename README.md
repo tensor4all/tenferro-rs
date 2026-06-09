@@ -74,20 +74,9 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | `tenferro-einsum` | Einsum and contraction planning |
 | `tenferro-fft` | FFT operations |
 
-### Published Implementation Crates
-
-These crates are published so the user-facing crates can depend on them through
-crates.io. They are not recommended starting points for application code.
-
-| Crate | Role |
-| --- | --- |
-| `tenferro-tensor-core` | Low-level host tensor model and scalar/layout primitives |
-| `tenferro-core-ops` | Core primitive operation catalog |
-| `tenferro-internal-ops` | Internal graph op vocabulary and AD rule plumbing |
-| `tenferro-internal-extension-macros` | Extension registration procedural macros |
-
 ## Minimal CPU Example
 
+<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};
@@ -106,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 ## Documentation
 

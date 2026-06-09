@@ -846,7 +846,10 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 /// fn accepts_session_host<B: BackendSessionHost>(_backend: &mut B) {}
 /// ```
 pub trait BackendSessionHost: BackendRuntimeCache {
-    fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R
     where
         Self: TensorBackend + Sized,
     {
@@ -854,10 +857,10 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     }
 
     #[doc(hidden)]
-    fn with_backend_session_cached<R>(
+    fn with_backend_session_cached<R: Send>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R
     where
         Self: TensorBackend + Sized,
@@ -953,9 +956,9 @@ impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
 ///     default_backend_session(backend, |_exec| 1usize)
 /// }
 /// ```
-pub fn default_backend_session<B: TensorBackend, R>(
+pub fn default_backend_session<B: TensorBackend, R: Send>(
     backend: &mut B,
-    f: impl FnOnce(&mut dyn BackendSession) -> R,
+    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
 ) -> R {
     f(backend)
 }

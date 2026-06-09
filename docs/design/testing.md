@@ -114,7 +114,7 @@ Port from `tests/einsum_core.rs` and `tests/optimizer.rs`.
 | `ContractionTree::optimize` | `test_greedy_*`, `test_treesa_*` | Greedy and TreeSA |
 | Optimized vs pairwise | `test_optimized_vs_pairwise` | Results must match |
 
-#### AD (einsum_rrule / einsum_frule)
+#### AD (extension reverse / forward rules)
 
 Port from `tests/backward.rs`. Uses hand-computed expected gradients for small cases,
 plus finite-difference verification from `tests/showcase.rs`.
@@ -307,9 +307,9 @@ on a full AD tape.
 
 | Test | Expected result |
 |------|----------------|
-| Call tropical einsum frule (`MaxPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
-| Call tropical einsum frule (`MinPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
-| Call tropical einsum frule (`MaxMul`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum forward-mode AD (`MaxPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum forward-mode AD (`MinPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum forward-mode AD (`MaxMul`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
 | Call tropical einsum hvp (`MaxPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "hvp", .. })` |
 | Call tropical einsum hvp (`MinPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "hvp", .. })` |
 
@@ -318,7 +318,7 @@ Example test structure:
 ```rust
 #[test]
 fn tropical_frule_returns_mode_not_supported() {
-    let result = einsum_frule(/* tropical MaxPlus ctx */, "ij,jk->ik", &primals, &tangents);
+    let result = tropical_einsum_forward_ad(/* MaxPlus ctx */, "ij,jk->ik", &primals, &tangents);
     match result {
         Err(AutodiffError::ModeNotSupported { ref mode, .. }) => {
             assert_eq!(mode, "frule");

@@ -91,7 +91,7 @@ fn assert_no_panic_backend_download_error<T>(
 }
 
 #[test]
-fn default_svd_view_returns_explicit_backend_boundary_error() {
+fn default_svd_read_returns_explicit_backend_boundary_error() {
     struct DefaultOnlyLinalgBackend;
 
     macro_rules! panic_backend_methods {
@@ -226,7 +226,7 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .svd_view(TensorView::F64(input.as_view()))
+        .svd_read(TensorView::F64(input.as_view()))
         .unwrap_err();
 
     assert!(matches!(

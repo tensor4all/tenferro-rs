@@ -182,3 +182,21 @@ fn backend_surface_does_not_expose_internal_lu_solve_mode_type() {
         "internal prepared-solve mode state should not be exposed as a backend public type"
     );
 }
+
+#[test]
+fn faer_batched_paths_reuse_pooled_scratch_inputs() {
+    let source = crate_source("src/cpu/linalg/faer_linalg.rs");
+
+    assert!(
+        source.contains("tensor_from_pooled_slice_with_template"),
+        "Faer batched paths should construct batch inputs from pooled scratch buffers"
+    );
+    assert!(
+        source.contains("refill_tensor_from_slice"),
+        "Faer batched paths should refill scratch tensors instead of reallocating per batch"
+    );
+    assert!(
+        !source.contains("host_data()[range].to_vec()"),
+        "Faer batched paths should not allocate a new Vec for every batch slice"
+    );
+}

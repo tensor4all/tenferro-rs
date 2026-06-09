@@ -21,8 +21,8 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
-use tenferro_runtime::compiler::compile_std_to_exec;
-use tenferro_runtime::shape_infer::{infer_output_dtype, infer_output_extents};
+use tenferro_runtime::extension::compile_std_to_exec;
+use tenferro_runtime::extension::{infer_output_dtype, infer_output_extents};
 use tenferro_runtime::traced_tensor::matmul;
 use tenferro_runtime::{GraphExecutor, TracedTensor};
 use tenferro_tensor::{

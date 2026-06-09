@@ -11,7 +11,7 @@ use crate::shape_infer::{
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
-pub mod optimizer;
+mod optimizer;
 mod options;
 
 pub use options::{CompilerOptions, OptimizerConfig};
@@ -344,7 +344,7 @@ type AxisVec = SmallVec<[usize; 4]>;
 /// `input_dtypes` and `input_shapes` are the program-input metadata matching
 /// `program.input_slots`. They are required because `ExecProgram` stores
 /// metadata on instruction outputs, but not on program inputs.
-pub fn conj_sinking(
+pub(crate) fn conj_sinking(
     program: &mut ExecProgram,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
@@ -648,7 +648,7 @@ pub(crate) fn populate_last_use(program: &mut ExecProgram) {
 // a stable canonical ordering.
 
 /// Sort contracting dimensions of all DotGeneral instructions in place.
-pub fn dot_dimension_sorter(program: &mut ExecProgram) {
+pub(crate) fn dot_dimension_sorter(program: &mut ExecProgram) {
     for instr in &mut program.instructions {
         match &mut instr.op {
             ExecOp::DotGeneral(config) | ExecOp::DotGeneralWithConj { config, .. } => {
@@ -710,7 +710,7 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 // split out of the fixed compile pipeline.
 
 /// Simplify algebraically redundant layout operations in place.
-pub fn algebraic_layout_simplifier(program: &mut ExecProgram) {
+pub(crate) fn algebraic_layout_simplifier(program: &mut ExecProgram) {
     loop {
         if !algebraic_layout_simplifier_one_pass(program) {
             break;
@@ -848,7 +848,7 @@ fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
 // adjusting the DotGeneral dimension numbers and bypassing the Transpose.
 
 /// Fold Transpose instructions into DotGeneral dimension numbers.
-pub fn transpose_folding(program: &mut ExecProgram) {
+pub(crate) fn transpose_folding(program: &mut ExecProgram) {
     loop {
         let producer_by_slot = producer_indices_by_slot(program);
         let changed = transpose_fold_one_pass(program, &producer_by_slot);
@@ -860,7 +860,7 @@ pub fn transpose_folding(program: &mut ExecProgram) {
 
 /// Fold layout chains into DotGeneral where the rewrite is known to preserve
 /// DotGeneral's free/contracting/batch axis order constraints.
-pub fn layout_chain_transpose_folding(program: &mut ExecProgram) {
+pub(crate) fn layout_chain_transpose_folding(program: &mut ExecProgram) {
     loop {
         let producer_by_slot = producer_indices_by_slot(program);
         let changed = transpose_fold_one_pass(program, &producer_by_slot);
@@ -1042,7 +1042,7 @@ fn fold_transpose_into_dot(
 
 mod dot_decomposer;
 
-pub use dot_decomposer::dot_decomposer;
+pub(crate) use dot_decomposer::dot_decomposer;
 
 // ============================================================================
 // Pass 4: DotConjFolding
@@ -1054,7 +1054,7 @@ pub use dot_decomposer::dot_decomposer;
 // `x` and marking the DotGeneral operand as conjugated.
 
 /// Fold `Conj` inputs into `DotGeneralWithConj`.
-pub fn dot_conj_folding(program: &mut ExecProgram) {
+pub(crate) fn dot_conj_folding(program: &mut ExecProgram) {
     let producer_by_slot = producer_index_by_slot(program);
     let use_counts = slot_use_counts(program);
     let mut layout_rewrites: Vec<(usize, usize)> = Vec::new();
@@ -1264,7 +1264,7 @@ fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
 // remains in the program), and DCE reclaims that wasted runtime work.
 
 /// Drop instructions with no downstream consumer.
-pub fn eliminate_dead_code(program: &mut ExecProgram) {
+pub(crate) fn eliminate_dead_code(program: &mut ExecProgram) {
     let mut live_slots = vec![false; program.n_slots];
     for &slot in &program.output_slots {
         if slot >= live_slots.len() {
@@ -1296,3 +1296,6 @@ pub fn eliminate_dead_code(program: &mut ExecProgram) {
         .filter_map(|(i, instr)| keep[i].then_some(instr))
         .collect();
 }
+
+#[cfg(test)]
+mod tests;
