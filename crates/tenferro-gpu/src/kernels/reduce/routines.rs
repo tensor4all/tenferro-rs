@@ -49,7 +49,7 @@ pub struct ReduceLaunchSettings {
 }
 
 /// Choose launch settings for the first unit-kernel implementation.
-pub fn unit_launch_settings<R: Runtime>(
+pub(crate) fn unit_launch_settings<R: Runtime>(
     client: &ComputeClient<R>,
     problem: ReduceProblem,
 ) -> ReduceLaunchSettings {

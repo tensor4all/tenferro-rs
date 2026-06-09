@@ -54,3 +54,28 @@ fn backend_surface_no_longer_uses_forwarding_macro() {
     let backend_source = include_str!("../src/backend.rs");
     assert!(!backend_source.contains("forward_exec_to_backend"));
 }
+
+#[test]
+fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
+    let elementwise_source = include_str!("../src/elementwise.rs");
+    let analytic_source = include_str!("../src/analytic.rs");
+
+    assert!(
+        !elementwise_source.contains("materialize_tensor_read"),
+        "elementwise read paths must dispatch over TensorRead views directly"
+    );
+    assert!(
+        !analytic_source.contains("materialize_tensor_read"),
+        "analytic read paths must dispatch over TensorRead views directly"
+    );
+}
+
+#[test]
+fn indexing_hot_loops_do_not_recompute_multi_indices_from_flat_offsets() {
+    let indexing_source = include_str!("../src/indexing.rs");
+
+    assert!(
+        !indexing_source.contains("flat_to_multi"),
+        "indexing kernels should carry column-major indices incrementally after validation"
+    );
+}

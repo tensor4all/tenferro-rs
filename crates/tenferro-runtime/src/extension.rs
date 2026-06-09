@@ -24,12 +24,23 @@ use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
+use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::Result;
 use crate::metadata::{push_metadata_scope, register_scoped_graph_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
+pub use crate::compiler::CompilerOptions;
+#[doc(hidden)]
+pub use crate::compiler::{compile_std_to_exec, compile_std_to_exec_with_options};
+#[doc(hidden)]
+pub use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
+#[doc(hidden)]
+pub use crate::shape_infer::{
+    infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
+    promote_dtype_div_like, promote_dtype_for_binary_op, promote_dtypes,
+};
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
 pub use tenferro_ops::ExtensionFamilyId;
 
@@ -40,6 +51,21 @@ pub use crate::extension_runtime::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
 };
+
+/// Execute a lowered core program with caller-owned backend runtime cache state.
+///
+/// This owner-scoped hook is for operation-family runtimes that expand an
+/// extension into core tensor operations and need to run that lowered program
+/// while preserving the runtime cache owned by the outer graph executor.
+#[doc(hidden)]
+pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<Tensor>> {
+    crate::exec::eval_exec_ir_with_backend_cache(backend, program, inputs, backend_cache)
+}
 
 /// Apply an extension op in the traced graph.
 ///
@@ -230,38 +256,4 @@ fn traced_outputs_from_graph(
 }
 
 #[cfg(test)]
-mod tests {
-    use computegraph::types::OperationRole;
-    use tenferro_tensor::DType;
-
-    use super::*;
-
-    #[test]
-    fn apply_expanded_graph_builds_standard_op_without_extension() {
-        let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-        let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
-
-        let outputs =
-            apply_expanded_graph(
-                &[&x, &y],
-                vec![(DType::F64, vec![SymDim::from(2)])],
-                |builder, inputs| {
-                    Ok(builder.add_operation(
-                        StdTensorOp::Add,
-                        inputs.to_vec(),
-                        OperationRole::Primary,
-                    ))
-                },
-            )
-            .expect("expanded graph should build");
-
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].rank, 1);
-        assert_eq!(outputs[0].dtype, DType::F64);
-        assert!(outputs[0]
-            .graph
-            .operations()
-            .iter()
-            .all(|node| !matches!(node.operation, StdTensorOp::Extension(_))));
-    }
-}
+mod tests;

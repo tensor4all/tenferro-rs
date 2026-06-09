@@ -5,7 +5,6 @@ use num_traits::Zero;
 use super::indexing_alloc::pooled_uninit_tensor;
 use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::flat_to_multi;
 use tenferro_tensor::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -111,6 +110,21 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     f(&mut buffers)
 }
 
+fn advance_col_major_index(index: &mut [usize], shape: &[usize]) {
+    debug_assert_eq!(index.len(), shape.len());
+    for axis in 0..index.len() {
+        if shape[axis] == 0 {
+            index[axis] = 0;
+            continue;
+        }
+        index[axis] += 1;
+        if index[axis] < shape[axis] {
+            break;
+        }
+        index[axis] = 0;
+    }
+}
+
 fn pooled_filled_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>, fill: T) -> TypedTensor<T>
 where
     T: Copy + Clone + PoolScalar,
@@ -181,14 +195,6 @@ pub(crate) fn scatter_with_pool(
         "Bool data tensors are not supported by additive scatter",
         |op, upd| typed_scatter(buffers, op, &scatter_indices, upd, config)
     )
-}
-
-pub fn slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-    try_slice(input, config)
-}
-
-pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| try_slice_with_pool(buffers, input, config))
 }
 
 pub(crate) fn try_slice_with_pool(
@@ -280,14 +286,6 @@ pub(crate) fn try_pad_with_pool(
     )
 }
 
-pub fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-    try_concatenate(inputs, axis)
-}
-
-pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| try_concatenate_with_pool(buffers, inputs, axis))
-}
-
 pub(crate) fn try_concatenate_with_pool(
     buffers: &mut BufferPool,
     inputs: &[&Tensor],
@@ -303,10 +301,6 @@ pub(crate) fn try_concatenate_with_pool(
     dispatch_tensor_unary_result!(first, |t| typed_concatenate_from_dyn_inputs(
         buffers, t, inputs, axis
     ))
-}
-
-pub fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| reverse_with_pool(buffers, input, axes))
 }
 
 pub(crate) fn reverse_with_pool(
@@ -382,12 +376,12 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    for flat in 0..out.n_elements() {
-        flat_to_multi(flat, &out_shape, &mut out_idx);
+    for out_value in out.host_data_mut().iter_mut() {
         for axis in 0..rank {
             in_idx[axis] = config.starts[axis] + out_idx[axis] * config.strides[axis];
         }
-        *out.get_mut(&out_idx) = *input.get(&in_idx);
+        *out_value = *input.get(&in_idx);
+        advance_col_major_index(&mut out_idx, &out_shape);
     }
 
     Ok(out)
@@ -481,8 +475,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    for flat in 0..out_len {
-        flat_to_multi(flat, &out_shape, &mut out_idx);
+    debug_assert_eq!(out.n_elements(), out_len);
+    for out_value in out.host_data_mut().iter_mut() {
         let concat_idx = out_idx[axis];
         let input_pos = segment_ends
             .iter()
@@ -499,7 +493,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
 
         in_idx.copy_from_slice(&out_idx);
         in_idx[axis] -= axis_base;
-        *out.get_mut(&out_idx) = *inputs[input_pos].get(&in_idx);
+        *out_value = *inputs[input_pos].get(&in_idx);
+        advance_col_major_index(&mut out_idx, &out_shape);
     }
 
     Ok(out)
@@ -528,8 +523,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    for flat in 0..out.n_elements() {
-        flat_to_multi(flat, input_shape, &mut out_idx);
+    for out_value in out.host_data_mut().iter_mut() {
         for axis in 0..rank {
             in_idx[axis] = if reverse_axis[axis] {
                 input_shape[axis] - 1 - out_idx[axis]
@@ -537,7 +531,8 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
                 out_idx[axis]
             };
         }
-        *out.get_mut(&out_idx) = *input.get(&in_idx);
+        *out_value = *input.get(&in_idx);
+        advance_col_major_index(&mut out_idx, input_shape);
     }
 
     Ok(out)
@@ -890,9 +885,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
     let mut operand_idx = vec![0usize; rank];
     let mut window_offsets = vec![0usize; rank];
 
-    for flat in 0..out.n_elements() {
-        flat_to_multi(flat, &out_shape, &mut out_idx);
-
+    for out_value in out.host_data_mut().iter_mut() {
         batch_axis = 0;
         window_offsets.fill(0);
         for out_axis in 0..out_rank {
@@ -925,7 +918,8 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
             operand_idx[axis] += window_offsets[axis];
         }
 
-        *out.get_mut(&out_idx) = *operand.get(&operand_idx);
+        *out_value = *operand.get(&operand_idx);
+        advance_col_major_index(&mut out_idx, &out_shape);
     }
 
     Ok(out)
@@ -1106,11 +1100,7 @@ where
     let mut operand_base = vec![0usize; op_rank];
     let mut operand_idx = vec![0usize; op_rank];
 
-    for batch_flat in 0..batch_elems {
-        if !batch_shape.is_empty() {
-            flat_to_multi(batch_flat, &batch_shape, &mut batch_idx);
-        }
-
+    for _ in 0..batch_elems {
         let mut window_fits = true;
         operand_base.fill(0);
         for (component, &operand_dim) in config.scatter_dims_to_operand_dims.iter().enumerate() {
@@ -1128,6 +1118,7 @@ where
             operand_base[operand_dim] = start as usize;
         }
         if !window_fits {
+            advance_col_major_index(&mut batch_idx, &batch_shape);
             continue;
         }
 
@@ -1138,14 +1129,12 @@ where
             }
         }
         if !window_fits {
+            advance_col_major_index(&mut batch_idx, &batch_shape);
             continue;
         }
 
-        for window_flat in 0..window_elems {
-            if !window_shape_updates.is_empty() {
-                flat_to_multi(window_flat, &window_shape_updates, &mut window_idx);
-            }
-
+        window_idx.fill(0);
+        for _ in 0..window_elems {
             let mut batch_axis = 0usize;
             let mut window_axis = 0usize;
             for axis in 0..update_rank {
@@ -1166,7 +1155,9 @@ where
             let value = *updates.get(&update_idx);
             let slot = out.get_mut(&operand_idx);
             *slot = *slot + value;
+            advance_col_major_index(&mut window_idx, &window_shape_updates);
         }
+        advance_col_major_index(&mut batch_idx, &batch_shape);
     }
 
     Ok(out)
@@ -1218,12 +1209,12 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     let mut out_idx = vec![0usize; out_shape.len()];
     let mut input_idx = vec![0usize; out_shape.len()];
 
-    for flat in 0..out.n_elements() {
-        flat_to_multi(flat, &out_shape, &mut out_idx);
+    for out_value in out.host_data_mut().iter_mut() {
         for axis in 0..out_shape.len() {
             input_idx[axis] = clamped_starts[axis] + out_idx[axis];
         }
-        *out.get_mut(&out_idx) = *input.get(&input_idx);
+        *out_value = *input.get(&input_idx);
+        advance_col_major_index(&mut out_idx, &out_shape);
     }
 
     Ok(out)
@@ -1275,12 +1266,12 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
     let mut update_idx = vec![0usize; update_shape.len()];
     let mut operand_idx = vec![0usize; operand_shape.len()];
 
-    for flat in 0..update.n_elements() {
-        flat_to_multi(flat, update_shape, &mut update_idx);
+    for update_value in update.as_slice() {
         for axis in 0..update_shape.len() {
             operand_idx[axis] = clamped_starts[axis] + update_idx[axis];
         }
-        *out.get_mut(&operand_idx) = *update.get(&update_idx);
+        *out.get_mut(&operand_idx) = *update_value;
+        advance_col_major_index(&mut update_idx, update_shape);
     }
 
     Ok(out)
@@ -1350,8 +1341,7 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     let mut input_idx = vec![0usize; input_shape.len()];
     let mut out_idx = vec![0usize; input_shape.len()];
 
-    for flat in 0..input.n_elements() {
-        flat_to_multi(flat, input_shape, &mut input_idx);
+    for input_value in input.as_slice() {
         let mut in_bounds = true;
         for axis in 0..input_shape.len() {
             let out_pos = config.edge_padding_low[axis]
@@ -1363,8 +1353,9 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
             out_idx[axis] = out_pos as usize;
         }
         if in_bounds {
-            *out.get_mut(&out_idx) = *input.get(&input_idx);
+            *out.get_mut(&out_idx) = *input_value;
         }
+        advance_col_major_index(&mut input_idx, input_shape);
     }
 
     Ok(out)

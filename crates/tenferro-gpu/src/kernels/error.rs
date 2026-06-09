@@ -1,17 +1,8 @@
 use thiserror::Error;
 
 /// Error returned by tenferro CubeCL kernel launch helpers.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::kernels::CubeclKernelError;
-///
-/// let err = CubeclKernelError::InvalidAxis { axis: 3, rank: 2 };
-/// assert!(err.to_string().contains("axis"));
-/// ```
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum CubeclKernelError {
+pub(crate) enum CubeclKernelError {
     /// The requested axis is outside the input tensor rank.
     #[error("axis {axis} is out of bounds for rank {rank}")]
     InvalidAxis {
@@ -29,16 +20,6 @@ pub enum CubeclKernelError {
         /// Actual output shape supplied by the caller.
         actual: Vec<usize>,
     },
-
-    /// The requested operation does not support the requested dtype.
-    #[error("{op:?} does not support dtype {dtype:?}")]
-    UnsupportedDType {
-        /// Requested reduction operation.
-        op: crate::kernels::reduce::ReduceOp,
-        /// Requested reduction dtype.
-        dtype: crate::kernels::reduce::ReduceDType,
-    },
-
     /// The selected launch strategy is invalid for the input.
     #[error("invalid reduction strategy: {reason}")]
     InvalidStrategy {
@@ -48,13 +29,4 @@ pub enum CubeclKernelError {
 }
 
 /// Result alias for tenferro CubeCL kernel helpers.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::kernels::Result;
-///
-/// fn ok() -> Result<()> { Ok(()) }
-/// assert!(ok().is_ok());
-/// ```
-pub type Result<T> = core::result::Result<T, CubeclKernelError>;
+pub(crate) type Result<T> = core::result::Result<T, CubeclKernelError>;

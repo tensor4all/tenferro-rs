@@ -1,4 +1,5 @@
 use cubecl::stream_id::StreamId;
+use std::num::NonZeroUsize;
 use std::panic;
 
 use crate::cubecl::dispatch::{
@@ -50,6 +51,59 @@ fn cuda_extension_cache_is_type_indexed_and_lazy() {
     }
 
     assert_eq!(initializers, 1);
+}
+
+#[test]
+fn cuda_extension_cache_reports_stats_and_clear() {
+    let cache = CudaExtensionCache::new();
+    assert_eq!(cache.stats().entries, 0);
+    assert_eq!(cache.stats().retained_bytes, 0);
+
+    let _usize = cache.get_or_try_init::<usize>(|| Ok(17)).unwrap();
+    drop(_usize);
+    let _string = cache
+        .get_or_try_init::<String>(|| Ok("gpu".to_string()))
+        .unwrap();
+    drop(_string);
+
+    let stats = cache.stats();
+    assert_eq!(stats.entries, 2);
+    assert!(stats.retained_bytes >= std::mem::size_of::<usize>());
+
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(cache.stats().entries, 0);
+}
+
+#[test]
+fn cuda_extension_cache_has_configurable_entry_bound() {
+    let cache = CudaExtensionCache::with_max_entries(NonZeroUsize::new(1).unwrap());
+    let mut usize_initializers = 0usize;
+
+    let value = cache
+        .get_or_try_init::<usize>(|| {
+            usize_initializers += 1;
+            Ok(17)
+        })
+        .unwrap();
+    assert_eq!(*value, 17);
+    drop(value);
+
+    let value = cache
+        .get_or_try_init::<String>(|| Ok("gpu".to_string()))
+        .unwrap();
+    assert_eq!(value.as_str(), "gpu");
+    drop(value);
+    assert_eq!(cache.stats().entries, 1);
+
+    let value = cache
+        .get_or_try_init::<usize>(|| {
+            usize_initializers += 1;
+            Ok(23)
+        })
+        .unwrap();
+    assert_eq!(*value, 23);
+    assert_eq!(usize_initializers, 2);
 }
 
 #[test]

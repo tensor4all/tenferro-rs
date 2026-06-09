@@ -72,7 +72,7 @@ def user_facing_docs(root: pathlib.Path) -> list[pathlib.Path]:
         "reference",
         "oracle",
     }
-    docs: list[pathlib.Path] = []
+    docs: list[pathlib.Path] = [root / "README.md"]
     for path in sorted(docs_root.rglob("*.md")):
         relative = path.relative_to(docs_root)
         if relative.parts and relative.parts[0] in excluded_parts:

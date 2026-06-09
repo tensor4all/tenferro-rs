@@ -13,16 +13,17 @@ use super::ffi::cusolver::{
     CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
-use tenferro_gpu::cubecl::dispatch::{
-    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, typed_from_cubecl,
-    typed_tensor_array_arg, typed_tensor_binding,
+use tenferro_gpu::cubecl::interop::{
+    alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
+    ensure_typed_tensor_resident, flush_cubecl_client, raw_cuda_stream,
+    typed_device_ptr as interop_typed_device_ptr, typed_tensor_array_arg, typed_tensor_binding,
+    upload_device_bytes, upload_typed_tensor, with_cubecl_client, DeviceByteBuffer,
 };
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
 use tenferro_gpu::cubecl::{
     download_tensor, CubeclBackend, CubeclRuntime, CudaExtensionCacheGuard,
 };
-use tenferro_gpu::CubeclBuffer;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     Buffer, DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
@@ -160,8 +161,7 @@ fn ensure_cubecl_resident_typed<T: 'static>(
     op: &'static str,
     input: &TypedTensor<T>,
 ) -> Result<()> {
-    cubecl_buffer(input, op)?;
-    Ok(())
+    ensure_typed_tensor_resident(input, op)
 }
 
 fn linalg_handles(
@@ -173,16 +173,18 @@ fn linalg_handles(
 }
 
 struct Workspace {
-    _handle: Option<cubecl_runtime::server::Handle>,
+    _owner: DeviceByteBuffer,
     ptr: *mut c_void,
 }
 
 impl Workspace {
     fn none() -> Self {
-        Self {
-            _handle: None,
-            ptr: std::ptr::null_mut(),
-        }
+        Self::from_device(DeviceByteBuffer::none())
+    }
+
+    fn from_device(owner: DeviceByteBuffer) -> Self {
+        let ptr = owner.ptr();
+        Self { _owner: owner, ptr }
     }
 }
 
@@ -913,10 +915,9 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let client = rt.client();
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
-    unsafe {
+    with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CudaRuntime>(
             client,
             cube_count_for_len(vt.n_elements()),
@@ -925,10 +926,8 @@ where
             v_arg.into_tensor_arg(),
             vt.shape().len(),
         );
-    }
-    client.flush().map_err(|err| {
-        Error::backend_failure(op, format!("SVD V-to-VT copy launch failed: {err:?}"))
-    })
+    });
+    flush_cubecl_client(rt, op)
 }
 
 fn launch_svd_v_to_vt_complex<T>(
@@ -943,10 +942,9 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let client = rt.client();
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
-    unsafe {
+    with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CudaRuntime>(
             client,
             cube_count_for_len(vt.n_elements()),
@@ -955,10 +953,8 @@ where
             v_arg.into_tensor_arg(),
             vt.shape().len(),
         );
-    }
-    client.flush().map_err(|err| {
-        Error::backend_failure(op, format!("SVD V-to-VT copy launch failed: {err:?}"))
-    })
+    });
+    flush_cubecl_client(rt, op)
 }
 
 fn svd_typed<T>(
@@ -1582,7 +1578,6 @@ where
     let l = alloc_output::<T>(rt, &l_shape);
     let u = alloc_output::<T>(rt, &u_shape);
     let parity = alloc_output::<T>(rt, &parity_shape);
-    let client = rt.client();
     let launch_len = p
         .n_elements()
         .max(l.n_elements())
@@ -1594,7 +1589,7 @@ where
     let parity_arg = typed_tensor_binding(&parity, "lu")?;
     let work_arg = typed_tensor_binding(lu, "lu")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
-    unsafe {
+    with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CudaRuntime>(
             client,
             cube_count_for_len(launch_len),
@@ -1608,10 +1603,8 @@ where
             k,
             lu.shape().len(),
         );
-    }
-    client.flush().map_err(|err| {
-        Error::backend_failure("lu", format!("LU output extraction launch failed: {err:?}"))
-    })?;
+    });
+    flush_cubecl_client(rt, "lu")?;
 
     Ok((p, l, u, parity))
 }
@@ -1626,10 +1619,9 @@ where
     T: LinalgScalar,
 {
     let parity = alloc_output::<T>(rt, batch_shape);
-    let client = rt.client();
     let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
-    unsafe {
+    with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_parity::launch_unchecked::<T, CudaRuntime>(
             client,
             cube_count_for_len(parity.n_elements()),
@@ -1638,13 +1630,8 @@ where
             pivots_arg,
             k,
         );
-    }
-    client.flush().map_err(|err| {
-        Error::backend_failure(
-            "lu_factor",
-            format!("LU parity extraction launch failed: {err:?}"),
-        )
-    })?;
+    });
+    flush_cubecl_client(rt, "lu_factor")?;
     Ok(parity)
 }
 
@@ -1662,11 +1649,10 @@ where
         return Ok(out);
     }
     let k = pivots.shape()[0];
-    let client = rt.client();
     let out_arg = typed_tensor_binding(&out, "lu_solve_prepared")?;
     let input_arg = typed_tensor_binding(input, "lu_solve_prepared")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
-    unsafe {
+    with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CudaRuntime>(
             client,
             cube_count_for_len(out.n_elements()),
@@ -1678,13 +1664,8 @@ where
             input.shape().len(),
             inverse,
         );
-    }
-    client.flush().map_err(|err| {
-        Error::backend_failure(
-            "lu_solve_prepared",
-            format!("LU pivot application launch failed: {err:?}"),
-        )
-    })?;
+    });
+    flush_cubecl_client(rt, "lu_solve_prepared")?;
     Ok(out)
 }
 
@@ -1715,9 +1696,7 @@ where
 }
 
 fn raw_stream(rt: &CubeclRuntime, op: &'static str) -> Result<CudaStream> {
-    rt.raw_cuda_stream()
-        .map(|stream| stream as usize as CudaStream)
-        .map_err(|err| Error::backend_failure(op, err.to_string()))
+    raw_cuda_stream(rt, op).map(|stream| stream as usize as CudaStream)
 }
 
 fn sync_stream(rt: &CubeclRuntime, op: &'static str) -> Result<()> {
@@ -1727,25 +1706,8 @@ fn sync_stream(rt: &CubeclRuntime, op: &'static str) -> Result<()> {
     })
 }
 
-fn alloc_workspace_bytes(
-    rt: &CubeclRuntime,
-    nbytes: usize,
-    _op: &'static str,
-) -> Result<Workspace> {
-    if nbytes == 0 {
-        return Ok(Workspace::none());
-    }
-    let handle = rt.client().empty(nbytes);
-    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
-        Error::backend_failure(
-            "cubecl_linalg",
-            format!("failed to obtain workspace resource: {err:?}"),
-        )
-    })?;
-    Ok(Workspace {
-        _handle: Some(handle),
-        ptr: resource.resource().ptr as usize as *mut c_void,
-    })
+fn alloc_workspace_bytes(rt: &CubeclRuntime, nbytes: usize, op: &'static str) -> Result<Workspace> {
+    alloc_device_bytes(rt, nbytes, op).map(Workspace::from_device)
 }
 
 fn alloc_workspace_elems<T>(rt: &CubeclRuntime, len: i32, op: &'static str) -> Result<Workspace>
@@ -1762,14 +1724,7 @@ fn typed_device_ptr<T: 'static>(
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<*mut c_void> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    let resource = rt
-        .client()
-        .get_resource(buffer.handle.clone())
-        .map_err(|err| {
-            Error::backend_failure(op, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
-    Ok(resource.resource().ptr as usize as *mut c_void)
+    interop_typed_device_ptr(rt, tensor, op)
 }
 
 fn clone_device_tensor<T>(
@@ -1810,13 +1765,7 @@ where
             ));
         }
     };
-    let len = data.len();
-    let handle = rt.client().create_from_slice(T::as_bytes(&data));
-    Ok(typed_from_cubecl(
-        shape,
-        CubeclBuffer::new(handle, len),
-        rt.device_ordinal(),
-    ))
+    Ok(upload_typed_tensor(rt, shape, data))
 }
 
 fn upload_pointer_array(
@@ -1826,17 +1775,7 @@ fn upload_pointer_array(
 ) -> Result<Workspace> {
     let nbytes = std::mem::size_of_val(pointers);
     let bytes = unsafe { std::slice::from_raw_parts(pointers.as_ptr().cast::<u8>(), nbytes) };
-    let handle = rt.client().create_from_slice(bytes);
-    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
-        Error::backend_failure(
-            op,
-            format!("failed to obtain pointer-array resource: {err:?}"),
-        )
-    })?;
-    Ok(Workspace {
-        _handle: Some(handle),
-        ptr: resource.resource().ptr as usize as *mut c_void,
-    })
+    upload_device_bytes(rt, bytes, op).map(Workspace::from_device)
 }
 
 fn download_device_tensor<T>(
@@ -1848,15 +1787,7 @@ where
     T: CubeElement + Clone,
 {
     sync_stream(rt, op)?;
-    let buffer = cubecl_buffer(tensor, op)?;
-    let bytes = rt
-        .client()
-        .read_one(buffer.handle.clone())
-        .map_err(|err| Error::backend_failure(op, format!("failed to download tensor: {err:?}")))?;
-    Ok(TypedTensor::from_vec_col_major(
-        tensor.shape().to_vec(),
-        T::from_bytes(&bytes).to_vec(),
-    ))
+    download_typed_tensor(rt, tensor, op)
 }
 
 fn copy_device_to_device(

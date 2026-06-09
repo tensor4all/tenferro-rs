@@ -1,28 +1,15 @@
-//! CubeCL kernels and launch helpers for tenferro.
+//! Internal CubeCL kernels and launch helpers for tenferro.
 //!
 //! This crate owns GPU kernel definitions but does not own tenferro tensor
 //! values, device placement, or backend dispatch.
-//!
-//! # Examples
-//!
-//! ```
-//! use tenferro_gpu::kernels::reduce::{ReduceOp, ReduceStrategy};
-//!
-//! let _op = ReduceOp::Sum;
-//! let _strategy = ReduceStrategy::Auto;
-//! ```
 
-pub mod error;
-pub mod reduce;
+pub(crate) mod error;
+pub(crate) mod reduce;
 
-#[doc(hidden)]
-pub mod diagonal;
-#[doc(hidden)]
-pub mod elementwise;
+pub(crate) mod diagonal;
+pub(crate) mod elementwise;
 mod helpers;
-#[doc(hidden)]
-pub mod indexing;
-#[doc(hidden)]
-pub mod structural;
+pub(crate) mod indexing;
+pub(crate) mod structural;
 
-pub use error::{CubeclKernelError, Result};
+pub(crate) use error::{CubeclKernelError, Result};

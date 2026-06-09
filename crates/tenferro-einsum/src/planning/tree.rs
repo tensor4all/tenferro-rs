@@ -362,7 +362,7 @@ impl ContractionTree {
 
     #[doc(hidden)]
     #[must_use]
-    pub fn retained_bytes_for_cache_stats(&self) -> usize {
+    pub(crate) fn retained_bytes_for_cache_stats(&self) -> usize {
         size_of::<Self>()
             + subscripts_retained_bytes(&self.subscripts)
             + self.steps.capacity() * size_of::<ContractionStep>()

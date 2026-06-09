@@ -289,22 +289,6 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
 /// can instead report a known upper bound so metadata consumers do not treat a
 /// compatibility shape as proof of exactness.
 ///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::shape_infer::infer_output_extents;
-/// use tenferro_ops::dim_expr::DimExpr;
-/// use tenferro_ops::std_tensor_op::StdTensorOp;
-/// use tenferro_ops::ShapeExtent;
-///
-/// let input = vec![DimExpr::Const(4)];
-/// let scalar = vec![];
-/// let extents = infer_output_extents(
-///     &StdTensorOp::DynamicTruncate { axis: 0 },
-///     &[&input, &scalar],
-/// );
-/// assert_eq!(extents[0][0], ShapeExtent::upper_bound(DimExpr::Const(4)));
-/// ```
 pub fn infer_output_extents(
     op: &StdTensorOp,
     input_shapes: &[&[DimExpr]],

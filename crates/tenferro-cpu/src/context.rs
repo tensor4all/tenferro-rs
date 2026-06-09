@@ -1,12 +1,12 @@
 use std::env;
+use std::sync::Arc;
 
 use crate::{Error, Result};
 
 /// Reusable CPU execution context carrying CPU parallelism policy.
 ///
 /// `CpuContext` stores the requested thread count as a kernel-level
-/// parallelism hint. It does not own a Rayon thread pool; faer-backed kernels
-/// use Rayon through faer's global/current-pool integration.
+/// parallelism hint and owns the Rayon pool used by multi-threaded CPU work.
 ///
 /// # Examples
 ///
@@ -21,6 +21,7 @@ use crate::{Error, Result};
 #[derive(Clone, Debug)]
 pub struct CpuContext {
     num_threads: usize,
+    pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 impl CpuContext {
@@ -110,7 +111,20 @@ impl CpuContext {
                 message: "thread count must be at least 1".into(),
             });
         }
-        Ok(Self { num_threads })
+        let pool = if num_threads == 1 {
+            None
+        } else {
+            Some(Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(num_threads)
+                    .build()
+                    .map_err(|err| Error::InvalidConfig {
+                        op: "CpuContext::try_with_threads",
+                        message: format!("failed to build CPU thread pool: {err}"),
+                    })?,
+            ))
+        };
+        Ok(Self { num_threads, pool })
     }
 
     /// Return this context's CPU parallelism hint.
@@ -127,10 +141,7 @@ impl CpuContext {
         self.num_threads
     }
 
-    /// Run a closure on the caller thread.
-    ///
-    /// This method preserves the public execution-scope API without creating or
-    /// entering a tenferro-owned Rayon pool.
+    /// Run a closure inside this context's CPU execution scope.
     ///
     /// # Examples
     ///
@@ -141,8 +152,11 @@ impl CpuContext {
     /// let value = ctx.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
-    pub fn install<R>(&self, op: impl FnOnce() -> R) -> R {
-        op()
+    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
+        match &self.pool {
+            Some(pool) => pool.install(op),
+            None => op(),
+        }
     }
 
     /// Return the faer parallelism policy for this context.
@@ -152,7 +166,7 @@ impl CpuContext {
         if self.num_threads == 1 {
             faer::Par::Seq
         } else {
-            faer::Par::rayon(self.num_threads)
+            faer::Par::rayon(0)
         }
     }
 }

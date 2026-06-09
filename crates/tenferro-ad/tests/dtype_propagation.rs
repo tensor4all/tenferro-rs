@@ -1,5 +1,5 @@
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::shape_infer::infer_output_dtype;
+use tenferro_runtime::extension::infer_output_dtype;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, ScatterConfig};
 
 #[test]

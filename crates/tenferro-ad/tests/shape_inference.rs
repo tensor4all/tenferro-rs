@@ -1,7 +1,7 @@
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
-use tenferro_runtime::shape_infer::{infer_output_extents, infer_output_shapes};
+use tenferro_runtime::extension::{infer_output_extents, infer_output_shapes};
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn cst(n: usize) -> DimExpr {

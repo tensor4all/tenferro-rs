@@ -40,6 +40,11 @@ mod traced;
 pub mod traced_tensor;
 
 #[cfg(feature = "autodiff")]
+pub use ad::support::{
+    all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdOutputSupport,
+    LinalgAdRuleSupport, LinalgAdSupport,
+};
+#[cfg(feature = "autodiff")]
 pub use ad::{ad_rules, register_extension_rule};
 pub use backend::LinalgBackend;
 pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};

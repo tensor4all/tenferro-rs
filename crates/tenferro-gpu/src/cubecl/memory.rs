@@ -239,7 +239,7 @@ fn cubecl_handle_from_backend<T: 'static>(
     buffer
         .as_any()
         .downcast_ref::<CubeclBuffer<T>>()
-        .map(|buffer| buffer.handle.clone())
+        .map(|buffer| buffer.handle().clone())
         .ok_or_else(|| {
             crate::Error::backend_failure(
                 op,

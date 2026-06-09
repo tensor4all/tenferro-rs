@@ -24,45 +24,8 @@ use tenferro_tensor::{
 /// Fused segments group consecutive non-host, non-FFI instructions that can
 /// share one backend execution session. FFI and host segments remain
 /// single-instruction boundaries in Phase 4.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::segment::{segment_exec_program, Segment};
-/// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-/// use tenferro_runtime::DType;
-///
-/// let program = ExecProgram {
-///     instructions: vec![
-///         ExecInstruction {
-///             op: ExecOp::Add,
-///             input_slots: vec![0, 1],
-///             output_slots: vec![2],
-///             dtype: DType::F64,
-///             output_shapes: vec![vec![]].into(),
-///             output_extents: vec![vec![]].into(),
-///             last_use: vec![false, true],
-///         },
-///         ExecInstruction {
-///             op: ExecOp::Negate,
-///             input_slots: vec![2],
-///             output_slots: vec![3],
-///             dtype: DType::F64,
-///             output_shapes: vec![vec![]].into(),
-///             output_extents: vec![vec![]].into(),
-///             last_use: vec![true],
-///         },
-///     ],
-///     input_slots: vec![0, 1],
-///     output_slots: vec![3],
-///     n_slots: 4,
-/// };
-///
-/// let segments = segment_exec_program(&program);
-/// assert!(matches!(&segments[0], Segment::Fused { instructions, .. } if instructions.len() == 2));
-/// ```
 #[derive(Clone, Debug)]
-pub enum Segment {
+pub(crate) enum Segment {
     Fused {
         instructions: Vec<ExecInstruction>,
         input_slots: Vec<usize>,
@@ -74,45 +37,7 @@ pub enum Segment {
 }
 
 /// Compile an [`ExecProgram`] into execution segments.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::segment::{segment_exec_program, Segment};
-/// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-/// use tenferro_runtime::DType;
-///
-/// let program = ExecProgram {
-///     instructions: vec![
-///         ExecInstruction {
-///             op: ExecOp::Add,
-///             input_slots: vec![0, 1],
-///             output_slots: vec![2],
-///             dtype: DType::F64,
-///             output_shapes: vec![vec![]].into(),
-///             output_extents: vec![vec![]].into(),
-///             last_use: vec![false, true],
-///         },
-///         ExecInstruction {
-///             op: ExecOp::ShapeOf { axis: 0 },
-///             input_slots: vec![2],
-///             output_slots: vec![3],
-///             dtype: DType::F64,
-///             output_shapes: vec![vec![]].into(),
-///             output_extents: vec![vec![]].into(),
-///             last_use: vec![true],
-///         },
-///     ],
-///     input_slots: vec![0, 1],
-///     output_slots: vec![2, 3],
-///     n_slots: 4,
-/// };
-///
-/// let segments = segment_exec_program(&program);
-/// assert!(matches!(&segments[0], Segment::Fused { .. }));
-/// assert!(matches!(&segments[1], Segment::Host(_)));
-/// ```
-pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
+pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut fused_start: Option<usize> = None;
     let mut idx = 0usize;
@@ -184,18 +109,8 @@ fn is_single_broadcast_multiply_pair_at(program: &ExecProgram, idx: usize) -> bo
 }
 
 /// Evaluate an [`ExecProgram`] via segment-based dispatch.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::segment::eval_exec_segmented;
-/// use tenferro_runtime::exec::ExecProgram;
-/// use tenferro_cpu::CpuBackend;
-///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
-///     eval_exec_segmented::<CpuBackend>;
-/// ```
-pub fn eval_exec_segmented<B: TensorBackend + 'static>(
+#[cfg(test)]
+pub(crate) fn eval_exec_segmented<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
@@ -203,6 +118,7 @@ pub fn eval_exec_segmented<B: TensorBackend + 'static>(
     eval_exec_segmented_with_cache(backend, program, inputs)
 }
 
+#[cfg(test)]
 pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
@@ -953,156 +869,4 @@ fn build_elementwise_fusion_plan(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
-    use tenferro_cpu::CpuBackend;
-    use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
-    use tenferro_tensor::{DType, Tensor};
-
-    fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
-        ExecInstruction {
-            op: ExecOp::BroadcastInDim {
-                shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
-                dims,
-            },
-            input_slots: vec![input],
-            output_slots: vec![output],
-            dtype: DType::F64,
-            output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]].into(),
-            output_extents: vec![vec![
-                ShapeExtent::exact(DimExpr::Const(2)),
-                ShapeExtent::exact(DimExpr::Const(2)),
-            ]]
-            .into(),
-            last_use: vec![true],
-        }
-    }
-
-    fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
-        ExecInstruction {
-            op: ExecOp::Multiply,
-            input_slots: vec![lhs, rhs],
-            output_slots: vec![output],
-            dtype: DType::F64,
-            output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]].into(),
-            output_extents: vec![vec![
-                ShapeExtent::exact(DimExpr::Const(2)),
-                ShapeExtent::exact(DimExpr::Const(2)),
-            ]]
-            .into(),
-            last_use: vec![true, true],
-        }
-    }
-
-    #[test]
-    fn segmenter_isolates_consecutive_broadcast_multiply_triples() {
-        let program = ExecProgram {
-            instructions: vec![
-                broadcast(0, 4, vec![0]),
-                broadcast(1, 5, vec![1]),
-                multiply(4, 5, 6),
-                broadcast(2, 7, vec![0]),
-                broadcast(3, 8, vec![1]),
-                multiply(7, 8, 9),
-            ],
-            input_slots: vec![0, 1, 2, 3],
-            output_slots: vec![6, 9],
-            n_slots: 10,
-        };
-
-        let segments = segment_exec_program(&program);
-
-        assert_eq!(segments.len(), 2);
-        for segment in segments {
-            assert!(
-                matches!(segment, Segment::Fused { instructions, .. } if instructions.len() == 3)
-            );
-        }
-    }
-
-    #[test]
-    fn segmenter_isolates_single_broadcast_multiply_pairs() {
-        let program = ExecProgram {
-            instructions: vec![
-                broadcast(0, 4, vec![0]),
-                multiply(4, 1, 5),
-                broadcast(2, 6, vec![1]),
-                multiply(3, 6, 7),
-            ],
-            input_slots: vec![0, 1, 2, 3],
-            output_slots: vec![5, 7],
-            n_slots: 8,
-        };
-
-        let segments = segment_exec_program(&program);
-
-        assert_eq!(segments.len(), 2);
-        for segment in segments {
-            assert!(
-                matches!(segment, Segment::Fused { instructions, .. } if instructions.len() == 2)
-            );
-        }
-    }
-
-    #[test]
-    fn single_broadcast_multiply_pair_handles_reused_broadcast_output() {
-        let instructions = vec![broadcast(0, 4, vec![0]), multiply(4, 4, 5)];
-
-        let pair = single_broadcast_multiply_pair(&instructions, &[5]);
-
-        assert!(matches!(
-            pair,
-            Some(SingleBroadcastMultiplyPair::ReusedBroadcast { .. })
-        ));
-    }
-
-    #[test]
-    fn segmented_eval_executes_single_broadcast_multiply_pairs() {
-        let program = ExecProgram {
-            instructions: vec![
-                broadcast(0, 4, vec![0]),
-                multiply(4, 1, 5),
-                broadcast(2, 6, vec![1]),
-                multiply(3, 6, 7),
-            ],
-            input_slots: vec![0, 1, 2, 3],
-            output_slots: vec![5, 7],
-            n_slots: 8,
-        };
-        let mut backend = CpuBackend::new();
-        let inputs = vec![
-            Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]),
-            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
-            Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
-            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
-        ];
-
-        let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
-
-        assert_eq!(
-            outputs[0].as_slice::<f64>().unwrap(),
-            &[10.0, 40.0, 30.0, 80.0]
-        );
-        assert_eq!(
-            outputs[1].as_slice::<f64>().unwrap(),
-            &[5.0, 10.0, 21.0, 28.0]
-        );
-    }
-
-    #[test]
-    fn segmented_eval_executes_reused_broadcast_multiply_pair() {
-        let program = ExecProgram {
-            instructions: vec![broadcast(0, 1, vec![0]), multiply(1, 1, 2)],
-            input_slots: vec![0],
-            output_slots: vec![2],
-            n_slots: 3,
-        };
-        let mut backend = CpuBackend::new();
-        let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])];
-
-        let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
-
-        assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 9.0, 4.0, 9.0]);
-    }
-}
+mod tests;

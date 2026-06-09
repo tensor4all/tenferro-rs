@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorRead, TracedTensor};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,

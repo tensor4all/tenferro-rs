@@ -559,13 +559,14 @@ impl CpuBackend {
     /// let value = backend.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
-    pub fn install<R>(&self, op: impl FnOnce() -> R) -> R {
+    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
         self.ctx.install(op)
     }
 
-    fn install_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
+    fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
-        let result = op(&mut buffers);
+        let ctx = Arc::clone(&self.ctx);
+        let result = ctx.install(|| op(&mut buffers));
         self.buffers = buffers;
         result
     }
@@ -580,7 +581,7 @@ impl CpuBackend {
         result
     }
 
-    fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
+    fn linalg_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
         match self.kind {
             CpuBackendKind::Faer => self.install_with_pool(op),
             CpuBackendKind::Blas => self.run_with_pool(op),
@@ -592,7 +593,7 @@ impl CpuBackend {
     /// This is exposed for operation-family crates that own their backend
     /// implementation while still sharing the CPU backend's allocation pool.
     #[doc(hidden)]
-    pub fn with_linalg_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
+    pub fn with_linalg_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
         self.linalg_with_pool(op)
     }
 
@@ -1347,28 +1348,34 @@ impl TensorIndexing for CpuBackend {
 }
 
 impl BackendSessionHost for CpuBackend {
-    fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
         let mut cache = profile_cpu_session_section("with_backend_session.cache_default", || {
             gemm::GemmAnalysisCache::default()
         });
         self.with_backend_session_cached(&mut cache, f)
     }
 
-    fn with_backend_session_cached<R>(
+    fn with_backend_session_cached<R: Send>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         if !cpu_session_profile_enabled() {
             let mut buffers = std::mem::take(&mut self.buffers);
             let ctx = Arc::clone(&self.ctx);
-            let mut session = CpuExecSession {
-                ctx: ctx.as_ref(),
-                buffers: &mut buffers,
-                gemm_analysis_cache: cache,
-                kind: self.kind,
-            };
-            let result = f(&mut session);
+            let kind = self.kind;
+            let result = ctx.install(|| {
+                let mut session = CpuExecSession {
+                    ctx: ctx.as_ref(),
+                    buffers: &mut buffers,
+                    gemm_analysis_cache: cache,
+                    kind,
+                };
+                f(&mut session)
+            });
             self.buffers = buffers;
             return result;
         }
@@ -1379,27 +1386,30 @@ impl BackendSessionHost for CpuBackend {
                 std::mem::take(&mut self.buffers)
             });
         let ctx = Arc::clone(&self.ctx);
+        let kind = self.kind;
         let result =
             profile_cpu_session_section("with_backend_session_cached.exec_session", || {
-                let session_started = Instant::now();
-                let mut session = CpuExecSession {
-                    ctx: ctx.as_ref(),
-                    buffers: &mut buffers,
-                    gemm_analysis_cache: cache,
-                    kind: self.kind,
-                };
-                record_cpu_session_profile(
-                    "with_backend_session_cached.session_construct",
-                    session_started.elapsed(),
-                );
+                ctx.install(|| {
+                    let session_started = Instant::now();
+                    let mut session = CpuExecSession {
+                        ctx: ctx.as_ref(),
+                        buffers: &mut buffers,
+                        gemm_analysis_cache: cache,
+                        kind,
+                    };
+                    record_cpu_session_profile(
+                        "with_backend_session_cached.session_construct",
+                        session_started.elapsed(),
+                    );
 
-                let exec_started = Instant::now();
-                let result = f(&mut session);
-                record_cpu_session_profile(
-                    "with_backend_session_cached.exec_body",
-                    exec_started.elapsed(),
-                );
-                result
+                    let exec_started = Instant::now();
+                    let result = f(&mut session);
+                    record_cpu_session_profile(
+                        "with_backend_session_cached.exec_body",
+                        exec_started.elapsed(),
+                    );
+                    result
+                })
             });
         profile_cpu_session_section("with_backend_session_cached.restore_buffers", || {
             self.buffers = buffers;

@@ -544,7 +544,7 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;

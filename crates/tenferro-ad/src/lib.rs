@@ -33,7 +33,12 @@ pub mod traced;
 pub use context::{AdContext, AdContextBuilder};
 pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
-pub use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics, shape_infer};
+pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
+pub(crate) mod shape_infer {
+    pub use tenferro_runtime::extension::{
+        promote_dtype, promote_dtype_for_binary_op, promote_dtypes,
+    };
+}
 pub use tenferro_runtime::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor,
@@ -46,10 +51,9 @@ pub mod error {
     pub use tenferro_runtime::{ContextId, Error, Result};
 }
 
-pub mod metadata {
+pub(crate) mod metadata {
     pub use tenferro_runtime::ad_support::{
-        metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
-        push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
+        metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_graph_metadata,
         register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
         MetadataScope,
     };

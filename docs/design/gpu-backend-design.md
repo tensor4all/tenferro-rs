@@ -40,9 +40,10 @@ crates/tenferro-gpu/src/kernels/
 
 crates/tenferro-gpu/src/cubecl/
     mod.rs                 CubeclBackend and TensorBackend implementation
-    runtime.rs             CubeCL/CUDA runtime initialization and stream access
+    runtime.rs             CubeCL/CUDA runtime initialization and synchronization
     memory.rs              upload_tensor, download_tensor, device pointer bridge
-    dispatch.rs            shared launch helpers and dtype dispatch
+    dispatch.rs            private shared launch helpers and dtype dispatch
+    interop.rs             owner-scoped launch/allocation bridge for operation crates
     fusion/                fused elementwise classification and code generation
     gemm.rs                cuTENSOR/cuBLAS-backed contraction support
     linalg.rs              cuSOLVER/cuBLAS-backed linalg support
@@ -110,6 +111,44 @@ Local GPU test runs should also set:
 | `CUDA_PATH` | CUDA toolkit root used by CubeCL/NVRTC |
 | `LD_LIBRARY_PATH` | CUDA, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
 | `CUBECL_DEBUG_LOG=0` | Suppress generated-kernel log spam |
+
+## Runtime Cache Ownership
+
+`CubeclBackend` owns CUDA extension backend-state caches. Extension crates may
+store type-indexed CUDA handles or plans through
+`CubeclBackend::cuda_extension_cache()`, but the backend remains the lifetime
+and resource owner.
+
+The CUDA extension cache has a bounded default capacity of 16 type entries.
+Applications can configure it with
+`CubeclBackend::set_cuda_extension_cache_max_entries`, clear it with
+`CubeclBackend::clear_cuda_extension_cache`, and inspect retained entries and
+logical retained bytes with `CubeclBackend::cuda_extension_cache_stats`.
+Retained bytes are estimates of cache-owned payloads, not process RSS or
+allocator arena usage.
+
+## Operation-Crate Interop Boundary
+
+`crates/tenferro-gpu/src/cubecl/dispatch.rs` is private backend glue. It owns
+shape/buffer validation before unsafe CubeCL launch arguments are constructed.
+Sibling operation crates must not import it directly.
+
+Operation crates that need to launch their own CubeCL kernels, such as
+`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cubecl::interop` module
+instead. That module intentionally exposes only the bridges that cannot live in
+`tenferro-gpu` without creating an operation-crate dependency cycle:
+
+- one-dimensional launch configuration helpers,
+- checked `TensorBinding` / `ArrayArg` construction,
+- typed output allocation, typed upload/download, and typed device-pointer
+  extraction,
+- byte workspaces kept alive for CUDA library calls,
+- scoped access to the CubeCL client for operation-owned kernel launches.
+
+`CubeclRuntime::client`, `CubeclRuntime::raw_cuda_stream`, `CubeclBuffer`
+fields, and raw `CubeclBuffer` constructors are not public API. Public tensor
+users should use `CubeclBackend`, `upload_tensor`, `download_tensor`,
+`device_ptr`, and `CubeclRuntime::synchronize`.
 
 ## Kernel Metadata Contract
 
@@ -200,7 +239,7 @@ Same-placement canonicalization is allowed: host views may be copied into host
 compact tensors, and CUDA views may be copied into CUDA compact tensors. It is
 not a transfer mechanism.
 
-```rust,ignore
+```text
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 

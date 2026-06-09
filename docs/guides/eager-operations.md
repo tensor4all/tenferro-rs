@@ -134,7 +134,7 @@ assert_eq!(x.shape(), &[3]);
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::Tensor;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);

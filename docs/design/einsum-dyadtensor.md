@@ -1,7 +1,11 @@
-# Einsum + DyadTensor AD Design
+# Historical Einsum + DyadTensor AD Design
 
-This document describes how `tenferro-einsum` integrates with the current
-`tidu` AD engine, `tenferro-ad`, and the `chainrules` scalar rule layer.
+This is a historical design record for the pre-extension-runtime AD model. It
+is retained for scalar/loss semantics background only; the tape and dual-value
+sketches below are not current public API guidance.
+
+`tenferro-einsum` now records graph-level extension operations and routes AD
+through extension rules registered with `tenferro-ad`.
 
 For the core AD contracts, see [autodiff.md](../architecture/ad-pipeline.md). For math
 derivations, see [AD Formula Notes](../AD/index.md).
@@ -26,10 +30,10 @@ Einsum and frontend layers integrate with a single AD execution model:
 
 There is no mixed runtime-erased tape path for custom values.
 
-Examples:
+Historical examples:
 
-- `tracked_einsum` works with `TrackedValue<Tensor<T>>`
-- `dual_einsum` works with `DualValue<Tensor<T>>`
+- a reverse-mode wrapper worked with `TrackedValue<Tensor<T>>`
+- a forward-mode wrapper worked with `DualValue<Tensor<T>>`
 - frontend wrappers may expose eager convenience APIs, but they still
   lower to homogeneous `TrackedValue<V>` / `Tape<V>` execution
 
@@ -41,10 +45,10 @@ Einsum losses follow PyTorch-style tensor scalar conventions.
 - shape `[1]` is not scalar
 - elementwise tensor-scalar sugar should normalize to rank-0 tensor semantics
 
-Typical loss construction:
+Typical loss construction sketch:
 
-```rust,ignore
-let loss = tracked_einsum("ij,ij->", &[&x, &x]).unwrap(); // rank-0 tensor
+```text
+let loss = /* legacy tracked einsum call returning a rank-0 tensor */;
 ```
 
 or equivalently, higher layers may use an explicit reduction that returns a
@@ -57,11 +61,11 @@ AD engine. This is separate from the tensor-operation scalar definition above.
 
 ### Explicit einsum AD entry points
 
-`tenferro-einsum` keeps explicit interfaces:
+The historical design used explicit interfaces:
 
-- `tracked_einsum`
-- `einsum_rrule`
-- `einsum_hvp`
+- reverse-mode tracked wrapper
+- reverse-mode rule helper
+- HVP helper
 
 The reverse-mode flow is:
 
@@ -82,10 +86,10 @@ These remain monomorphic. They do not mutate `.grad()` / `.hvp()` buffers.
 
 Forward-over-reverse HVP uses tangent-seeded leaves and the monomorphic tape:
 
-```rust,ignore
+```text
 let tape = Tape::<Tensor<f64>>::new();
 let x = tape.leaf_with_tangent(x0, v0).unwrap();
-let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
+let loss = /* legacy tracked einsum call returning a rank-0 tensor */;
 let hv = tape.hvp(&loss).unwrap();
 ```
 
@@ -94,7 +98,7 @@ phase; the low-level `tidu::Tape::hvp` path is the source of truth.
 
 ## Forward-Mode Integration
 
-`dual_einsum` remains the forward-mode entry point.
+The historical dual-mode wrapper was the forward-mode entry point.
 
 - primal values live in `DualValue<V>::primal()`
 - tangents live in `DualValue<V>::tangent()`

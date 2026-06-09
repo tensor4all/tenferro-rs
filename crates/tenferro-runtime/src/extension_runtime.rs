@@ -68,10 +68,8 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ops::dim_expr::DimExpr;
-    /// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-    /// use tenferro_runtime::{
-    ///     DType, ExtensionCacheStore, ExtensionExecutionContext, Tensor,
-    /// };
+    /// use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
+    /// use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, Tensor};
     ///
     /// let program = ExecProgram {
     ///     instructions: vec![ExecInstruction {
@@ -100,7 +98,7 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     /// ```
     pub fn execute_core_exec_program_unsegmented(
         &mut self,
-        program: &crate::exec::ExecProgram,
+        program: &crate::extension::ExecProgram,
         inputs: Vec<Tensor>,
     ) -> crate::error::Result<Vec<Tensor>>
     where

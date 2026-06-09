@@ -1,17 +1,23 @@
+use std::any::Any;
 use std::collections::HashMap;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::Duration;
 
 use computegraph::types::ValueKey;
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::DotGeneralConfig;
+use tenferro_runtime::ExtensionExecutor;
 use tenferro_tensor::Tensor;
+use tenferro_tensor::{DType, DotGeneralConfig};
 use tenferro_tensor::{TensorFusion, TensorRead};
 use tidu::ADKey;
 
 use crate::eager_backend::EagerBackend;
+use crate::eager_exec::exec_op_on_tensor_reads_with_extension_executor;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,
@@ -20,6 +26,73 @@ use super::{
     eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
 };
+
+#[derive(Clone, Debug)]
+struct ReadPathFallbackProbe;
+
+impl ExtensionOp for ReadPathFallbackProbe {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.read-path-fallback-probe.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().is::<ReadPathFallbackProbe>()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[test]
+fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
+    let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let reads = [TensorRead::from_tensor(&input)];
+    let mut backend = CpuBackend::new();
+    let mut extension_executor = ExtensionExecutor::<CpuBackend>::new();
+
+    let err = exec_op_on_tensor_reads_with_extension_executor(
+        &op,
+        &reads,
+        &mut backend,
+        Some(&mut extension_executor),
+    )
+    .expect_err("registered runtime owner with missing family must not eager fallback");
+
+    let message = err.to_string();
+    assert!(message.contains("missing runtime"), "{message}");
+    assert!(
+        message.contains("tenferro-tests.read-path-fallback-probe.v1"),
+        "{message}"
+    );
+}
 
 #[test]
 fn eager_op_profile_helpers_cover_enabled_paths() {

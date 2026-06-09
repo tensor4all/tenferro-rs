@@ -15,8 +15,8 @@ use tenferro_tensor::{
 };
 
 use super::{
-    materialize_tensor_read, tensor_from_array, typed_array_uninit_from_pool, typed_host_data,
-    typed_view, typed_view_from_view,
+    tensor_from_array, typed_array_uninit_from_pool, typed_host_data, typed_view,
+    typed_view_from_view,
 };
 
 macro_rules! dispatch_ternary_result_with_pool {
@@ -192,6 +192,20 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     f(&mut buffers)
 }
 
+/// Add two CPU tensors elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::add;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let out = add(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| add_with_pool(buffers, lhs, rhs))
 }
@@ -356,6 +370,20 @@ pub(crate) fn add_read_with_pool(
     })
 }
 
+/// Multiply two CPU tensors elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::mul;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]);
+/// let out = mul(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[8.0, 15.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| mul_with_pool(buffers, lhs, rhs))
 }
@@ -371,41 +399,11 @@ fn binary_read_with_pool(
         return f(buffers, lhs, rhs);
     }
 
-    let lhs = materialize_tensor_read(op, lhs)?;
-    let rhs = materialize_tensor_read(op, rhs)?;
-    f(buffers, &lhs, &rhs)
-}
-
-fn unary_read_with_pool(
-    op: &'static str,
-    buffers: &mut BufferPool,
-    input: TensorRead<'_>,
-    f: impl FnOnce(&mut BufferPool, &Tensor) -> crate::Result<Tensor>,
-) -> crate::Result<Tensor> {
-    if let Some(input) = input.as_tensor() {
-        return f(buffers, input);
-    }
-
-    let input = materialize_tensor_read(op, input)?;
-    f(buffers, &input)
-}
-
-fn ternary_read_with_pool(
-    op: &'static str,
-    buffers: &mut BufferPool,
-    a: TensorRead<'_>,
-    b: TensorRead<'_>,
-    c: TensorRead<'_>,
-    f: impl FnOnce(&mut BufferPool, &Tensor, &Tensor, &Tensor) -> crate::Result<Tensor>,
-) -> crate::Result<Tensor> {
-    if let (Some(a), Some(b), Some(c)) = (a.as_tensor(), b.as_tensor(), c.as_tensor()) {
-        return f(buffers, a, b, c);
-    }
-
-    let a = materialize_tensor_read(op, a)?;
-    let b = materialize_tensor_read(op, b)?;
-    let c = materialize_tensor_read(op, c)?;
-    f(buffers, &a, &b, &c)
+    Err(crate::Error::DTypeMismatch {
+        op,
+        lhs: lhs.dtype(),
+        rhs: rhs.dtype(),
+    })
 }
 
 pub(crate) fn mul_with_pool(
@@ -569,7 +567,7 @@ enum CpuReadView<'a> {
     F64(TypedTensorView<'a, f64>),
     I32(TypedTensorView<'a, i32>),
     I64(TypedTensorView<'a, i64>),
-    Bool,
+    Bool(TypedTensorView<'a, bool>),
     C32(TypedTensorView<'a, Complex<f32>>),
     C64(TypedTensorView<'a, Complex<f64>>),
 }
@@ -580,17 +578,187 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
         TensorRead::Tensor(Tensor::F64(tensor)) => CpuReadView::F64(tensor.as_view()),
         TensorRead::Tensor(Tensor::I32(tensor)) => CpuReadView::I32(tensor.as_view()),
         TensorRead::Tensor(Tensor::I64(tensor)) => CpuReadView::I64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::Bool(_)) => CpuReadView::Bool,
+        TensorRead::Tensor(Tensor::Bool(tensor)) => CpuReadView::Bool(tensor.as_view()),
         TensorRead::Tensor(Tensor::C32(tensor)) => CpuReadView::C32(tensor.as_view()),
         TensorRead::Tensor(Tensor::C64(tensor)) => CpuReadView::C64(tensor.as_view()),
         TensorRead::View(TensorView::F32(view)) => CpuReadView::F32(view),
         TensorRead::View(TensorView::F64(view)) => CpuReadView::F64(view),
         TensorRead::View(TensorView::I32(view)) => CpuReadView::I32(view),
         TensorRead::View(TensorView::I64(view)) => CpuReadView::I64(view),
-        TensorRead::View(TensorView::Bool(_)) => CpuReadView::Bool,
+        TensorRead::View(TensorView::Bool(view)) => CpuReadView::Bool(view),
         TensorRead::View(TensorView::C32(view)) => CpuReadView::C32(view),
         TensorRead::View(TensorView::C64(view)) => CpuReadView::C64(view),
     }
+}
+
+fn typed_binary_view_with_pool<T, L, R>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+    f: impl Fn(T, T) -> T + Copy,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + 'static,
+    L: TensorRank,
+    R: TensorRank,
+{
+    if lhs.shape() == rhs.shape() {
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view_from_view(op, lhs)?,
+            &typed_view_from_view(op, rhs)?,
+            f,
+        )
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        Ok(tensor_from_array(out))
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_view_from_view(op, lhs)?.get(&[]);
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
+            f(scalar, x)
+        })
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        Ok(tensor_from_array(out))
+    } else if rhs.shape().is_empty() {
+        let scalar = typed_view_from_view(op, rhs)?.get(&[]);
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
+            f(x, scalar)
+        })
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        Ok(tensor_from_array(out))
+    } else {
+        Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        })
+    }
+}
+
+fn typed_unary_view_with_pool<T, R>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensorView<'_, T, R>,
+    f: impl Fn(T) -> T + Copy,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + 'static,
+    R: TensorRank,
+{
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_same_shape_binary_view_with_pool<T, O, L, R>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+    f: impl Fn(T, T) -> O + Copy,
+) -> crate::Result<TypedTensor<O>>
+where
+    T: Copy + 'static,
+    O: Copy + PoolScalar,
+    L: TensorRank,
+    R: TensorRank,
+{
+    if lhs.shape() != rhs.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        });
+    }
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+    zip_map2_into(
+        &mut out.view_mut(),
+        &typed_view_from_view(op, lhs)?,
+        &typed_view_from_view(op, rhs)?,
+        f,
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_select_view_with_pool<T, P, A, B>(
+    buffers: &mut BufferPool,
+    pred: &TypedTensorView<'_, bool, P>,
+    on_true: &TypedTensorView<'_, T, A>,
+    on_false: &TypedTensorView<'_, T, B>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + 'static,
+    P: TensorRank,
+    A: TensorRank,
+    B: TensorRank,
+{
+    if pred.shape() != on_true.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op: "select",
+            lhs: pred.shape().to_vec(),
+            rhs: on_true.shape().to_vec(),
+        });
+    }
+    if pred.shape() != on_false.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op: "select",
+            lhs: pred.shape().to_vec(),
+            rhs: on_false.shape().to_vec(),
+        });
+    }
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) };
+    zip_map3_into(
+        &mut out.view_mut(),
+        &typed_view_from_view("select", pred)?,
+        &typed_view_from_view("select", on_true)?,
+        &typed_view_from_view("select", on_false)?,
+        |p, t, f| if p { t } else { f },
+    )
+    .map_err(|err| crate::Error::backend_failure("select", err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_clamp_view_with_pool<T, I, L, U>(
+    buffers: &mut BufferPool,
+    input: &TypedTensorView<'_, T, I>,
+    lower: &TypedTensorView<'_, T, L>,
+    upper: &TypedTensorView<'_, T, U>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar + 'static,
+    I: TensorRank,
+    L: TensorRank,
+    U: TensorRank,
+{
+    if input.shape() != lower.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op: "clamp",
+            lhs: input.shape().to_vec(),
+            rhs: lower.shape().to_vec(),
+        });
+    }
+    if input.shape() != upper.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op: "clamp",
+            lhs: input.shape().to_vec(),
+            rhs: upper.shape().to_vec(),
+        });
+    }
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    zip_map3_into(
+        &mut out.view_mut(),
+        &typed_view_from_view("clamp", input)?,
+        &typed_view_from_view("clamp", lower)?,
+        &typed_view_from_view("clamp", upper)?,
+        |x, lo, hi| lo.max_elem(hi.min_elem(x)),
+    )
+    .map_err(|err| crate::Error::backend_failure("clamp", err))?;
+    Ok(tensor_from_array(out))
 }
 
 #[derive(Clone, Copy)]
@@ -1254,6 +1422,20 @@ pub(crate) fn broadcast_multiply_value_with_pool(
         .map(|tensor| tensor.map(TensorValue::from_tensor))
 }
 
+/// Divide two CPU tensors elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::div;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 15.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 5.0]);
+/// let out = div(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 3.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| div_with_pool(buffers, lhs, rhs))
 }
@@ -1297,9 +1479,102 @@ pub(crate) fn div_read_with_pool(
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    binary_read_with_pool("div", buffers, lhs, rhs, div_with_pool)
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(typed_binary_view_with_pool(
+            "div",
+            buffers,
+            &a,
+            &b,
+            |x, y| x / y,
+        )?)),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(typed_binary_view_with_pool(
+            "div",
+            buffers,
+            &a,
+            &b,
+            |x, y| x / y,
+        )?)),
+        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(typed_binary_view_with_pool(
+            "div",
+            buffers,
+            &a,
+            &b,
+            |x, y| x / y,
+        )?)),
+        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(typed_binary_view_with_pool(
+            "div",
+            buffers,
+            &a,
+            &b,
+            |x, y| x / y,
+        )?)),
+        (CpuReadView::F32(real), CpuReadView::C32(complex)) if real.shape().is_empty() => {
+            let scalar = complex_scalar_tensor_from_view(&real)?;
+            let scalar = scalar.as_view();
+            Ok(Tensor::C32(typed_binary_view_with_pool(
+                "div",
+                buffers,
+                &scalar,
+                &complex,
+                |x, y| x / y,
+            )?))
+        }
+        (CpuReadView::C32(complex), CpuReadView::F32(real)) if real.shape().is_empty() => {
+            let scalar = complex_scalar_tensor_from_view(&real)?;
+            let scalar = scalar.as_view();
+            Ok(Tensor::C32(typed_binary_view_with_pool(
+                "div",
+                buffers,
+                &complex,
+                &scalar,
+                |x, y| x / y,
+            )?))
+        }
+        (CpuReadView::F64(real), CpuReadView::C64(complex)) if real.shape().is_empty() => {
+            let scalar = complex_scalar_tensor_from_view(&real)?;
+            let scalar = scalar.as_view();
+            Ok(Tensor::C64(typed_binary_view_with_pool(
+                "div",
+                buffers,
+                &scalar,
+                &complex,
+                |x, y| x / y,
+            )?))
+        }
+        (CpuReadView::C64(complex), CpuReadView::F64(real)) if real.shape().is_empty() => {
+            let scalar = complex_scalar_tensor_from_view(&real)?;
+            let scalar = scalar.as_view();
+            Ok(Tensor::C64(typed_binary_view_with_pool(
+                "div",
+                buffers,
+                &complex,
+                &scalar,
+                |x, y| x / y,
+            )?))
+        }
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "div",
+            lhs: lhs_dtype,
+            rhs: rhs_dtype,
+        }),
+    }
 }
 
+/// Negate a CPU tensor elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::neg;
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]);
+/// let out = neg(&input)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| neg_with_pool(buffers, input))
 }
@@ -1321,9 +1596,53 @@ pub(crate) fn neg_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    unary_read_with_pool("neg", buffers, input, neg_with_pool)
+    let dtype = input.dtype();
+    match read_as_cpu_view(input) {
+        CpuReadView::F32(t) => Ok(Tensor::F32(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| -x,
+        )?)),
+        CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| -x,
+        )?)),
+        CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| -x,
+        )?)),
+        CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| -x,
+        )?)),
+        _ => Err(crate::Error::backend_failure(
+            "neg",
+            format!("unsupported dtype {dtype:?}"),
+        )),
+    }
 }
 
+/// Conjugate a real or complex CPU tensor elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tenferro_cpu::conj;
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]);
+/// let out = conj(&input)?;
+/// assert_eq!(out.as_slice::<Complex64>().unwrap(), &[Complex64::new(1.0, -2.0)]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| conj_with_pool(buffers, input))
 }
@@ -1345,9 +1664,52 @@ pub(crate) fn conj_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    unary_read_with_pool("conj", buffers, input, conj_with_pool)
+    let dtype = input.dtype();
+    match read_as_cpu_view(input) {
+        CpuReadView::F32(t) => Ok(Tensor::F32(typed_unary_view_with_pool(
+            "conj",
+            buffers,
+            &t,
+            |x| x.conj_elem(),
+        )?)),
+        CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
+            "conj",
+            buffers,
+            &t,
+            |x| x.conj_elem(),
+        )?)),
+        CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
+            "conj",
+            buffers,
+            &t,
+            |x| x.conj_elem(),
+        )?)),
+        CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
+            "conj",
+            buffers,
+            &t,
+            |x| x.conj_elem(),
+        )?)),
+        _ => Err(crate::Error::backend_failure(
+            "conj",
+            format!("unsupported dtype {dtype:?}"),
+        )),
+    }
 }
 
+/// Compute elementwise absolute values.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::abs;
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![2], vec![-3.0_f64, 4.0]);
+/// let out = abs(&input)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| abs_with_pool(buffers, input))
 }
@@ -1369,9 +1731,52 @@ pub(crate) fn abs_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    unary_read_with_pool("abs", buffers, input, abs_with_pool)
+    let dtype = input.dtype();
+    match read_as_cpu_view(input) {
+        CpuReadView::F32(t) => Ok(Tensor::F32(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.abs_elem(),
+        )?)),
+        CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.abs_elem(),
+        )?)),
+        CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.abs_elem(),
+        )?)),
+        CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.abs_elem(),
+        )?)),
+        _ => Err(crate::Error::backend_failure(
+            "abs",
+            format!("unsupported dtype {dtype:?}"),
+        )),
+    }
 }
 
+/// Compute elementwise signs.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::sign;
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![3], vec![-2.0_f64, 0.0, 3.0]);
+/// let out = sign(&input)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 0.0, 1.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| sign_with_pool(buffers, input))
 }
@@ -1393,9 +1798,53 @@ pub(crate) fn sign_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    unary_read_with_pool("sign", buffers, input, sign_with_pool)
+    let dtype = input.dtype();
+    match read_as_cpu_view(input) {
+        CpuReadView::F32(t) => Ok(Tensor::F32(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.sign_elem(),
+        )?)),
+        CpuReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.sign_elem(),
+        )?)),
+        CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.sign_elem(),
+        )?)),
+        CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.sign_elem(),
+        )?)),
+        _ => Err(crate::Error::backend_failure(
+            "sign",
+            format!("unsupported dtype {dtype:?}"),
+        )),
+    }
 }
 
+/// Compute elementwise maximum values.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::maximum;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let out = maximum(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 5.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| maximum_with_pool(buffers, lhs, rhs))
 }
@@ -1431,9 +1880,51 @@ pub(crate) fn maximum_read_with_pool(
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    binary_read_with_pool("maximum", buffers, lhs, rhs, maximum_with_pool)
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "maximum",
+            lhs: lhs_dtype,
+            rhs: rhs_dtype,
+        }),
+    }
 }
 
+/// Compute elementwise minimum values.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::minimum;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let out = minimum(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| minimum_with_pool(buffers, lhs, rhs))
 }
@@ -1469,9 +1960,51 @@ pub(crate) fn minimum_read_with_pool(
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    binary_read_with_pool("minimum", buffers, lhs, rhs, minimum_with_pool)
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "minimum",
+            lhs: lhs_dtype,
+            rhs: rhs_dtype,
+        }),
+    }
 }
 
+/// Compare two CPU tensors elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::compare;
+/// use tenferro_tensor::{CompareDir, Tensor};
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let out = compare(&a, &b, &CompareDir::Gt)?;
+/// assert_eq!(out.as_slice::<bool>().unwrap(), &[false, true]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
     with_local_pool(|buffers| compare_with_pool(buffers, lhs, rhs, dir))
 }
@@ -1518,11 +2051,67 @@ pub(crate) fn compare_read_with_pool(
     rhs: TensorRead<'_>,
     dir: &CompareDir,
 ) -> crate::Result<Tensor> {
-    binary_read_with_pool("compare", buffers, lhs, rhs, |buffers, lhs, rhs| {
-        compare_with_pool(buffers, lhs, rhs, dir)
-    })
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::Bool(a), CpuReadView::Bool(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "compare",
+            lhs: lhs_dtype,
+            rhs: rhs_dtype,
+        }),
+    }
 }
 
+/// Select values from two tensors using a boolean predicate tensor.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::select;
+/// use tenferro_tensor::Tensor;
+///
+/// let pred = Tensor::from_vec_col_major(vec![2], vec![true, false]);
+/// let on_true = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let on_false = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let out = select(&pred, &on_true, &on_false)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| select_with_pool(buffers, pred, on_true, on_false))
 }
@@ -1574,9 +2163,63 @@ pub(crate) fn select_read_with_pool(
     on_true: TensorRead<'_>,
     on_false: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    ternary_read_with_pool("select", buffers, pred, on_true, on_false, select_with_pool)
+    let pred_dtype = pred.dtype();
+    let true_dtype = on_true.dtype();
+    let false_dtype = on_false.dtype();
+    match (
+        read_as_cpu_view(pred),
+        read_as_cpu_view(on_true),
+        read_as_cpu_view(on_false),
+    ) {
+        (CpuReadView::Bool(p), CpuReadView::F32(t), CpuReadView::F32(f)) => Ok(Tensor::F32(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::F64(t), CpuReadView::F64(f)) => Ok(Tensor::F64(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::I32(t), CpuReadView::I32(f)) => Ok(Tensor::I32(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::I64(t), CpuReadView::I64(f)) => Ok(Tensor::I64(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::Bool(t), CpuReadView::Bool(f)) => Ok(Tensor::Bool(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::C32(t), CpuReadView::C32(f)) => Ok(Tensor::C32(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(p), CpuReadView::C64(t), CpuReadView::C64(f)) => Ok(Tensor::C64(
+            typed_select_view_with_pool(buffers, &p, &t, &f)?,
+        )),
+        (CpuReadView::Bool(_), _, _) => Err(crate::Error::DTypeMismatch {
+            op: "select",
+            lhs: true_dtype,
+            rhs: false_dtype,
+        }),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "select",
+            lhs: pred_dtype,
+            rhs: crate::DType::Bool,
+        }),
+    }
 }
 
+/// Clamp CPU tensor values elementwise between lower and upper bounds.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::clamp;
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 2.0, 8.0]);
+/// let lower = Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 0.0, 0.0]);
+/// let upper = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 5.0, 5.0]);
+/// let out = clamp(&input, &lower, &upper)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 2.0, 5.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| clamp_with_pool(buffers, input, lower, upper))
 }
@@ -1598,14 +2241,31 @@ pub(crate) fn clamp_read_with_pool(
     lower: TensorRead<'_>,
     upper: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
-    ternary_read_with_pool("clamp", buffers, input, lower, upper, clamp_with_pool)
-}
-
-pub fn typed_add<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
-{
-    with_local_pool(|buffers| typed_add_with_pool(buffers, lhs, rhs))
+    let input_dtype = input.dtype();
+    let lower_dtype = lower.dtype();
+    match (
+        read_as_cpu_view(input),
+        read_as_cpu_view(lower),
+        read_as_cpu_view(upper),
+    ) {
+        (CpuReadView::F32(input), CpuReadView::F32(lower), CpuReadView::F32(upper)) => Ok(
+            Tensor::F32(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
+        ),
+        (CpuReadView::F64(input), CpuReadView::F64(lower), CpuReadView::F64(upper)) => Ok(
+            Tensor::F64(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
+        ),
+        (CpuReadView::C32(input), CpuReadView::C32(lower), CpuReadView::C32(upper)) => Ok(
+            Tensor::C32(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
+        ),
+        (CpuReadView::C64(input), CpuReadView::C64(lower), CpuReadView::C64(upper)) => Ok(
+            Tensor::C64(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
+        ),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "clamp",
+            lhs: input_dtype,
+            rhs: lower_dtype,
+        }),
+    }
 }
 
 pub(crate) fn typed_add_with_pool<T>(
@@ -1706,13 +2366,6 @@ where
     }
 }
 
-pub fn typed_mul<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
-{
-    with_local_pool(|buffers| typed_mul_with_pool(buffers, lhs, rhs))
-}
-
 pub(crate) fn typed_mul_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -1809,13 +2462,6 @@ where
     }
 }
 
-pub fn typed_div<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
-{
-    with_local_pool(|buffers| typed_div_with_pool(buffers, lhs, rhs))
-}
-
 pub(crate) fn typed_div_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -1862,13 +2508,6 @@ where
     }
 }
 
-pub fn typed_neg<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
-{
-    with_local_pool(|buffers| typed_neg_with_pool(buffers, input))
-}
-
 pub(crate) fn typed_neg_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -1881,13 +2520,6 @@ where
     map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
         .map_err(|err| crate::Error::backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
-}
-
-pub fn typed_conj<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Zero + ConjElem + PoolScalar,
-{
-    with_local_pool(|buffers| typed_conj_with_pool(buffers, input))
 }
 
 pub(crate) fn typed_conj_with_pool<T>(
@@ -2093,268 +2725,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [7.0_f64, 8.0, 9.0, 10.0];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([2, 2], [1, 2], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 3, 2, 2],
-            &[0, 1],
-            &rhs,
-            &[2, 3, 2, 2],
-            &[2, 3],
-        )
-        .unwrap()
-        .expect("rank-N x rank-M pure outer products should use the fast path");
-
-        assert_eq!(out.shape(), &[2, 3, 2, 2]);
-        let expected: Vec<f64> = (0..2)
-            .flat_map(|d| {
-                (0..2).flat_map(move |c| {
-                    (0..3).flat_map(move |b| {
-                        (0..2).map(move |a| lhs_data[a + 2 * b] * rhs_data[c + 2 * d])
-                    })
-                })
-            })
-            .collect();
-        assert_eq!(out.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn batched_outer_product_fast_path_accepts_shared_batch_axis() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [
-            7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-        ];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 3], [1, 4], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 4, 3],
-            &[0, 2],
-            &rhs,
-            &[2, 4, 3],
-            &[1, 2],
-        )
-        .unwrap()
-        .expect("shared-batch outer products should use the fast path");
-
-        assert_eq!(out.shape(), &[2, 4, 3]);
-        let expected: Vec<f64> = (0..3)
-            .flat_map(|t| {
-                (0..4).flat_map(move |o| {
-                    (0..2).map(move |j| lhs_data[j + 2 * t] * rhs_data[o + 4 * t])
-                })
-            })
-            .collect();
-        assert_eq!(out.as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_degenerate_1x1_batched_elementwise() {
-        let lhs_data = [1.0_f64; 5];
-        let rhs_data = [2.0_f64; 5];
-        let lhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([1, 5], [1, 1], 0, &rhs_data).unwrap();
-
-        let plan =
-            split_outer_product_plan(&lhs, &[1, 1, 5], &[0, 2], &rhs, &[1, 1, 5], &[1, 2]).unwrap();
-
-        assert!(
-            plan.is_none(),
-            "1x1 per batch should use the ordinary zip-map path"
-        );
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_scaling_and_unsupported_axis_layouts() {
-        let vector_data = vec![1.0_f64; 5];
-        let matrix_data = vec![2.0_f64; 15];
-        let vector = TypedTensorView::from_slice([5], [1], 0, &vector_data).unwrap();
-        let matrix = TypedTensorView::from_slice([5, 3], [1, 5], 0, &matrix_data).unwrap();
-
-        assert!(
-            split_outer_product_plan(&vector, &[5, 3], &[0], &matrix, &[5, 3], &[0, 1])
-                .unwrap()
-                .is_none(),
-            "lhs scaling over a shared axis is not an outer product"
-        );
-        assert!(
-            split_outer_product_plan(&matrix, &[5, 3], &[0, 1], &vector, &[5, 3], &[0])
-                .unwrap()
-                .is_none(),
-            "rhs scaling over a shared axis is not an outer product"
-        );
-
-        let lhs_data = vec![1.0_f64; 6];
-        let rhs_data = vec![2.0_f64; 20];
-        let lhs = TypedTensorView::from_slice([2, 3], [1, 2], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 5], [1, 4], 0, &rhs_data).unwrap();
-        assert!(
-            split_outer_product_plan(&lhs, &[2, 4, 3, 5], &[0, 2], &rhs, &[2, 4, 3, 5], &[1, 3],)
-                .unwrap()
-                .is_none(),
-            "interleaved free axes are not supported by the materialized fast path"
-        );
-
-        let lhs_data = [1.0_f64, 2.0];
-        let rhs_data = [3.0_f64, 4.0, 5.0];
-        let lhs = TypedTensorView::from_slice([2], [1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([3], [1], 0, &rhs_data).unwrap();
-        assert!(
-            split_outer_product_plan(&lhs, &[2, 3, 4], &[0], &rhs, &[2, 3, 4], &[1])
-                .unwrap()
-                .is_none(),
-            "every output axis must be covered by lhs, rhs, or a shared batch axis"
-        );
-    }
-
-    #[test]
-    fn outer_product_fast_path_rejects_pure_shared_batch_elementwise() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64; 24];
-        let rhs_data = [2.0_f64; 24];
-        let lhs = TypedTensorView::from_slice([2, 3, 4], [1, 2, 6], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4, 2, 3], [1, 4, 8], 0, &rhs_data).unwrap();
-
-        let out = try_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 3, 4],
-            &[0, 1, 2],
-            &rhs,
-            &[2, 3, 4],
-            &[2, 0, 1],
-        )
-        .unwrap();
-
-        assert!(
-            out.is_none(),
-            "pure shared-batch elementwise should use the ordinary zip-map path"
-        );
-    }
-
-    #[test]
-    fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materialization() {
-        let mut buffers = BufferPool::default();
-        let lhs_data: Vec<f64> = (0..24).map(|i| (i + 1) as f64).collect();
-        let rhs_data: Vec<f64> = (0..24).map(|i| (100 + i) as f64).collect();
-        let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
-            vec![2, 3, 4],
-            lhs_data.clone(),
-        ));
-        let rhs = Tensor::F64(TypedTensor::from_vec_col_major(
-            vec![4, 2, 3],
-            rhs_data.clone(),
-        ));
-
-        let out = broadcast_multiply_read_with_pool(
-            &mut buffers,
-            TensorRead::from_tensor(&lhs),
-            &[2, 3, 4],
-            &[0, 1, 2],
-            TensorRead::from_tensor(&rhs),
-            &[2, 3, 4],
-            &[2, 0, 1],
-        )
-        .unwrap()
-        .expect("same-rank permuted elementwise multiply should use fallback broadcast mul");
-
-        let expected: Vec<f64> = (0..4)
-            .flat_map(|k| {
-                let lhs_data = &lhs_data;
-                let rhs_data = &rhs_data;
-                (0..3).flat_map(move |j| {
-                    (0..2).map(move |i| {
-                        let lhs_offset = i + 2 * j + 6 * k;
-                        let rhs_offset = k + 4 * i + 8 * j;
-                        lhs_data[lhs_offset] * rhs_data[rhs_offset]
-                    })
-                })
-            })
-            .collect();
-
-        assert_eq!(out.shape(), &[2, 3, 4]);
-        assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
-    }
-
-    #[test]
-    fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
-        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
-
-        let out = try_lazy_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[2, 3, 4],
-            &[0, 1],
-            &rhs,
-            &[2, 3, 4],
-            &[2],
-        )
-        .unwrap()
-        .expect("non-canonical lhs physical order should use lazy outer-product output");
-
-        assert_eq!(out.shape, vec![2, 3, 4]);
-        assert_ne!(out.strides, col_major_strides(&out.shape));
-        let value =
-            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
-        let tensor = value.to_tensor();
-        let expected: Vec<f64> = (0..4)
-            .flat_map(|k| {
-                (0..3).flat_map(move |j| (0..2).map(move |i| lhs_data[i * 3 + j] * rhs_data[k]))
-            })
-            .collect();
-        assert_eq!(tensor.shape(), &[2, 3, 4]);
-        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
-    }
-
-    #[test]
-    fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
-        let mut buffers = BufferPool::default();
-        let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let rhs_data = [10.0_f64, 20.0, 30.0, 40.0];
-        let lhs = TypedTensorView::from_slice([2, 3], [3, 1], 0, &lhs_data).unwrap();
-        let rhs = TypedTensorView::from_slice([4], [1], 0, &rhs_data).unwrap();
-
-        let out = try_lazy_outer_product_with_pool(
-            &mut buffers,
-            &lhs,
-            &[4, 2, 3],
-            &[1, 2],
-            &rhs,
-            &[4, 2, 3],
-            &[0],
-        )
-        .unwrap()
-        .expect("rhs-prefix output should still support lazy non-canonical lhs order");
-
-        assert_eq!(out.shape, vec![4, 2, 3]);
-        assert_ne!(out.strides, col_major_strides(&out.shape));
-        let value =
-            lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
-        let tensor = value.to_tensor();
-        let expected: Vec<f64> = (0..3)
-            .flat_map(|j| {
-                (0..2).flat_map(move |i| (0..4).map(move |k| rhs_data[k] * lhs_data[i * 3 + j]))
-            })
-            .collect();
-        assert_eq!(tensor.shape(), &[4, 2, 3]);
-        assert_eq!(tensor.as_slice::<f64>().unwrap(), expected.as_slice());
-    }
-}
+mod tests;

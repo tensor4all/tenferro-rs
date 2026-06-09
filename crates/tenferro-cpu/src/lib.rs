@@ -23,19 +23,19 @@ compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
 compile_error!("provider-inject requires cpu-blas");
 
 pub mod affinity;
-pub mod analytic;
+mod analytic;
 pub mod backend;
-pub mod buffer_pool;
+mod buffer_pool;
 pub mod context;
-pub mod elementwise;
+mod elementwise;
 mod exec_session;
-pub mod gemm;
-pub mod indexing;
+mod gemm;
+mod indexing;
 mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
-pub mod reduction;
-pub mod structural;
+mod reduction;
+mod structural;
 
 use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedArray, StridedView};
 
@@ -55,6 +55,7 @@ extern crate lapack_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::{CpuBackend, CpuBackendKind};
+pub use buffer_pool::BufferPoolStats;
 pub use context::CpuContext;
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
@@ -64,6 +65,16 @@ pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
 pub use structural::{
     broadcast_in_dim, convert, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
 };
+
+/// Owner-scoped CPU scratch-pool API for operation-family crates.
+///
+/// This module is not an application-facing tensor API. It exists so
+/// operation crates that implement CPU kernels can share `CpuBackend`'s
+/// allocation pool without exposing the pool as a general public contract.
+#[doc(hidden)]
+pub mod linalg_interop {
+    pub use crate::buffer_pool::{BufferPool, PoolScalar};
+}
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
     crate::Error::backend_failure(
@@ -168,6 +179,7 @@ fn materialize_tensor_view(op: &'static str, view: TensorView<'_>) -> crate::Res
 /// Caller must write every element before reading. The returned array
 /// contains uninitialized data.
 #[allow(clippy::uninit_vec)]
+#[cfg(test)]
 pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
     let total: usize = shape.iter().product();
     let strides = kernel_col_major_strides(shape);

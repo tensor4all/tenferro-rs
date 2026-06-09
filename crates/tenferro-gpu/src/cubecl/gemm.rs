@@ -294,7 +294,7 @@ fn typed_device_ptr<T: 'static>(
     let buffer = cubecl_buffer(tensor, OP)?;
     let resource = rt
         .client()
-        .get_resource(buffer.handle.clone())
+        .get_resource(buffer.handle().clone())
         .map_err(|err| {
             crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;

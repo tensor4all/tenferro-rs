@@ -78,7 +78,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
+    /// use tenferro_runtime::{CompilerOptions, OptimizerConfig};
     /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::with_compiler_options(CompilerOptions {
@@ -236,7 +236,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::compiler::CompilerOptions;
+    /// use tenferro_runtime::CompilerOptions;
     /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
@@ -251,7 +251,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::compiler::{CompilerOptions, OptimizerConfig};
+    /// use tenferro_runtime::{CompilerOptions, OptimizerConfig};
     /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();

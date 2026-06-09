@@ -1,4 +1,4 @@
-//! CubeCL CUDA runtime initialization and stream access.
+//! CubeCL CUDA runtime initialization and synchronization.
 
 use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
@@ -26,8 +26,6 @@ pub fn gpu_available() -> bool {
 /// use tenferro_gpu::cubecl::CubeclRuntime;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
-/// let _stream: fn(&CubeclRuntime) -> tenferro_tensor::Result<u64> =
-///     CubeclRuntime::raw_cuda_stream;
 /// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
 ///     CubeclRuntime::synchronize;
 /// ```
@@ -96,18 +94,7 @@ impl CubeclRuntime {
         })
     }
 
-    /// Borrow the underlying CubeCL compute client.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cubecl::client::ComputeClient;
-    /// use cubecl_cuda::CudaRuntime;
-    /// use tenferro_gpu::cubecl::CubeclRuntime;
-    ///
-    /// let _client_getter: fn(&CubeclRuntime) -> &ComputeClient<CudaRuntime> = CubeclRuntime::client;
-    /// ```
-    pub fn client(&self) -> &ComputeClient<CudaRuntime> {
+    pub(crate) fn client(&self) -> &ComputeClient<CudaRuntime> {
         &self.client
     }
 
@@ -137,17 +124,7 @@ impl CubeclRuntime {
         })
     }
 
-    /// Extract the raw CUDA stream pointer used by the current CubeCL stream.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_gpu::cubecl::CubeclRuntime;
-    ///
-    /// let _stream: fn(&CubeclRuntime) -> tenferro_tensor::Result<u64> =
-    ///     CubeclRuntime::raw_cuda_stream;
-    /// ```
-    pub fn raw_cuda_stream(&self) -> crate::Result<u64> {
+    pub(crate) fn raw_cuda_stream(&self) -> crate::Result<u64> {
         self.client
             .with_server(|server| {
                 server

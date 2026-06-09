@@ -80,32 +80,30 @@ fn test_with_backend_session_runs_compiled_ops() {
 }
 
 #[test]
-fn cpu_context_install_runs_on_caller_thread() {
+fn cpu_context_install_enters_owned_pool() {
     let ctx = CpuContext::with_threads(2);
-    let caller_thread = std::thread::current().id();
-    let seen_thread = ctx.install(|| std::thread::current().id());
-    assert_eq!(seen_thread, caller_thread);
+    let seen_threads = ctx.install(rayon::current_num_threads);
+    assert_eq!(seen_threads, 2);
 }
 
 #[test]
-fn cpu_install_accepts_non_send_state() {
+fn cpu_install_accepts_send_state() {
     let ctx = CpuContext::with_threads(2);
-    let state = Rc::new(41usize);
+    let state = Arc::new(41usize);
     let seen = ctx.install(|| *state + 1);
     assert_eq!(seen, 42);
 
     let backend = CpuBackend::with_threads(2);
-    let state = Rc::new(20usize);
+    let state = Arc::new(20usize);
     let seen = backend.install(|| *state + 2);
     assert_eq!(seen, 22);
 }
 
 #[test]
-fn cpu_backend_exec_session_runs_on_caller_thread() {
+fn cpu_backend_exec_session_enters_owned_pool() {
     let mut backend = CpuBackend::with_threads(2);
-    let caller_thread = std::thread::current().id();
-    let seen_thread = backend.with_backend_session(|_| std::thread::current().id());
-    assert_eq!(seen_thread, caller_thread);
+    let seen_threads = backend.with_backend_session(|_| rayon::current_num_threads());
+    assert_eq!(seen_threads, 2);
 }
 
 #[test]
