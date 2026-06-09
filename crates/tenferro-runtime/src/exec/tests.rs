@@ -15,7 +15,7 @@ use super::dispatch::{
     backend_dispatch_entry, ffi_dispatch_entry, host_dispatch_entry, FfiDispatchKey,
     HostDispatchKey, BACKEND_DISPATCH_TABLE,
 };
-use super::{ExecInstruction, ExecOp};
+use super::{tensor_value_for_lazy_view, ExecInstruction, ExecOp, ExecSlot};
 use tenferro_cpu::CpuBackend;
 
 #[test]
@@ -134,6 +134,21 @@ fn exec_instruction_single_output_metadata_stays_inline() {
 
     assert!(!instr.output_shapes.spilled());
     assert!(!instr.output_extents.spilled());
+}
+
+#[test]
+fn lazy_view_input_conversion_shares_live_owned_tensor() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let mut slots = vec![Some(ExecSlot::Owned(tensor))];
+
+    let value = tensor_value_for_lazy_view(&mut slots, 0, false).unwrap();
+
+    let output = value.as_tensor_arc().unwrap();
+    let stored = match slots[0].as_ref().unwrap() {
+        ExecSlot::Value(value) => value.as_tensor_arc().unwrap(),
+        _ => panic!("expected promoted tensor value"),
+    };
+    assert!(Arc::ptr_eq(output, stored));
 }
 
 fn backend_dispatch_cases() -> Vec<(ExecOp, PrimitiveOpKind)> {

@@ -277,10 +277,23 @@ fn tensor_value_for_lazy_view<'input>(
             .ok_or(TensorError::MissingValue { slot }.into());
     }
 
-    match slots[slot].as_ref() {
-        Some(ExecSlot::Owned(tensor)) => Ok(TensorValue::from_tensor(tensor.clone())),
-        Some(ExecSlot::Value(value)) => Ok(value.clone()),
-        Some(ExecSlot::Read(read)) => Ok(TensorValue::from_tensor(read.to_tensor())),
+    match slots[slot].take() {
+        Some(ExecSlot::Owned(tensor)) => {
+            let tensor = Arc::new(tensor);
+            let value = TensorValue::from_tensor_arc(Arc::clone(&tensor));
+            slots[slot] = Some(ExecSlot::Value(TensorValue::from_tensor_arc(tensor)));
+            Ok(value)
+        }
+        Some(ExecSlot::Value(value)) => {
+            let output = value.clone();
+            slots[slot] = Some(ExecSlot::Value(value));
+            Ok(output)
+        }
+        Some(ExecSlot::Read(read)) => {
+            let output = TensorValue::from_tensor(read.to_tensor());
+            slots[slot] = Some(ExecSlot::Read(read));
+            Ok(output)
+        }
         None => Err(TensorError::MissingValue { slot }.into()),
     }
 }

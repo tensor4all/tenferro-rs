@@ -81,7 +81,7 @@ Status values:
 | #112 CUDA zero-sized-output residency validation | Auto Fix | remaining-auto |
 | #113 gather/scatter boundary VJP | Verify First | verify-first; narrow to current boundary cases |
 | #114 `Pow` zero-base singularity | Auto Fix | remaining-auto |
-| #115 terminal lazy view base clone | Auto Fix | remaining-auto |
+| #115 terminal lazy view base clone | Auto Fix | fixed |
 | #116 scalar helper public contract | Design Gate | design-gated |
 | #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto |
 | #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
@@ -137,6 +137,16 @@ Implemented:
 - Updated compile-cache retained-byte accounting to include structural key
   payloads instead of string capacity.
 
+## Fourth Batch: Terminal Lazy View Sharing
+
+Implemented:
+
+- Changed non-consuming terminal lazy-view input conversion from deep-cloning a
+  live `Owned(Tensor)` to promoting the slot into a shared `Arc<Tensor>` held
+  by both the slot and returned `TensorValue`.
+- Preserved existing borrowed `TensorRead` behavior, which must still
+  materialize when an owned lazy output is required.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -152,6 +162,9 @@ Implemented:
 - `cargo test -p tenferro-runtime graph::cache`
 - `cargo test -p tenferro-runtime compile_cache`
 - `cargo test -p tenferro-einsum --test traced_graph_cache`
+- `cargo test -p tenferro-runtime lazy_view_input_conversion_shares_live_owned_tensor`
+- `cargo test -p tenferro-runtime lazy`
+- `cargo test -p tenferro-runtime value`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
