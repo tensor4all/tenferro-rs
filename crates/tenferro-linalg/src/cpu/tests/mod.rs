@@ -179,6 +179,14 @@ fn diag_c64(values: &[Complex64]) -> Vec<Complex64> {
     out
 }
 
+fn diag_c64_from_real(values: &[f64]) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); values.len() * values.len()];
+    for (i, value) in values.iter().enumerate() {
+        out[col_major_index(values.len(), i, i)] = Complex64::new(*value, 0.0);
+    }
+    out
+}
+
 fn batch_matrix_f64_from_tensor(
     t: &Tensor,
     rows: usize,

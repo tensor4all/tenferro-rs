@@ -552,7 +552,22 @@ macro_rules! transpose_elementwise {
     };
 }
 
-transpose_elementwise!(transpose_div, elementwise::transpose_div);
+fn transpose_div(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(elementwise::transpose_div(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        ctx,
+    ))
+}
 transpose_elementwise!(transpose_abs, elementwise::transpose_abs);
 fn transpose_sign(
     _op: &StdTensorOp,
@@ -647,9 +662,9 @@ macro_rules! analytic_transpose {
             cotangent_out: &[Option<LocalValueId>],
             inputs: &[ValueRef<StdTensorOp>],
             mode: &OperationRole,
-            _ctx: &mut ShapeGuardContext,
+            ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            Ok($callee(builder, cotangent_out, inputs, mode))
+            Ok($callee(builder, cotangent_out, inputs, mode, ctx))
         }
     };
 }

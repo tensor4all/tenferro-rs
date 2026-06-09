@@ -1,3 +1,5 @@
+use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::{conjugate_primal_if_any_dtype_complex, dtype_of_or_real};
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::CompareDir;
@@ -108,6 +110,20 @@ fn emit_zero_from_active(
             active_mask: vec![true, true],
         },
     )[0]
+}
+
+fn conjugate_for_input_dtypes(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    inputs: &[ValueRef<StdTensorOp>],
+    indices: &[usize],
+    ctx: &mut ShapeGuardContext,
+) -> ValueRef<StdTensorOp> {
+    let dtypes: Vec<_> = indices
+        .iter()
+        .map(|&index| dtype_of_or_real(ctx, &inputs[index]))
+        .collect();
+    conjugate_primal_if_any_dtype_complex(builder, input, &dtypes)
 }
 
 fn select_tangents(
@@ -354,6 +370,7 @@ pub fn transpose_div(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -368,9 +385,10 @@ pub fn transpose_div(
     let mut result = vec![None, None];
 
     if active_mask[0] {
+        let denominator = conjugate_for_input_dtypes(builder, inputs[1].clone(), inputs, &[1], ctx);
         let out = builder.add_operation(
             StdTensorOp::Div,
-            vec![ValueRef::Local(ct), inputs[1].clone()],
+            vec![ValueRef::Local(ct), denominator],
             OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
@@ -382,7 +400,9 @@ pub fn transpose_div(
         let quotient = emit_fixed_div(builder, inputs[0].clone(), inputs[1].clone());
         let neg_quotient = emit_fixed_neg(builder, ValueRef::Local(quotient));
         let coeff = emit_fixed_div(builder, ValueRef::Local(neg_quotient), inputs[1].clone());
-        result[1] = Some(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), ct));
+        let coeff =
+            conjugate_for_input_dtypes(builder, ValueRef::Local(coeff), inputs, &[0, 1], ctx);
+        result[1] = Some(emit_linear_mul_fixed(builder, coeff, ct));
     }
 
     result
