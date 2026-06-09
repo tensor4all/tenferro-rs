@@ -5,7 +5,9 @@ use cubecl::prelude::{CubeDim, CubeElement, CubeKernel, CubePrimitive, KernelId,
 use super::classify::ClassifiedFusion;
 use super::codegen::build_kernel_definition;
 use crate::backend::ElementwiseFusionPlan;
-use crate::cubecl::dispatch::{alloc_output, cube_count_for_len, cube_dim_1d};
+use crate::cubecl::dispatch::{
+    alloc_output, cube_count_for_len, cube_dim_1d, ensure_resident_on_runtime,
+};
 use crate::cubecl::runtime::CubeclRuntime;
 use crate::types::TypedTensor;
 
@@ -20,6 +22,17 @@ where
     for _ in &classified.plan.outputs {
         outputs.push(alloc_output::<T>(runtime, &classified.output_shape));
     }
+    let mut input_args = Vec::with_capacity(classified.inputs.len());
+    for input in &classified.inputs {
+        ensure_resident_on_runtime(runtime, input, "fused_elementwise")?;
+        let arg = crate::cubecl::dispatch::typed_tensor_array_arg(input, "fused_elementwise")?;
+        input_args.push(arg);
+    }
+    let mut output_args = Vec::with_capacity(outputs.len());
+    for output in &outputs {
+        let arg = crate::cubecl::dispatch::typed_tensor_array_arg(output, "fused_elementwise")?;
+        output_args.push(arg);
+    }
     if classified.n_elements == 0 {
         return Ok(outputs);
     }
@@ -28,12 +41,10 @@ where
     let mut launcher = KernelLauncher::new(settings);
     let item = launcher.with_scope(|scope| T::as_type(scope));
 
-    for input in &classified.inputs {
-        let arg = crate::cubecl::dispatch::typed_tensor_array_arg(input, "fused_elementwise")?;
+    for arg in input_args {
         launcher.register_array(arg, item.clone());
     }
-    for output in &outputs {
-        let arg = crate::cubecl::dispatch::typed_tensor_array_arg(output, "fused_elementwise")?;
+    for arg in output_args {
         launcher.register_array(arg, item.clone());
     }
 

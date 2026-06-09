@@ -78,7 +78,7 @@ Status values:
 | #109 lazy value/view API rustdoc examples | Auto Fix | fixed |
 | #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | remaining-auto |
 | #111 `TracedTensorAdExt` rustdoc examples | Auto Fix | fixed |
-| #112 CUDA zero-sized-output residency validation | Auto Fix | remaining-auto |
+| #112 CUDA zero-sized-output residency validation | Auto Fix | fixed |
 | #113 gather/scatter boundary VJP | Verify First | verify-first; narrow to current boundary cases |
 | #114 `Pow` zero-base singularity | Auto Fix | fixed |
 | #115 terminal lazy view base clone | Auto Fix | fixed |
@@ -164,6 +164,18 @@ Implemented:
   zero-safe coefficient builder used by both JVP and VJP.
 - Added single-zero and multiple-zero regression coverage for reduced axes.
 
+## Seventh Batch: CUDA Zero-Output Validation
+
+Implemented:
+
+- Moved CubeCL input/output residency and buffer argument validation before
+  zero-sized-output early returns in raw unary, tensor unary, nullary-into,
+  tensor-into, binary, comparison, logical tensor binary, and ternary launch
+  helpers.
+- Applied the same ordering to elementwise fusion launch inputs/outputs.
+- Added a non-hardware source-contract test that checks validation happens
+  before the zero-output shortcut.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -184,6 +196,9 @@ Implemented:
 - `cargo test -p tenferro-runtime value`
 - `cargo test -p tenferro-ad grad_pow`
 - `cargo test -p tenferro-ad reduce_prod_ --test ad`
+- `cargo test -p tenferro-gpu --test cubecl_launch_contract cubecl_zero_length_launches_validate_buffers_before_returning`
+- `cargo test -p tenferro-gpu`
+- `cargo test -p tenferro-gpu --features cuda --no-run`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
@@ -194,3 +209,5 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   behavior and should be handled in later coherent commits.
 - Design-gated items should become focused design or child issues rather than
   being implemented silently in this remediation branch.
+- CUDA zero-output validation was verified with source-contract tests and
+  CUDA-feature compile-only checks, not with CUDA hardware execution.
