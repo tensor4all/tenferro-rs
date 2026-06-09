@@ -28,6 +28,25 @@ AD semantics.
   non-squash method.
 - Maintainers retain review, merge, policy, and roadmap authority.
 
+## Classification Ledger
+
+Before implementation, maintain a local classification ledger for the findings
+in scope. The ledger may live in a work log, PR body draft, or uncommitted
+scratch file outside the repository, but the final PR must include the same
+information in reviewable form.
+
+For each finding, record:
+
+- the source issue/comment or historical finding number;
+- `Auto Fix`, `Verify First`, or `Design Gate`;
+- current evidence from the working hash, not only historical comments;
+- the smallest useful verification target;
+- whether the item was fixed, narrowed, marked stale, or deferred;
+- residual risk or follow-up issue when not fixed.
+
+Historical comments are evidence, not authority. Reclassify an item when the
+current worktree or an earlier commit in the same batch already fixed it.
+
 ## Scope Classification
 
 Classify each candidate finding before editing.
@@ -54,6 +73,9 @@ The agent must either:
 - narrow it to a current source path and expected behavior,
 - remove it from the active batch with evidence that it is stale, or
 - move it to a design-gated issue if the intended behavior is unclear.
+
+Do not keep broad historical wording as an active task after a narrower current
+state is known. Replace it with the concrete failing path or mark it stale.
 
 ### Design Gate
 
@@ -102,6 +124,27 @@ contract and verification path. Stop expanding when the search reaches another
 subsystem, requires a different policy decision, or would dominate the review.
 Record deferred related findings as residual risk or follow-up issues.
 
+Historical `docs/plans/` material is normally out of remediation scope unless
+an active document links it as current guidance. Fix active links or active
+summaries instead of rewriting archived plans.
+
+## Subagent Coordination
+
+Use subagents for independent inspection or implementation domains when the
+user authorizes subagent work.
+
+- Prefer read-only explorer subagents for classification across independent
+  domains such as docs, AD, runtime/performance, and GPU placement.
+- Use worker subagents only for disjoint write scopes.
+- Tell workers they are not alone in the codebase and must not revert unrelated
+  edits.
+- The coordinating agent owns integration: review subagent diffs, run the
+  relevant verification, update the classification ledger, and decide the next
+  batch.
+- Subagent results are evidence to inspect, not a substitute for final
+  verification.
+- Close completed subagents once their result has been integrated.
+
 ## Interactive Session Rule Improvements
 
 When working in an interactive user session, the agent should propose useful
@@ -123,6 +166,12 @@ requires user approval first.
 
 In non-interactive or headless runs, record rule-improvement suggestions in the
 PR body or work log instead of applying them silently.
+
+If the user explicitly authorizes autonomous rule growth for a remediation
+session, the agent may apply rule improvements that make future automatic
+resolution safer or more precise. Such updates must stay within the user's
+approved objective, must not silently expand project policy, and must be
+committed as their own coherent review unit or clearly separated in the PR.
 
 ## Category-Specific Fix Rules
 

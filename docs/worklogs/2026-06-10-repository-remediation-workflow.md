@@ -31,6 +31,14 @@ remediation of repository-rule violations. The workflow is linked from
 - Add an interactive-session rule-improvement policy: agents may fix typos
   directly, but must propose behavior-changing rule improvements to the user
   before applying them.
+- After beginning the first issue-986 remediation pass, add a classification
+  ledger requirement, stale-finding handling, historical-docs scope guard, and
+  subagent coordination rules. These were added because the first pass needed a
+  durable way to integrate explorer/worker outputs and distinguish current
+  failures from already-fixed historical comments.
+- Allow autonomous rule growth only when the user explicitly authorizes it for
+  a remediation session. The rule update must stay within the approved
+  objective and remain reviewable as its own coherent unit.
 
 ## Rejected Alternatives
 
@@ -42,11 +50,17 @@ remediation of repository-rule violations. The workflow is linked from
   and verification before PR creation.
 - Squash-merging remediation batches was rejected because the batch may contain
   several reviewable units whose commit boundaries should remain visible.
+- Treating subagent output as final proof was rejected. The coordinating agent
+  remains responsible for integration, verification, ledger updates, and final
+  reporting.
 
 ## Verification
 
 - Reviewed the new workflow against `REPOSITORY_RULES.md`.
 - Ran `git diff --check`.
+- During the first remediation pass, verified that docs/rustdoc fixes surfaced
+  the need for a classification ledger and subagent coordination rule before
+  applying those rule improvements.
 
 ## Residual Risks
 
