@@ -31,6 +31,12 @@ Worker subagents implemented method-level rustdoc examples in disjoint files:
 - `crates/tenferro-runtime/src/graph/executor.rs`
 - `crates/tenferro-ad/src/traced.rs`
 
+Worker subagents also implemented disjoint runtime/performance fixes:
+
+- `crates/tenferro-runtime/src/segment.rs`
+- `crates/tenferro-fft/src/lib.rs`
+- `crates/tenferro-einsum/src/planning/tree.rs`
+
 The coordinating agent reviewed and integrated the results.
 
 ## Classification Ledger
@@ -51,7 +57,7 @@ Status values:
 | #6 FFT C2C transpose/oracle coverage | Auto Fix | remaining-auto |
 | #10 `TensorDeviceTransfer` clone defaults | Design Gate | design-gated |
 | #12 compile-cache string fingerprint | Auto Fix | remaining-auto |
-| #13 segment later-instruction scans | Auto Fix | remaining-auto |
+| #13 segment later-instruction scans | Auto Fix | fixed |
 | #16 publishable internal `tenferro_ops` crate | Design Gate | design-gated |
 | #19 public tensor representation hooks | Design Gate | design-gated |
 | #20 `ReduceProd` zero-input AD | Auto Fix | remaining-auto |
@@ -59,7 +65,7 @@ Status values:
 | #29 README ROCm support overclaim | Auto Fix | fixed |
 | #32 public `TracedTensor` fields | Design Gate | design-gated |
 | #37 traced graph builder clones | Verify First | verify-first |
-| #40 FFT output zero-initialization | Auto Fix | remaining-auto |
+| #40 FFT output zero-initialization | Auto Fix | fixed |
 | #42/#43 complex `Abs`/`Sign` AD | Verify First | verify-first; split `Abs` from `Sign` policy |
 | #44/#52/#101 shape-source arity AD | Auto Fix | remaining-auto |
 | #49 public fusion IR backend API | Design Gate | design-gated |
@@ -78,7 +84,7 @@ Status values:
 | #115 terminal lazy view base clone | Auto Fix | remaining-auto |
 | #116 scalar helper public contract | Design Gate | design-gated |
 | #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto |
-| #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | remaining-auto |
+| #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
 | #117 eager helper host tensors in CUDA contexts | Auto Fix | remaining-auto |
 | #118 active crate/backend ownership docs | Auto Fix | fixed |
 | #119 primitive catalog `Constant` docs | Auto Fix | fixed |
@@ -104,6 +110,21 @@ Implemented:
 - Added missing API index links for internal implementation crates required by
   `scripts/check-docs-site.py`.
 
+## Second Batch: Runtime And Operation Performance
+
+Implemented:
+
+- Replaced segment construction's repeated later-instruction scans with a
+  single `SegmentUseSummary` pass that records program outputs and last input
+  use by slot.
+- Replaced fully overwritten FFT CPU output zero-fill with `MaybeUninit`
+  output buffers while keeping zero-filled scratch lanes for padded FFT input.
+- Reworked the einsum self-greedy fallback to maintain live needed-label
+  counts instead of rebuilding a `HashSet` for every candidate pair.
+- Removed the obsolete private `contraction_cost` helper after replacing its
+  hot-path use, matching the remediation workflow's rule against artificial
+  dead-code references.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -113,6 +134,9 @@ Implemented:
 - `cargo doc --workspace --no-deps`
 - `python3 scripts/check-docs-site.py`
 - `git diff --check`
+- `cargo test -p tenferro-einsum self_greedy`
+- `cargo test -p tenferro-fft --test fft_ops`
+- `cargo test -p tenferro-runtime segment`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.

@@ -104,6 +104,29 @@ fn single_broadcast_multiply_pair_handles_reused_broadcast_output() {
 }
 
 #[test]
+fn segment_use_summary_tracks_program_outputs_and_future_inputs() {
+    let program = ExecProgram {
+        instructions: vec![
+            broadcast(0, 2, vec![0]),
+            multiply(2, 1, 3),
+            multiply(3, 1, 4),
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![4],
+        n_slots: 5,
+    };
+
+    let summary = SegmentUseSummary::new(&program);
+
+    assert!(summary.is_program_output(4));
+    assert!(!summary.is_program_output(3));
+    assert!(!summary.is_used_at_or_after(0, 1));
+    assert!(summary.is_used_at_or_after(1, 2));
+    assert!(summary.is_used_at_or_after(3, 2));
+    assert!(!summary.is_used_at_or_after(3, 3));
+}
+
+#[test]
 fn segmented_eval_executes_single_broadcast_multiply_pairs() {
     let program = ExecProgram {
         instructions: vec![

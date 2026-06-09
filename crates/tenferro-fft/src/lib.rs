@@ -34,6 +34,7 @@
 
 use std::any::Any;
 use std::hash::Hasher;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
@@ -782,6 +783,24 @@ fn validate_axis(op: &'static str, shape: &[usize], axis: usize) -> tenferro_ten
     Ok(())
 }
 
+fn uninit_output_vec<T>(len: usize) -> Vec<MaybeUninit<T>> {
+    let mut output = Vec::with_capacity(len);
+    // SAFETY: Uninitialized bytes are valid for `MaybeUninit<T>` slots. The
+    // slots are converted to `T` only after all output positions are written.
+    unsafe { output.set_len(len) };
+    output
+}
+
+unsafe fn assume_init_output_vec<T>(mut output: Vec<MaybeUninit<T>>) -> Vec<T> {
+    let len = output.len();
+    let capacity = output.capacity();
+    let ptr = output.as_mut_ptr().cast::<T>();
+    std::mem::forget(output);
+    // SAFETY: `MaybeUninit<T>` has the same layout as `T`; the caller
+    // guarantees every slot has been initialized exactly once.
+    unsafe { Vec::from_raw_parts(ptr, len, capacity) }
+}
+
 fn execute_c2c<T>(
     input: &TypedTensor<Complex<T>>,
     axis: usize,
@@ -797,7 +816,7 @@ where
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
     let input_data = input.host_data();
-    let mut output = vec![Complex::zero(); out_shape.iter().product()];
+    let mut output = uninit_output_vec(out_shape.iter().product());
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = if forward {
         planner.plan_fft_forward(fft_len)
@@ -820,11 +839,13 @@ where
             }
         }
         for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)] = value;
+            output[lane_ctx.output_offset(k)].write(value);
         }
     });
 
-    Ok(output)
+    // SAFETY: `for_axis_lane` covers every element in the compact column-major
+    // output exactly once, and each lane writes all `out_axis_len` positions.
+    Ok(unsafe { assume_init_output_vec(output) })
 }
 
 fn execute_r2c<T>(
@@ -842,7 +863,7 @@ where
     let out_shape = output_shape_r2c(in_shape, axis, n, onesided)?;
     let out_axis_len = out_shape[axis];
     let input_data = input.host_data();
-    let mut output = vec![Complex::zero(); out_shape.iter().product()];
+    let mut output = uninit_output_vec(out_shape.iter().product());
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_forward(fft_len);
     let scale: T = scale_for(norm, true, fft_len);
@@ -861,11 +882,13 @@ where
             }
         }
         for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)] = value;
+            output[lane_ctx.output_offset(k)].write(value);
         }
     });
 
-    Ok(output)
+    // SAFETY: `for_axis_lane` covers every element in the compact column-major
+    // output exactly once, and each lane writes all `out_axis_len` positions.
+    Ok(unsafe { assume_init_output_vec(output) })
 }
 
 fn execute_c2r<T>(
@@ -882,7 +905,7 @@ where
     let out_axis_len = out_shape[axis];
     let expected_half = out_axis_len / 2 + 1;
     let input_data = input.host_data();
-    let mut output = vec![T::zero(); out_shape.iter().product()];
+    let mut output = uninit_output_vec(out_shape.iter().product());
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_inverse(out_axis_len);
     let scale: T = scale_for(norm, false, out_axis_len);
@@ -902,11 +925,13 @@ where
         }
         fft_plan.process(&mut lane);
         for (k, value) in lane.iter().take(out_axis_len).enumerate() {
-            output[lane_ctx.output_offset(k)] = value.re * scale;
+            output[lane_ctx.output_offset(k)].write(value.re * scale);
         }
     });
 
-    Ok(output)
+    // SAFETY: `for_axis_lane` covers every element in the compact column-major
+    // output exactly once, and each lane writes all `out_axis_len` positions.
+    Ok(unsafe { assume_init_output_vec(output) })
 }
 
 fn scale_for<T>(norm: FftNorm, forward: bool, n: usize) -> T

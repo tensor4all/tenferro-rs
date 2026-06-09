@@ -112,6 +112,25 @@ fn registered_runtime_reports_gpu_input_as_unsupported() {
 }
 
 #[test]
+fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
+    let source = include_str!("../src/lib.rs");
+
+    assert!(
+        !source.contains("let mut output = vec![Complex::zero(); out_shape.iter().product()]"),
+        "FFT CPU complex output buffers are fully overwritten and should not be zero-filled"
+    );
+    assert!(
+        !source.contains("let mut output = vec![T::zero(); out_shape.iter().product()]"),
+        "FFT CPU real output buffers are fully overwritten and should not be zero-filled"
+    );
+    assert!(
+        source.contains("let mut lane = vec![Complex::zero(); fft_len]")
+            && source.contains("lane.fill(Complex::zero())"),
+        "FFT CPU scratch lanes must stay zero-filled for transform padding"
+    );
+}
+
+#[test]
 fn fft_c64_matches_numpy_convention() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],
@@ -133,6 +152,27 @@ fn fft_c64_matches_numpy_convention() {
             Complex64::new(-2.0, 2.0),
             Complex64::new(-2.0, 0.0),
             Complex64::new(-2.0, -2.0),
+        ],
+    );
+}
+
+#[test]
+fn fft_with_longer_transform_uses_zero_padded_lanes() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    );
+    let y = fft(&x, Some(4), -1, FftNorm::Backward).unwrap();
+    let out = run(&y);
+
+    assert_eq!(out.shape(), &[4]);
+    assert_c64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(3.0, 0.0),
+            Complex64::new(1.0, -2.0),
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(1.0, 2.0),
         ],
     );
 }

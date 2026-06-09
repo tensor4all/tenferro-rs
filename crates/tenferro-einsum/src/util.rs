@@ -80,23 +80,3 @@ pub(crate) fn intermediate_subs(
     }
     output
 }
-
-/// Compute the cost (output size) of contracting two operands.
-pub(crate) fn contraction_cost(
-    subs_a: &[u32],
-    subs_b: &[u32],
-    needed: &HashSet<u32>,
-    size_dict: &HashMap<u32, usize>,
-) -> Result<usize> {
-    let out_subs = intermediate_subs(subs_a, subs_b, needed);
-    let mut cost = 1usize;
-    for label in out_subs {
-        let size = size_dict.get(&label).copied().ok_or_else(|| {
-            Error::InvalidArgument(format!(
-                "unknown size for label {label} in contraction cost"
-            ))
-        })?;
-        cost = cost.saturating_mul(size);
-    }
-    Ok(cost.max(1))
-}
