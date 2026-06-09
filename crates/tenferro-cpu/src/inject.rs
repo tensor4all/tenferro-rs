@@ -314,10 +314,7 @@ impl LapackProviderPtrSet {
 /// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet {
-///         dgemm: Some(dgemm_ptr),
-///         ..BlasGemmFnPtrSet::new()
-///     });
+///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new());
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
@@ -366,11 +363,7 @@ impl BlasGemmFnPtrSet {
 /// };
 ///
 /// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet {
-///         dgetc2: Some(dgetc2_ptr),
-///         dgesc2: Some(dgesc2_ptr),
-///         ..LapackFullPivLuFnPtrSet::new()
-///     });
+///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new());
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
@@ -467,12 +460,7 @@ fn lapack_registration_status(
 /// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet {
-///         sgemm: Some(sgemm_ptr),
-///         dgemm: Some(dgemm_ptr),
-///         cgemm: Some(cgemm_ptr),
-///         zgemm: Some(zgemm_ptr),
-///     });
+///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new());
 /// }
 /// ```
 pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
@@ -508,12 +496,7 @@ pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
 /// };
 ///
 /// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet {
-///         dgetc2: Some(dgetc2_ptr),
-///         dgesc2: Some(dgesc2_ptr),
-///         zgetc2: Some(zgetc2_ptr),
-///         zgesc2: Some(zgesc2_ptr),
-///     });
+///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new());
 /// }
 /// ```
 pub unsafe fn register_lapack_full_piv_lu_fn_ptrs(ptrs: LapackFullPivLuFnPtrSet) {

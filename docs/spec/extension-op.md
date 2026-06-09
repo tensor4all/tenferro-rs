@@ -322,11 +322,11 @@ Example:
 ```
 
 Extension crates MAY use the `ExtensionFamilyId` derive macro re-exported by
-`tenferro_runtime::extension` / `tenferro_ops` to generate this string as an
-inherent `FAMILY_ID` constant:
+`tenferro_runtime::extension` to generate this string as an inherent
+`FAMILY_ID` constant:
 
 ```rust
-use tenferro_ops::ExtensionFamilyId;
+use tenferro_runtime::extension::ExtensionFamilyId;
 
 #[derive(ExtensionFamilyId)]
 #[tenferro_extension(namespace = "my-crate", name = "fft", version = 1)]

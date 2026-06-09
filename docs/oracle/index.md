@@ -18,11 +18,11 @@ should live in the crate that owns the behavior under test. Each test case:
 ## Coverage
 
 See [Oracle Coverage Status](./tensor-ad-oracles-support.md) for the current
-per-op support matrix (auto-generated).
+checked-in per-op support snapshot.
 
 ## CI policy
 
-Oracle replay has two CI tiers:
+The intended oracle replay design has two tiers:
 
 1. **PR sentinel tier**: run on a standard GitHub-hosted Linux runner. This tier
    uses a fixed sentinel set plus an affected-op subset derived from the PR
@@ -49,9 +49,10 @@ The PR sentinel set should be chosen by these criteria:
 - keep the set deterministic and stable so a PR failure points to a contract
   regression rather than oracle sampling variance.
 
-The current root-facade oracle harness has been removed. Until a crate-local
-replay harness is restored, CI cannot claim full oracle replay coverage; focused
-regression tests and this support matrix are the active gates.
+The current root-facade oracle harness has been removed, and these tiers are
+not active CI gates. Until a crate-local replay harness is restored, CI cannot
+claim full oracle replay coverage; focused regression tests and this support
+snapshot are the active gates.
 
 ## Links
 

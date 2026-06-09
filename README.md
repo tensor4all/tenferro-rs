@@ -62,7 +62,7 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA/ROCm backend support and explicit device transfers |
+| `tenferro-gpu` | CUDA backend support, ROCm feature stub, and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
 

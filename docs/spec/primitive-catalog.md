@@ -434,11 +434,11 @@ than as distinct graph primitives.
 
 ### Constants and literals
 
-Constants (scalar or tensor literals) are **not** Tenferro IR primitives.
-They enter the graph as `Graph` input nodes with attached data
-(`TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(...))`).
-Canonical lowerings that reference literal values (e.g., `1 / n` in `mean`,
-`1` in `reciprocal`) construct these as `Graph` inputs.
+Constants (scalar or tensor literals) are represented by the `Constant` IR
+primitive when they are embedded in a graph. User-supplied tensors still enter
+through graph inputs, while helper-created literals such as `1 / n` in `mean`
+or `1` in `reciprocal` lower to `Constant` operations with encoded dtype and
+payload bytes.
 
 ### Lowering table
 

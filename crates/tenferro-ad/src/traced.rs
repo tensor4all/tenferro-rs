@@ -149,13 +149,65 @@ fn grad_with_optional_rules(
 /// ```
 pub trait TracedTensorAdExt {
     /// Gradient of a scalar output with respect to a traced input.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
+    ///     let mut compiler = GraphCompiler::new();
+    ///     let program = compiler.compile(tensor).unwrap();
+    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///     executor.run(&program).unwrap()
+    /// }
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let loss = &x * &x;
+    /// let dx = loss.grad(&x).unwrap();
+    ///
+    /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[6.0]);
+    /// ```
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`grad`](Self::grad), but returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
+    /// let loss = &y * &y;
+    ///
+    /// assert!(loss.grad_optional(&x).unwrap().is_none());
+    /// ```
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>>;
 
     /// Evaluate this tensor and replace its graph with a concrete leaf while
     /// preserving the previous graph for AD replay.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// let mut compiler = GraphCompiler::new();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let mut y = &x * &x;
+    ///
+    /// y.checkpoint(&mut compiler, &mut executor).unwrap();
+    ///
+    /// let value = y.data.as_ref().unwrap();
+    /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
+    /// ```
     fn checkpoint<B: TensorBackend>(
         &mut self,
         compiler: &mut GraphCompiler,
@@ -163,12 +215,70 @@ pub trait TracedTensorAdExt {
     ) -> Result<()>;
 
     /// Forward-mode Jacobian-vector product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
+    ///     let mut compiler = GraphCompiler::new();
+    ///     let program = compiler.compile(tensor).unwrap();
+    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///     executor.run(&program).unwrap()
+    /// }
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    /// let y = &x * &x;
+    /// let dy = y.jvp(&x, &tangent);
+    ///
+    /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
+    /// ```
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
 
     /// Like [`jvp`](Self::jvp), but returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
+    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let loss = &y * &y;
+    ///
+    /// assert!(loss.jvp_optional(&x, &tangent).is_none());
+    /// ```
     fn jvp_optional(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor>;
 
     /// Fallible forward-mode Jacobian-vector product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
+    ///     let mut compiler = GraphCompiler::new();
+    ///     let program = compiler.compile(tensor).unwrap();
+    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///     executor.run(&program).unwrap()
+    /// }
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    /// let y = &x * &x;
+    /// let dy = y.jvp_optional_result(&x, &tangent).unwrap().unwrap();
+    ///
+    /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
+    /// ```
     fn jvp_optional_result(
         &self,
         wrt: &TracedTensor,
@@ -176,12 +286,70 @@ pub trait TracedTensorAdExt {
     ) -> Result<Option<TracedTensor>>;
 
     /// Reverse-mode vector-Jacobian product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
+    ///     let mut compiler = GraphCompiler::new();
+    ///     let program = compiler.compile(tensor).unwrap();
+    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///     executor.run(&program).unwrap()
+    /// }
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]);
+    /// let y = &x * &x;
+    /// let dx = y.vjp(&x, &cotangent);
+    ///
+    /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[3.0]);
+    /// ```
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor;
 
     /// Like [`vjp`](Self::vjp), but returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
+    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let loss = &y * &y;
+    ///
+    /// assert!(loss.vjp_optional(&x, &cotangent).is_none());
+    /// ```
     fn vjp_optional(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor>;
 
     /// Fallible reverse-mode vector-Jacobian product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
+    ///     let mut compiler = GraphCompiler::new();
+    ///     let program = compiler.compile(tensor).unwrap();
+    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///     executor.run(&program).unwrap()
+    /// }
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    /// let y = &x * &x;
+    /// let dx = y.vjp_optional_result(&x, &cotangent).unwrap().unwrap();
+    ///
+    /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[12.0]);
+    /// ```
     fn vjp_optional_result(
         &self,
         wrt: &TracedTensor,

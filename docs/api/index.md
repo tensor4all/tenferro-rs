@@ -30,3 +30,17 @@ For contributors, internal crate APIs are also available in the
   eager helpers, extension runtime, and optional linalg AD rules
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
   public FFT APIs
+
+## Internal Implementation Crates
+
+These crates are documented for contributors and crate-boundary review. They
+are not the recommended application-facing API surface.
+
+- [tenferro-tensor-core](./tenferro_tensor_core/index.html): host-only tensor
+  data model, dtype tags, scalar traits, rank metadata, and metadata-only views
+- [tenferro-core-ops](./tenferro_core_ops/index.html): internal primitive
+  operation catalog metadata
+- [tenferro-internal-ops](./tenferro_ops/index.html): graph operation
+  vocabulary and AD rule implementations
+- [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):
+  internal extension-op registration macros

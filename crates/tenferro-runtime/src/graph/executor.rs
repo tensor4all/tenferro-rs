@@ -82,6 +82,22 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// This is useful for tight benchmark or serving loops that consume an
     /// output before the next run and want backend-level output allocation
     /// behavior to match caching allocators.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let out = executor.run(&program).unwrap();
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-2.0]);
+    /// executor.reclaim_outputs(vec![out]);
+    /// ```
     pub fn reclaim_outputs(&mut self, outputs: Vec<Tensor>) {
         for tensor in outputs {
             self.backend.reclaim_buffer(tensor);
@@ -92,6 +108,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// Lazy owned views are intentionally ignored because their base storage may
     /// be aliased by view metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor, Tensor, TensorValue};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// executor.reclaim_value_outputs(vec![TensorValue::from_tensor(tensor)]);
+    /// ```
     pub fn reclaim_value_outputs(&mut self, outputs: Vec<TensorValue>) {
         for value in outputs {
             if let TensorValue::Tensor(tensor) = value {
@@ -133,6 +160,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Register one extension runtime on this executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::GraphExecutor;
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// executor.register_extension(|_| Ok(())).unwrap();
+    /// ```
     pub fn register_extension(
         &mut self,
         register: impl FnOnce(
@@ -163,6 +200,30 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a one-output program and preserve lazy owned output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// );
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let value = executor.run_value(&program).unwrap();
+    /// assert!(matches!(&value, TensorValue::View(_)));
+    /// assert_eq!(value.shape(), &[3, 2]);
+    /// assert_eq!(
+    ///     value.to_tensor().as_slice::<f64>().unwrap(),
+    ///     &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    /// );
+    /// ```
     pub fn run_value(&mut self, program: &GraphProgram) -> Result<TensorValue> {
         let mut outputs = self.run_many_values(program)?;
         expect_single_value(&mut outputs)
@@ -189,6 +250,24 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a program and preserve lazy owned output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile_many(&[&y]).unwrap();
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let outputs = executor.run_many_values(&program).unwrap();
+    /// assert_eq!(outputs.len(), 1);
+    /// assert!(matches!(&outputs[0], TensorValue::View(_)));
+    /// assert_eq!(outputs[0].shape(), &[2, 2]);
+    /// ```
     pub fn run_many_values(&mut self, program: &GraphProgram) -> Result<Vec<TensorValue>> {
         self.run_many_values_with_inputs(program, &[])
     }
@@ -225,6 +304,26 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a one-output program with explicit bindings and preserve lazy output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
+    ///     .unwrap();
+    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let value = executor.run_value_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    /// assert!(matches!(&value, TensorValue::View(_)));
+    /// assert_eq!(value.to_tensor().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
     pub fn run_value_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -239,6 +338,29 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// Unlike [`run_with_inputs`](Self::run_with_inputs), caller-owned input
     /// tensors are read through [`TensorRead`] and are not cloned into executor
     /// slots.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{
+    ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorView, TracedTensor, TypedTensorView,
+    /// };
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let y = &x + &x;
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+    ///     .unwrap();
+    /// let data = [1.0_f64, 99.0, 2.0];
+    /// let view = TypedTensorView::from_slice([2], [2], 0, &data).unwrap();
+    /// let read = TensorRead::from_view(TensorView::F64(view));
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let out = executor.run_with_input_reads(&program, &[(&x, read)]).unwrap();
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// ```
     pub fn run_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -249,6 +371,33 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a one-output program with borrowed bindings and preserve lazy output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{
+    ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorValue, TensorView, TracedTensor,
+    ///     TypedTensorView,
+    /// };
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
+    ///     .unwrap();
+    /// let data = [1.0_f64, 2.0, 3.0, 4.0];
+    /// let view = TypedTensorView::from_slice([2, 2], [1, 2], 0, &data).unwrap();
+    /// let read = TensorRead::from_view(TensorView::F64(view));
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let value = executor
+    ///     .run_value_with_input_reads(&program, &[(&x, read)])
+    ///     .unwrap();
+    /// assert!(matches!(&value, TensorValue::View(_)));
+    /// assert_eq!(value.shape(), &[2, 2]);
+    /// ```
     pub fn run_value_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -288,6 +437,28 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a program with explicit bindings and preserve lazy output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
+    ///     .unwrap();
+    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let outputs = executor
+    ///     .run_many_values_with_inputs(&program, &[(&x, &bound)])
+    ///     .unwrap();
+    /// assert_eq!(outputs.len(), 1);
+    /// assert!(matches!(&outputs[0], TensorValue::View(_)));
+    /// ```
     pub fn run_many_values_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -302,6 +473,29 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// Bindings override program defaults and are validated against the input
     /// specs captured in the compiled program. Bound tensors are borrowed by
     /// the executor for this call instead of cloned into input slots.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{
+    ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorView, TracedTensor, TypedTensorView,
+    /// };
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let y = &x + &x;
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+    ///     .unwrap();
+    /// let data = [1.0_f64, 99.0, 2.0];
+    /// let view = TypedTensorView::from_slice([2], [2], 0, &data).unwrap();
+    /// let read = TensorRead::from_view(TensorView::F64(view));
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let outputs = executor.run_many_with_input_reads(&program, &[(&x, read)]).unwrap();
+    /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// ```
     pub fn run_many_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -312,6 +506,33 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Run a program with borrowed bindings and preserve lazy output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{
+    ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorValue, TensorView, TracedTensor,
+    ///     TypedTensorView,
+    /// };
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
+    ///     .unwrap();
+    /// let data = [1.0_f64, 2.0, 3.0, 4.0];
+    /// let view = TypedTensorView::from_slice([2, 2], [1, 2], 0, &data).unwrap();
+    /// let read = TensorRead::from_view(TensorView::F64(view));
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let outputs = executor
+    ///     .run_many_values_with_input_reads(&program, &[(&x, read)])
+    ///     .unwrap();
+    /// assert_eq!(outputs.len(), 1);
+    /// assert!(matches!(&outputs[0], TensorValue::View(_)));
+    /// ```
     pub fn run_many_values_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -356,6 +577,23 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Evaluate an execution program and preserve lazy owned output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let value = executor.run_value(&program).unwrap();
+    /// assert!(matches!(&value, TensorValue::View(_)));
+    /// assert_eq!(value.shape(), &[2, 2]);
+    /// ```
     pub fn eval_exec_ir_values(
         &mut self,
         program: &ExecProgram,
@@ -401,6 +639,23 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     }
 
     /// Evaluate an execution program without consuming inputs and preserve lazy outputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let y = x.transpose(&[1, 0]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    ///
+    /// let value = executor.run_value(&program).unwrap();
+    /// assert!(matches!(&value, TensorValue::View(_)));
+    /// assert_eq!(value.to_tensor().shape(), &[2, 2]);
+    /// ```
     pub fn eval_exec_ir_non_consuming_values(
         &mut self,
         program: &ExecProgram,
