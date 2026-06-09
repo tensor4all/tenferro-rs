@@ -217,6 +217,8 @@ committed as their own coherent review unit or clearly separated in the PR.
   clones, and string/debug fingerprints in hot paths.
 - Prefer stable structural keys, one-pass summaries, explicit ownership
   transfer, workspace reuse, and backend-aware allocation.
+- When replacing a hot-path helper, remove obsolete private helpers instead of
+  keeping artificial references only to suppress dead-code warnings.
 - Add focused tests, assertions, benchmarks, or complexity checks when
   practical.
 

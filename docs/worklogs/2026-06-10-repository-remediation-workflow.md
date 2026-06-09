@@ -39,6 +39,11 @@ remediation of repository-rule violations. The workflow is linked from
 - Allow autonomous rule growth only when the user explicitly authorizes it for
   a remediation session. The rule update must stay within the approved
   objective and remain reviewable as its own coherent unit.
+- After integrating the first runtime/performance fixes, add a rule that
+  replaced hot-path helpers should be removed when obsolete instead of kept
+  alive through artificial references. This was added after reviewing an
+  automated patch that otherwise preserved a dead helper only to avoid an
+  unused-code warning.
 
 ## Rejected Alternatives
 
@@ -61,6 +66,9 @@ remediation of repository-rule violations. The workflow is linked from
 - During the first remediation pass, verified that docs/rustdoc fixes surfaced
   the need for a classification ledger and subagent coordination rule before
   applying those rule improvements.
+- During the runtime/performance pass, verified that the obsolete-helper rule
+  matched the actual integration review by removing the replaced einsum cost
+  helper and rerunning focused tests.
 
 ## Residual Risks
 
