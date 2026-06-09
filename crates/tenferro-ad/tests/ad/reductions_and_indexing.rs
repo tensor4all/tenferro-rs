@@ -358,6 +358,28 @@ fn grad_pow() {
 }
 
 #[test]
+fn grad_pow_wrt_base_handles_zero_base_integer_exponent() {
+    let x_data = vec![0.0_f64, 2.0, 3.0];
+    let y_data = vec![2.0_f64, 3.0, 4.0];
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone()));
+    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], y_data.clone()));
+    let loss = x.pow(&y).reduce_sum(&[0]);
+
+    let grad_x = loss.grad(&x).unwrap();
+    let grad_x_tensor = eval_tensor(grad_x);
+    let grad_x_data = get_f64_data(&grad_x_tensor);
+    let expected_x = vec![0.0, 12.0, 108.0];
+    assert_close_slice(grad_x_data, &expected_x);
+
+    let f = |lhs: &[f64], rhs: &[f64]| {
+        let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], lhs.to_vec()));
+        let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], rhs.to_vec()));
+        eval_scalar(x.pow(&y).reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff_lhs(grad_x_data, &x_data, &y_data, &f);
+}
+
+#[test]
 fn grad_pow_wrt_exponent() {
     let x_data = vec![1.2, 1.8, 2.5];
     let y_data = vec![0.5, 1.5, 2.0];

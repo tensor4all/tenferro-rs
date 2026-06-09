@@ -49,6 +49,15 @@ fn emit_fixed_add(
     emit_fixed_binary(builder, StdTensorOp::Add, lhs, rhs)
 }
 
+fn emit_fixed_sub(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    let neg_rhs = emit_fixed_neg(builder, rhs);
+    emit_fixed_add(builder, lhs, ValueRef::Local(neg_rhs))
+}
+
 fn emit_fixed_mul(
     builder: &mut dyn PrimitiveRuleBuilder,
     lhs: ValueRef<StdTensorOp>,
@@ -297,15 +306,22 @@ pub fn linearize_pow(
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
-        let pow_over_x = emit_fixed_div(
+        let one = emit_one_like_fixed(builder, ValueRef::External(primal_in[1].clone()));
+        let exponent_minus_one = emit_fixed_sub(
             builder,
-            ValueRef::External(primal_out[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
+            ValueRef::Local(one),
+        );
+        let pow_x_y_minus_one = emit_fixed_binary(
+            builder,
+            StdTensorOp::Pow,
             ValueRef::External(primal_in[0].clone()),
+            ValueRef::Local(exponent_minus_one),
         );
         let coeff = emit_fixed_mul(
             builder,
             ValueRef::External(primal_in[1].clone()),
-            ValueRef::Local(pow_over_x),
+            ValueRef::Local(pow_x_y_minus_one),
         );
         terms.push(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), dx));
     }
@@ -575,14 +591,19 @@ pub fn transpose_pow(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let pow_xy = emit_fixed_binary(
+        let one = emit_one_like_fixed(builder, inputs[1].clone());
+        let exponent_minus_one = emit_fixed_sub(builder, inputs[1].clone(), ValueRef::Local(one));
+        let pow_x_y_minus_one = emit_fixed_binary(
             builder,
             StdTensorOp::Pow,
             inputs[0].clone(),
-            inputs[1].clone(),
+            ValueRef::Local(exponent_minus_one),
         );
-        let pow_over_x = emit_fixed_div(builder, ValueRef::Local(pow_xy), inputs[0].clone());
-        let coeff = emit_fixed_mul(builder, inputs[1].clone(), ValueRef::Local(pow_over_x));
+        let coeff = emit_fixed_mul(
+            builder,
+            inputs[1].clone(),
+            ValueRef::Local(pow_x_y_minus_one),
+        );
         let coeff = conjugate_for_binary_input_dtypes(builder, ValueRef::Local(coeff), inputs, ctx);
         result[0] = Some(emit_linear_mul_fixed(builder, coeff, ct));
     }

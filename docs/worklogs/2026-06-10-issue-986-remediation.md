@@ -80,7 +80,7 @@ Status values:
 | #111 `TracedTensorAdExt` rustdoc examples | Auto Fix | fixed |
 | #112 CUDA zero-sized-output residency validation | Auto Fix | remaining-auto |
 | #113 gather/scatter boundary VJP | Verify First | verify-first; narrow to current boundary cases |
-| #114 `Pow` zero-base singularity | Auto Fix | remaining-auto |
+| #114 `Pow` zero-base singularity | Auto Fix | fixed |
 | #115 terminal lazy view base clone | Auto Fix | fixed |
 | #116 scalar helper public contract | Design Gate | design-gated |
 | #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto |
@@ -147,6 +147,15 @@ Implemented:
 - Preserved existing borrowed `TensorRead` behavior, which must still
   materialize when an owned lazy output is required.
 
+## Fifth Batch: Pow Zero-Base AD
+
+Implemented:
+
+- Replaced `Pow` base-side AD coefficients of the form `y * pow(x, y) / x`
+  with `y * pow(x, y - 1)` in both `linearize_pow` and `transpose_pow`.
+- Added a regression for `x=0, y=2` in the traced gradient path, including
+  finite-difference verification for the base cotangent.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -165,6 +174,7 @@ Implemented:
 - `cargo test -p tenferro-runtime lazy_view_input_conversion_shares_live_owned_tensor`
 - `cargo test -p tenferro-runtime lazy`
 - `cargo test -p tenferro-runtime value`
+- `cargo test -p tenferro-ad grad_pow`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
