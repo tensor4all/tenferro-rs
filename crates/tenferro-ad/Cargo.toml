@@ -21,6 +21,15 @@ cpu-faer = [
 cpu-blas = [
     "tenferro-cpu/cpu-blas",
 ]
+blas-openblas = [
+    "tenferro-cpu/blas-openblas",
+]
+blas-accelerate = [
+    "tenferro-cpu/blas-accelerate",
+]
+blas-mkl = [
+    "tenferro-cpu/blas-mkl",
+]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 

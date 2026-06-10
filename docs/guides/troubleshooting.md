@@ -79,6 +79,22 @@ and `cpu-blas` can be enabled by itself or together with `cpu-faer`:
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", features = ["cpu-blas"] }
 ```
 
+`cpu-blas` is the generic CBLAS/LAPACK backend. If the build should select a
+concrete provider from Cargo features, enable exactly one of `blas-openblas`,
+`blas-accelerate`, or `blas-mkl` on the CPU-using tenferro crates:
+
+```toml
+[dependencies]
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas-openblas"] }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas-openblas"] }
+```
+
+Cargo features are additive. If two explicit provider features are enabled by
+different dependencies, tenferro stops at compile time instead of linking an
+ambiguous BLAS/LAPACK provider set. Use `OPENBLAS_LIB_DIR` for non-standard
+OpenBLAS installs, and `MKLROOT` or `MKL_LIB_DIR` for non-standard MKL installs
+when the provider build scripts need a library path.
+
 `CpuBackend::new()` selects the compiled default provider: BLAS when `cpu-blas`
 is compiled, otherwise faer. Use `CpuBackend::with_kind(CpuBackendKind::Faer)`
 when faer should handle provider-backed kernels in a build that includes faer.

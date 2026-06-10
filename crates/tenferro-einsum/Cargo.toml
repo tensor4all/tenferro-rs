@@ -25,6 +25,18 @@ cpu-blas = [
     "tenferro-ad?/cpu-blas",
     "tenferro-cpu/cpu-blas",
 ]
+blas-openblas = [
+    "tenferro-ad?/blas-openblas",
+    "tenferro-cpu/blas-openblas",
+]
+blas-accelerate = [
+    "tenferro-ad?/blas-accelerate",
+    "tenferro-cpu/blas-accelerate",
+]
+blas-mkl = [
+    "tenferro-ad?/blas-mkl",
+    "tenferro-cpu/blas-mkl",
+]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 

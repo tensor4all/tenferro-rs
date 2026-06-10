@@ -14,6 +14,9 @@ description = "FFT extension runtime and public FFT APIs for tenferro."
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
+blas-openblas = ["tenferro-ad?/blas-openblas", "tenferro-cpu/blas-openblas"]
+blas-accelerate = ["tenferro-ad?/blas-accelerate", "tenferro-cpu/blas-accelerate"]
+blas-mkl = ["tenferro-ad?/blas-mkl", "tenferro-cpu/blas-mkl"]
 autodiff = [
     "dep:tidu",
     "dep:tenferro-ad",

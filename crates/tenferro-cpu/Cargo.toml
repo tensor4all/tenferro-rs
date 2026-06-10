@@ -19,9 +19,30 @@ cpu-faer = ["dep:faer", "dep:strided-einsum2", "strided-einsum2/faer"]
 cpu-blas = ["dep:cblas-sys", "dep:lapack"]
 provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
 provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
-src-openblas = ["provider-src", "blas-src/openblas"]
-src-accelerate = ["provider-src", "blas-src/accelerate"]
-src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
+blas-openblas = [
+    "provider-src",
+    "dep:strided-einsum2",
+    "blas-src/openblas",
+    "lapack-src/openblas",
+    "strided-einsum2/blas-openblas",
+]
+blas-accelerate = [
+    "provider-src",
+    "dep:strided-einsum2",
+    "blas-src/accelerate",
+    "lapack-src/accelerate",
+    "strided-einsum2/blas-accelerate",
+]
+blas-mkl = [
+    "provider-src",
+    "dep:strided-einsum2",
+    "blas-src/intel-mkl-dynamic-parallel",
+    "lapack-src/intel-mkl-dynamic-parallel",
+    "strided-einsum2/blas-mkl",
+]
+src-openblas = ["blas-openblas"]
+src-accelerate = ["blas-accelerate"]
+src-intel-mkl-dynamic-parallel = ["blas-mkl"]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0" }

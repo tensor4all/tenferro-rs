@@ -12,6 +12,9 @@ parallelism contract.
 
 At least one CPU provider feature must be compiled. `cpu-faer` is the default.
 `cpu-blas` can be compiled by itself or together with `cpu-faer`.
+`blas-openblas`, `blas-accelerate`, and `blas-mkl` are explicit BLAS/LAPACK
+source-provider features that also enable `cpu-blas`; enable at most one of
+them in a single resolved Cargo feature graph.
 
 `CpuBackend::new()` chooses a provider from the features compiled into the
 current binary:
@@ -78,7 +81,9 @@ VECLIB_MAXIMUM_THREADS=4 \
 Use the variables that match your actual provider. For example, OpenBLAS mainly
 uses `OPENBLAS_NUM_THREADS`; Intel MKL uses `MKL_NUM_THREADS`; Accelerate uses
 `VECLIB_MAXIMUM_THREADS`; OpenMP-backed providers usually also obey
-`OMP_NUM_THREADS`.
+`OMP_NUM_THREADS`. For provider discovery at build time, non-standard OpenBLAS
+installs commonly need `OPENBLAS_LIB_DIR`; non-standard MKL installs commonly
+need `MKLROOT` or `MKL_LIB_DIR`.
 
 ## Avoid Oversubscription
 

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 BACKEND="both"
 KIND="runtime"
-BLAS_FEATURE="${BLAS_FEATURE:-src-accelerate}"
+BLAS_FEATURE="${BLAS_FEATURE:-blas-accelerate}"
 WARM_UP_TIME="${WARM_UP_TIME:-1}"
 MEASUREMENT_TIME="${MEASUREMENT_TIME:-2}"
 SAMPLE_SIZE="${SAMPLE_SIZE:-10}"
@@ -23,7 +23,7 @@ Options:
                                 Runtime sweep, eager sweep, compile-only sweep,
                                 runtime+compile, or all three (default: runtime)
   --backend faer|blas|both       Which backend configuration to run (default: both)
-  --blas-feature FEATURE         BLAS provider feature for the blas run (default: src-accelerate)
+  --blas-feature FEATURE         BLAS provider feature for the blas run (default: blas-accelerate)
   --warm-up-time SECONDS         Criterion warm-up time (default: 1)
   --measurement-time SECONDS     Criterion measurement time (default: 2)
   --sample-size N                Criterion sample size (default: 10)
@@ -144,7 +144,7 @@ if [[ "$KIND" == "runtime" || "$KIND" == "both" || "$KIND" == "all" ]]; then
     log ""
     log "== faer/default =="
     run_one_thread \
-      cargo bench -p tenferro --bench mps_inner_product -- \
+      cargo bench -p tenferro-einsum --bench mps_inner_product -- \
       "${criterion_args[@]}"
   fi
 
@@ -152,7 +152,7 @@ if [[ "$KIND" == "runtime" || "$KIND" == "both" || "$KIND" == "all" ]]; then
     log ""
     log "== BLAS (${BLAS_FEATURE}) =="
     run_one_thread \
-      cargo bench -p tenferro --no-default-features --features "$BLAS_FEATURE" \
+      cargo bench -p tenferro-einsum --no-default-features --features "$BLAS_FEATURE" \
       --bench mps_inner_product -- \
       "${criterion_args[@]}"
   fi
@@ -163,7 +163,7 @@ if [[ "$KIND" == "eager" || "$KIND" == "all" ]]; then
     log ""
     log "== eager faer/default =="
     run_one_thread \
-      cargo bench -p tenferro --bench mps_inner_product_eager -- \
+      cargo bench -p tenferro-einsum --bench mps_inner_product_eager -- \
       "${criterion_args[@]}"
   fi
 
@@ -171,7 +171,7 @@ if [[ "$KIND" == "eager" || "$KIND" == "all" ]]; then
     log ""
     log "== eager BLAS (${BLAS_FEATURE}) =="
     run_one_thread \
-      cargo bench -p tenferro --no-default-features --features "$BLAS_FEATURE" \
+      cargo bench -p tenferro-einsum --no-default-features --features "$BLAS_FEATURE" \
       --bench mps_inner_product_eager -- \
       "${criterion_args[@]}"
   fi
@@ -181,6 +181,6 @@ if [[ "$KIND" == "compile" || "$KIND" == "both" || "$KIND" == "all" ]]; then
   log ""
   log "== compile-only =="
   run_one_thread \
-    cargo bench -p tenferro --bench mps_inner_product_compile -- \
+    cargo bench -p tenferro-einsum --bench mps_inner_product_compile -- \
     "${criterion_args[@]}"
 fi
