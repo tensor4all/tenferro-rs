@@ -1,5 +1,8 @@
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::support::{conjugate_primal_if_any_dtype_complex, dtype_of_or_real};
+use crate::ad::support::{
+    conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
+    dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
+};
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
@@ -47,6 +50,15 @@ fn emit_fixed_add(
     rhs: ValueRef<StdTensorOp>,
 ) -> LocalValueId {
     emit_fixed_binary(builder, StdTensorOp::Add, lhs, rhs)
+}
+
+fn emit_fixed_sub(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    lhs: ValueRef<StdTensorOp>,
+    rhs: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    let neg_rhs = emit_fixed_neg(builder, rhs);
+    emit_fixed_add(builder, lhs, ValueRef::Local(neg_rhs))
 }
 
 fn emit_fixed_mul(
@@ -293,20 +305,46 @@ pub fn linearize_pow(
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
+    let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
+    let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
+    let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
-        let pow_over_x = emit_fixed_div(
+        let one = emit_one_like_fixed(builder, ValueRef::External(primal_in[1].clone()));
+        let exponent_minus_one = emit_fixed_sub(
             builder,
-            ValueRef::External(primal_out[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
+            ValueRef::Local(one),
+        );
+        let promoted_base = convert_fixed_ref_to_dtype(
+            builder,
             ValueRef::External(primal_in[0].clone()),
+            lhs_dtype,
+            output_dtype,
+        );
+        let promoted_exponent = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::Local(exponent_minus_one),
+            rhs_dtype,
+            output_dtype,
+        );
+        let pow_x_y_minus_one =
+            emit_fixed_binary(builder, StdTensorOp::Pow, promoted_base, promoted_exponent);
+        let promoted_exponent_input = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[1].clone()),
+            rhs_dtype,
+            output_dtype,
         );
         let coeff = emit_fixed_mul(
             builder,
-            ValueRef::External(primal_in[1].clone()),
-            ValueRef::Local(pow_over_x),
+            promoted_exponent_input,
+            ValueRef::Local(pow_x_y_minus_one),
         );
+        let dx = convert_linear_to_dtype(builder, dx, lhs_dtype, output_dtype);
         terms.push(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), dx));
     }
 
@@ -316,11 +354,32 @@ pub fn linearize_pow(
             StdTensorOp::Log,
             ValueRef::External(primal_in[0].clone()),
         );
-        let coeff = emit_fixed_mul(
-            builder,
-            ValueRef::Local(log_x),
-            ValueRef::External(primal_out[0].clone()),
-        );
+        let log_x =
+            convert_fixed_ref_to_dtype(builder, ValueRef::Local(log_x), lhs_dtype, output_dtype);
+        let pow_xy = if lhs_dtype == output_dtype && rhs_dtype == output_dtype {
+            ValueRef::External(primal_out[0].clone())
+        } else {
+            let promoted_base = convert_fixed_ref_to_dtype(
+                builder,
+                ValueRef::External(primal_in[0].clone()),
+                lhs_dtype,
+                output_dtype,
+            );
+            let promoted_exponent = convert_fixed_ref_to_dtype(
+                builder,
+                ValueRef::External(primal_in[1].clone()),
+                rhs_dtype,
+                output_dtype,
+            );
+            ValueRef::Local(emit_fixed_binary(
+                builder,
+                StdTensorOp::Pow,
+                promoted_base,
+                promoted_exponent,
+            ))
+        };
+        let coeff = emit_fixed_mul(builder, log_x, pow_xy);
+        let dy = convert_linear_to_dtype(builder, dy, rhs_dtype, output_dtype);
         terms.push(emit_linear_mul_fixed(builder, ValueRef::Local(coeff), dy));
     }
 
@@ -572,32 +631,59 @@ pub fn transpose_pow(
         OperationRole::Primary => return vec![None, None],
     };
 
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let pow_xy = emit_fixed_binary(
+        let one = emit_one_like_fixed(builder, inputs[1].clone());
+        let exponent_minus_one = emit_fixed_sub(builder, inputs[1].clone(), ValueRef::Local(one));
+        let promoted_base =
+            convert_fixed_ref_to_dtype(builder, inputs[0].clone(), lhs_dtype, output_dtype);
+        let promoted_exponent = convert_fixed_ref_to_dtype(
             builder,
-            StdTensorOp::Pow,
-            inputs[0].clone(),
-            inputs[1].clone(),
+            ValueRef::Local(exponent_minus_one),
+            rhs_dtype,
+            output_dtype,
         );
-        let pow_over_x = emit_fixed_div(builder, ValueRef::Local(pow_xy), inputs[0].clone());
-        let coeff = emit_fixed_mul(builder, inputs[1].clone(), ValueRef::Local(pow_over_x));
+        let pow_x_y_minus_one =
+            emit_fixed_binary(builder, StdTensorOp::Pow, promoted_base, promoted_exponent);
+        let promoted_exponent_input =
+            convert_fixed_ref_to_dtype(builder, inputs[1].clone(), rhs_dtype, output_dtype);
+        let coeff = emit_fixed_mul(
+            builder,
+            promoted_exponent_input,
+            ValueRef::Local(pow_x_y_minus_one),
+        );
         let coeff = conjugate_for_binary_input_dtypes(builder, ValueRef::Local(coeff), inputs, ctx);
-        result[0] = Some(emit_linear_mul_fixed(builder, coeff, ct));
+        let cotangent = emit_linear_mul_fixed(builder, coeff, ct);
+        result[0] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            lhs_dtype,
+        ));
     }
 
     if active_mask[1] {
         let log_x = emit_fixed_unary(builder, StdTensorOp::Log, inputs[0].clone());
-        let pow_xy = emit_fixed_binary(
-            builder,
-            StdTensorOp::Pow,
-            inputs[0].clone(),
-            inputs[1].clone(),
-        );
-        let coeff = emit_fixed_mul(builder, ValueRef::Local(log_x), ValueRef::Local(pow_xy));
+        let promoted_log_x =
+            convert_fixed_ref_to_dtype(builder, ValueRef::Local(log_x), lhs_dtype, output_dtype);
+        let promoted_base =
+            convert_fixed_ref_to_dtype(builder, inputs[0].clone(), lhs_dtype, output_dtype);
+        let promoted_exponent =
+            convert_fixed_ref_to_dtype(builder, inputs[1].clone(), rhs_dtype, output_dtype);
+        let pow_xy = emit_fixed_binary(builder, StdTensorOp::Pow, promoted_base, promoted_exponent);
+        let coeff = emit_fixed_mul(builder, promoted_log_x, ValueRef::Local(pow_xy));
         let coeff = conjugate_for_binary_input_dtypes(builder, ValueRef::Local(coeff), inputs, ctx);
-        result[1] = Some(emit_linear_mul_fixed(builder, coeff, ct));
+        let cotangent = emit_linear_mul_fixed(builder, coeff, ct);
+        result[1] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            rhs_dtype,
+        ));
     }
 
     result

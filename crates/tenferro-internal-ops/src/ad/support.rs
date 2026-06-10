@@ -170,8 +170,56 @@ pub fn is_real_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64)
 }
 
+pub(crate) fn is_differentiable_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+}
+
 fn is_complex_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::C32 | DType::C64)
+}
+
+fn promotion_rank(dtype: DType) -> u8 {
+    match dtype {
+        DType::Bool => 0,
+        DType::I32 => 1,
+        DType::I64 => 2,
+        DType::F32 => 3,
+        DType::F64 => 4,
+        DType::C32 => 5,
+        DType::C64 => 6,
+    }
+}
+
+pub(crate) fn promote_dtype(lhs: DType, rhs: DType) -> DType {
+    use DType::*;
+    if lhs == rhs {
+        return lhs;
+    }
+    let (a, b) = if promotion_rank(lhs) <= promotion_rank(rhs) {
+        (lhs, rhs)
+    } else {
+        (rhs, lhs)
+    };
+    match (a, b) {
+        (Bool, other) => other,
+        (I32, I64) => I64,
+        (I32 | I64, F32 | F64) => F64,
+        (I32 | I64, C32 | C64) => C64,
+        (F32, F64) => F64,
+        (F32, C32) => C32,
+        (F32, C64) => C64,
+        (F64, C32) => C64,
+        (F64, C64) => C64,
+        (C32, C64) => C64,
+        _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
+    }
+}
+
+pub(crate) fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
+    if matches!(lhs, DType::I32 | DType::I64) && matches!(rhs, DType::I32 | DType::I64) {
+        return DType::F64;
+    }
+    promote_dtype(lhs, rhs)
 }
 
 pub(crate) fn dtype_of_or_real(ctx: &mut ShapeGuardContext, val: &ValueRef<StdTensorOp>) -> DType {
@@ -236,6 +284,56 @@ pub fn conjugate_linear_if_dtype_complex(
     } else {
         input
     }
+}
+
+pub(crate) fn project_linear_to_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+    from: DType,
+    to: DType,
+) -> LocalValueId {
+    if !is_real_dtype(to) || from == to {
+        return input;
+    }
+    convert_linear_to_dtype(builder, input, from, to)
+}
+
+pub(crate) fn convert_linear_to_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+    from: DType,
+    to: DType,
+) -> LocalValueId {
+    if from == to {
+        return input;
+    }
+    builder.add_operation(
+        StdTensorOp::Convert { from, to },
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    )[0]
+}
+
+pub(crate) fn convert_fixed_ref_to_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    from: DType,
+    to: DType,
+) -> ValueRef<StdTensorOp> {
+    if from == to {
+        return input;
+    }
+    ValueRef::Local(
+        builder.add_operation(
+            StdTensorOp::Convert { from, to },
+            vec![input],
+            OperationRole::Linearized {
+                active_mask: vec![false],
+            },
+        )[0],
+    )
 }
 
 #[cfg(test)]

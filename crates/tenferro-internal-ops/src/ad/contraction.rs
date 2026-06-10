@@ -2,7 +2,11 @@ use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::support::{conjugate_primal_if_complex, conjugate_primal_if_dtype_complex};
+use crate::ad::support::{
+    conjugate_primal_if_complex, conjugate_primal_if_dtype_complex, convert_fixed_ref_to_dtype,
+    convert_linear_to_dtype, dtype_of_or_real, project_linear_to_dtype, promote_dtype,
+};
+use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
@@ -28,17 +32,24 @@ pub fn linearize_dot_general(
                 "invalid DotGeneral config during linearize: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
             )
         });
+    let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
+    let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
+        let dx = convert_linear_to_dtype(builder, dx, lhs_dtype, output_dtype);
+        let rhs = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[1].clone()),
+            rhs_dtype,
+            output_dtype,
+        );
         let term = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
             },
-            vec![
-                ValueRef::Local(dx),
-                ValueRef::External(primal_in[1].clone()),
-            ],
+            vec![ValueRef::Local(dx), rhs],
             OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
@@ -47,14 +58,18 @@ pub fn linearize_dot_general(
     }
 
     if let Some(dy) = tangent_in[1] {
+        let lhs = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[0].clone()),
+            lhs_dtype,
+            output_dtype,
+        );
+        let dy = convert_linear_to_dtype(builder, dy, rhs_dtype, output_dtype);
         let term = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
             },
-            vec![
-                ValueRef::External(primal_in[0].clone()),
-                ValueRef::Local(dy),
-            ],
+            vec![lhs, ValueRef::Local(dy)],
             OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
@@ -123,14 +138,16 @@ pub fn linearize_reduce_prod(
         &input_shape,
         &kept_dims,
     );
-    let coeff = builder.add_operation(
-        StdTensorOp::Div,
-        vec![
-            ValueRef::Local(prod_broadcast),
-            ValueRef::External(primal_in[0].clone()),
-        ],
-        OperationRole::Primary,
-    )[0];
+    let input_dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let coeff = reduce_prod_derivative_coeff(
+        builder,
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::Local(prod_broadcast),
+        &input_shape,
+        &kept_dims,
+        axes,
+        input_dtype,
+    );
     let scaled_tangent = builder.add_operation(
         StdTensorOp::Mul,
         vec![ValueRef::Local(coeff), ValueRef::Local(dx)],
@@ -222,6 +239,9 @@ pub fn transpose_dot_general(
 
     let lhs_rank = ctx.shape_of(&inputs[0]).len();
     let rhs_rank = ctx.shape_of(&inputs[1]).len();
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
@@ -245,6 +265,7 @@ pub fn transpose_dot_general(
 
     if active_mask[0] {
         let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
+        let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = builder.add_operation(
@@ -257,11 +278,18 @@ pub fn transpose_dot_general(
             },
         );
         let _ = (new_lhs_rank, new_rhs_rank);
-        result[0] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        let cotangent = add_transpose_if_needed(builder, out[0], &perm);
+        result[0] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            lhs_dtype,
+        ));
     }
 
     if active_mask[1] {
         let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
+        let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = builder.add_operation(
@@ -274,7 +302,13 @@ pub fn transpose_dot_general(
             },
         );
         let _ = (new_lhs_rank, new_rhs_rank);
-        result[1] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        let cotangent = add_transpose_if_needed(builder, out[0], &perm);
+        result[1] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            rhs_dtype,
+        ));
     }
 
     result
@@ -373,12 +407,16 @@ pub fn transpose_reduce_prod(
                 &input_shape,
                 &kept_dims,
             );
-            let coeff = builder.add_operation(
-                StdTensorOp::Div,
-                vec![ValueRef::Local(prod_broadcast), inputs[0].clone()],
-                OperationRole::Primary,
-            )[0];
             let input_dtype = ctx.dtype_of(&inputs[0]);
+            let coeff = reduce_prod_derivative_coeff(
+                builder,
+                inputs[0].clone(),
+                ValueRef::Local(prod_broadcast),
+                &input_shape,
+                &kept_dims,
+                axes,
+                input_dtype,
+            );
             let coeff_conj =
                 conjugate_primal_if_dtype_complex(builder, ValueRef::Local(coeff), input_dtype);
             let out = builder.add_operation(
@@ -555,6 +593,180 @@ fn broadcast_reduction_output(
         inputs,
         OperationRole::Primary,
     )[0]
+}
+
+fn reduce_prod_derivative_coeff(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    prod_broadcast: ValueRef<StdTensorOp>,
+    input_shape: &[SymDim],
+    kept_dims: &[usize],
+    axes: &[usize],
+    dtype: DType,
+) -> LocalValueId {
+    let input_rank = input_shape.len();
+    let zero = build_zero_like(builder, dtype, input.clone(), input_rank);
+    let one = build_one_like(builder, dtype, input.clone(), input_rank);
+    let zero_mask = builder.add_operation(
+        StdTensorOp::Compare(CompareDir::Eq),
+        vec![input.clone(), ValueRef::Local(zero)],
+        OperationRole::Primary,
+    )[0];
+    let numeric_zero_mask = numeric_indicators(builder, zero_mask, dtype);
+    let zero_count = builder.add_operation(
+        StdTensorOp::ReduceSum {
+            axes: axes.to_vec(),
+        },
+        vec![ValueRef::Local(numeric_zero_mask)],
+        OperationRole::Primary,
+    )[0];
+    let zero_count_broadcast = broadcast_reduction_output(
+        builder,
+        ValueRef::Local(zero_count),
+        input.clone(),
+        input_shape,
+        kept_dims,
+    );
+    let safe_input = builder.add_operation(
+        StdTensorOp::Select,
+        vec![
+            ValueRef::Local(zero_mask),
+            ValueRef::Local(one),
+            input.clone(),
+        ],
+        OperationRole::Primary,
+    )[0];
+    let nonzero_prod = builder.add_operation(
+        StdTensorOp::ReduceProd {
+            axes: axes.to_vec(),
+        },
+        vec![ValueRef::Local(safe_input)],
+        OperationRole::Primary,
+    )[0];
+    let nonzero_prod_broadcast = broadcast_reduction_output(
+        builder,
+        ValueRef::Local(nonzero_prod),
+        input.clone(),
+        input_shape,
+        kept_dims,
+    );
+    let quotient = builder.add_operation(
+        StdTensorOp::Div,
+        vec![prod_broadcast, ValueRef::Local(safe_input)],
+        OperationRole::Primary,
+    )[0];
+    let zero_coeff = build_zero_like(builder, dtype, input.clone(), input_rank);
+    let single_zero_coeff = builder.add_operation(
+        StdTensorOp::Select,
+        vec![
+            ValueRef::Local(zero_mask),
+            ValueRef::Local(nonzero_prod_broadcast),
+            ValueRef::Local(zero_coeff),
+        ],
+        OperationRole::Primary,
+    )[0];
+    let zero_count_zero = build_zero_like(builder, dtype, input.clone(), input_rank);
+    let zero_count_is_zero = builder.add_operation(
+        StdTensorOp::Compare(CompareDir::Eq),
+        vec![
+            ValueRef::Local(zero_count_broadcast),
+            ValueRef::Local(zero_count_zero),
+        ],
+        OperationRole::Primary,
+    )[0];
+    let zero_count_one = build_one_like(builder, dtype, input, input_rank);
+    let zero_count_is_one = builder.add_operation(
+        StdTensorOp::Compare(CompareDir::Eq),
+        vec![
+            ValueRef::Local(zero_count_broadcast),
+            ValueRef::Local(zero_count_one),
+        ],
+        OperationRole::Primary,
+    )[0];
+    let zero_for_multiple = build_zero_like(
+        builder,
+        dtype,
+        ValueRef::Local(single_zero_coeff),
+        input_rank,
+    );
+    let zero_case_coeff = builder.add_operation(
+        StdTensorOp::Select,
+        vec![
+            ValueRef::Local(zero_count_is_one),
+            ValueRef::Local(single_zero_coeff),
+            ValueRef::Local(zero_for_multiple),
+        ],
+        OperationRole::Primary,
+    )[0];
+    builder.add_operation(
+        StdTensorOp::Select,
+        vec![
+            ValueRef::Local(zero_count_is_zero),
+            ValueRef::Local(quotient),
+            ValueRef::Local(zero_case_coeff),
+        ],
+        OperationRole::Primary,
+    )[0]
+}
+
+fn build_one_like(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> LocalValueId {
+    build_scalar_like(builder, dtype, one_bytes(dtype), anchor, anchor_rank)
+}
+
+fn build_scalar_like(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    bytes: Vec<u8>,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> LocalValueId {
+    let scalar = builder.add_operation(
+        StdTensorOp::Constant { dtype, bytes },
+        vec![],
+        OperationRole::Primary,
+    )[0];
+    if anchor_rank == 0 {
+        return scalar;
+    }
+
+    let shape: Vec<DimExpr> = (0..anchor_rank)
+        .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
+        .collect();
+    builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape,
+            dims: vec![],
+        },
+        vec![ValueRef::Local(scalar), anchor],
+        OperationRole::Primary,
+    )[0]
+}
+
+fn one_bytes(dtype: DType) -> Vec<u8> {
+    match dtype {
+        DType::F32 => 1.0_f32.to_le_bytes().to_vec(),
+        DType::F64 => 1.0_f64.to_le_bytes().to_vec(),
+        DType::I32 => 1_i32.to_le_bytes().to_vec(),
+        DType::I64 => 1_i64.to_le_bytes().to_vec(),
+        DType::Bool => vec![1],
+        DType::C32 => {
+            let mut bytes = Vec::with_capacity(8);
+            bytes.extend_from_slice(&1.0_f32.to_le_bytes());
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+            bytes
+        }
+        DType::C64 => {
+            let mut bytes = Vec::with_capacity(16);
+            bytes.extend_from_slice(&1.0_f64.to_le_bytes());
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            bytes
+        }
+    }
 }
 
 fn reduction_location_indicators(

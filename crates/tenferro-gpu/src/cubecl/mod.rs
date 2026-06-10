@@ -36,7 +36,7 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+//! use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 //! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
 //!
 //! fn main() -> tenferro_tensor::Result<()> {
@@ -111,12 +111,10 @@ use crate::{
 };
 
 mod dispatch;
-#[doc(hidden)]
-pub mod ffi;
+mod ffi;
 mod fusion;
 mod gemm;
-#[doc(hidden)]
-pub mod interop;
+pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
 mod runtime;
@@ -223,7 +221,7 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cubecl::CubeclBackend;
+/// use tenferro_gpu::CubeclBackend;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclBackend> = CubeclBackend::new;
 /// ```
@@ -302,7 +300,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    /// use tenferro_gpu::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// assert!(cache.is_empty());
@@ -326,7 +324,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    /// use tenferro_gpu::CudaExtensionCache;
     ///
     /// assert!(CudaExtensionCache::new().is_empty());
     /// ```
@@ -381,7 +379,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    /// use tenferro_gpu::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();
@@ -441,7 +439,7 @@ impl CubeclBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclBackend;
+    /// use tenferro_gpu::CubeclBackend;
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclBackend> = CubeclBackend::new;
     /// ```
@@ -458,7 +456,7 @@ impl CubeclBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::{CubeclBackend, CubeclRuntime};
+    /// use tenferro_gpu::{CubeclBackend, CubeclRuntime};
     ///
     /// let _runtime: fn(&CubeclBackend) -> &CubeclRuntime = CubeclBackend::runtime;
     /// ```
@@ -1990,38 +1988,38 @@ impl TensorStructural for CubeclBackend {
         match input {
             Tensor::F32(t) => Ok(Tensor::F32(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::F64(t) => Ok(Tensor::F64(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::I32(t) => Ok(Tensor::I32(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::I64(t) => Ok(Tensor::I64(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::Bool(t) => Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::C32(t) => Ok(Tensor::C32(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
             Tensor::C64(t) => Ok(Tensor::C64(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                t.buffer.clone(),
-                t.placement.clone(),
+                t.buffer().clone(),
+                t.placement().clone(),
             ))),
         }
     }
@@ -2688,7 +2686,7 @@ impl TensorFusion for CubeclBackend {
     fn execute_elementwise_fusion(
         &mut self,
         inputs: &[&Tensor],
-        plan: &crate::ElementwiseFusionPlan,
+        plan: &crate::backend::ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
         fusion::execute_elementwise_fusion(self, inputs, plan)
     }
@@ -2820,11 +2818,8 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
             )));
     }
 
-    Ok(TypedTensor::from_buffer_col_major(
-        shape,
-        tensor.buffer,
-        tensor.placement,
-    ))
+    let (buffer, _, placement) = tensor.into_parts();
+    Ok(TypedTensor::from_buffer_col_major(shape, buffer, placement))
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {

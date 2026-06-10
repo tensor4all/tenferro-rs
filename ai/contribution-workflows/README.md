@@ -20,3 +20,5 @@ Available workflows:
   discussions, and documentation/article topic issues.
 - `bugfix-pr.md`: prepare pull requests that fix existing intended behavior
   without introducing new features or architectural changes.
+- `repository-remediation.md`: batch and resolve repository-rule violations
+  across related findings with local-first verification and one non-squash PR.

@@ -27,6 +27,52 @@ fn test_reduce_prod_jvp() {
 }
 
 #[test]
+fn reduce_prod_jvp_handles_zero_containing_inputs() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![3usize];
+    let (graph, input_key, output_key) = build_unary_graph(op, tensor_input_key(60_006));
+    let x_data = vec![0.0, 2.0, 3.0];
+    let dx_data = vec![7.0, 11.0, 13.0];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), x_data.clone()),
+    );
+
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(input_shape, dx_data),
+    );
+
+    assert_close_slice(get_f64_data(&tangent), &[42.0]);
+}
+
+#[test]
+fn reduce_prod_jvp_returns_zero_with_multiple_reduced_zeros() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![3usize];
+    let (graph, input_key, output_key) = build_unary_graph(op, tensor_input_key(60_007));
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), vec![0.0, 2.0, 0.0]),
+    );
+
+    let tangent = jvp_from_graph_with_inputs(
+        graph,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(input_shape, vec![7.0, 11.0, 13.0]),
+    );
+
+    assert_close_slice(get_f64_data(&tangent), &[0.0]);
+}
+
+#[test]
 fn test_reduce_prod_vjp() {
     let op = StdTensorOp::ReduceProd { axes: vec![0] };
     let input_shape = vec![2usize, 3];
@@ -47,6 +93,23 @@ fn test_reduce_prod_vjp() {
             .map(|(value, weight)| value * weight)
             .sum()
     });
+}
+
+#[test]
+fn reduce_prod_vjp_handles_single_and_multiple_reduced_zeros() {
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![2usize, 3];
+    let input_key = tensor_input_key(60_008);
+    let x_data = vec![0.0, 2.0, 3.0, 4.0, 0.0, 0.0];
+    let cotangent = vec![0.5, -1.0, 2.0];
+    let grad = transpose_primal_unary_op_with_inputs(
+        op,
+        input_key,
+        f64_tensor(input_shape, x_data),
+        f64_tensor(vec![3], cotangent),
+    );
+
+    assert_close_slice(get_f64_data(&grad), &[1.0, 0.0, -4.0, -3.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -347,6 +410,28 @@ fn grad_pow() {
     let grad_x_tensor = eval_tensor(grad_x);
     let grad_x_data = get_f64_data(&grad_x_tensor);
     let expected_x: Vec<f64> = x_data.iter().map(|x| 2.0 * x).collect();
+    assert_close_slice(grad_x_data, &expected_x);
+
+    let f = |lhs: &[f64], rhs: &[f64]| {
+        let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], lhs.to_vec()));
+        let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], rhs.to_vec()));
+        eval_scalar(x.pow(&y).reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff_lhs(grad_x_data, &x_data, &y_data, &f);
+}
+
+#[test]
+fn grad_pow_wrt_base_handles_zero_base_integer_exponent() {
+    let x_data = vec![0.0_f64, 2.0, 3.0];
+    let y_data = vec![2.0_f64, 3.0, 4.0];
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone()));
+    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], y_data.clone()));
+    let loss = x.pow(&y).reduce_sum(&[0]);
+
+    let grad_x = loss.grad(&x).unwrap();
+    let grad_x_tensor = eval_tensor(grad_x);
+    let grad_x_data = get_f64_data(&grad_x_tensor);
+    let expected_x = vec![0.0, 12.0, 108.0];
     assert_close_slice(grad_x_data, &expected_x);
 
     let f = |lhs: &[f64], rhs: &[f64]| {
@@ -953,7 +1038,7 @@ fn dropped_traced_graph_releases_registered_metadata() {
         leaf_key = ValueKey::Input(x.input_key().expect("leaf input key"));
 
         y = &x + &x;
-        derived_key = y.graph.values()[y.val].key.clone();
+        derived_key = y.graph().values()[y.val].key.clone();
 
         assert!(lookup_global_metadata(&leaf_key).is_some());
         assert!(lookup_global_metadata(&derived_key).is_some());

@@ -158,7 +158,7 @@ It is a handwritten test matrix, not a generated JSON-driven harness.
 The suite combines:
 
 - Small deterministic fixtures for reconstruction/property tests and error paths
-- Shared finite-difference helpers (`check_rrule_fd`, `check_frule_fd`, etc.)
+- Shared finite-difference helpers for VJP and JVP checks
 - Targeted branch-coverage tests for tall/wide, batched, and rank-deficient cases
 - Dtype coverage across `f64`, `f32`, `Complex64`, and `Complex32`
 
@@ -179,7 +179,7 @@ cargo bench -p tenferro-linalg --bench linalg_benchmarks
 ```
 
 The benchmark set includes forward kernels (`svd`, `qr`, `solve`,
-`matrix_exp`) and representative AD rules (`svd_rrule`, `solve_rrule`)
+`matrix_exp`) and representative AD rules (`svd` VJP, `solve` VJP)
 across small/medium square, tall, wide, and batched-small shapes.
 
 #### Forward (decomposition correctness)
@@ -198,7 +198,7 @@ BLAS/LAPACK do not specify sign/phase conventions, so reference data cannot be u
 Forward coverage is provided by explicit per-operation tests, with separate
 batched and dtype-specific checks where relevant.
 
-#### AD (rrule): finite-difference gradient check
+#### AD (VJP): finite-difference gradient check
 
 Ported from [BackwardsLinalg.jl](https://github.com/GiggleLiu/BackwardsLinalg.jl).
 Source dump: `/tmp/BackwardsLinalg_dump.txt`
@@ -207,7 +207,7 @@ Source dump: `/tmp/BackwardsLinalg_dump.txt`
 
 ```
 gradient_check(f, A; η=1e-5):
-    g = analytic_gradient(f, A)          // computed via rrule
+    g = analytic_gradient(f, A)          // computed via VJP
     dy_expect = η * sum(|g|²)            // expected change (first-order)
     dy = f(A) - f(A - η·g)              // actual change
     assert |dy - dy_expect| < rtol * |dy_expect| + atol
@@ -218,7 +218,7 @@ Tolerances: `rtol = 1e-2`, `atol = 1e-8` (same as BackwardsLinalg.jl).
 **Scalar test functions and cotangent isolation:**
 
 The gradient check requires a scalar function `f: Matrix → Scalar` to differentiate.
-The choice of `f` determines which cotangent paths of the rrule are exercised:
+The choice of `f` determines which cotangent paths of the VJP are exercised:
 
 - If `f` depends only on U (e.g., via `U[:,1]`), then dS = 0 and dV = 0,
   so only the dU branch of `svd_back` is tested.
@@ -266,22 +266,23 @@ Here `H` and `op` are random Hermitian (or symmetric) matrices, generated indepe
 
 ## AD Test Matrix
 
-Coverage targets for reverse-mode (rrule/VJP), forward-mode (frule/JVP), and
-Hessian-vector product (hvp) across all differentiable operations.
+Coverage targets for reverse-mode VJP, forward-mode JVP, and Hessian-vector
+product (HVP) across all differentiable operations.
 
 **Test ownership:**
 
 - Unit tests for each rule live in the crate that owns the rule:
   - `crates/tenferro-einsum/tests/` — einsum AD tests
   - `crates/tenferro-linalg/tests/` — linalg AD tests
-  - `chainrules/tests/` — tape/tracking infrastructure tests
+  - `crates/tenferro-ad/tests/` — eager/traced AD integration tests
+  - `crates/tenferro-internal-ops/src/ad/tests/` — primitive rule tests
 - Workspace-level integration tests (in `tests/` at the workspace root) cover
   cross-crate AD scenarios: e.g., an einsum followed by an SVD inside a single
   tape, or C-API roundtrip correctness for AD.
 
 ### Einsum AD
 
-| Operation | rrule | frule | hvp | Tropical-specific | Notes |
+| Operation | VJP | JVP | HVP | Tropical-specific | Notes |
 |-----------|-------|-------|-----|-------------------|-------|
 | Matmul `ij,jk->ik` (Standard) | planned | planned | planned | — | Finite-diff + hand-computed |
 | Trace `ii->` (Standard) | planned | planned | — | — | Gradient = identity diagonal |
@@ -293,7 +294,7 @@ Hessian-vector product (hvp) across all differentiable operations.
 | MaxPlus chain (tropical) | planned | — | — | argmax route | Gradient sparsity increases with chain length |
 
 Notes:
-- frule for tropical einsum is not planned: tropical algebra has no
+- JVP for tropical einsum is not planned: tropical algebra has no
   meaningful JVP (the `max` operation is not differentiable in the usual sense).
 - hvp for tropical einsum is not planned for the same reason.
 - argmax route testing may require a custom kernel infrastructure separate from
@@ -330,11 +331,11 @@ fn tropical_frule_returns_mode_not_supported() {
 
 ### Linalg AD
 
-All 14 rrule and 14 frule functions are implemented and tested with
+All 14 VJP and 14 JVP rules are implemented and tested with
 finite-difference verification. AD formulas sourced from PyTorch autograd
 and Mathieu (2019).
 
-| Operation | rrule | frule | FD status | Notes |
+| Operation | VJP | JVP | FD status | Notes |
 |-----------|-------|-------|-----------|-------|
 | SVD | done | done | pass | Per-cotangent-branch FD checks (dU, dS, dVt) |
 | QR | done | done | pass | Full-rank and wide-case FD coverage |
@@ -357,17 +358,17 @@ Notes:
   through linalg (e.g., SVD Hessians) is mathematically complex and deferred.
 - All linalg AD tests use central finite-difference verification
   (`eps = 1e-6`, `atol = 1e-4`).
-- `tenferro-linalg` AD rules depend only on `chainrules-core` (not the full
-  `tidu` engine); test infrastructure calls `svd_rrule` etc. directly
-  without requiring a tape.
+- `tenferro-linalg` AD rules depend on `tidu` rule interfaces and are tested
+  through crate-local helpers plus traced/eager integration coverage.
 
 ---
 
-### chainrules-core / chainrules / tidu
+### tidu / tenferro-ad
 
-- `chainrules-core`: shared AD traits and rule interfaces
-- `chainrules`: engine-independent scalar rules and scalar forward/reverse helpers
-- `tidu`: tape, tracked values, dual values, and pullback execution
+- `tidu`: generic primitive AD graph interfaces and transforms such as
+  `linearize` and `linear_transpose`
+- `tenferro-ad`: eager runtime, eager tensors, traced AD helper APIs, and
+  integration tests over tenferro tensors
 
 ## Benchmark Tests (`tensor4all/benchmark_einsum`)
 

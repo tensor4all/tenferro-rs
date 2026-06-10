@@ -9,9 +9,10 @@ use strided_kernel::{
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::ConjElem;
 use tenferro_tensor::{
-    col_major_strides, CompareDir, ConjElem, Tensor, TensorOwnedView, TensorRank, TensorRead,
-    TensorValue, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, CompareDir, Tensor, TensorOwnedView, TensorRank, TensorRead, TensorValue,
+    TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{
@@ -1699,6 +1700,8 @@ pub(crate) fn conj_read_with_pool(
 
 /// Compute elementwise absolute values.
 ///
+/// Complex inputs return real magnitudes (`C32 -> F32`, `C64 -> F64`).
+///
 /// # Examples
 ///
 /// ```
@@ -1722,8 +1725,8 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
             "abs",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_abs_with_pool(buffers, t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_abs_with_pool(buffers, t)?)),
+        Tensor::C32(t) => Ok(Tensor::F32(typed_complex_abs_with_pool(buffers, t)?)),
+        Tensor::C64(t) => Ok(Tensor::F64(typed_complex_abs_with_pool(buffers, t)?)),
     }
 }
 
@@ -1745,18 +1748,8 @@ pub(crate) fn abs_read_with_pool(
             &t,
             |x| x.abs_elem(),
         )?)),
-        CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
-            "abs",
-            buffers,
-            &t,
-            |x| x.abs_elem(),
-        )?)),
-        CpuReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
-            "abs",
-            buffers,
-            &t,
-            |x| x.abs_elem(),
-        )?)),
+        CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
+        CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
         _ => Err(crate::Error::backend_failure(
             "abs",
             format!("unsupported dtype {dtype:?}"),
@@ -2550,6 +2543,39 @@ where
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.abs_elem()
     })
+    .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_complex_abs_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<Complex<T>>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: num_traits::Float + PoolScalar,
+{
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
+        x.norm()
+    })
+    .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_complex_abs_view_with_pool<T, R>(
+    buffers: &mut BufferPool,
+    input: &TypedTensorView<'_, Complex<T>, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: num_traits::Float + PoolScalar + 'static,
+    R: TensorRank,
+{
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    map_into(
+        &mut out.view_mut(),
+        &typed_view_from_view("abs", input)?,
+        |x| x.norm(),
+    )
     .map_err(|err| crate::Error::backend_failure("abs", err))?;
     Ok(tensor_from_array(out))
 }

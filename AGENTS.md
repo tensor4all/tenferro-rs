@@ -49,11 +49,20 @@ issues or bug-fix PRs:
   requests, design discussions, and documentation or article topic issues.
 - `ai/contribution-workflows/bugfix-pr.md` for pull requests that fix existing
   intended behavior.
+- `ai/contribution-workflows/repository-remediation.md` for batched,
+  agent-assisted remediation of repository-rule violations across multiple
+  related issues or findings.
 
 Do not open a new-feature implementation PR before maintainers accept the
 corresponding issue. If a proposed bug-fix PR needs a new public API, operation
 family, backend, dependency, feature flag, architectural layer, or AD semantics
 change, stop the PR path and use issue intake.
+
+For batched repository-rule remediation work, follow
+`ai/contribution-workflows/repository-remediation.md`. That workflow is a
+deliberate exception to the normal one-bug-fix-PR path: collect all local fixes
+and verification before opening a PR, keep coherent commits in a single PR, and
+do not use squash merge.
 
 Thin tool adapters live in `.agents/skills/`, `.claude/skills/`, and
 `.opencode/commands/`. Keep policy in `CONTRIBUTING.md` and
@@ -185,6 +194,7 @@ If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting auto
 
 Additionally, verify the following before pushing:
 
+- **Clippy parity**: Run clippy locally with the same command and options as the repository CI `clippy` job; do not use a relaxed local variant.
 - **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`. Stale documentation is worse than no documentation.
@@ -194,7 +204,12 @@ Additionally, verify the following before pushing:
 
 - PRs to `main` must be created using `gh pr create`
 - Do not include AI-generated analysis reports as standalone files in PRs
-- Enable auto-merge after creating a PR: `gh pr merge --auto --squash --delete-branch`
+- Batched repository-rule remediation PRs must follow
+  `ai/contribution-workflows/repository-remediation.md`: open one PR only after
+  all local fixes and verification are complete, keep coherent commits, and
+  merge with a non-squash method.
+- For ordinary non-remediation PRs, enable auto-merge after creating a PR:
+  `gh pr merge --auto --squash --delete-branch`
 - `createpr` must confirm auto-merge remains enabled and the required branch protection checks are still configured
 
 ## Build Commands

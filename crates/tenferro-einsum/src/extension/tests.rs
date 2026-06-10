@@ -3,7 +3,10 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::optimize::EinsumPlanSpec;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_runtime::ExtensionCacheStore;
+use tenferro_tensor::{TensorOwnedView, TensorRead};
 
 #[test]
 fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
@@ -87,6 +90,30 @@ fn runtime_input_index_vec_stays_inline_for_common_arity() {
 }
 
 #[test]
+fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
+    let base = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+    let input = TensorRead::from_view(view.tensor_view());
+    let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
+    let mut backend = CpuBackend::new();
+    let mut caches = ExtensionCacheStore::new();
+    let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
+
+    let outputs = execute_einsum_extension_reads(&op, &[input], &mut ctx)
+        .expect("read-capable einsum extension execution");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(
+        outputs[0].as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+}
+
+#[test]
 #[cfg(feature = "autodiff")]
 fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
     let primal_op = EinsumExtensionOp::with_plan_spec(
@@ -154,6 +181,58 @@ fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
     let tree = op.static_tree().expect("expected concrete VJP tree");
     assert_eq!(tree.step_pair(0), Some((0, 1)));
     assert_eq!(tree.step_pair(1), Some((3, 2)));
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn repeated_label_projection_projects_each_extra_occurrence() {
+    let mut builder = RecordingRuleBuilder::default();
+
+    let result = project_repeated_labels_to_diagonal(&mut builder, 0, &[0, 1, 1, 1]);
+
+    assert_eq!(result, 4);
+    assert_eq!(
+        builder.ops,
+        vec![
+            StdTensorOp::ExtractDiag {
+                axis_a: 1,
+                axis_b: 2,
+            },
+            StdTensorOp::EmbedDiag {
+                axis_a: 1,
+                axis_b: 2,
+            },
+            StdTensorOp::ExtractDiag {
+                axis_a: 1,
+                axis_b: 3,
+            },
+            StdTensorOp::EmbedDiag {
+                axis_a: 1,
+                axis_b: 3,
+            },
+        ]
+    );
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Default)]
+struct RecordingRuleBuilder {
+    ops: Vec<StdTensorOp>,
+    next_id: LocalValueId,
+}
+
+#[cfg(feature = "autodiff")]
+impl PrimitiveRuleBuilder for RecordingRuleBuilder {
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        _inputs: Vec<ValueRef<StdTensorOp>>,
+        _role: OperationRole,
+    ) -> Vec<LocalValueId> {
+        self.ops.push(operation);
+        self.next_id += 1;
+        vec![self.next_id]
+    }
 }
 
 fn payload_hash(op: &EinsumExtensionOp) -> u64 {

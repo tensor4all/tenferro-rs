@@ -59,7 +59,7 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
         let base = self.external_data.get(&base_key).unwrap_or_else(|| {
             panic!("EagerPrimitiveBuilder: missing tangent base {:?}", base_key)
         });
-        let zero = Arc::new(zero_like_tensor(base.as_ref()));
+        let zero = Arc::new(zero_like_tensor(base.as_ref(), self.backend));
         self.external_data.insert(key.clone(), Arc::clone(&zero));
         zero
     }
@@ -123,8 +123,8 @@ fn missing_tangent_base_key(key: &ValueKey<StdTensorOp>) -> Option<ValueKey<StdT
     Some(ValueKey::Input((**of).clone()))
 }
 
-fn zero_like_tensor(input: &Tensor) -> Tensor {
-    match input {
+fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+    let host = match input {
         Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
@@ -135,5 +135,8 @@ fn zero_like_tensor(input: &Tensor) -> Tensor {
         )),
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
-    }
+    };
+    backend
+        .upload_host_tensor(&host)
+        .unwrap_or_else(|err| panic!("eager primitive zero_like upload failed: {}", err))
 }

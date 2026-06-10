@@ -255,6 +255,87 @@ fn eager_clamp_gradients_match_finite_diff() {
 }
 
 #[test]
+fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
+    let ctx = test_ctx();
+    let input_data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let weights = vec![0.5_f64, -1.25];
+
+    let input = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 3], input_data.clone()),
+        ctx.clone(),
+    );
+    let weights_tensor = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], weights.clone()),
+        ctx.clone(),
+    );
+
+    let loss = input
+        .extract_diag(0, 1)
+        .unwrap()
+        .mul(&weights_tensor)
+        .unwrap()
+        .reduce_sum(&[0])
+        .unwrap();
+    let _ = loss.backward().unwrap();
+
+    let loss_for_input = |values: &[f64]| weights[0] * values[0] + weights[1] * values[3];
+
+    let grad = input.grad().unwrap();
+    assert_eq!(grad.shape(), &[2, 3]);
+    assert_close(
+        f64_data(&grad),
+        &finite_diff_unary(loss_for_input, &input_data),
+    );
+}
+
+#[test]
+fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
+    let ctx = test_ctx();
+    let input_shape = vec![2, 3];
+    let input_data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let weights = vec![
+        0.5_f64, -1.0, 1.5, 2.0, -0.25, 0.75, 1.25, -1.5, 0.25, -0.5, 2.5, -2.0, 0.0, 3.0, -3.5,
+        4.0, -4.5, 5.0,
+    ];
+
+    let input = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(input_shape.clone(), input_data.clone()),
+        ctx.clone(),
+    );
+    let weights_tensor = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 2, 3], weights.clone()),
+        ctx.clone(),
+    );
+
+    let loss = input
+        .embed_diag(1, 0)
+        .unwrap()
+        .mul(&weights_tensor)
+        .unwrap()
+        .reduce_sum(&[0, 1, 2])
+        .unwrap();
+    let _ = loss.backward().unwrap();
+
+    let loss_for_input = |values: &[f64]| {
+        (0..input_shape[1])
+            .flat_map(|col| (0..input_shape[0]).map(move |row| (row, col)))
+            .map(|(row, col)| {
+                let input_flat = row + input_shape[0] * col;
+                let output_flat = col + input_shape[1] * (row + input_shape[0] * col);
+                values[input_flat] * weights[output_flat]
+            })
+            .sum()
+    };
+
+    let grad = input.grad().unwrap();
+    assert_eq!(grad.shape(), input_shape.as_slice());
+    assert_close(
+        f64_data(&grad),
+        &finite_diff_unary(loss_for_input, &input_data),
+    );
+}
+
+#[test]
 fn eager_concatenate_gradients_match_finite_diff() {
     let ctx = test_ctx();
     let left_data = vec![1.0_f64, 2.0];

@@ -22,8 +22,12 @@ buffers, CUDA, BLAS/LAPACK providers, execution traits, runtime caches, or AD.
 - dtype-erased dynamic-rank `Tensor`,
 - `TypedTensorView<'a, T, R>` and `TypedTensorViewMut<'a, T, R>` for borrowed
   strided views,
-- placement metadata, backend buffer handles, `TensorBackend`, CPU execution,
-  and backend sessions.
+- placement metadata, backend buffer handles, `TensorBackend`, and backend
+  session traits.
+
+CPU execution, CPU kernels, provider selection, and CPU resource pools belong
+to `tenferro-cpu`. GPU execution and explicit device transfer helpers belong
+to `tenferro-gpu`.
 
 ## Layout
 

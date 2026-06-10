@@ -122,7 +122,7 @@ fn tensor_from_vec_with_template<T: Clone, U>(
     template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
     let mut tensor = TypedTensor::from_vec_col_major(shape, data);
-    tensor.placement = template.placement.clone();
+    tensor.set_placement(template.placement().clone());
     tensor
 }
 

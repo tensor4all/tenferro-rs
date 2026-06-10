@@ -214,7 +214,7 @@ fn graph_size_grows_linearly() {
         for _ in 0..k {
             x = &a * &x.cos();
         }
-        total_ops(&x.graph)
+        total_ops(x.graph())
     }
 
     let ops_10 = ops_for_k_iters(10);

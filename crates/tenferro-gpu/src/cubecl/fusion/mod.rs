@@ -13,7 +13,7 @@ pub(crate) fn execute_elementwise_fusion(
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<Option<Vec<Tensor>>> {
-    match plan.dtype {
+    match plan.dtype() {
         crate::DType::F32 => {
             let Some(classified) = classify::<f32>(inputs, plan)? else {
                 return Ok(None);

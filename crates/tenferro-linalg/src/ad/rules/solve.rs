@@ -456,9 +456,8 @@ pub(crate) fn transpose_full_piv_lu_solve(
 }
 
 fn adjoint_lu_solve_flags(transpose_a: bool, conjugate_a: bool) -> (bool, bool) {
-    if !transpose_a && !conjugate_a {
-        (true, true)
-    } else {
-        (false, false)
-    }
+    (!transpose_a, !conjugate_a)
 }
+
+#[cfg(test)]
+mod tests;

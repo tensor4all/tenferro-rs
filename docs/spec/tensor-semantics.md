@@ -17,7 +17,9 @@ The split is intentional:
 - `tenferro-tensor-core` is a lightweight rank/layout metadata and host-only
   adapter layer.
 - `tenferro-tensor` adds runtime tensor storage, placement metadata, typed
-  views, backend traits, CPU backends, and core execution kernels.
+  views, and backend traits.
+- `tenferro-cpu` owns CPU backend implementations, CPU kernels, provider
+  selection, and CPU execution resources.
 
 `tenferro-tensor-core` must not require computation backends, GPU runtimes,
 provider selection, graph execution, or AD. Crates that need only dtype tags,
@@ -140,11 +142,10 @@ for downcasting and execution.
 - runtime dense tensor types, including `TypedTensor<T, R = DynRank>` and
   dynamic-rank `Tensor`
 - backend traits
-- CPU backend implementations
-- core execution kernels
 - host/runtime views used by kernels
 
-GPU backend implementations and GPU transfer helpers belong in
+CPU backend implementations, CPU kernels, and CPU resource pools belong in
+`tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in
 `tenferro-gpu`.
 
 ---

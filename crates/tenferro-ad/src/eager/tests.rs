@@ -10,9 +10,9 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_runtime::ExtensionExecutor;
+use tenferro_runtime::{ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
 use tenferro_tensor::{TensorFusion, TensorRead};
 use tidu::ADKey;
 
@@ -26,6 +26,37 @@ use super::{
     eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
 };
+
+struct EagerOpProfileOverrideGuard;
+
+impl EagerOpProfileOverrideGuard {
+    fn set(enabled: bool, print_every: Option<usize>) -> Self {
+        super::EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| {
+            *state.borrow_mut() = Some(enabled);
+        });
+        super::EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| {
+            *state.borrow_mut() = Some(print_every);
+        });
+        super::EAGER_OP_PROFILE_STATE.with(|state| {
+            state.borrow_mut().clear();
+        });
+        Self
+    }
+}
+
+impl Drop for EagerOpProfileOverrideGuard {
+    fn drop(&mut self) {
+        super::EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| {
+            *state.borrow_mut() = None;
+        });
+        super::EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| {
+            *state.borrow_mut() = None;
+        });
+        super::EAGER_OP_PROFILE_STATE.with(|state| {
+            state.borrow_mut().clear();
+        });
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ReadPathFallbackProbe;
@@ -70,6 +101,24 @@ impl ExtensionOp for ReadPathFallbackProbe {
     }
 }
 
+#[derive(Debug)]
+struct ReadPathFallbackRuntime;
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.read-path-fallback-probe.v1"
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        op.eager_execute(inputs)
+    }
+}
+
 #[test]
 fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
     let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
@@ -95,11 +144,37 @@ fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
 }
 
 #[test]
+fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    ctx.register_extension(|executor| {
+        executor
+            .registry_mut()
+            .register(Arc::new(ReadPathFallbackRuntime))
+    })
+    .expect("register read-path fallback runtime");
+
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx,
+    );
+    let x_t = x.transpose(&[1, 0]).unwrap();
+    assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
+    assert!(!x_t.materialized_cache_is_initialized());
+
+    let outputs = crate::extension::apply_eager(Arc::new(ReadPathFallbackProbe), &[&x_t])
+        .expect("eager extension dispatch");
+
+    assert!(!x_t.materialized_cache_is_initialized());
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].data().as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+}
+
+#[test]
 fn eager_op_profile_helpers_cover_enabled_paths() {
-    unsafe {
-        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
-        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "2");
-    }
+    let _guard = EagerOpProfileOverrideGuard::set(true, Some(2));
 
     assert!(eager_op_profile_enabled());
     assert_eq!(profile_eager_op_section("coverage.profile", || 7), 7);

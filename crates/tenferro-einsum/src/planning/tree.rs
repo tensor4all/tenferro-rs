@@ -7,7 +7,7 @@ use omeco::{
 
 use crate::planning::plan::{compile_step_plans, DiagPlan, GemmPlan, ReducePlan, StepPlan};
 use crate::syntax::subscripts::Subscripts;
-use crate::util::{build_size_dict, contraction_cost, intermediate_subs};
+use crate::util::{build_size_dict, intermediate_subs};
 use crate::{Error, Result};
 
 /// A single step in the contraction sequence.
@@ -476,6 +476,120 @@ fn nested_to_pairs(
     }
 }
 
+fn build_operand_label_sets(operand_subs: &[Vec<u32>]) -> Vec<HashSet<u32>> {
+    operand_subs
+        .iter()
+        .map(|subs| subs.iter().copied().collect())
+        .collect()
+}
+
+fn build_needed_label_counts(
+    output_subs: &[u32],
+    available: &[usize],
+    operand_label_sets: &[HashSet<u32>],
+) -> HashMap<u32, usize> {
+    let mut counts = HashMap::new();
+    for &label in output_subs {
+        counts.entry(label).or_insert(1);
+    }
+    for &idx in available {
+        add_labels_to_counts(&mut counts, &operand_label_sets[idx]);
+    }
+    counts
+}
+
+fn add_labels_to_counts(counts: &mut HashMap<u32, usize>, labels: &HashSet<u32>) {
+    for &label in labels {
+        *counts.entry(label).or_insert(0) += 1;
+    }
+}
+
+fn remove_labels_from_counts(counts: &mut HashMap<u32, usize>, labels: &HashSet<u32>) {
+    for &label in labels {
+        match counts.get(&label).copied() {
+            Some(1) => {
+                counts.remove(&label);
+            }
+            Some(count) => {
+                counts.insert(label, count - 1);
+            }
+            None => {}
+        }
+    }
+}
+
+fn candidate_label_is_needed(
+    label: u32,
+    left: usize,
+    right: usize,
+    operand_label_sets: &[HashSet<u32>],
+    needed_label_counts: &HashMap<u32, usize>,
+) -> bool {
+    let mut selected_count = 0;
+    if operand_label_sets[left].contains(&label) {
+        selected_count += 1;
+    }
+    if operand_label_sets[right].contains(&label) {
+        selected_count += 1;
+    }
+    needed_label_counts.get(&label).copied().unwrap_or(0) > selected_count
+}
+
+fn collect_candidate_intermediate_subs(
+    subs_left: &[u32],
+    subs_right: &[u32],
+    left: usize,
+    right: usize,
+    operand_label_sets: &[HashSet<u32>],
+    needed_label_counts: &HashMap<u32, usize>,
+    output: &mut Vec<u32>,
+) {
+    output.clear();
+    for &label in subs_left.iter().chain(subs_right.iter()) {
+        if candidate_label_is_needed(label, left, right, operand_label_sets, needed_label_counts)
+            && !output.contains(&label)
+        {
+            output.push(label);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CandidateCostContext<'a> {
+    operand_label_sets: &'a [HashSet<u32>],
+    needed_label_counts: &'a HashMap<u32, usize>,
+    size_dict: &'a HashMap<u32, usize>,
+}
+
+fn candidate_contraction_cost(
+    subs_left: &[u32],
+    subs_right: &[u32],
+    left: usize,
+    right: usize,
+    context: CandidateCostContext<'_>,
+    candidate_subs: &mut Vec<u32>,
+) -> Result<usize> {
+    collect_candidate_intermediate_subs(
+        subs_left,
+        subs_right,
+        left,
+        right,
+        context.operand_label_sets,
+        context.needed_label_counts,
+        candidate_subs,
+    );
+    let mut cost = 1usize;
+    for &label in candidate_subs.iter() {
+        let size = context.size_dict.get(&label).copied().ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "unknown size for label {label} in contraction cost"
+            ))
+        })?;
+        cost = cost.saturating_mul(size);
+    }
+    Ok(cost.max(1))
+}
+
 fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
@@ -483,6 +597,10 @@ fn optimize_self_greedy_pairs(
     let input_count = subscripts.inputs.len();
     let mut available: Vec<usize> = (0..input_count).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
+    let mut operand_label_sets = build_operand_label_sets(&operand_subs);
+    let mut needed_label_counts =
+        build_needed_label_counts(&subscripts.output, &available, &operand_label_sets);
+    let mut candidate_subs = Vec::new();
     let mut pairs: Vec<(usize, usize)> = Vec::new();
 
     while available.len() > 1 {
@@ -494,15 +612,18 @@ fn optimize_self_greedy_pairs(
             for j in (i + 1)..available.len() {
                 let li = available[i];
                 let lj = available[j];
-                let mut needed = HashSet::new();
-                needed.extend(subscripts.output.iter().copied());
-                for &idx in &available {
-                    if idx != li && idx != lj {
-                        needed.extend(operand_subs[idx].iter().copied());
-                    }
-                }
-                let cost =
-                    contraction_cost(&operand_subs[li], &operand_subs[lj], &needed, size_dict)?;
+                let cost = candidate_contraction_cost(
+                    &operand_subs[li],
+                    &operand_subs[lj],
+                    li,
+                    lj,
+                    CandidateCostContext {
+                        operand_label_sets: &operand_label_sets,
+                        needed_label_counts: &needed_label_counts,
+                        size_dict,
+                    },
+                    &mut candidate_subs,
+                )?;
                 if cost < best_cost {
                     best_cost = cost;
                     best_i = i;
@@ -515,16 +636,23 @@ fn optimize_self_greedy_pairs(
         let right = available[best_j];
         pairs.push((left, right));
 
-        let mut needed = HashSet::new();
-        needed.extend(subscripts.output.iter().copied());
-        for &idx in &available {
-            if idx != left && idx != right {
-                needed.extend(operand_subs[idx].iter().copied());
-            }
-        }
-        let new_subs = intermediate_subs(&operand_subs[left], &operand_subs[right], &needed);
+        let mut new_subs = Vec::new();
+        collect_candidate_intermediate_subs(
+            &operand_subs[left],
+            &operand_subs[right],
+            left,
+            right,
+            &operand_label_sets,
+            &needed_label_counts,
+            &mut new_subs,
+        );
         let new_idx = operand_subs.len();
+        let new_label_set: HashSet<u32> = new_subs.iter().copied().collect();
+        remove_labels_from_counts(&mut needed_label_counts, &operand_label_sets[left]);
+        remove_labels_from_counts(&mut needed_label_counts, &operand_label_sets[right]);
+        add_labels_to_counts(&mut needed_label_counts, &new_label_set);
         operand_subs.push(new_subs);
+        operand_label_sets.push(new_label_set);
         available.remove(best_j);
         available.remove(best_i);
         available.push(new_idx);

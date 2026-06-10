@@ -29,6 +29,7 @@ struct RuntimeArgs {
     family_id: Path,
     op_type: Path,
     execute: Path,
+    execute_reads: Option<Path>,
     register_fn: Ident,
     backend_bound: Path,
 }
@@ -72,6 +73,7 @@ impl Parse for RuntimeArgs {
         let mut family_id = None;
         let mut op_type = None;
         let mut execute = None;
+        let mut execute_reads = None;
         let mut register_fn = None;
         let mut backend_bound = None;
 
@@ -83,6 +85,7 @@ impl Parse for RuntimeArgs {
                 "family_id" => family_id = Some(input.parse()?),
                 "op_type" => op_type = Some(input.parse()?),
                 "execute" => execute = Some(input.parse()?),
+                "execute_reads" => execute_reads = Some(input.parse()?),
                 "register_fn" => register_fn = Some(input.parse()?),
                 "backend_bound" => backend_bound = Some(input.parse()?),
                 other => {
@@ -103,6 +106,7 @@ impl Parse for RuntimeArgs {
             family_id: required(family_id, "family_id")?,
             op_type: required(op_type, "op_type")?,
             execute: required(execute, "execute")?,
+            execute_reads,
             register_fn: required(register_fn, "register_fn")?,
             backend_bound: backend_bound
                 .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
@@ -165,6 +169,9 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 ///
 /// The `execute` function must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[&Tensor], &mut ExtensionExecutionContext<'_, B>)`.
+///
+/// `execute_reads` is optional. When supplied, it must have this signature:
+/// `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
 #[proc_macro]
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
@@ -220,9 +227,29 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
         family_id,
         op_type,
         execute,
+        execute_reads,
         register_fn,
         backend_bound,
     } = args;
+    let execute_reads_method = execute_reads.map(|execute_reads| {
+        quote! {
+            fn execute_reads(
+                &self,
+                op: &dyn tenferro_runtime::extension::ExtensionOpTrait,
+                inputs: &[tenferro_tensor::TensorRead<'_>],
+                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
+            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
+                let op = op
+                    .as_any()
+                    .downcast_ref::<#op_type>()
+                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                        op: "extension_runtime",
+                        message: format!("payload type mismatch for {}", #family_id),
+                    })?;
+                #execute_reads(op, inputs, ctx)
+            }
+        }
+    });
 
     quote! {
         #[derive(Debug, Default)]
@@ -250,6 +277,8 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                     })?;
                 #execute(op, inputs, ctx)
             }
+
+            #execute_reads_method
         }
 
         pub fn #register_fn<B: #backend_bound + 'static>(

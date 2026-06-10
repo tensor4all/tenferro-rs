@@ -19,21 +19,162 @@ fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a
 #[doc(hidden)]
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ElementwiseFusionPlan {
-    pub dtype: crate::DType,
-    pub input_count: usize,
-    pub outputs: Vec<usize>,
-    pub ops: Vec<ElementwiseFusionInst>,
+    dtype: crate::DType,
+    input_count: usize,
+    outputs: Vec<usize>,
+    ops: Vec<ElementwiseFusionInst>,
 }
 
 /// One node in a canonical elementwise fusion plan.
 #[doc(hidden)]
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ElementwiseFusionInst {
-    pub op: ElementwiseFusionOp,
-    pub inputs: Vec<usize>,
+    op: ElementwiseFusionOp,
+    inputs: Vec<usize>,
 }
 
 tenferro_core_ops::define_elementwise_fusion_op!();
+
+impl ElementwiseFusionPlan {
+    /// Build a backend elementwise fusion plan.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{
+    ///     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
+    /// };
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::new(
+    ///     DType::F64,
+    ///     2,
+    ///     vec![2],
+    ///     vec![ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1])],
+    /// );
+    /// assert_eq!(plan.input_count(), 2);
+    /// ```
+    pub fn new(
+        dtype: crate::DType,
+        input_count: usize,
+        outputs: Vec<usize>,
+        ops: Vec<ElementwiseFusionInst>,
+    ) -> Self {
+        Self {
+            dtype,
+            input_count,
+            outputs,
+            ops,
+        }
+    }
+
+    /// Return the scalar dtype expected by this fusion plan.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionPlan;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::new(DType::F32, 0, Vec::new(), Vec::new());
+    /// assert_eq!(plan.dtype(), DType::F32);
+    /// ```
+    pub fn dtype(&self) -> crate::DType {
+        self.dtype
+    }
+
+    /// Return the number of input tensors expected by this plan.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionPlan;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::new(DType::F64, 3, Vec::new(), Vec::new());
+    /// assert_eq!(plan.input_count(), 3);
+    /// ```
+    pub fn input_count(&self) -> usize {
+        self.input_count
+    }
+
+    /// Return the value ids selected as fusion outputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionPlan;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::new(DType::F64, 0, vec![0], Vec::new());
+    /// assert_eq!(plan.outputs(), &[0]);
+    /// ```
+    pub fn outputs(&self) -> &[usize] {
+        &self.outputs
+    }
+
+    /// Return the fused elementwise instruction sequence.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{
+    ///     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
+    /// };
+    /// use tenferro_tensor::DType;
+    ///
+    /// let inst = ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![0]);
+    /// let plan = ElementwiseFusionPlan::new(DType::F64, 1, vec![1], vec![inst]);
+    /// assert_eq!(plan.ops().len(), 1);
+    /// ```
+    pub fn ops(&self) -> &[ElementwiseFusionInst] {
+        &self.ops
+    }
+}
+
+impl ElementwiseFusionInst {
+    /// Build a backend elementwise fusion instruction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
+    ///
+    /// let inst = ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]);
+    /// assert_eq!(inst.inputs(), &[0, 1]);
+    /// ```
+    pub fn new(op: ElementwiseFusionOp, inputs: Vec<usize>) -> Self {
+        Self { op, inputs }
+    }
+
+    /// Return the elementwise op executed by this instruction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
+    ///
+    /// let inst = ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![0]);
+    /// assert_eq!(inst.op(), ElementwiseFusionOp::Negate);
+    /// ```
+    pub fn op(&self) -> ElementwiseFusionOp {
+        self.op
+    }
+
+    /// Return this instruction's input value ids.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
+    ///
+    /// let inst = ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 0]);
+    /// assert_eq!(inst.inputs(), &[2, 0]);
+    /// ```
+    pub fn inputs(&self) -> &[usize] {
+        &self.inputs
+    }
+}
 
 /// Elementwise tensor operations.
 ///

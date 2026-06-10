@@ -482,8 +482,9 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     ));
 
     let abs_c32 = abs(&input_c32).unwrap();
-    assert_eq!(get_c32(&abs_c32, &[0]), Complex32::new(5.0, 0.0));
-    assert_eq!(get_c32(&abs_c32, &[1]), Complex32::new(0.0, 0.0));
+    assert_eq!(abs_c32.dtype(), DType::F32);
+    assert_eq!(get_f32(&abs_c32, &[0]), 5.0);
+    assert_eq!(get_f32(&abs_c32, &[1]), 0.0);
 
     let sign_c32 = sign(&input_c32).unwrap();
     assert_eq!(get_c32(&sign_c32, &[1]), Complex32::new(0.0, 0.0));

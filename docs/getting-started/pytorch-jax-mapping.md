@@ -14,7 +14,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Eager forward and gradients | eager ops plus `loss.backward()` | — | `EagerTensor` forward ops, with `backward()` for tracked scalar losses |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
-| CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::cubecl::upload_tensor(...)` and `download_tensor(...)` |
+| CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro_einsum::traced_tensor::einsum` standard extension |
 
 ## Function mapping
@@ -60,8 +60,8 @@ physical order.
 
 tenferro follows the PyTorch convention that CPU and CUDA tensors do not move
 between devices implicitly. Upload CPU tensors with
-`tenferro_gpu::cubecl::upload_tensor` before CUDA backend operations, and download
-with `tenferro_gpu::cubecl::download_tensor` before inspecting values on the host.
+`tenferro_gpu::upload_tensor` before CUDA backend operations, and download
+with `tenferro_gpu::download_tensor` before inspecting values on the host.
 
 For eager CUDA execution, operation calls submit work and return CUDA tensor
 handles. The host synchronizes at download/read boundaries or at operations

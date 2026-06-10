@@ -17,7 +17,7 @@ use crate::types::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cubecl::{upload_tensor, CubeclRuntime};
+/// use tenferro_gpu::{upload_tensor, CubeclRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _upload: fn(&CubeclRuntime, &Tensor) -> Result<Tensor> = upload_tensor;
@@ -44,7 +44,7 @@ pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tenso
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cubecl::{download_tensor, CubeclRuntime};
+/// use tenferro_gpu::{download_tensor, CubeclRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _download: fn(&CubeclRuntime, &Tensor) -> Result<Tensor> = download_tensor;
@@ -67,7 +67,7 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cubecl::{device_ptr, CubeclRuntime};
+/// use tenferro_gpu::{device_ptr, CubeclRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _device_ptr: fn(&CubeclRuntime, &Tensor) -> Result<u64> = device_ptr;
@@ -86,7 +86,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     device_ordinal: usize,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    let host_data = match &typed.buffer {
+    let host_data = match typed.buffer() {
         Buffer::Host(data) => data,
         Buffer::Backend(buffer) => {
             return Err(crate::Error::backend_failure(
@@ -117,7 +117,7 @@ fn download_typed<T: CubeElement + Clone + 'static>(
     client: &ComputeClient<CudaRuntime>,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    let handle = match &typed.buffer {
+    let handle = match typed.buffer() {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
                 "download",
@@ -149,7 +149,7 @@ fn upload_bool(
     device_ordinal: usize,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
-    let host_data = match &typed.buffer {
+    let host_data = match typed.buffer() {
         Buffer::Host(data) => data,
         Buffer::Backend(buffer) => {
             return Err(crate::Error::backend_failure(
@@ -181,7 +181,7 @@ fn download_bool(
     client: &ComputeClient<CudaRuntime>,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
-    let handle = match &typed.buffer {
+    let handle = match typed.buffer() {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
                 "download",
@@ -210,13 +210,13 @@ fn download_bool(
 
 fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl_runtime::server::Handle> {
     match tensor {
-        Tensor::F64(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::F32(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::I32(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::I64(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::Bool(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::C64(t) => cubecl_handle_from_buffer(&t.buffer),
-        Tensor::C32(t) => cubecl_handle_from_buffer(&t.buffer),
+        Tensor::F64(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::F32(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::I32(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::I64(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::Bool(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::C64(t) => cubecl_handle_from_buffer(t.buffer()),
+        Tensor::C32(t) => cubecl_handle_from_buffer(t.buffer()),
     }
 }
 

@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_tensor::{CacheStats, Tensor, TensorBackend};
+use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorRead};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
 
@@ -129,6 +129,50 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
         inputs: &[&Tensor],
         ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>>;
+
+    /// Execute the extension op on borrowed tensor reads.
+    ///
+    /// Runtime implementations that can consume strided views should override
+    /// this method. The default fallback preserves compatibility with
+    /// tensor-only runtimes by materializing view reads at this explicit ABI
+    /// boundary before delegating to [`ExtensionRuntime::execute`].
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let concrete_inputs = concrete_tensor_reads(inputs);
+        let input_refs: Vec<&Tensor> = concrete_inputs
+            .iter()
+            .map(ConcreteTensorRead::tensor)
+            .collect();
+        self.execute(op, &input_refs, ctx)
+    }
+}
+
+enum ConcreteTensorRead<'a> {
+    Borrowed(&'a Tensor),
+    Owned(Box<Tensor>),
+}
+
+impl ConcreteTensorRead<'_> {
+    fn tensor(&self) -> &Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Owned(tensor) => tensor.as_ref(),
+        }
+    }
+}
+
+fn concrete_tensor_reads<'a>(inputs: &[TensorRead<'a>]) -> Vec<ConcreteTensorRead<'a>> {
+    inputs
+        .iter()
+        .map(|input| match input {
+            TensorRead::Tensor(tensor) => ConcreteTensorRead::Borrowed(tensor),
+            TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.to_tensor())),
+        })
+        .collect()
 }
 
 /// Registry of backend-specific extension runtime executors.
@@ -275,6 +319,113 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
         };
         let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
         executor.execute(op, inputs, &mut ctx)
+    }
+
+    /// Execute an extension using borrowed tensor reads.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::Any;
+    /// use std::hash::Hasher;
+    /// use std::sync::Arc;
+    ///
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ops::{ext_op::ExtensionOp, SymDim};
+    /// use tenferro_runtime::{
+    ///     DType, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime, Tensor,
+    /// };
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct IdentityOp;
+    ///
+    /// impl ExtensionOp for IdentityOp {
+    ///     fn family_id(&self) -> &'static str {
+    ///         "example.identity.v1"
+    ///     }
+    ///
+    ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    ///
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().is::<IdentityOp>()
+    ///     }
+    ///
+    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+    ///         Arc::new(self.clone())
+    ///     }
+    ///
+    ///     fn as_any(&self) -> &dyn Any {
+    ///         self
+    ///     }
+    ///
+    ///     fn input_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///
+    ///     fn output_count(&self) -> usize {
+    ///         1
+    ///     }
+    ///
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         input_dtypes: &[DType],
+    ///         input_shapes: &[&[SymDim]],
+    ///     ) -> Vec<(DType, Vec<SymDim>)> {
+    ///         vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ///     }
+    ///
+    ///     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    ///         Ok(vec![inputs[0].clone()])
+    ///     }
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct IdentityRuntime;
+    ///
+    /// impl ExtensionRuntime<CpuBackend> for IdentityRuntime {
+    ///     fn family_id(&self) -> &'static str {
+    ///         "example.identity.v1"
+    ///     }
+    ///
+    ///     fn execute(
+    ///         &self,
+    ///         op: &dyn ExtensionOp,
+    ///         inputs: &[&Tensor],
+    ///         _ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+    ///     ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    ///         op.eager_execute(inputs)
+    ///     }
+    /// }
+    ///
+    /// let mut executor = ExtensionExecutor::<CpuBackend>::new();
+    /// executor.registry_mut().register(Arc::new(IdentityRuntime))?;
+    /// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// let read = TensorRead::from_tensor(&input);
+    /// let mut backend = CpuBackend::new();
+    ///
+    /// let outputs = executor.execute_reads(&mut backend, &IdentityOp, &[read])?;
+    ///
+    /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn execute_reads(
+        &mut self,
+        backend: &mut B,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let Some(executor) = self.registry.get(op.family_id()) else {
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op: "extension",
+                message: format!(
+                    "missing runtime for family_id {:?}; register the extension on this runtime owner, for example `executor.register_extension(<extension_crate>::register_runtime)` or `eager_runtime.register_extension(<extension_crate>::register_runtime)`",
+                    op.family_id()
+                ),
+            });
+        };
+        let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
+        executor.execute_reads(op, inputs, &mut ctx)
     }
 
     /// Clear every runtime extension cache entry.

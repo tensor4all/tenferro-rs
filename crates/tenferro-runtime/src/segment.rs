@@ -15,9 +15,8 @@ use crate::exec::{
     ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
-use tenferro_tensor::{
-    ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend, TensorRead, TensorValue,
-};
+use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionPlan};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///
@@ -38,6 +37,7 @@ pub(crate) enum Segment {
 
 /// Compile an [`ExecProgram`] into execution segments.
 pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
+    let future_uses = SegmentUseSummary::new(program);
     let mut segments = Vec::new();
     let mut fused_start: Option<usize> = None;
     let mut idx = 0usize;
@@ -45,20 +45,44 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
     while idx < program.instructions.len() {
         let inst = &program.instructions[idx];
         if is_host_instruction(inst) {
-            flush_fused_segment(program, &mut segments, fused_start.take(), idx);
+            flush_fused_segment(
+                program,
+                &future_uses,
+                &mut segments,
+                fused_start.take(),
+                idx,
+            );
             segments.push(Segment::Host(inst.clone()));
             idx += 1;
         } else if is_ffi_instruction(inst) {
-            flush_fused_segment(program, &mut segments, fused_start.take(), idx);
+            flush_fused_segment(
+                program,
+                &future_uses,
+                &mut segments,
+                fused_start.take(),
+                idx,
+            );
             segments.push(Segment::Ffi(inst.clone()));
             idx += 1;
         } else if is_broadcast_multiply_triplet_at(program, idx) {
-            flush_fused_segment(program, &mut segments, fused_start.take(), idx);
-            segments.push(build_fused_segment(program, idx, idx + 3));
+            flush_fused_segment(
+                program,
+                &future_uses,
+                &mut segments,
+                fused_start.take(),
+                idx,
+            );
+            segments.push(build_fused_segment(program, &future_uses, idx, idx + 3));
             idx += 3;
         } else if is_single_broadcast_multiply_pair_at(program, idx) {
-            flush_fused_segment(program, &mut segments, fused_start.take(), idx);
-            segments.push(build_fused_segment(program, idx, idx + 2));
+            flush_fused_segment(
+                program,
+                &future_uses,
+                &mut segments,
+                fused_start.take(),
+                idx,
+            );
+            segments.push(build_fused_segment(program, &future_uses, idx, idx + 2));
             idx += 2;
         } else if fused_start.is_none() {
             fused_start = Some(idx);
@@ -70,6 +94,7 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
 
     flush_fused_segment(
         program,
+        &future_uses,
         &mut segments,
         fused_start.take(),
         program.instructions.len(),
@@ -736,6 +761,7 @@ fn try_execute_terminal_single_broadcast_multiply_value_segment(
 
 fn flush_fused_segment(
     program: &ExecProgram,
+    use_summary: &SegmentUseSummary,
     segments: &mut Vec<Segment>,
     start: Option<usize>,
     end: usize,
@@ -746,10 +772,72 @@ fn flush_fused_segment(
     if start == end {
         return;
     }
-    segments.push(build_fused_segment(program, start, end));
+    segments.push(build_fused_segment(program, use_summary, start, end));
 }
 
-fn build_fused_segment(program: &ExecProgram, start: usize, end: usize) -> Segment {
+struct SegmentUseSummary {
+    program_outputs: Vec<bool>,
+    overflow_program_outputs: HashSet<usize>,
+    last_input_use: Vec<Option<usize>>,
+    overflow_last_input_use: HashMap<usize, usize>,
+}
+
+impl SegmentUseSummary {
+    fn new(program: &ExecProgram) -> Self {
+        let mut program_outputs = vec![false; program.n_slots];
+        let mut overflow_program_outputs = HashSet::new();
+        for &slot in &program.output_slots {
+            if let Some(output) = program_outputs.get_mut(slot) {
+                *output = true;
+            } else {
+                overflow_program_outputs.insert(slot);
+            }
+        }
+
+        let mut last_input_use = vec![None; program.n_slots];
+        let mut overflow_last_input_use = HashMap::new();
+        for (idx, inst) in program.instructions.iter().enumerate().rev() {
+            for &slot in &inst.input_slots {
+                if let Some(last_use) = last_input_use.get_mut(slot) {
+                    if last_use.is_none() {
+                        *last_use = Some(idx);
+                    }
+                } else {
+                    overflow_last_input_use.entry(slot).or_insert(idx);
+                }
+            }
+        }
+
+        Self {
+            program_outputs,
+            overflow_program_outputs,
+            last_input_use,
+            overflow_last_input_use,
+        }
+    }
+
+    fn is_program_output(&self, slot: usize) -> bool {
+        self.program_outputs.get(slot).copied().unwrap_or(false)
+            || self.overflow_program_outputs.contains(&slot)
+    }
+
+    fn is_used_at_or_after(&self, slot: usize, inst_idx: usize) -> bool {
+        let last_use = self
+            .last_input_use
+            .get(slot)
+            .copied()
+            .flatten()
+            .or_else(|| self.overflow_last_input_use.get(&slot).copied());
+        last_use.is_some_and(|last_use| last_use >= inst_idx)
+    }
+}
+
+fn build_fused_segment(
+    program: &ExecProgram,
+    use_summary: &SegmentUseSummary,
+    start: usize,
+    end: usize,
+) -> Segment {
     let instructions = program.instructions[start..end].to_vec();
     let mut produced = HashSet::new();
     let mut seen_inputs = HashSet::new();
@@ -769,24 +857,17 @@ fn build_fused_segment(program: &ExecProgram, start: usize, end: usize) -> Segme
         }
     }
 
-    let later_instructions = &program.instructions[end..];
     let output_slots: Vec<usize> = produced_order
         .into_iter()
-        .filter(|slot| {
-            program.output_slots.contains(slot)
-                || later_instructions
-                    .iter()
-                    .any(|later| later.input_slots.contains(slot))
+        .filter(|&slot| {
+            use_summary.is_program_output(slot) || use_summary.is_used_at_or_after(slot, end)
         })
         .collect();
 
     let last_use = input_slots
         .iter()
         .map(|slot| {
-            !program.output_slots.contains(slot)
-                && !later_instructions
-                    .iter()
-                    .any(|later| later.input_slots.contains(slot))
+            !use_summary.is_program_output(*slot) && !use_summary.is_used_at_or_after(*slot, end)
         })
         .collect();
 
@@ -851,7 +932,7 @@ fn build_elementwise_fusion_plan(
             .iter()
             .map(|slot| slot_to_value.get(slot).copied())
             .collect::<Option<Vec<_>>>()?;
-        ops.push(ElementwiseFusionInst { op, inputs });
+        ops.push(ElementwiseFusionInst::new(op, inputs));
         slot_to_value.insert(inst.output_slots[0], next_value);
     }
 
@@ -860,12 +941,12 @@ fn build_elementwise_fusion_plan(
         .map(|slot| slot_to_value.get(slot).copied())
         .collect::<Option<Vec<_>>>()?;
 
-    Some(ElementwiseFusionPlan {
+    Some(ElementwiseFusionPlan::new(
         dtype,
-        input_count: input_slots.len(),
+        input_slots.len(),
         outputs,
         ops,
-    })
+    ))
 }
 
 #[cfg(test)]

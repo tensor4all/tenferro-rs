@@ -16,7 +16,7 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape metadata contract |
-| [extension-runtime-restructure.md](./extension-runtime-restructure.md) | Current restructure direction for extension crates, backend-aware execution, multi-output, linalg migration boundaries, and autodiff feature gates |
+| [extension-runtime-restructure.md](./extension-runtime-restructure.md) | Historical migration note for extension crates, backend-aware execution, multi-output, linalg migration boundaries, and autodiff feature gates |
 | [einsum-extension-migration-audit.md](./einsum-extension-migration-audit.md) | Source-to-target migration checklist for moving einsum into tenferro-einsum without regenerating the implementation |
 | [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration for einsum + frontend |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |

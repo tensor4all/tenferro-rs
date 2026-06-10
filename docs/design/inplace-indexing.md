@@ -7,7 +7,7 @@ Add safe and backend-portable support for partial in-place tensor updates
 
 - `tenferro-tensor`: views/ownership metadata
 - `tenferro-tensor::TensorBackend`: backend execution protocol
-- `chainrules` integration: AD safety rules
+- graph-level AD integration: mutation and aliasing safety rules
 
 ## Reference Behavior (PyTorch C++)
 
@@ -145,8 +145,9 @@ Introduce explicit mutation tracking:
 - Validate saved values during backward/HVP and error on stale versions.
 - Add view+in-place conflict checks for tracked tensors.
 
-This mirrors the PyTorch safety model conceptually, while keeping tenferro's
-crate boundaries (`chainrules-core` independent from tensor internals).
+This mirrors the PyTorch safety model conceptually, while keeping tensor
+storage independent from the graph-level AD rules owned by `tidu` and
+tenferro's AD crates.
 
 ## GPU Notes
 

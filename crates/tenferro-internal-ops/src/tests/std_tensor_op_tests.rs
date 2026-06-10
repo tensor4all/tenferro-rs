@@ -433,9 +433,18 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
     let mut ad_ctx = ShapeGuardContext::default();
     let dx = builder.add_input(TensorInputKey::User { id: 1 });
     let dy = builder.add_input(TensorInputKey::User { id: 2 });
+    let primal_in = vec![
+        ValueKey::Input(TensorInputKey::User { id: 10 }),
+        ValueKey::Input(TensorInputKey::User { id: 11 }),
+    ];
 
-    let result =
-        StdTensorOp::add().jvp_rule(&mut builder, &[], &[], &[Some(dx), Some(dy)], &mut ad_ctx);
+    let result = StdTensorOp::add().jvp_rule(
+        &mut builder,
+        &primal_in,
+        &[],
+        &[Some(dx), Some(dy)],
+        &mut ad_ctx,
+    );
 
     assert_eq!(result.len(), 1);
     assert!(result[0].is_some());

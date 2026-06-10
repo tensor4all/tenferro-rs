@@ -2,7 +2,7 @@ mod ffi;
 mod kernels;
 mod linalg;
 
-use tenferro_gpu::cubecl::CubeclBackend;
+use tenferro_gpu::CubeclBackend;
 use tenferro_tensor::{DType, Error, Tensor, TensorView, TensorViewCanonicalization};
 
 use crate::backend::LinalgBackend;

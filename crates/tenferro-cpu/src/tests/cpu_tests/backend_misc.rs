@@ -768,12 +768,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     assert_eq!(downloaded.as_slice::<f64>().unwrap(), &[2.0]);
     backend.reclaim_buffer(downloaded);
 
-    let fusion_plan = tenferro_tensor::ElementwiseFusionPlan {
-        dtype: DType::F64,
-        input_count: 0,
-        outputs: vec![],
-        ops: vec![],
-    };
+    let fusion_plan =
+        tenferro_tensor::backend::ElementwiseFusionPlan::new(DType::F64, 0, vec![], vec![]);
     assert!(backend
         .execute_elementwise_fusion(&[], &fusion_plan)
         .unwrap()

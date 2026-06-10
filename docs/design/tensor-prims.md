@@ -146,7 +146,7 @@ path.
 Linalg is not a separate backend crate today. Dense linalg operations are part
 of the linalg extension backend surface, with CPU implementations under
 `crates/tenferro-linalg/src/cpu` and CubeCL/CUDA implementations under
-`crates/tenferro-gpu/src/cubecl/linalg.rs`.
+`crates/tenferro-linalg/src/gpu`.
 
 General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
 `CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly

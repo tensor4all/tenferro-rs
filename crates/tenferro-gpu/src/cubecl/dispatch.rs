@@ -36,7 +36,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
-    match &tensor.buffer {
+    match tensor.buffer() {
         Buffer::Host(_) => Err(crate::Error::backend_failure(
             op,
             "expected CubeCL GPU tensor, got host tensor. \
@@ -207,7 +207,7 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
     op: &'static str,
 ) -> crate::Result<()> {
     cubecl_buffer(tensor, op)?;
-    ensure_placement_resident_on_runtime(rt, &tensor.placement, op)
+    ensure_placement_resident_on_runtime(rt, tensor.placement(), op)
 }
 
 pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(
@@ -425,12 +425,13 @@ where
     validate_raw_unary_shapes(input, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, input, op)?;
+    let input_arg = typed_tensor_array_arg(input, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_array_arg(&output, op)?;
-    let input_arg = typed_tensor_array_arg(input, op)?;
     // SAFETY: This helper is the host-side unchecked launch boundary for raw
     // shape-preserving unary kernels. The shape validation above proves input
     // and output have the same dense element count; `typed_tensor_array_arg`
@@ -466,12 +467,13 @@ where
 {
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, input, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_binding(&output, op)?;
-    let input_arg = typed_tensor_binding(input, op)?;
     // SAFETY: Logical tensor kernels use `TensorBinding`, whose construction
     // validates shape product against the CubeCL allocation length. The caller
     // supplies output shape and launch metadata already validated for the
@@ -498,10 +500,11 @@ pub(crate) fn launch_nullary_into<TOut>(
 where
     TOut: CubeElement + Clone,
 {
+    ensure_resident_on_runtime(rt, output, op)?;
+    let output_arg = typed_tensor_array_arg(output, op)?;
     if output.n_elements() == 0 {
         return Ok(());
     }
-    let output_arg = typed_tensor_array_arg(output, op)?;
     // SAFETY: Nullary raw kernels write only to the validated output array.
     // The caller-supplied `count`/`dim` must describe the initialized domain,
     // and kernels using this path guard with `ABSOLUTE_POS < out.len()`.
@@ -528,11 +531,13 @@ where
     TIn: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
+    ensure_resident_on_runtime(rt, output, op)?;
+    ensure_resident_on_runtime(rt, input, op)?;
+    let output_arg = typed_tensor_binding(output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
     if output.n_elements() == 0 {
         return Ok(());
     }
-    let output_arg = typed_tensor_binding(output, op)?;
-    let input_arg = typed_tensor_binding(input, op)?;
     // SAFETY: `TensorBinding` construction validates shape and backing buffer
     // length for both tensors. The caller supplies a launch domain derived
     // from validated operation metadata, and the target kernel guards the
@@ -564,13 +569,15 @@ where
     validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, lhs, op)?;
+    ensure_resident_on_runtime(rt, rhs, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_array_arg(&output, op)?;
-    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
-    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
     // SAFETY: This helper is the host-side unchecked launch boundary for raw
     // shape-preserving binary kernels. The shared shape validation above
     // proves all arrays have the same dense element count; the raw array
@@ -609,13 +616,15 @@ where
     validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
     let output = alloc_bool_output(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, lhs, op)?;
+    ensure_resident_on_runtime(rt, rhs, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = bool_tensor_array_arg(&output, op)?;
-    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
-    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
     // SAFETY: Shape validation proves all raw arrays share the dense element
     // count. Bool output storage uses one byte per element and the kernel
     // guards with `ABSOLUTE_POS < out.len()`.
@@ -652,13 +661,15 @@ where
 {
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, lhs, op)?;
+    ensure_resident_on_runtime(rt, rhs, op)?;
+    let lhs_arg = typed_tensor_binding(lhs, op)?;
+    let rhs_arg = typed_tensor_binding(rhs, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_binding(&output, op)?;
-    let lhs_arg = typed_tensor_binding(lhs, op)?;
-    let rhs_arg = typed_tensor_binding(rhs, op)?;
     // SAFETY: Logical tensor kernels receive only `TensorBinding` arguments,
     // each validated against its backing buffer length. Shape/config
     // compatibility is checked by the operation-specific metadata builder
@@ -698,14 +709,17 @@ where
     validate_raw_ternary_shapes(pred, on_true, on_false, out_shape, op)?;
     let output = alloc_output::<T>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, pred, op)?;
+    ensure_resident_on_runtime(rt, on_true, op)?;
+    ensure_resident_on_runtime(rt, on_false, op)?;
+    let pred_arg = bool_tensor_array_arg(pred, op)?;
+    let true_arg = typed_tensor_array_arg(on_true, op)?;
+    let false_arg = typed_tensor_array_arg(on_false, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_array_arg(&output, op)?;
-    let pred_arg = bool_tensor_array_arg(pred, op)?;
-    let true_arg = typed_tensor_array_arg(on_true, op)?;
-    let false_arg = typed_tensor_array_arg(on_false, op)?;
     // SAFETY: Shape validation proves all raw arrays share the dense element
     // count. The predicate buffer is a validated one-byte Bool tensor buffer,
     // matching the Array<bool> kernel view.
@@ -747,14 +761,17 @@ where
     validate_raw_ternary_shapes(a, b, c, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
+    ensure_resident_on_runtime(rt, a, op)?;
+    ensure_resident_on_runtime(rt, b, op)?;
+    ensure_resident_on_runtime(rt, c, op)?;
+    let a_arg = typed_tensor_array_arg(a, op)?;
+    let b_arg = typed_tensor_array_arg(b, op)?;
+    let c_arg = typed_tensor_array_arg(c, op)?;
     if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
     let output_arg = typed_tensor_array_arg(&output, op)?;
-    let a_arg = typed_tensor_array_arg(a, op)?;
-    let b_arg = typed_tensor_array_arg(b, op)?;
-    let c_arg = typed_tensor_array_arg(c, op)?;
     // SAFETY: This helper is the host-side unchecked launch boundary for raw
     // shape-preserving ternary kernels. The shared shape validation above
     // proves all inputs and output have the same dense element count; raw array

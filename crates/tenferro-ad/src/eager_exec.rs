@@ -224,12 +224,7 @@ pub(crate) fn exec_op_on_tensor_reads_with_extension_executor<B: TensorBackend +
         let Some(extension_executor) = extension_executor else {
             return Err(missing_extension_executor_error(ext.as_ref()));
         };
-        let input_tensors = concrete_tensor_reads(inputs);
-        let input_refs: Vec<&Tensor> = input_tensors
-            .iter()
-            .map(ConcreteTensorRead::tensor)
-            .collect();
-        let outputs = extension_executor.execute(backend, ext.as_ref(), &input_refs);
+        let outputs = extension_executor.execute_reads(backend, ext.as_ref(), inputs);
         return outputs.map_err(|err| extension_error(ext.as_ref(), err));
     }
 
@@ -256,11 +251,63 @@ fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp)
     })
 }
 
+fn upload_generated_host_tensor<B: TensorBackend>(
+    backend: &mut B,
+    tensor: Tensor,
+) -> Result<Tensor> {
+    backend.upload_host_tensor(&tensor).map_err(Error::from)
+}
+
+fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
+    if axis >= shape.len() {
+        return Err(Error::Internal(format!(
+            "ShapeOf: axis {} out of bounds for rank {}",
+            axis,
+            shape.len()
+        )));
+    }
+    let size = shape[axis] as f64;
+    Ok(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![],
+        vec![size],
+    )))
+}
+
+fn execute_generated_host_output_on_backend_reads<B: TensorBackend>(
+    op: &StdTensorOp,
+    inputs: &[TensorRead<'_>],
+    backend: &mut B,
+) -> Result<Option<Tensor>> {
+    let host = match op {
+        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
+        StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
+        _ => return Ok(None),
+    };
+    upload_generated_host_tensor(backend, host).map(Some)
+}
+
+fn execute_generated_host_output_on_backend_tensors<B: TensorBackend>(
+    op: &StdTensorOp,
+    inputs: &[&Tensor],
+    backend: &mut B,
+) -> Result<Option<Tensor>> {
+    let host = match op {
+        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
+        StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
+        _ => return Ok(None),
+    };
+    upload_generated_host_tensor(backend, host).map(Some)
+}
+
 fn exec_standard_op_on_tensor_reads<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
+    if let Some(output) = execute_generated_host_output_on_backend_reads(op, inputs, backend)? {
+        return Ok(vec![output]);
+    }
+
     backend.with_backend_session(|exec| {
         let result = match op {
             StdTensorOp::Add => {
@@ -361,7 +408,7 @@ fn exec_standard_op_on_tensor_reads<B: TensorBackend>(
                 let input = concrete_tensor_read(inputs[0].clone());
                 vec![exec.convert(input.tensor(), *to)?]
             }
-            StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
+            StdTensorOp::Constant { .. } => unreachable!("handled before backend session"),
             StdTensorOp::Select => {
                 let value_dtype =
                     crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
@@ -444,21 +491,7 @@ fn exec_standard_op_on_tensor_reads<B: TensorBackend>(
                     starts.tensor(),
                 )?]
             }
-            StdTensorOp::ShapeOf { axis } => {
-                let input = &inputs[0];
-                if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "ShapeOf: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
-                }
-                let size = input.shape()[*axis] as f64;
-                vec![Tensor::F64(TypedTensor::from_vec_col_major(
-                    vec![],
-                    vec![size],
-                ))]
-            }
+            StdTensorOp::ShapeOf { .. } => unreachable!("handled before backend session"),
             StdTensorOp::DynamicTruncate { axis } => {
                 let input = &inputs[0];
                 if *axis >= input.shape().len() {
@@ -522,6 +555,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
+    if let Some(output) = execute_generated_host_output_on_backend_tensors(op, inputs, backend)? {
+        return Ok(vec![output]);
+    }
+
     backend.with_backend_session(|exec| {
         let result = match op {
             StdTensorOp::Add => {
@@ -594,7 +631,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Expm1 => vec![exec.expm1(inputs[0])?],
             StdTensorOp::Log1p => vec![exec.log1p(inputs[0])?],
             StdTensorOp::Convert { to, .. } => vec![exec.convert(inputs[0], *to)?],
-            StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
+            StdTensorOp::Constant { .. } => unreachable!("handled before backend session"),
             StdTensorOp::Select => {
                 let value_dtype =
                     crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
@@ -648,21 +685,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
             }
-            StdTensorOp::ShapeOf { axis } => {
-                let input = inputs[0];
-                if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "ShapeOf: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
-                }
-                let size = input.shape()[*axis] as f64;
-                vec![Tensor::F64(TypedTensor::from_vec_col_major(
-                    vec![],
-                    vec![size],
-                ))]
-            }
+            StdTensorOp::ShapeOf { .. } => unreachable!("handled before backend session"),
             StdTensorOp::DynamicTruncate { axis } => {
                 let input = inputs[0];
                 if *axis >= input.shape().len() {

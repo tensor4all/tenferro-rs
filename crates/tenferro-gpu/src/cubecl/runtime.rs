@@ -23,7 +23,7 @@ pub fn gpu_available() -> bool {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cubecl::CubeclRuntime;
+/// use tenferro_gpu::CubeclRuntime;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
 /// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
@@ -47,7 +47,7 @@ impl CubeclRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclRuntime;
+    /// use tenferro_gpu::CubeclRuntime;
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
     /// ```
@@ -103,7 +103,7 @@ impl CubeclRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclRuntime;
+    /// use tenferro_gpu::CubeclRuntime;
     ///
     /// let _device_ordinal: fn(&CubeclRuntime) -> usize = CubeclRuntime::device_ordinal;
     /// ```
@@ -144,7 +144,7 @@ impl CubeclRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclRuntime;
+    /// use tenferro_gpu::CubeclRuntime;
     ///
     /// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
     ///     CubeclRuntime::synchronize;

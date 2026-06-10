@@ -672,7 +672,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
     )
     .unwrap();
-    assert_c64_close(abs.as_slice::<Complex<f64>>().unwrap()[0], c64(5.0, 0.0));
+    assert_eq!(abs.as_slice::<f64>().unwrap()[0], 5.0);
 
     let sign = sign_read_with_pool(
         &mut buffers,

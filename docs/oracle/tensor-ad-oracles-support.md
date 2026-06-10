@@ -1,6 +1,8 @@
 # Tensor AD Oracles Support Coverage
 
-This file is generated from the vendored `third_party/tensor-ad-oracles` subtree and the local oracle replay support registry.
+This file is a checked-in support snapshot derived from the vendored
+`third_party/tensor-ad-oracles` subtree. The root-facade replay harness and
+local generation registry are not active CI gates in the current workspace.
 
 ## Summary
 

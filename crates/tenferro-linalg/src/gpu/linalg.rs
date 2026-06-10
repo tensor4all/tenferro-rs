@@ -13,17 +13,16 @@ use super::ffi::cusolver::{
     CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
-use tenferro_gpu::cubecl::interop::{
+use tenferro_gpu::cuda_interop::{
     alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
     ensure_typed_tensor_resident, flush_cubecl_client, raw_cuda_stream,
     typed_device_ptr as interop_typed_device_ptr, typed_tensor_array_arg, typed_tensor_binding,
-    upload_device_bytes, upload_typed_tensor, with_cubecl_client, DeviceByteBuffer,
+    upload_device_bytes, upload_typed_tensor, with_cubecl_client, CudaExtensionCacheGuard,
+    DeviceByteBuffer,
 };
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
-use tenferro_gpu::cubecl::{
-    download_tensor, CubeclBackend, CubeclRuntime, CudaExtensionCacheGuard,
-};
+use tenferro_gpu::{download_tensor, CubeclBackend, CubeclRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     Buffer, DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
@@ -1756,7 +1755,8 @@ where
     T: CubeElement + Clone + Send + Sync + 'static,
 {
     let shape = tensor.shape().to_vec();
-    let (shape, data) = match tensor.buffer {
+    let (buffer, _, _) = tensor.into_parts();
+    let (shape, data) = match buffer {
         Buffer::Host(data) => (shape, data),
         Buffer::Backend(_) => {
             return Err(Error::backend_failure(

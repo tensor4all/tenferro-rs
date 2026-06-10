@@ -128,9 +128,59 @@ impl Default for ExtensionCacheLimits {
     }
 }
 
-struct ExtensionCacheEntry {
-    value: Box<dyn Any + Send + Sync>,
+trait ExtensionCacheValue: Send + Sync {
+    fn as_any(&self) -> &(dyn Any + Send + Sync);
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync);
+    fn retained_bytes(&self) -> usize;
+}
+
+struct FixedRetainedBytes<T> {
+    value: T,
     retained_bytes: usize,
+}
+
+impl<T> ExtensionCacheValue for FixedRetainedBytes<T>
+where
+    T: Any + Send + Sync + 'static,
+{
+    fn as_any(&self) -> &(dyn Any + Send + Sync) {
+        &self.value
+    }
+
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
+        &mut self.value
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+}
+
+struct DynamicRetainedBytes<T, F> {
+    value: T,
+    retained_bytes: F,
+}
+
+impl<T, F> ExtensionCacheValue for DynamicRetainedBytes<T, F>
+where
+    T: Any + Send + Sync + 'static,
+    F: Fn(&T) -> usize + Send + Sync + 'static,
+{
+    fn as_any(&self) -> &(dyn Any + Send + Sync) {
+        &self.value
+    }
+
+    fn as_any_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
+        &mut self.value
+    }
+
+    fn retained_bytes(&self) -> usize {
+        (self.retained_bytes)(&self.value)
+    }
+}
+
+struct ExtensionCacheEntry {
+    value: Box<dyn ExtensionCacheValue>,
 }
 
 /// Bounded type-erased cache storage owned by an extension executor.
@@ -191,8 +241,55 @@ impl ExtensionCacheStore {
         self.entries.put(
             key,
             ExtensionCacheEntry {
-                value: Box::new(value),
-                retained_bytes,
+                value: Box::new(FixedRetainedBytes {
+                    value,
+                    retained_bytes,
+                }),
+            },
+        );
+    }
+
+    /// Insert or replace a typed cache entry whose retained bytes are computed
+    /// from the current value whenever stats are requested.
+    ///
+    /// Use this for entries that mutate after insertion, such as compiled
+    /// execution plans with backend-owned nested caches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ExtensionCacheKey, ExtensionCacheStore, ExtensionCacheSelector};
+    ///
+    /// let mut store = ExtensionCacheStore::new();
+    /// let key = ExtensionCacheKey::new("example.cache.v1", "plans", 0);
+    /// store.put_with_retained_bytes(key, Vec::<usize>::with_capacity(2), |values| {
+    ///     values.capacity() * std::mem::size_of::<usize>()
+    /// });
+    /// let values = store.get_mut::<Vec<usize>>(&key).unwrap();
+    /// values.reserve_exact(4);
+    /// let retained_capacity = values.capacity();
+    ///
+    /// assert_eq!(
+    ///     store.stats(ExtensionCacheSelector::All).retained_bytes,
+    ///     retained_capacity * std::mem::size_of::<usize>()
+    /// );
+    /// ```
+    pub fn put_with_retained_bytes<T, F>(
+        &mut self,
+        key: ExtensionCacheKey,
+        value: T,
+        retained_bytes: F,
+    ) where
+        T: Any + Send + Sync + 'static,
+        F: Fn(&T) -> usize + Send + Sync + 'static,
+    {
+        self.entries.put(
+            key,
+            ExtensionCacheEntry {
+                value: Box::new(DynamicRetainedBytes {
+                    value,
+                    retained_bytes,
+                }),
             },
         );
     }
@@ -204,7 +301,7 @@ impl ExtensionCacheStore {
     {
         self.entries
             .get(key)
-            .and_then(|entry| entry.value.downcast_ref::<T>())
+            .and_then(|entry| entry.value.as_any().downcast_ref::<T>())
     }
 
     /// Get a mutable typed cache entry, updating its LRU position.
@@ -214,7 +311,7 @@ impl ExtensionCacheStore {
     {
         self.entries
             .get_mut(key)
-            .and_then(|entry| entry.value.downcast_mut::<T>())
+            .and_then(|entry| entry.value.as_any_mut().downcast_mut::<T>())
     }
 
     /// Clear entries selected by `selector`.
@@ -252,7 +349,7 @@ impl ExtensionCacheStore {
                 .entries
                 .iter()
                 .filter(|(key, _)| selector.matches(key))
-                .map(|(_, entry)| entry.retained_bytes)
+                .map(|(_, entry)| entry.value.retained_bytes())
                 .sum(),
         }
     }

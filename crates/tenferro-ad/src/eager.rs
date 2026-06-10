@@ -10,7 +10,7 @@ use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError}
 use computegraph::ValueKey;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cubecl::CubeclBackend;
+use tenferro_gpu::CubeclBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
@@ -49,9 +49,18 @@ struct EagerOpProfileEntry {
 thread_local! {
     static EAGER_OP_PROFILE_STATE: RefCell<HashMap<&'static str, EagerOpProfileEntry>> =
         RefCell::new(HashMap::new());
+    #[cfg(test)]
+    static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn eager_op_profile_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(value) = EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| *state.borrow()) {
+        return value;
+    }
+
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_OP_AGG").is_ok())
 }
@@ -82,10 +91,7 @@ pub(crate) fn maybe_print_eager_op_profile() {
     if !eager_op_profile_enabled() {
         return;
     }
-    let Ok(print_every) = env::var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY") else {
-        return;
-    };
-    let Ok(print_every) = print_every.parse::<usize>() else {
+    let Some(print_every) = eager_op_profile_print_every() else {
         return;
     };
     if print_every == 0 {
@@ -101,6 +107,18 @@ pub(crate) fn maybe_print_eager_op_profile() {
     if should_print {
         print_and_reset_eager_op_profile();
     }
+}
+
+fn eager_op_profile_print_every() -> Option<usize> {
+    #[cfg(test)]
+    if let Some(value) = EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| *state.borrow()) {
+        return value;
+    }
+
+    env::var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY")
+        .ok()?
+        .parse()
+        .ok()
 }
 
 pub(crate) fn print_and_reset_eager_op_profile() {
@@ -229,7 +247,7 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclBackend;
+    /// use tenferro_gpu::CubeclBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
     /// let _ctor: fn(CubeclBackend) -> std::sync::Arc<EagerRuntime> =
@@ -246,7 +264,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::cubecl::CubeclBackend;
+    /// use tenferro_gpu::CubeclBackend;
     ///
     /// let _ctor: fn(CubeclBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
@@ -1108,8 +1126,8 @@ pub(crate) fn exec_single_output_read(
     ))
 }
 
-pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut B) -> Tensor {
-    match input {
+pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+    let host = match input {
         Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
@@ -1120,7 +1138,10 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut 
         )),
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
-    }
+    };
+    backend
+        .upload_host_tensor(&host)
+        .unwrap_or_else(|err| panic!("zero_like upload failed: {}", err))
 }
 
 pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {

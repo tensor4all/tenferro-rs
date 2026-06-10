@@ -39,6 +39,18 @@ fn test_constant_uses_variant_dtype() {
 }
 
 #[test]
+fn test_abs_complex_outputs_real_dtype() {
+    assert_eq!(
+        infer_output_dtype(&StdTensorOp::Abs, &[DType::C32]),
+        DType::F32
+    );
+    assert_eq!(
+        infer_output_dtype(&StdTensorOp::Abs, &[DType::C64]),
+        DType::F64
+    );
+}
+
+#[test]
 fn test_reduce_sum_preserves_dtype() {
     let op = StdTensorOp::ReduceSum { axes: vec![0] };
     assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::F32);

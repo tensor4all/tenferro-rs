@@ -143,6 +143,23 @@ fn test_neg() {
 }
 
 #[test]
+fn traced_abs_of_complex_tensor_returns_real_tensor() {
+    use num_complex::Complex64;
+
+    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(5.0, 12.0)],
+    ));
+    let y = x.abs();
+    assert_eq!(y.dtype, DType::F64);
+
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
+    assert_eq!(result.dtype(), DType::F64);
+    assert_eq!(get_f64_data(&result), &[5.0, 13.0]);
+}
+
+#[test]
 fn test_dot_general() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);

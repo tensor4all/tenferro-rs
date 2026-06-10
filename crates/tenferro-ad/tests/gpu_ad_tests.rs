@@ -4,7 +4,7 @@ use tenferro_ad::TracedTensorAdExt;
 mod support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
-use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Buffer;
 
@@ -39,13 +39,13 @@ fn assert_device_backed(tensor: &Tensor) {
     }
 
     match tensor {
-        Tensor::F32(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::F64(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::I64(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::C32(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::C64(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::I32(inner) => assert!(is_cubecl(&inner.buffer)),
-        Tensor::Bool(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::F32(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::F64(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::I64(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::C32(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::C64(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::I32(inner) => assert!(is_cubecl(inner.buffer())),
+        Tensor::Bool(inner) => assert!(is_cubecl(inner.buffer())),
     }
 }
 

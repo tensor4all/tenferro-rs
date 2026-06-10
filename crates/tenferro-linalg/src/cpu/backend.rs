@@ -976,7 +976,7 @@ fn complex32_real_part_tensor(values: TypedTensor<Complex32>) -> TypedTensor<f32
         values.shape().to_vec(),
         values.host_data().iter().map(|value| value.re).collect(),
     );
-    out.placement = values.placement.clone();
+    out.set_placement(values.placement().clone());
     out
 }
 
@@ -985,7 +985,7 @@ fn complex64_real_part_tensor(values: TypedTensor<Complex64>) -> TypedTensor<f64
         values.shape().to_vec(),
         values.host_data().iter().map(|value| value.re).collect(),
     );
-    out.placement = values.placement.clone();
+    out.set_placement(values.placement().clone());
     out
 }
 

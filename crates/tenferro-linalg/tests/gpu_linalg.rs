@@ -3,7 +3,7 @@
 // Run with: cargo test --features cuda -- --ignored
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{Error, Tensor, TypedTensor};
 

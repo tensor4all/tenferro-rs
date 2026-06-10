@@ -1457,7 +1457,7 @@ where
         src: &TypedTensor<T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
-        if matches!(&src.buffer, Buffer::Backend(_)) {
+        if matches!(src.buffer(), Buffer::Backend(_)) {
             return Err(crate::Error::backend_failure(
                 "CpuBackend::copy_from_contiguous",
                 "CPU backend received a backend source tensor; download the tensor to host before CPU view copy-back",
@@ -1507,12 +1507,33 @@ impl TensorFusion for CpuBackend {
     }
 }
 
-impl TensorDeviceTransfer for CpuBackend {}
+impl TensorDeviceTransfer for CpuBackend {
+    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        if tensor.is_backend_buffer() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::download_to_host",
+                "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
+            ));
+        }
+        Ok(tensor.clone())
+    }
+
+    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        if tensor.is_backend_buffer() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::upload_host_tensor",
+                "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
+            ));
+        }
+        Ok(tensor.clone())
+    }
+}
 
 impl TensorBackend for CpuBackend {}
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
-    match typed.buffer {
+    let (buffer, _, _) = typed.into_parts();
+    match buffer {
         Buffer::Host(data) => T::pool_release(pool, data),
         Buffer::Backend(_) => {}
     }

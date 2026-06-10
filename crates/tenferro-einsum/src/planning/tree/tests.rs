@@ -8,7 +8,8 @@ use crate::syntax::subscripts::Subscripts;
 use crate::Error;
 
 use super::{
-    nested_to_pairs, optimize_self_greedy_pairs, ContractionOptimizerOptions, ContractionTree,
+    build_needed_label_counts, collect_candidate_intermediate_subs, nested_to_pairs,
+    optimize_self_greedy_pairs, ContractionOptimizerOptions, ContractionTree,
 };
 
 #[test]
@@ -238,6 +239,50 @@ fn self_greedy_pair_optimizer_rejects_missing_needed_label() {
     assert!(
         matches!(err, Error::InvalidArgument(message) if message.contains("unknown size for label 4"))
     );
+}
+
+#[test]
+fn self_greedy_precomputed_needed_counts_match_rebuilt_needed_sets() {
+    let operand_subs = [vec![0, 1, 1], vec![1, 2], vec![2, 3], vec![3, 4]];
+    let output_subs = vec![0, 4];
+    let available = vec![0, 1, 2, 3];
+    let operand_label_sets: Vec<HashSet<u32>> = operand_subs
+        .iter()
+        .map(|labels| labels.iter().copied().collect())
+        .collect();
+    let needed_label_counts =
+        build_needed_label_counts(&output_subs, &available, &operand_label_sets);
+    let mut actual = Vec::new();
+
+    for i in 0..available.len() {
+        for j in (i + 1)..available.len() {
+            let left = available[i];
+            let right = available[j];
+            let mut rebuilt_needed: HashSet<u32> = output_subs.iter().copied().collect();
+            for &idx in &available {
+                if idx != left && idx != right {
+                    rebuilt_needed.extend(operand_subs[idx].iter().copied());
+                }
+            }
+            let expected = crate::util::intermediate_subs(
+                &operand_subs[left],
+                &operand_subs[right],
+                &rebuilt_needed,
+            );
+
+            collect_candidate_intermediate_subs(
+                &operand_subs[left],
+                &operand_subs[right],
+                left,
+                right,
+                &operand_label_sets,
+                &needed_label_counts,
+                &mut actual,
+            );
+
+            assert_eq!(actual, expected);
+        }
+    }
 }
 
 #[test]

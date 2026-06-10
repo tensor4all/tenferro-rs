@@ -21,6 +21,11 @@
 //! cotangent to the operand as an identity passthrough and to the
 //! updates through the inverse `Gather`.
 //!
+//! Indexing AD follows the repository AD contract's JAX/StableHLO-style
+//! `promise_in_bounds` rule: gradients are guaranteed only for in-bounds
+//! starts and indices. Primal out-of-bounds clamping or dropped scatter
+//! windows must not be reviewed as an AD finite-difference promise.
+//!
 //! Closing the core op vocabulary under AD is a Stage 7 prerequisite (the
 //! tropical fused backward emits `Gather` / `Scatter` on this vocabulary).
 
