@@ -76,7 +76,8 @@ Status values:
 | #32 public `TracedTensor` fields | Design Gate | design-gated |
 | #37 traced graph builder clones | Verify First | verify-first |
 | #40 FFT output zero-initialization | Auto Fix | fixed |
-| #42/#43 complex `Abs`/`Sign` AD | Verify First | verify-first; split `Abs` from `Sign` policy |
+| #42 complex `Abs` AD convention | Design Gate | design-gated; current primal returns complex real-embedded output while JAX uses real output, so the AD convention must be decided before code changes |
+| #43 complex `Sign` AD convention | Design Gate | design-gated; JAX treats `sign` as zero-JVP, but tenferro's complex primal is non-holomorphic and needs an explicit convention |
 | #44/#52/#101 shape-source arity AD | Auto Fix | fixed; narrowed to current `transpose_reshape` arity gap plus verification of existing broadcast arity behavior |
 | #49 public fusion IR backend API | Design Gate | design-gated |
 | #56/#73 executor workspace allocation/clones | Verify First | verify-first |
@@ -345,3 +346,32 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   The same direct mixed-dtype projection issue is also fixed for `DotGeneral`.
   Similar risks remain in boundary-sensitive elementwise ops, but they require
   #125 semantics before implementation.
+
+## PR-Pre Residual Audit
+
+Two read-only subagents audited the unresolved ledger before PR creation. They
+found no additional `remaining-auto` item. The stale FFT device/backend-buffer
+finding was removed from the active fix queue because current FFT code rejects
+device and backend-buffer inputs with a host-only diagnostic.
+
+Remaining `Verify First` items:
+
+- #21 indexing AD coverage: broad coverage debt, with no narrow failing path
+  identified in this pass.
+- #37 traced graph builder clones: the remaining clone concern is mostly in the
+  pinned external `computegraph` dependency, not a narrow repo-local fix.
+- #56/#73 executor workspace allocation/clones: owned execution paths already
+  reuse workspace; borrowed paths still need performance/lifetime investigation.
+- #113 gather/scatter boundary VJP: strongest remaining concrete risk. Current
+  gather boundary behavior clamps indices while scatter drops out-of-range
+  windows, so a focused boundary VJP test should be written before any fix.
+
+Remaining design-gated groups:
+
+- Public surface and compatibility decisions: #2, #16, #19, #32, #49, and #116
+  scalar helper contract.
+- Repository policy decisions: #4 coverage policy and #10 transfer defaults.
+- AD semantics decisions: #42 complex `Abs`, #43 complex `Sign`, #106
+  integer/bool/lossy `Convert`, and #125 max/min/clamp boundaries.
+- Runtime/cache boundary decisions: #121 einsum retained-byte accounting and
+  #123 eager extension view/materialization ABI.
