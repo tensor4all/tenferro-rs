@@ -96,7 +96,7 @@ pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
 ///
 /// Panics if the input dtypes are inconsistent for the op (shouldn't happen
 /// in well-formed SSA programs). For `StdTensorOp::Extension`, prefer the
-/// combined [`infer_extension_output_meta`] helper — this function only
+/// combined `infer_extension_output_meta` helper — this function only
 /// returns the first output's dtype, which is sufficient for single-output
 /// extensions but loses information for multi-output ones.
 pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
