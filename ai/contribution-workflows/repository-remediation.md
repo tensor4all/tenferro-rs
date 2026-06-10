@@ -47,6 +47,12 @@ For each finding, record:
 Historical comments are evidence, not authority. Reclassify an item when the
 current worktree or an earlier commit in the same batch already fixed it.
 
+If new issue comments, maintainer notes, or agent verification reports arrive
+during the remediation session, pause before starting the next fix and
+reconcile the ledger against the latest remote issue state. Narrow over-broad
+items, mark stale items out of scope, and record any newly confirmed residual
+paths before continuing implementation.
+
 ## Scope Classification
 
 Classify each candidate finding before editing.
