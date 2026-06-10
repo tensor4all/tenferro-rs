@@ -184,9 +184,10 @@ def collect_public_items(root: pathlib.Path, crates: list[CrateInfo]) -> list[Pu
 
 def user_facing_docs(root: pathlib.Path) -> list[pathlib.Path]:
     docs = [root / "README.md"]
-    guides = root / "docs" / "guides"
-    if guides.exists():
-        docs.extend(sorted(guides.rglob("*.md")))
+    for relative in ("docs/guides", "docs/getting-started"):
+        directory = root / relative
+        if directory.exists():
+            docs.extend(sorted(directory.rglob("*.md")))
     return [path for path in docs if path.exists()]
 
 
@@ -194,13 +195,13 @@ def check_public_items(root: pathlib.Path, items: list[PublicItem]) -> list[Find
     findings: list[Finding] = []
     for item in items:
         location = item.location(root)
-        if item.name.startswith("traced_"):
+        if item.kind == "fn" and item.name.startswith("traced_"):
             findings.append(
                 Finding(
                     "traced_prefix",
                     location,
                     f"`{item.name}` is public",
-                    "Traced tensor APIs should not use a `traced_` prefix.",
+                    "Traced tensor function and method names should not use a `traced_` prefix.",
                 )
             )
         if item.kind == "fn" and item.name.endswith("_read"):
