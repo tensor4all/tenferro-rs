@@ -11,7 +11,7 @@
 //! use tenferro_ops::{ShapeExtent, SymDim};
 //! use tenferro_ops::std_tensor_op::StdTensorOp;
 //!
-//! let op = StdTensorOp::constant_f64(2.0);
+//! let op = StdTensorOp::constant(2.0_f64);
 //! let extent = ShapeExtent::exact(SymDim::from(3usize));
 //! assert!(matches!(op, StdTensorOp::Constant { .. }));
 //! assert!(extent.is_exact());

@@ -686,13 +686,13 @@ impl TracedTensor {
     /// ```
     pub fn scale_real(&self, factor: f64) -> TracedTensor {
         let op = match self.dtype {
-            DType::F64 => StdTensorOp::constant_f64(factor),
-            DType::F32 => StdTensorOp::constant_f32(factor as f32),
-            DType::I32 => StdTensorOp::constant_i32(round_real_to_i64(factor) as i32),
-            DType::I64 => StdTensorOp::constant_i64(round_real_to_i64(factor)),
-            DType::Bool => StdTensorOp::constant_bool(factor != 0.0),
-            DType::C64 => StdTensorOp::constant_c64(Complex64::new(factor, 0.0)),
-            DType::C32 => StdTensorOp::constant_c32(Complex32::new(factor as f32, 0.0)),
+            DType::F64 => StdTensorOp::constant(factor),
+            DType::F32 => StdTensorOp::constant(factor as f32),
+            DType::I32 => StdTensorOp::constant(round_real_to_i64(factor) as i32),
+            DType::I64 => StdTensorOp::constant(round_real_to_i64(factor)),
+            DType::Bool => StdTensorOp::constant(factor != 0.0),
+            DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
+            DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
         };
         scale_with_constant(self, op)
     }
@@ -715,10 +715,10 @@ impl TracedTensor {
     /// ```
     pub fn scale_complex(&self, factor: Complex64) -> TracedTensor {
         match self.dtype {
-            DType::C64 => scale_with_constant(self, StdTensorOp::constant_c64(factor)),
+            DType::C64 => scale_with_constant(self, StdTensorOp::constant(factor)),
             DType::C32 => scale_with_constant(
                 self,
-                StdTensorOp::constant_c32(Complex32::new(factor.re as f32, factor.im as f32)),
+                StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
             DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
                 panic!(

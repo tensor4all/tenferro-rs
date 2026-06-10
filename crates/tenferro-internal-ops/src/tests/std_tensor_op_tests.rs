@@ -244,7 +244,7 @@ fn test_std_tensor_op_input_output_counts() {
         2
     );
     assert_eq!(StdTensorOp::ReduceSum { axes: vec![0] }.input_count(), 1);
-    assert_eq!(StdTensorOp::constant_f64(1.0).input_count(), 0);
+    assert_eq!(StdTensorOp::constant(1.0).input_count(), 0);
     assert_eq!(
         StdTensorOp::ExtractDiag {
             axis_a: 0,
@@ -310,7 +310,7 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Abs.input_count(), 1);
     assert_eq!(StdTensorOp::Exp.input_count(), 1);
     assert_eq!(StdTensorOp::Log1p.input_count(), 1);
-    assert_eq!(StdTensorOp::constant_f64(1.0).output_count(), 1);
+    assert_eq!(StdTensorOp::constant(1.0).output_count(), 1);
     assert_eq!(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -666,9 +666,9 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
     }
 
     let mut lhs = DefaultHasher::new();
-    StdTensorOp::constant_f64(1.25).hash(&mut lhs);
+    StdTensorOp::constant(1.25).hash(&mut lhs);
     let mut rhs = DefaultHasher::new();
-    StdTensorOp::constant_f64(1.25).hash(&mut rhs);
+    StdTensorOp::constant(1.25).hash(&mut rhs);
     assert_eq!(lhs.finish(), rhs.finish());
 }
 
@@ -799,19 +799,40 @@ fn test_std_tensor_op_dynamic_truncate_linearize_uses_static_slice_for_narrowed_
 }
 
 #[test]
-fn test_std_tensor_op_constant_constructors_encode_expected_bytes() {
+fn test_std_tensor_op_generic_constant_constructor_encodes_expected_bytes() {
     assert_eq!(
-        StdTensorOp::constant_f64(1.25),
+        StdTensorOp::constant(1.25_f64),
         StdTensorOp::Constant {
             dtype: DType::F64,
             bytes: 1.25_f64.to_le_bytes().to_vec(),
         }
     );
     assert_eq!(
-        StdTensorOp::constant_f32(1.25),
+        StdTensorOp::constant(1.25_f32),
         StdTensorOp::Constant {
             dtype: DType::F32,
             bytes: 1.25_f32.to_le_bytes().to_vec(),
+        }
+    );
+    assert_eq!(
+        StdTensorOp::constant(7_i64),
+        StdTensorOp::Constant {
+            dtype: DType::I64,
+            bytes: 7_i64.to_le_bytes().to_vec(),
+        }
+    );
+    assert_eq!(
+        StdTensorOp::constant(7_i32),
+        StdTensorOp::Constant {
+            dtype: DType::I32,
+            bytes: 7_i32.to_le_bytes().to_vec(),
+        }
+    );
+    assert_eq!(
+        StdTensorOp::constant(true),
+        StdTensorOp::Constant {
+            dtype: DType::Bool,
+            bytes: vec![1],
         }
     );
 
@@ -820,7 +841,7 @@ fn test_std_tensor_op_constant_constructors_encode_expected_bytes() {
     c64_bytes.extend_from_slice(&c64.re.to_le_bytes());
     c64_bytes.extend_from_slice(&c64.im.to_le_bytes());
     assert_eq!(
-        StdTensorOp::constant_c64(c64),
+        StdTensorOp::constant(c64),
         StdTensorOp::Constant {
             dtype: DType::C64,
             bytes: c64_bytes,
@@ -832,11 +853,35 @@ fn test_std_tensor_op_constant_constructors_encode_expected_bytes() {
     c32_bytes.extend_from_slice(&c32.re.to_le_bytes());
     c32_bytes.extend_from_slice(&c32.im.to_le_bytes());
     assert_eq!(
-        StdTensorOp::constant_c32(c32),
+        StdTensorOp::constant(c32),
         StdTensorOp::Constant {
             dtype: DType::C32,
             bytes: c32_bytes,
         }
+    );
+}
+
+#[test]
+fn generic_constant_constructor_sets_dtype_for_each_scalar() {
+    fn dtype_of(op: StdTensorOp) -> DType {
+        match op {
+            StdTensorOp::Constant { dtype, .. } => dtype,
+            other => panic!("expected constant op, got {other:?}"),
+        }
+    }
+
+    assert_eq!(dtype_of(StdTensorOp::constant(1.0_f64)), DType::F64);
+    assert_eq!(dtype_of(StdTensorOp::constant(1.0_f32)), DType::F32);
+    assert_eq!(dtype_of(StdTensorOp::constant(1_i64)), DType::I64);
+    assert_eq!(dtype_of(StdTensorOp::constant(1_i32)), DType::I32);
+    assert_eq!(dtype_of(StdTensorOp::constant(true)), DType::Bool);
+    assert_eq!(
+        dtype_of(StdTensorOp::constant(Complex64::new(1.0, -2.0))),
+        DType::C64
+    );
+    assert_eq!(
+        dtype_of(StdTensorOp::constant(Complex32::new(1.0, -2.0))),
+        DType::C32
     );
 }
 
@@ -870,7 +915,7 @@ fn test_std_tensor_op_linearize_none_tangent_paths_return_none() {
     assert!(graph.operations().is_empty());
 
     let (constant_result, constant_graph) =
-        run_linearize_case(StdTensorOp::constant_f64(1.0), 0, 0, &[]);
+        run_linearize_case(StdTensorOp::constant(1.0), 0, 0, &[]);
     assert_eq!(constant_result, vec![None]);
     assert!(constant_graph.operations().is_empty());
 }
@@ -1015,7 +1060,7 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
 
 #[test]
 fn test_std_tensor_op_constant_transpose_rule_has_no_inputs_or_ops() {
-    let (result, _, graph) = run_transpose_case(StdTensorOp::constant_f64(1.0), 0, &[], true);
+    let (result, _, graph) = run_transpose_case(StdTensorOp::constant(1.0), 0, &[], true);
     assert!(result.is_empty());
     assert!(graph.operations().is_empty());
 }

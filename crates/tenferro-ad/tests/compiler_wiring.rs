@@ -247,8 +247,8 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
 
     let program = CompiledProgram {
         instructions: vec![
-            make_instr(StdTensorOp::constant_f64(2.5), vec![], vec![1]),
-            make_instr(StdTensorOp::constant_c64(complex), vec![], vec![2]),
+            make_instr(StdTensorOp::constant(2.5), vec![], vec![1]),
+            make_instr(StdTensorOp::constant(complex), vec![], vec![2]),
             make_instr(
                 StdTensorOp::Convert {
                     from: DType::F64,

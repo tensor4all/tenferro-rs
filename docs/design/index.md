@@ -8,6 +8,7 @@ architecture see [Architecture](../architecture/). For normative specs see
 
 | Document | Description |
 |----------|-------------|
+| [api-and-convention-freeze.md](./api-and-convention-freeze.md) | Clean-break release posture for public API, API consistency detection, crate ownership, naming conventions, docs ownership, and audit/remediation workflow |
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |

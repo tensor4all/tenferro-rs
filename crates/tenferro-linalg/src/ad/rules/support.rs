@@ -147,7 +147,7 @@ pub(super) fn fixed_scale(
     factor: f64,
 ) -> LocalValueId {
     let constant = builder.add_operation(
-        StdTensorOp::constant_f64(factor),
+        StdTensorOp::constant(factor),
         vec![],
         OperationRole::Primary,
     );
@@ -223,7 +223,7 @@ pub(super) fn linear_scale(
     factor: f64,
 ) -> LocalValueId {
     let constant = builder.add_operation(
-        StdTensorOp::constant_f64(factor),
+        StdTensorOp::constant(factor),
         vec![],
         OperationRole::Primary,
     );

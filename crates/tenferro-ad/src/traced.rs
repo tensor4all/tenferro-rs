@@ -7,11 +7,12 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::{
-    checkpoint_traced_tensor, leaf_input_key, linear_input_key, metadata_scopes_with_new,
+    checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
+    extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,
+    linear_input_key, metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new,
     ones_tensor, push_metadata_scope, register_scoped_graph_metadata, registered_meta,
-    tensor_meta_from_tensor, traced_checkpoint_chain, traced_extra_roots, traced_inputs_map,
-    traced_metadata_scopes, traced_resolve_roots, traced_shape_hint, traced_tensor_from_parts,
-    TracedTensorParts,
+    resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
+    tensor_meta_from_tensor, TracedTensorParts,
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
@@ -385,7 +386,7 @@ impl TracedTensorAdExt for TracedTensor {
             let program = compiler.compile(self)?;
             Arc::new(executor.run(&program)?)
         };
-        checkpoint_traced_tensor(self, data);
+        checkpoint_tensor(self, data);
         Ok(())
     }
 
@@ -434,7 +435,7 @@ fn jvp_optional_result_with_rules(
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
     let output_key = output.graph().values()[output.val].key.clone();
-    let checkpoint_chain = traced_checkpoint_chain(output);
+    let checkpoint_chain = tensor_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
         .map(|chain| chain.collect_aliases())
@@ -443,7 +444,7 @@ fn jvp_optional_result_with_rules(
         .as_ref()
         .map(|chain| chain.collect_graphs())
         .unwrap_or_default();
-    let mut roots = traced_resolve_roots(output);
+    let mut roots = tensor_resolve_roots(output);
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
@@ -473,7 +474,7 @@ fn jvp_optional_result_with_rules(
         )],
     );
 
-    let mut inputs_map = (*traced_inputs_map(output)).clone();
+    let mut inputs_map = (*tensor_inputs_map(output)).clone();
     if let Some(chain) = &checkpoint_chain {
         inputs_map.extend(chain.collect_inputs());
     }
@@ -487,24 +488,24 @@ fn jvp_optional_result_with_rules(
 
     let mut extra_roots = vec![Arc::clone(output.graph())];
     extra_roots.extend(checkpoint_graphs);
-    extra_roots.extend(traced_extra_roots(output));
+    extra_roots.extend(tensor_extra_roots(output));
 
-    Ok(Some(traced_tensor_from_parts(TracedTensorParts {
+    Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: output.rank,
         dtype: output.dtype,
         graph: Arc::new(linear.into_graph()),
         val: tangent_output,
         data: None,
-        shape_hint: traced_shape_hint(output),
+        shape_hint: tensor_shape_hint(output),
         inputs_map: Arc::new(inputs_map),
         extra_roots,
         checkpoint_chain,
         metadata_scopes: metadata_scopes_with_new(
             metadata_scope,
             [
-                traced_metadata_scopes(output),
-                traced_metadata_scopes(wrt),
-                traced_metadata_scopes(tangent),
+                tensor_metadata_scopes(output),
+                tensor_metadata_scopes(wrt),
+                tensor_metadata_scopes(tangent),
             ],
         ),
     })))
@@ -518,7 +519,7 @@ fn vjp_optional_result_with_rules(
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
     let output_key = output.graph().values()[output.val].key.clone();
-    let checkpoint_chain = traced_checkpoint_chain(output);
+    let checkpoint_chain = tensor_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
         .map(|chain| chain.collect_aliases())
@@ -527,7 +528,7 @@ fn vjp_optional_result_with_rules(
         .as_ref()
         .map(|chain| chain.collect_graphs())
         .unwrap_or_default();
-    let mut roots = traced_resolve_roots(output);
+    let mut roots = tensor_resolve_roots(output);
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
@@ -573,7 +574,7 @@ fn vjp_optional_result_with_rules(
         return Ok(None);
     };
 
-    let mut inputs_map = (*traced_inputs_map(output)).clone();
+    let mut inputs_map = (*tensor_inputs_map(output)).clone();
     if let Some(chain) = &checkpoint_chain {
         inputs_map.extend(chain.collect_inputs());
     }
@@ -587,15 +588,15 @@ fn vjp_optional_result_with_rules(
 
     let mut extra_roots = vec![Arc::clone(output.graph()), linear_graph];
     extra_roots.extend(checkpoint_graphs);
-    extra_roots.extend(traced_extra_roots(output));
+    extra_roots.extend(tensor_extra_roots(output));
 
-    Ok(Some(traced_tensor_from_parts(TracedTensorParts {
+    Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
         dtype: wrt.dtype,
         graph: Arc::new(transposed.into_graph()),
         val: cotangent_output,
         data: None,
-        shape_hint: traced_shape_hint(wrt),
+        shape_hint: tensor_shape_hint(wrt),
         inputs_map: Arc::new(inputs_map),
         extra_roots,
         checkpoint_chain,
@@ -603,9 +604,9 @@ fn vjp_optional_result_with_rules(
             let mut scopes = metadata_scopes_with_new(
                 linear_metadata_scope,
                 [
-                    traced_metadata_scopes(output),
-                    traced_metadata_scopes(wrt),
-                    traced_metadata_scopes(cotangent),
+                    tensor_metadata_scopes(output),
+                    tensor_metadata_scopes(wrt),
+                    tensor_metadata_scopes(cotangent),
                 ],
             );
             push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));

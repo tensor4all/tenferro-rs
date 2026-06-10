@@ -13,128 +13,113 @@ use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
 use crate::input_key::TensorInputKey;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    TensorScalar,
 };
+
+/// Scalar values that can be encoded as tensor constant operations.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ops::std_tensor_op::ConstantScalar;
+///
+/// assert_eq!(1.0_f64.constant_bytes(), 1.0_f64.to_le_bytes().to_vec());
+/// ```
+pub trait ConstantScalar: TensorScalar + private::Sealed {
+    /// Encode the scalar value as little-endian constant bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::std_tensor_op::ConstantScalar;
+    ///
+    /// assert_eq!(true.constant_bytes(), vec![1]);
+    /// ```
+    fn constant_bytes(self) -> Vec<u8>;
+}
+
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for f64 {}
+    impl Sealed for f32 {}
+    impl Sealed for i64 {}
+    impl Sealed for i32 {}
+    impl Sealed for bool {}
+    impl Sealed for num_complex::Complex64 {}
+    impl Sealed for num_complex::Complex32 {}
+}
+
+impl ConstantScalar for f64 {
+    fn constant_bytes(self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl ConstantScalar for f32 {
+    fn constant_bytes(self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl ConstantScalar for i64 {
+    fn constant_bytes(self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl ConstantScalar for i32 {
+    fn constant_bytes(self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl ConstantScalar for bool {
+    fn constant_bytes(self) -> Vec<u8> {
+        vec![u8::from(self)]
+    }
+}
+
+impl ConstantScalar for Complex64 {
+    fn constant_bytes(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(16);
+        bytes.extend_from_slice(&self.re.to_le_bytes());
+        bytes.extend_from_slice(&self.im.to_le_bytes());
+        bytes
+    }
+}
+
+impl ConstantScalar for Complex32 {
+    fn constant_bytes(self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8);
+        bytes.extend_from_slice(&self.re.to_le_bytes());
+        bytes.extend_from_slice(&self.im.to_le_bytes());
+        bytes
+    }
+}
 
 tenferro_core_ops::define_std_tensor_op!();
 
 impl StdTensorOp {
-    /// Create an `f64` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_f64(1.5);
-    /// ```
-    pub fn constant_f64(value: f64) -> Self {
-        Self::Constant {
-            dtype: DType::F64,
-            bytes: value.to_le_bytes().to_vec(),
-        }
-    }
-
-    /// Create an `f32` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_f32(1.5_f32);
-    /// ```
-    pub fn constant_f32(value: f32) -> Self {
-        Self::Constant {
-            dtype: DType::F32,
-            bytes: value.to_le_bytes().to_vec(),
-        }
-    }
-
-    /// Create an `i64` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_i64(7);
-    /// ```
-    pub fn constant_i64(value: i64) -> Self {
-        Self::Constant {
-            dtype: DType::I64,
-            bytes: value.to_le_bytes().to_vec(),
-        }
-    }
-
-    /// Create an `i32` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_i32(7);
-    /// ```
-    pub fn constant_i32(value: i32) -> Self {
-        Self::Constant {
-            dtype: DType::I32,
-            bytes: value.to_le_bytes().to_vec(),
-        }
-    }
-
-    /// Create a `bool` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_bool(true);
-    /// ```
-    pub fn constant_bool(value: bool) -> Self {
-        Self::Constant {
-            dtype: DType::Bool,
-            bytes: vec![u8::from(value)],
-        }
-    }
-
-    /// Create a `Complex64` scalar constant op.
+    /// Create a scalar constant op from any supported tensor scalar.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use num_complex::Complex64;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_tensor::DType;
     ///
-    /// let op = StdTensorOp::constant_c64(Complex64::new(1.0, -2.0));
+    /// let real = StdTensorOp::constant(1.5_f64);
+    /// let complex = StdTensorOp::constant(Complex64::new(1.0, -2.0));
+    ///
+    /// assert!(matches!(real, StdTensorOp::Constant { dtype: DType::F64, .. }));
+    /// assert!(matches!(complex, StdTensorOp::Constant { dtype: DType::C64, .. }));
     /// ```
-    pub fn constant_c64(value: Complex64) -> Self {
-        let mut bytes = Vec::with_capacity(16);
-        bytes.extend_from_slice(&value.re.to_le_bytes());
-        bytes.extend_from_slice(&value.im.to_le_bytes());
+    pub fn constant<T: ConstantScalar>(value: T) -> Self {
         Self::Constant {
-            dtype: DType::C64,
-            bytes,
-        }
-    }
-
-    /// Create a `Complex32` scalar constant op.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use num_complex::Complex32;
-    /// use tenferro_ops::std_tensor_op::StdTensorOp;
-    ///
-    /// let op = StdTensorOp::constant_c32(Complex32::new(1.0, -2.0));
-    /// ```
-    pub fn constant_c32(value: Complex32) -> Self {
-        let mut bytes = Vec::with_capacity(8);
-        bytes.extend_from_slice(&value.re.to_le_bytes());
-        bytes.extend_from_slice(&value.im.to_le_bytes());
-        Self::Constant {
-            dtype: DType::C32,
-            bytes,
+            dtype: T::dtype(),
+            bytes: value.constant_bytes(),
         }
     }
 }
