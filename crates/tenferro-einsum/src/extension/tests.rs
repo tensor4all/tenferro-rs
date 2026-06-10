@@ -156,6 +156,58 @@ fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
     assert_eq!(tree.step_pair(1), Some((3, 2)));
 }
 
+#[test]
+#[cfg(feature = "autodiff")]
+fn repeated_label_projection_projects_each_extra_occurrence() {
+    let mut builder = RecordingRuleBuilder::default();
+
+    let result = project_repeated_labels_to_diagonal(&mut builder, 0, &[0, 1, 1, 1]);
+
+    assert_eq!(result, 4);
+    assert_eq!(
+        builder.ops,
+        vec![
+            StdTensorOp::ExtractDiag {
+                axis_a: 1,
+                axis_b: 2,
+            },
+            StdTensorOp::EmbedDiag {
+                axis_a: 1,
+                axis_b: 2,
+            },
+            StdTensorOp::ExtractDiag {
+                axis_a: 1,
+                axis_b: 3,
+            },
+            StdTensorOp::EmbedDiag {
+                axis_a: 1,
+                axis_b: 3,
+            },
+        ]
+    );
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Default)]
+struct RecordingRuleBuilder {
+    ops: Vec<StdTensorOp>,
+    next_id: LocalValueId,
+}
+
+#[cfg(feature = "autodiff")]
+impl PrimitiveRuleBuilder for RecordingRuleBuilder {
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        _inputs: Vec<ValueRef<StdTensorOp>>,
+        _role: OperationRole,
+    ) -> Vec<LocalValueId> {
+        self.ops.push(operation);
+        self.next_id += 1;
+        vec![self.next_id]
+    }
+}
+
 fn payload_hash(op: &EinsumExtensionOp) -> u64 {
     let mut hasher = DefaultHasher::new();
     op.payload_hash(&mut hasher);

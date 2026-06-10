@@ -835,17 +835,10 @@ fn project_repeated_labels_to_diagonal(
     labels: &[u32],
 ) -> LocalValueId {
     let mut result = cotangent;
-    let mut seen = HashSet::new();
-    for (axis_a, label) in labels.iter().copied().enumerate() {
-        if !seen.insert(label) {
-            continue;
-        }
-        let Some(axis_b) = labels
-            .iter()
-            .enumerate()
-            .skip(axis_a + 1)
-            .find_map(|(axis, candidate)| (*candidate == label).then_some(axis))
-        else {
+    let mut first_axis_by_label = HashMap::new();
+    for (axis_b, label) in labels.iter().copied().enumerate() {
+        let Some(&axis_a) = first_axis_by_label.get(&label) else {
+            first_axis_by_label.insert(label, axis_b);
             continue;
         };
         let extracted = builder.add_operation(
