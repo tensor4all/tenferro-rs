@@ -243,7 +243,7 @@ fn self_greedy_pair_optimizer_rejects_missing_needed_label() {
 
 #[test]
 fn self_greedy_precomputed_needed_counts_match_rebuilt_needed_sets() {
-    let operand_subs = vec![vec![0, 1, 1], vec![1, 2], vec![2, 3], vec![3, 4]];
+    let operand_subs = [vec![0, 1, 1], vec![1, 2], vec![2, 3], vec![3, 4]];
     let output_subs = vec![0, 4];
     let available = vec![0, 1, 2, 3];
     let operand_label_sets: Vec<HashSet<u32>> = operand_subs

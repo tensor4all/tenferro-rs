@@ -554,14 +554,19 @@ fn collect_candidate_intermediate_subs(
     }
 }
 
+#[derive(Clone, Copy)]
+struct CandidateCostContext<'a> {
+    operand_label_sets: &'a [HashSet<u32>],
+    needed_label_counts: &'a HashMap<u32, usize>,
+    size_dict: &'a HashMap<u32, usize>,
+}
+
 fn candidate_contraction_cost(
     subs_left: &[u32],
     subs_right: &[u32],
     left: usize,
     right: usize,
-    operand_label_sets: &[HashSet<u32>],
-    needed_label_counts: &HashMap<u32, usize>,
-    size_dict: &HashMap<u32, usize>,
+    context: CandidateCostContext<'_>,
     candidate_subs: &mut Vec<u32>,
 ) -> Result<usize> {
     collect_candidate_intermediate_subs(
@@ -569,13 +574,13 @@ fn candidate_contraction_cost(
         subs_right,
         left,
         right,
-        operand_label_sets,
-        needed_label_counts,
+        context.operand_label_sets,
+        context.needed_label_counts,
         candidate_subs,
     );
     let mut cost = 1usize;
     for &label in candidate_subs.iter() {
-        let size = size_dict.get(&label).copied().ok_or_else(|| {
+        let size = context.size_dict.get(&label).copied().ok_or_else(|| {
             Error::InvalidArgument(format!(
                 "unknown size for label {label} in contraction cost"
             ))
@@ -612,9 +617,11 @@ fn optimize_self_greedy_pairs(
                     &operand_subs[lj],
                     li,
                     lj,
-                    &operand_label_sets,
-                    &needed_label_counts,
-                    size_dict,
+                    CandidateCostContext {
+                        operand_label_sets: &operand_label_sets,
+                        needed_label_counts: &needed_label_counts,
+                        size_dict,
+                    },
                     &mut candidate_subs,
                 )?;
                 if cost < best_cost {
