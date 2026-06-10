@@ -204,6 +204,11 @@ committed as their own coherent review unit or clearly separated in the PR.
 
 - Start from current primal semantics and the machine-readable AD support
   manifests before changing rules.
+- When the intended AD behavior is unclear, use JAX as a reference for common
+  tensor AD conventions. Treat JAX behavior as guidance, not authority: if it
+  conflicts with current tenferro specs, documented API contracts, or issue
+  decisions, classify the item as design-gated instead of silently changing
+  semantics.
 - `linearize` and `transpose_rule` must preserve arity: return one tangent or
   cotangent slot per primal input, using `None` for nondifferentiable inputs.
 - Add targeted regression or oracle coverage for the reported edge case before
