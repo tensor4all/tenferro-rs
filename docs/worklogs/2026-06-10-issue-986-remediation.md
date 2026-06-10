@@ -82,18 +82,18 @@ Status values:
 | #56/#73 executor workspace allocation/clones | Verify First | verify-first |
 | #65 explicit singleton `BroadcastInDim` VJP | Auto Fix | fixed |
 | #78/#79 diagonal VJP edge cases | Auto Fix | fixed |
-| #80 repeated-label einsum VJP | Auto Fix | remaining-auto |
+| #80 repeated-label einsum VJP | Auto Fix | fixed; verified with helper-level repeated-label projection regression |
 | #87 FFT under CUDA-backed execution | Verify First | stale/docs-only; current behavior rejects device/backend-buffer input with a clear host-only diagnostic |
 | #106 integer/bool/lossy `Convert` AD policy | Design Gate | design-gated |
 | #109 lazy value/view API rustdoc examples | Auto Fix | fixed |
-| #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | remaining-auto |
+| #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | fixed |
 | #111 `TracedTensorAdExt` rustdoc examples | Auto Fix | fixed |
 | #112 CUDA zero-sized-output residency validation | Auto Fix | fixed |
 | #113 gather/scatter boundary VJP | Verify First | verify-first; narrow to current boundary cases |
 | #114 `Pow` zero-base singularity | Auto Fix | fixed |
 | #115 terminal lazy view base clone | Auto Fix | fixed |
 | #116 scalar helper public contract | Design Gate | design-gated |
-| #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto |
+| #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto; failing regressions drafted but implementation incomplete |
 | #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
 | #117 eager helper host tensors in CUDA contexts | Auto Fix | fixed |
 | #118 active crate/backend ownership docs | Auto Fix | fixed |
@@ -229,6 +229,24 @@ Implemented:
   currently builds the seed as a default input tensor, and `GraphExecutor`
   resolves default inputs by cloning them directly into execution slots.
 
+## Eleventh Batch: Remaining AD Edge Fixes
+
+Implemented:
+
+- Fixed `LuSolvePrepared` adjoint flag handling so transpose-only and
+  conjugate-only prepared solves preserve the missing flag in the adjoint
+  solve instead of collapsing to `(false, false)`.
+- Fixed repeated-label einsum VJP projection so labels repeated three or more
+  times project each extra occurrence back to the first axis for that label.
+
+Residual:
+
+- The repeated-label einsum regression is helper-level because an attempted
+  public end-to-end VJP regression exposed a separate symbolic shape issue.
+- Mixed real/complex binary VJP regressions were drafted and currently fail;
+  the implementation still needs real-input cotangent projection and `Pow`
+  mixed-dtype coefficient handling.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -267,6 +285,9 @@ Implemented:
 - `cargo test -p tenferro-ad eager_exec::tests`
 - `cargo test -p tenferro-ad --features cuda --no-run`
 - `git diff --check -- crates/tenferro-ad/src/eager.rs crates/tenferro-ad/src/eager_builder.rs crates/tenferro-ad/src/eager_exec.rs crates/tenferro-ad/src/shape_packing.rs crates/tenferro-ad/tests/eager_device_placement_contract.rs`
+- `cargo test -p tenferro-linalg --features autodiff adjoint_lu_solve_flags_preserve_mixed_complex_adjoint_cases`
+- `cargo test -p tenferro-einsum --features autodiff repeated_label_projection_projects_each_extra_occurrence`
+- `git diff --check -- crates/tenferro-linalg/src/ad/rules/solve.rs crates/tenferro-linalg/src/ad/rules/solve/tests.rs crates/tenferro-einsum/src/extension.rs crates/tenferro-einsum/src/extension/tests.rs crates/tenferro-ad/tests/ad.rs`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
@@ -283,3 +304,7 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   CPU behavior tests, not CUDA hardware execution. Traced AD scalar seeds still
   use default input tensors and should be fixed with the graph-executor input
   placement boundary.
+- Mixed real/complex binary VJP remains unresolved. The current uncommitted
+  regression tests fail for `Add`, `Mul`, `Div`, and `Pow`; `Pow` also exposes
+  a mixed-dtype coefficient construction error before cotangent projection can
+  be validated.
