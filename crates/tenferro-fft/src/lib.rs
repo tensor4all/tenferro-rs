@@ -105,6 +105,17 @@ pub enum FftNorm {
     Ortho,
 }
 
+#[cfg(feature = "autodiff")]
+impl FftNorm {
+    fn c2c_adjoint(self) -> Self {
+        match self {
+            Self::Backward => Self::Forward,
+            Self::Forward => Self::Backward,
+            Self::Ortho => Self::Ortho,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FftKind {
     C2C { forward: bool },
@@ -127,6 +138,19 @@ impl FftOp {
             axis,
             n,
             norm,
+        }
+    }
+
+    #[cfg(feature = "autodiff")]
+    fn c2c_adjoint(&self) -> Option<Self> {
+        match self.kind {
+            FftKind::C2C { forward } => Some(Self {
+                kind: FftKind::C2C { forward: !forward },
+                axis: self.axis,
+                n: self.n,
+                norm: self.norm.c2c_adjoint(),
+            }),
+            FftKind::R2C { .. } | FftKind::C2R => None,
         }
     }
 }
@@ -424,8 +448,11 @@ impl ExtensionAdRuleTrait for FftAdRule {
 
         match cotangent_out[0] {
             Some(ct) => {
+                let adjoint_op = fft_op.c2c_adjoint().ok_or_else(|| {
+                    ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, ADRuleKind::Transpose)
+                })?;
                 let outputs = builder.add_operation(
-                    StdTensorOp::Extension(Arc::new(fft_op.clone())),
+                    StdTensorOp::Extension(Arc::new(adjoint_op)),
                     vec![ValueRef::Local(ct)],
                     OperationRole::Linearized {
                         active_mask: vec![true],

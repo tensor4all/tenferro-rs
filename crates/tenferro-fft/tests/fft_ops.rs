@@ -354,3 +354,77 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
         ],
     );
 }
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    );
+    let cotangent = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(0.25, -2.0),
+        ],
+    );
+
+    let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
+    let dx = y.vjp(&x, &cotangent);
+    let out = run(&dx);
+
+    assert_c64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(2.25, -1.5),
+            Complex64::new(1.0, 2.25),
+            Complex64::new(-2.25, 4.5),
+            Complex64::new(3.0, -1.25),
+        ],
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+            Complex64::new(-2.0, -2.0),
+        ],
+    );
+    let cotangent = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(0.25, -2.0),
+        ],
+    );
+
+    let y = ifft(&x, None, -1, FftNorm::Backward).unwrap();
+    let dx = y.vjp(&x, &cotangent);
+    let out = run(&dx);
+
+    assert_c64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(0.5625, -0.375),
+            Complex64::new(0.75, -0.3125),
+            Complex64::new(-0.5625, 1.125),
+            Complex64::new(0.25, 0.5625),
+        ],
+    );
+}

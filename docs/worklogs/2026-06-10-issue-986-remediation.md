@@ -15,6 +15,9 @@ boundary changes remain design-gated.
 - `REPOSITORY_RULES.md`
 - `ai/contribution-workflows/repository-remediation.md`
 - GitHub issue #986 body and historical comments
+- GitHub issue #986 verification comment
+  `2026-06-10T00:03:13Z`, which re-checked queue items against
+  `origin/main` `043259ab5cc46dfc665159c02a480bdfb2fac8a9`
 - Current source and docs referenced by the classification table below
 
 ## Subagents
@@ -39,6 +42,13 @@ Worker subagents also implemented disjoint runtime/performance fixes:
 
 The coordinating agent reviewed and integrated the results.
 
+Later worker subagents implemented disjoint AD fixes:
+
+- C2C FFT transpose convention and regression tests
+- structural `Reshape`/`BroadcastInDim` transpose arity and singleton broadcast
+  VJP tests
+- diagonal extraction/embedding VJP edge cases and eager finite-difference tests
+
 ## Classification Ledger
 
 Status values:
@@ -54,7 +64,7 @@ Status values:
 | #2 public `tenferro_gpu::cubecl`/doc-hidden modules | Design Gate | design-gated |
 | #3 stale `tenferro_ops::ExtensionFamilyId` docs | Auto Fix | fixed |
 | #4 coverage policy vs thresholds | Design Gate | design-gated |
-| #6 FFT C2C transpose/oracle coverage | Auto Fix | remaining-auto |
+| #6 FFT C2C transpose/oracle coverage | Auto Fix | fixed; existing C2C rule used the wrong adjoint convention |
 | #10 `TensorDeviceTransfer` clone defaults | Design Gate | design-gated |
 | #12 compile-cache string fingerprint | Auto Fix | fixed |
 | #13 segment later-instruction scans | Auto Fix | fixed |
@@ -67,13 +77,13 @@ Status values:
 | #37 traced graph builder clones | Verify First | verify-first |
 | #40 FFT output zero-initialization | Auto Fix | fixed |
 | #42/#43 complex `Abs`/`Sign` AD | Verify First | verify-first; split `Abs` from `Sign` policy |
-| #44/#52/#101 shape-source arity AD | Auto Fix | remaining-auto |
+| #44/#52/#101 shape-source arity AD | Auto Fix | fixed; narrowed to current `transpose_reshape` arity gap plus verification of existing broadcast arity behavior |
 | #49 public fusion IR backend API | Design Gate | design-gated |
 | #56/#73 executor workspace allocation/clones | Verify First | verify-first |
-| #65 explicit singleton `BroadcastInDim` VJP | Auto Fix | remaining-auto |
-| #78/#79 diagonal VJP edge cases | Auto Fix | remaining-auto |
+| #65 explicit singleton `BroadcastInDim` VJP | Auto Fix | fixed |
+| #78/#79 diagonal VJP edge cases | Auto Fix | fixed |
 | #80 repeated-label einsum VJP | Auto Fix | remaining-auto |
-| #87 FFT under CUDA-backed execution | Verify First | verify-first; current behavior rejects GPU input |
+| #87 FFT under CUDA-backed execution | Verify First | stale/docs-only; current behavior rejects device/backend-buffer input with a clear host-only diagnostic |
 | #106 integer/bool/lossy `Convert` AD policy | Design Gate | design-gated |
 | #109 lazy value/view API rustdoc examples | Auto Fix | fixed |
 | #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | remaining-auto |
@@ -176,6 +186,32 @@ Implemented:
 - Added a non-hardware source-contract test that checks validation happens
   before the zero-output shortcut.
 
+## Eighth Batch: FFT C2C Transpose Convention
+
+Implemented:
+
+- Reclassified the historical FFT C2C item from "missing transpose rule" to
+  "existing transpose rule uses the wrong adjoint convention."
+- Changed C2C FFT transpose to emit the opposite transform direction with the
+  adjoint normalization (`Backward` <-> `Forward`, `Ortho` unchanged).
+- Added C64 VJP regressions for both `fft(..., FftNorm::Backward)` and
+  `ifft(..., FftNorm::Backward)`.
+
+## Ninth Batch: Structural And Diagonal AD Edges
+
+Implemented:
+
+- Updated `Reshape` transpose to return one cotangent slot per primal input,
+  including `None` for dynamic shape-source inputs.
+- Kept existing shape-source handling for `BroadcastInDim` and added explicit
+  singleton-axis VJP reduction followed by a reshape back to the input shape.
+- Fixed rectangular `ExtractDiag` VJP by padding the embedded cotangent back to
+  both diagonal axes of the primal input shape.
+- Fixed shifted-axis `EmbedDiag` VJP by extracting the shifted source diagonal
+  and transposing the result back when insertion occurs before the source axis.
+- Added focused structural helper tests and eager finite-difference diagonal
+  regressions.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -199,6 +235,12 @@ Implemented:
 - `cargo test -p tenferro-gpu --test cubecl_launch_contract cubecl_zero_length_launches_validate_buffers_before_returning`
 - `cargo test -p tenferro-gpu`
 - `cargo test -p tenferro-gpu --features cuda --no-run`
+- `cargo fmt --all --check`
+- `cargo test -p tenferro-internal-ops --features autodiff structural_tests -- --nocapture`
+- `cargo test -p tenferro-ad --test ad_structural_primitives diag`
+- `cargo test -p tenferro-ad --test ad diag`
+- `cargo test -p tenferro-fft --features autodiff --test fft_ops`
+- `git diff --check -- crates/tenferro-internal-ops/src/ad/structural.rs crates/tenferro-internal-ops/src/ad/registry.rs crates/tenferro-internal-ops/src/ad/diagonal.rs crates/tenferro-internal-ops/src/ad/tests/mod.rs crates/tenferro-internal-ops/src/ad/tests/structural_tests.rs crates/tenferro-ad/tests/ad_structural_primitives.rs crates/tenferro-fft/src/lib.rs crates/tenferro-fft/tests/fft_ops.rs`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.

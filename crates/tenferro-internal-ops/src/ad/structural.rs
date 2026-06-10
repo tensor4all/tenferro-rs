@@ -340,7 +340,8 @@ pub fn transpose_reshape(
         unreachable!("transpose_reshape expects Reshape");
     };
 
-    match cotangent_out[0] {
+    let mut result = Vec::with_capacity(inputs.len());
+    let primary = match cotangent_out[0] {
         Some(ct) => {
             let input_rank = ctx.shape_of(&inputs[0]).len();
             let remapped_to_shape = DimExpr::input_shape(1, input_rank);
@@ -360,10 +361,15 @@ pub fn transpose_reshape(
                 op_inputs,
                 OperationRole::Linearized { active_mask },
             );
-            vec![Some(out[0])]
+            Some(out[0])
         }
-        None => vec![None],
+        None => None,
+    };
+    result.push(primary);
+    for _ in 1..inputs.len() {
+        result.push(None);
     }
+    result
 }
 
 pub fn transpose_broadcast_in_dim(
@@ -371,39 +377,98 @@ pub fn transpose_broadcast_in_dim(
     cotangent_out: &[Option<LocalValueId>],
     shape: &[DimExpr],
     dims: &[usize],
+    inputs: &[ValueRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
-    let output_rank = shape.len();
-    let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
-
-    // When `shape` references input_idx > 0 the primal op carries
-    // auxiliary shape-reference inputs. Those inputs contribute no
-    // cotangent, but the transpose-rule contract requires one entry per
-    // input. Pad with `None` for each shape-ref slot.
-    let extra_inputs = DimExpr::max_input_idx_all(shape).unwrap_or(0);
+    let (reduce_axes, needs_input_shape_restore) =
+        broadcast_transpose_reduce_axes(shape, dims, inputs, ctx);
 
     let primary = match cotangent_out[0] {
-        Some(ct) if broadcast_axes.is_empty() => Some(ct),
+        Some(ct) if reduce_axes.is_empty() => Some(ct),
         Some(ct) => {
-            let out = builder.add_operation(
-                StdTensorOp::ReduceSum {
-                    axes: broadcast_axes,
-                },
+            let reduced = builder.add_operation(
+                StdTensorOp::ReduceSum { axes: reduce_axes },
                 vec![ValueRef::Local(ct)],
                 OperationRole::Linearized {
                     active_mask: vec![true],
                 },
-            );
-            Some(out[0])
+            )[0];
+            if needs_input_shape_restore {
+                let input_rank = ctx.shape_of(&inputs[0]).len();
+                let reshaped = builder.add_operation(
+                    StdTensorOp::Reshape {
+                        to_shape: DimExpr::input_shape(1, input_rank),
+                    },
+                    vec![ValueRef::Local(reduced), inputs[0].clone()],
+                    OperationRole::Linearized {
+                        active_mask: vec![true, false],
+                    },
+                );
+                Some(reshaped[0])
+            } else {
+                Some(reduced)
+            }
         }
         None => None,
     };
 
-    let mut result = Vec::with_capacity(1 + extra_inputs);
+    let mut result = Vec::with_capacity(inputs.len());
     result.push(primary);
-    for _ in 0..extra_inputs {
+    for _ in 1..inputs.len() {
         result.push(None);
     }
     result
+}
+
+fn broadcast_transpose_reduce_axes(
+    shape: &[DimExpr],
+    dims: &[usize],
+    inputs: &[ValueRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
+) -> (Vec<usize>, bool) {
+    let mut reduce_axes: Vec<usize> = (0..shape.len()).filter(|dim| !dims.contains(dim)).collect();
+    let Some(input_shapes) = collect_known_input_shapes(inputs, ctx) else {
+        return (reduce_axes, false);
+    };
+    if input_shapes.is_empty()
+        || DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx >= input_shapes.len())
+    {
+        return (reduce_axes, false);
+    }
+
+    let input_shape = &input_shapes[0];
+    let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
+    let output_shape: Vec<_> = shape
+        .iter()
+        .map(|dim| SymDim::from_dim_expr(dim, &input_shape_refs))
+        .collect();
+
+    let one = SymDim::from(1usize);
+    let mut needs_input_shape_restore = false;
+    for (input_axis, &output_axis) in dims.iter().enumerate() {
+        if input_axis >= input_shape.len() || output_axis >= output_shape.len() {
+            continue;
+        }
+        if input_shape[input_axis] == one && output_shape[output_axis] != one {
+            reduce_axes.push(output_axis);
+            needs_input_shape_restore = true;
+        }
+    }
+
+    reduce_axes.sort_unstable();
+    reduce_axes.dedup();
+    (reduce_axes, needs_input_shape_restore)
+}
+
+fn collect_known_input_shapes(
+    inputs: &[ValueRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
+) -> Option<Vec<Vec<SymDim>>> {
+    let mut shapes = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        shapes.push(ctx.try_shape_of(input)?.to_vec());
+    }
+    Some(shapes)
 }
 
 pub fn transpose_convert(

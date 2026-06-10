@@ -931,9 +931,9 @@ fn transpose_broadcast_in_dim(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[ValueRef<StdTensorOp>],
     _mode: &OperationRole,
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::BroadcastInDim { shape, dims } = op else {
         unreachable!("catalog kind mismatch")
@@ -943,6 +943,8 @@ fn transpose_broadcast_in_dim(
         cotangent_out,
         shape,
         dims,
+        inputs,
+        ctx,
     ))
 }
 
@@ -1002,14 +1004,21 @@ macro_rules! diagonal_rule {
             op: &StdTensorOp,
             builder: &mut dyn PrimitiveRuleBuilder,
             cotangent_out: &[Option<LocalValueId>],
-            _inputs: &[ValueRef<StdTensorOp>],
+            inputs: &[ValueRef<StdTensorOp>],
             _mode: &OperationRole,
-            _ctx: &mut ShapeGuardContext,
+            ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let StdTensorOp::$variant { axis_a, axis_b } = op else {
                 unreachable!("catalog kind mismatch")
             };
-            Ok($trans_call(builder, cotangent_out, *axis_a, *axis_b))
+            Ok($trans_call(
+                builder,
+                cotangent_out,
+                inputs,
+                *axis_a,
+                *axis_b,
+                ctx,
+            ))
         }
     };
 }

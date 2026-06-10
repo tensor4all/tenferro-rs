@@ -17,6 +17,8 @@ mod elementwise_tests;
 mod indexing_tests;
 #[cfg(feature = "autodiff")]
 mod registry_tests;
+#[cfg(feature = "autodiff")]
+mod structural_tests;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
