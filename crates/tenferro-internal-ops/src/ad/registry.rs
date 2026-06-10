@@ -343,23 +343,23 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
 fn linearize_add(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
-    _primal_in: &[ValueKey<StdTensorOp>],
+    primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::linearize_add(builder, tangent_in))
+    Ok(semiring::linearize_add(builder, primal_in, tangent_in, ctx))
 }
 
 fn transpose_add(
     _op: &StdTensorOp,
-    _builder: &mut dyn PrimitiveRuleBuilder,
+    builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[ValueRef<StdTensorOp>],
     _mode: &OperationRole,
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_add(cotangent_out))
+    Ok(semiring::transpose_add(builder, cotangent_out, inputs, ctx))
 }
 
 fn linearize_mul(
@@ -368,9 +368,9 @@ fn linearize_mul(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::linearize_mul(builder, primal_in, tangent_in))
+    Ok(semiring::linearize_mul(builder, primal_in, tangent_in, ctx))
 }
 
 fn transpose_mul(
@@ -447,10 +447,10 @@ fn linearize_div(
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_div(
-        builder, primal_in, primal_out, tangent_in,
+        builder, primal_in, primal_out, tangent_in, ctx,
     ))
 }
 
@@ -645,10 +645,10 @@ fn linearize_pow(
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(analytic::linearize_pow(
-        builder, primal_in, primal_out, tangent_in,
+        builder, primal_in, primal_out, tangent_in, ctx,
     ))
 }
 analytic_linearize!(linearize_expm1, analytic::linearize_expm1, primal_out);

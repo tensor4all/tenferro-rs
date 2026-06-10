@@ -1,5 +1,8 @@
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::support::{conjugate_primal_if_any_dtype_complex, dtype_of_or_real};
+use crate::ad::support::{
+    conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
+    dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
+};
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::CompareDir;
@@ -183,16 +186,24 @@ pub fn linearize_div(
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
+    let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
+    let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
+    let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
+        let dx = convert_linear_to_dtype(builder, dx, lhs_dtype, output_dtype);
+        let rhs = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[1].clone()),
+            rhs_dtype,
+            output_dtype,
+        );
         let out = builder.add_operation(
             StdTensorOp::Div,
-            vec![
-                ValueRef::Local(dx),
-                ValueRef::External(primal_in[1].clone()),
-            ],
+            vec![ValueRef::Local(dx), rhs],
             OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
@@ -201,12 +212,32 @@ pub fn linearize_div(
     }
 
     if let Some(dy) = tangent_in[1] {
-        let quotient_over_rhs = emit_fixed_div(
+        let quotient = if lhs_dtype == output_dtype && rhs_dtype == output_dtype {
+            ValueRef::External(primal_out[0].clone())
+        } else {
+            let lhs = convert_fixed_ref_to_dtype(
+                builder,
+                ValueRef::External(primal_in[0].clone()),
+                lhs_dtype,
+                output_dtype,
+            );
+            let rhs = convert_fixed_ref_to_dtype(
+                builder,
+                ValueRef::External(primal_in[1].clone()),
+                rhs_dtype,
+                output_dtype,
+            );
+            ValueRef::Local(emit_fixed_div(builder, lhs, rhs))
+        };
+        let rhs = convert_fixed_ref_to_dtype(
             builder,
-            ValueRef::External(primal_out[0].clone()),
             ValueRef::External(primal_in[1].clone()),
+            rhs_dtype,
+            output_dtype,
         );
+        let quotient_over_rhs = emit_fixed_div(builder, quotient, rhs);
         let neg_coeff = emit_fixed_neg(builder, ValueRef::Local(quotient_over_rhs));
+        let dy = convert_linear_to_dtype(builder, dy, rhs_dtype, output_dtype);
         terms.push(emit_linear_mul_fixed(
             builder,
             ValueRef::Local(neg_coeff),
@@ -382,10 +413,14 @@ pub fn transpose_div(
         OperationRole::Primary => return vec![None, None],
     };
 
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut result = vec![None, None];
 
     if active_mask[0] {
         let denominator = conjugate_for_input_dtypes(builder, inputs[1].clone(), inputs, &[1], ctx);
+        let denominator = convert_fixed_ref_to_dtype(builder, denominator, rhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Div,
             vec![ValueRef::Local(ct), denominator],
@@ -393,16 +428,31 @@ pub fn transpose_div(
                 active_mask: vec![true, false],
             },
         );
-        result[0] = Some(out[0]);
+        result[0] = Some(project_linear_to_dtype(
+            builder,
+            out[0],
+            output_dtype,
+            lhs_dtype,
+        ));
     }
 
     if active_mask[1] {
-        let quotient = emit_fixed_div(builder, inputs[0].clone(), inputs[1].clone());
+        let numerator =
+            convert_fixed_ref_to_dtype(builder, inputs[0].clone(), lhs_dtype, output_dtype);
+        let denominator =
+            convert_fixed_ref_to_dtype(builder, inputs[1].clone(), rhs_dtype, output_dtype);
+        let quotient = emit_fixed_div(builder, numerator, denominator.clone());
         let neg_quotient = emit_fixed_neg(builder, ValueRef::Local(quotient));
-        let coeff = emit_fixed_div(builder, ValueRef::Local(neg_quotient), inputs[1].clone());
+        let coeff = emit_fixed_div(builder, ValueRef::Local(neg_quotient), denominator);
         let coeff =
             conjugate_for_input_dtypes(builder, ValueRef::Local(coeff), inputs, &[0, 1], ctx);
-        result[1] = Some(emit_linear_mul_fixed(builder, coeff, ct));
+        let cotangent = emit_linear_mul_fixed(builder, coeff, ct);
+        result[1] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            rhs_dtype,
+        ));
     }
 
     result

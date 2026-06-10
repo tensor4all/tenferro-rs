@@ -93,7 +93,7 @@ Status values:
 | #114 `Pow` zero-base singularity | Auto Fix | fixed |
 | #115 terminal lazy view base clone | Auto Fix | fixed |
 | #116 scalar helper public contract | Design Gate | design-gated |
-| #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto; failing regressions drafted but implementation incomplete |
+| #116 mixed real/complex binary VJPs | Auto Fix | fixed for binary arithmetic `Add`/`Mul`/`Div`/`Pow`; verified with direct mixed primitive JVP/VJP regressions for both real-input positions |
 | #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
 | #117 eager helper host tensors in CUDA contexts | Auto Fix | fixed |
 | #118 active crate/backend ownership docs | Auto Fix | fixed |
@@ -238,14 +238,24 @@ Implemented:
   solve instead of collapsing to `(false, false)`.
 - Fixed repeated-label einsum VJP projection so labels repeated three or more
   times project each extra occurrence back to the first axis for that label.
+- Fixed mixed real/complex binary arithmetic AD so direct primitive
+  `Add`/`Mul`/`Div`/`Pow` graphs convert linearized tangents and fixed
+  coefficients to the promoted output dtype, project complex cotangents back to
+  real tangent spaces, and avoid evaluating raw mixed primal `Div`/`Pow`
+  outputs when building coefficients.
 
 Residual:
 
 - The repeated-label einsum regression is helper-level because an attempted
   public end-to-end VJP regression exposed a separate symbolic shape issue.
-- Mixed real/complex binary VJP regressions were drafted and currently fail;
-  the implementation still needs real-input cotangent projection and `Pow`
-  mixed-dtype coefficient handling.
+- Mixed real/complex AD risks remain outside the binary arithmetic slice:
+  `Maximum`/`Minimum`/`Select`/`Clamp` need boundary-convention decisions
+  tracked under #125 before changing tie/boundary semantics, and direct
+  mixed-dtype `DotGeneral` needs a separate focused VJP projection pass.
+- The AD-local dtype-promotion helper intentionally mirrors the runtime helper
+  for this patch because `tenferro-internal-ops` cannot depend on
+  `tenferro-runtime`; a lower-crate shared promotion helper remains a cleanup
+  follow-up if duplication becomes broader.
 
 ## Verification
 
@@ -288,6 +298,14 @@ Residual:
 - `cargo test -p tenferro-linalg --features autodiff adjoint_lu_solve_flags_preserve_mixed_complex_adjoint_cases`
 - `cargo test -p tenferro-einsum --features autodiff repeated_label_projection_projects_each_extra_occurrence`
 - `git diff --check -- crates/tenferro-linalg/src/ad/rules/solve.rs crates/tenferro-linalg/src/ad/rules/solve/tests.rs crates/tenferro-einsum/src/extension.rs crates/tenferro-einsum/src/extension/tests.rs crates/tenferro-ad/tests/ad.rs`
+- `cargo test -p tenferro-ad mixed_ --test ad`
+- `cargo test -p tenferro-ad complex_div_and_pow_vjps_conjugate_holomorphic_coefficients --test ad`
+- `cargo test -p tenferro-ad convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules --test ad`
+- `cargo test -p tenferro-ad grad --test ad`
+- `cargo test -p tenferro-ad --test ad`
+- `cargo test -p tenferro-internal-ops --features autodiff`
+- `cargo fmt --all --check`
+- `git diff --check`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
@@ -304,7 +322,7 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   CPU behavior tests, not CUDA hardware execution. Traced AD scalar seeds still
   use default input tensors and should be fixed with the graph-executor input
   placement boundary.
-- Mixed real/complex binary VJP remains unresolved. The current uncommitted
-  regression tests fail for `Add`, `Mul`, `Div`, and `Pow`; `Pow` also exposes
-  a mixed-dtype coefficient construction error before cotangent projection can
-  be validated.
+- Mixed real/complex binary arithmetic AD is fixed for `Add`/`Mul`/`Div`/`Pow`.
+  Similar risks remain in boundary-sensitive elementwise ops and `DotGeneral`,
+  but they are tracked separately because they require either #125 semantics or
+  a different contraction-specific pass.

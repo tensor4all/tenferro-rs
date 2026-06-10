@@ -217,6 +217,12 @@ committed as their own coherent review unit or clearly separated in the PR.
   mixed real/complex, and dtype-conversion behavior.
 - Project complex cotangents back to real tangent space for real inputs when
   required by the mathematical adjoint.
+- For mixed real/complex AD fixes, check both JVP and VJP paths and both active
+  input positions when the primitive is symmetric or accepts either side as
+  real. Linearized graphs must not leave backend-executed mixed primitive
+  inputs behind; insert linear/fixed `Convert` operations to the promoted
+  output dtype, and avoid reusing a raw mixed primal output when doing so would
+  force execution of an invalid mixed primitive.
 - Do not synthesize hidden host tensors for AD seeds, missing tangents, or
   constants on device paths.
 - If the correct AD convention is not established, use the design gate.
