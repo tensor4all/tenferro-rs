@@ -2,11 +2,15 @@
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn c64_tensor(shape: Vec<usize>, data: Vec<num_complex::Complex64>) -> Tensor {
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
@@ -152,7 +156,7 @@ fn svd_values_grad_matches_finite_diff() {
 
     let actual = get_f64_data(&out);
     assert_eq!(actual.len(), data.len());
-    for idx in 0..data.len() {
+    for (idx, actual_value) in actual.iter().enumerate().take(data.len()) {
         let expected = finite_diff_scalar(
             |xs| {
                 let input =
@@ -164,11 +168,11 @@ fn svd_values_grad_matches_finite_diff() {
             idx,
             1.0e-6,
         );
-        let diff = (actual[idx] - expected).abs();
+        let diff = (*actual_value - expected).abs();
         assert!(
             diff <= 1.0e-4,
             "idx {idx}: expected {expected}, got {}, diff {diff}",
-            actual[idx]
+            actual_value
         );
     }
 }
@@ -546,6 +550,29 @@ fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
         assert_eq!(result.shape(), &[2, 1]);
         assert_eq!(get_f64_data(result), &[0.5, 0.25]);
     }
+}
+
+#[test]
+fn complex_eigh_values_grad_executes_with_complex_input_dtype() {
+    let ad = ad_context();
+    let h = TracedTensor::from_tensor_concrete_shape(c64_tensor(
+        vec![2, 2],
+        vec![
+            num_complex::Complex64::new(3.0, 0.0),
+            num_complex::Complex64::new(0.2, -0.4),
+            num_complex::Complex64::new(0.2, 0.4),
+            num_complex::Complex64::new(2.0, 0.0),
+        ],
+    ));
+    let (values, _vectors) = tenferro_linalg::eigh(&h).unwrap();
+    let loss = values.reduce_sum(&[0]);
+
+    let grad = ad.grad(&loss, &h).unwrap();
+    let out = eval(&grad);
+
+    assert_eq!(out.dtype(), DType::C64);
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_finite_tensor(&out);
 }
 
 #[test]

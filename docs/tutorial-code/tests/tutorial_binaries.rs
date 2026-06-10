@@ -27,4 +27,8 @@ fn tutorial_binaries_run_successfully() {
         "traced_autodiff_jax_style",
         env!("CARGO_BIN_EXE_traced_autodiff_jax_style"),
     );
+    run_tutorial(
+        "complex_ad_convention",
+        env!("CARGO_BIN_EXE_complex_ad_convention"),
+    );
 }

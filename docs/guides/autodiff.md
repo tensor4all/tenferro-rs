@@ -14,6 +14,10 @@ explicitly. For eager forward execution and scalar loss accumulation semantics, 
 - `jvp` for Jacobian-vector products
 - Higher-order AD via composition, such as `jvp(grad(f))` for HVPs
 
+For complex tensors, reverse-mode cotangents use tenferro's Hermitian
+real-inner-product convention. See [Complex Autodiff](complex-ad.md) before
+comparing `grad` or `vjp` values directly against JAX.
+
 Use `tenferro_ad::AdContext` to own the AD rule set used by a transform. Core
 tensor primitive rules are always available. Extension crates can provide owned
 JVP/VJP rule sets for their operations; `tenferro-linalg` exposes these through

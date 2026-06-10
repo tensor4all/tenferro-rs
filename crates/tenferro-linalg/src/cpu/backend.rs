@@ -463,9 +463,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::faer::svd(ctx.as_ref(), buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::faer::svd(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                            .and_then(svd_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::faer::svd(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                            .and_then(svd_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("svd", input.dtype())),
                     })
                 }
@@ -483,9 +483,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::blas::svd(buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::blas::svd(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                            .and_then(svd_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::blas::svd(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                            .and_then(svd_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("svd", input.dtype())),
                     })
                 }
@@ -987,6 +987,50 @@ fn complex64_real_part_tensor(values: TypedTensor<Complex64>) -> TypedTensor<f64
     );
     out.set_placement(values.placement().clone());
     out
+}
+
+fn svd_output_count_error(count: usize) -> Error {
+    Error::backend_failure("svd", format!("expected 3 outputs, got {count}"))
+}
+
+fn svd_c32_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex32>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(u), Some(values), Some(vt), None) => Ok(vec![
+            Tensor::C32(u),
+            Tensor::F32(complex32_real_part_tensor(values)),
+            Tensor::C32(vt),
+        ]),
+        _ => Err(svd_output_count_error(count)),
+    }
+}
+
+fn svd_c64_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex64>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(u), Some(values), Some(vt), None) => Ok(vec![
+            Tensor::C64(u),
+            Tensor::F64(complex64_real_part_tensor(values)),
+            Tensor::C64(vt),
+        ]),
+        _ => Err(svd_output_count_error(count)),
+    }
 }
 
 fn eigh_c32_outputs_to_public_tensors(outputs: Vec<TypedTensor<Complex32>>) -> Vec<Tensor> {

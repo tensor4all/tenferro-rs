@@ -55,6 +55,11 @@ impl AdContext {
 
     /// Gradient of a scalar traced output with respect to a traced input.
     ///
+    /// For complex scalar outputs, tenferro returns the Hermitian-adjoint
+    /// cotangent. To compare seed-`1` scalar gradients with JAX's public
+    /// `grad` values, use the complex conjugate of this result. See
+    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -140,6 +145,11 @@ impl AdContext {
     }
 
     /// Reverse-mode vector-Jacobian product.
+    ///
+    /// Complex cotangents use tenferro's Hermitian real-inner-product
+    /// convention. Non-real complex cotangent seeds therefore need an explicit
+    /// seed-convention comparison when matching JAX. See
+    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
     ///
     /// # Examples
     ///
