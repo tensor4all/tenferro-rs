@@ -1,4 +1,4 @@
-use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
+use tenferro_tensor::{GatherConfig, Tensor, TensorDeviceTransfer, TypedTensor};
 
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
@@ -222,6 +222,10 @@ impl EagerTensor {
     /// ```
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
+        let indices = {
+            let mut backend = self.ctx.backend.lock().unwrap();
+            backend.upload_host_tensor(&indices)?
+        };
         let indices = self.ctx.constant_from(indices);
         self.gather(&indices, config)
     }

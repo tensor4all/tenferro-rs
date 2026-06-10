@@ -95,7 +95,7 @@ Status values:
 | #116 scalar helper public contract | Design Gate | design-gated |
 | #116 mixed real/complex binary VJPs | Auto Fix | remaining-auto |
 | #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
-| #117 eager helper host tensors in CUDA contexts | Auto Fix | remaining-auto |
+| #117 eager helper host tensors in CUDA contexts | Auto Fix | fixed |
 | #118 active crate/backend ownership docs | Auto Fix | fixed |
 | #119 primitive catalog `Constant` docs | Auto Fix | fixed |
 | #120 active in-place indexing ChainRules framing | Auto Fix | fixed |
@@ -104,7 +104,7 @@ Status values:
 | #123 eager extension materializes lazy/view tensors | Design Gate | design-gated |
 | #124 oracle docs active CI/replay claims | Auto Fix | fixed |
 | #125 max/min/clamp boundary AD convention | Design Gate | design-gated |
-| #126 device AD seeds and missing tangents | Auto Fix | remaining-auto |
+| #126 device AD seeds and missing tangents | Auto Fix | partial; eager seed and missing-tangent zeroes fixed, traced default-input seed placement remains a residual runtime-input path |
 
 ## First Batch: Docs And Rustdoc
 
@@ -212,6 +212,23 @@ Implemented:
 - Added focused structural helper tests and eager finite-difference diagonal
   regressions.
 
+## Tenth Batch: Eager Device-Placement Helpers
+
+Implemented:
+
+- Changed eager `index_select` to upload hidden generated index tensors through
+  the eager backend before importing them as constants and dispatching gather.
+- Changed eager `Constant` and `ShapeOf` execution helpers to upload generated
+  host tensors through the active backend before returning them to eager
+  execution.
+- Changed eager AD scalar seeds and missing-tangent zeroes to allocate the host
+  zero tensor and then upload it through the active backend before use.
+- Added non-hardware source-contract tests covering hidden eager indices,
+  eager generated constants/shape scalars, and eager AD zero seed upload.
+- Left traced `grad()` scalar seed placement as a residual path: traced AD
+  currently builds the seed as a default input tensor, and `GraphExecutor`
+  resolves default inputs by cloning them directly into execution slots.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -241,6 +258,15 @@ Implemented:
 - `cargo test -p tenferro-ad --test ad diag`
 - `cargo test -p tenferro-fft --features autodiff --test fft_ops`
 - `git diff --check -- crates/tenferro-internal-ops/src/ad/structural.rs crates/tenferro-internal-ops/src/ad/registry.rs crates/tenferro-internal-ops/src/ad/diagonal.rs crates/tenferro-internal-ops/src/ad/tests/mod.rs crates/tenferro-internal-ops/src/ad/tests/structural_tests.rs crates/tenferro-ad/tests/ad_structural_primitives.rs crates/tenferro-fft/src/lib.rs crates/tenferro-fft/tests/fft_ops.rs`
+- `cargo test -p tenferro-ad --test eager_device_placement_contract`
+- `cargo test -p tenferro-ad zero_like_tensor_covers_non_f64_dtypes`
+- `cargo test -p tenferro-ad constant_from_creates_untracked_leaf`
+- `cargo test -p tenferro-ad eager_forward_helpers_synthesize_tangent_values_from_primal_data`
+- `cargo test -p tenferro-ad --test eager_tensor index_select`
+- `cargo test -p tenferro-ad grad --test ad`
+- `cargo test -p tenferro-ad eager_exec::tests`
+- `cargo test -p tenferro-ad --features cuda --no-run`
+- `git diff --check -- crates/tenferro-ad/src/eager.rs crates/tenferro-ad/src/eager_builder.rs crates/tenferro-ad/src/eager_exec.rs crates/tenferro-ad/src/shape_packing.rs crates/tenferro-ad/tests/eager_device_placement_contract.rs`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
@@ -253,3 +279,7 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   being implemented silently in this remediation branch.
 - CUDA zero-output validation was verified with source-contract tests and
   CUDA-feature compile-only checks, not with CUDA hardware execution.
+- The eager device-placement fix was verified with source-contract tests and
+  CPU behavior tests, not CUDA hardware execution. Traced AD scalar seeds still
+  use default input tensors and should be fixed with the graph-executor input
+  placement boundary.

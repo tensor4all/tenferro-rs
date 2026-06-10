@@ -1108,8 +1108,8 @@ pub(crate) fn exec_single_output_read(
     ))
 }
 
-pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut B) -> Tensor {
-    match input {
+pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+    let host = match input {
         Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
@@ -1120,7 +1120,10 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut 
         )),
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
-    }
+    };
+    backend
+        .upload_host_tensor(&host)
+        .unwrap_or_else(|err| panic!("zero_like upload failed: {}", err))
 }
 
 pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
