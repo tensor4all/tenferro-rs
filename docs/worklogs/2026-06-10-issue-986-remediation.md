@@ -243,6 +243,10 @@ Implemented:
   coefficients to the promoted output dtype, project complex cotangents back to
   real tangent spaces, and avoid evaluating raw mixed primal `Div`/`Pow`
   outputs when building coefficients.
+- Fixed direct mixed real/complex `DotGeneral` AD so JVP tangents and fixed
+  contraction operands are promoted before backend execution and VJP cotangents
+  are projected back to real inputs after any transpose needed to restore input
+  layout.
 
 Residual:
 
@@ -250,8 +254,7 @@ Residual:
   public end-to-end VJP regression exposed a separate symbolic shape issue.
 - Mixed real/complex AD risks remain outside the binary arithmetic slice:
   `Maximum`/`Minimum`/`Select`/`Clamp` need boundary-convention decisions
-  tracked under #125 before changing tie/boundary semantics, and direct
-  mixed-dtype `DotGeneral` needs a separate focused VJP projection pass.
+  tracked under #125 before changing tie/boundary semantics.
 - The AD-local dtype-promotion helper intentionally mirrors the runtime helper
   for this patch because `tenferro-internal-ops` cannot depend on
   `tenferro-runtime`; a lower-crate shared promotion helper remains a cleanup
@@ -323,6 +326,6 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   use default input tensors and should be fixed with the graph-executor input
   placement boundary.
 - Mixed real/complex binary arithmetic AD is fixed for `Add`/`Mul`/`Div`/`Pow`.
-  Similar risks remain in boundary-sensitive elementwise ops and `DotGeneral`,
-  but they are tracked separately because they require either #125 semantics or
-  a different contraction-specific pass.
+  The same direct mixed-dtype projection issue is also fixed for `DotGeneral`.
+  Similar risks remain in boundary-sensitive elementwise ops, but they require
+  #125 semantics before implementation.

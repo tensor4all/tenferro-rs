@@ -512,6 +512,112 @@ fn mixed_binary_jvp_lhs(
     jvp_from_graph_with_inputs(graph, output_key, lhs_key, inputs_map, tangent)
 }
 
+fn mixed_binary_jvp_rhs(
+    op: StdTensorOp,
+    key_base: u64,
+    lhs: Tensor,
+    rhs: Tensor,
+    tangent: Tensor,
+) -> Tensor {
+    let (graph, lhs_key, rhs_key, output_key) = build_binary_graph(
+        op,
+        tensor_input_key(key_base),
+        tensor_input_key(key_base + 1),
+    );
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(lhs_key, lhs);
+    inputs_map.insert(rhs_key.clone(), rhs);
+    jvp_from_graph_with_inputs(graph, output_key, rhs_key, inputs_map, tangent)
+}
+
+fn col_major_2d(row: usize, col: usize, rows: usize) -> usize {
+    row + col * rows
+}
+
+fn expected_matmul_real_complex_tangent(
+    lhs_tangent: &[f64],
+    rhs: &[Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); m * n];
+    for row in 0..m {
+        for col in 0..n {
+            let mut acc = Complex64::new(0.0, 0.0);
+            for inner in 0..k {
+                acc += Complex64::new(lhs_tangent[col_major_2d(row, inner, m)], 0.0)
+                    * rhs[col_major_2d(inner, col, k)];
+            }
+            out[col_major_2d(row, col, m)] = acc;
+        }
+    }
+    out
+}
+
+fn expected_matmul_complex_real_tangent(
+    lhs: &[Complex64],
+    rhs_tangent: &[f64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); m * n];
+    for row in 0..m {
+        for col in 0..n {
+            let mut acc = Complex64::new(0.0, 0.0);
+            for inner in 0..k {
+                acc += lhs[col_major_2d(row, inner, m)]
+                    * Complex64::new(rhs_tangent[col_major_2d(inner, col, k)], 0.0);
+            }
+            out[col_major_2d(row, col, m)] = acc;
+        }
+    }
+    out
+}
+
+fn expected_dot_vjp_lhs_real(
+    rhs: &[Complex64],
+    cotangent: &[Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<f64> {
+    let mut out = vec![0.0; m * k];
+    for row in 0..m {
+        for inner in 0..k {
+            let mut acc = Complex64::new(0.0, 0.0);
+            for col in 0..n {
+                acc +=
+                    cotangent[col_major_2d(row, col, m)] * rhs[col_major_2d(inner, col, k)].conj();
+            }
+            out[col_major_2d(row, inner, m)] = acc.re;
+        }
+    }
+    out
+}
+
+fn expected_dot_vjp_rhs_real(
+    lhs: &[Complex64],
+    cotangent: &[Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<f64> {
+    let mut out = vec![0.0; k * n];
+    for inner in 0..k {
+        for col in 0..n {
+            let mut acc = Complex64::new(0.0, 0.0);
+            for row in 0..m {
+                acc +=
+                    lhs[col_major_2d(row, inner, m)].conj() * cotangent[col_major_2d(row, col, m)];
+            }
+            out[col_major_2d(inner, col, k)] = acc.re;
+        }
+    }
+    out
+}
+
 fn eval_f64_reduction_op(op: &StdTensorOp, input_shape: &[usize], data: &[f64]) -> Vec<f64> {
     let mut backend = CpuBackend::new();
     let output = match op {
@@ -1374,6 +1480,124 @@ fn mixed_real_complex_pow_jvp_promotes_lhs_tangent() {
             coeff * Complex64::new(dx, 0.0)
         })
         .collect();
+    assert_close_slice_c64(get_c64_data(&tangent), &expected);
+}
+
+#[test]
+fn mixed_real_complex_dot_general_vjp_projects_lhs_to_real_tangent_space() {
+    let lhs_data = vec![1.0, -2.0, 0.5, 1.25, -0.75, 2.5];
+    let rhs_data = vec![
+        Complex64::new(0.5, 1.0),
+        Complex64::new(-1.0, 0.25),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(1.5, -1.25),
+        Complex64::new(-0.25, 0.75),
+        Complex64::new(0.8, 0.4),
+    ];
+    let cotangent_data = vec![
+        Complex64::new(0.25, -0.5),
+        Complex64::new(1.5, 0.75),
+        Complex64::new(-0.75, 1.25),
+        Complex64::new(0.6, -1.0),
+    ];
+
+    let grad = mixed_binary_vjp_lhs(
+        StdTensorOp::DotGeneral {
+            config: matmul_config(),
+        },
+        92_120,
+        f64_tensor(vec![2, 3], lhs_data),
+        c64_tensor(vec![3, 2], rhs_data.clone()),
+        c64_tensor(vec![2, 2], cotangent_data.clone()),
+    );
+
+    let expected = expected_dot_vjp_lhs_real(&rhs_data, &cotangent_data, 2, 3, 2);
+    assert_close_slice(get_f64_data(&grad), &expected);
+}
+
+#[test]
+fn mixed_complex_real_dot_general_vjp_projects_rhs_to_real_tangent_space() {
+    let lhs_data = vec![
+        Complex64::new(0.5, 1.0),
+        Complex64::new(-1.0, 0.25),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(1.5, -1.25),
+        Complex64::new(-0.25, 0.75),
+        Complex64::new(0.8, 0.4),
+    ];
+    let rhs_data = vec![1.0, -2.0, 0.5, 1.25, -0.75, 2.5];
+    let cotangent_data = vec![
+        Complex64::new(0.25, -0.5),
+        Complex64::new(1.5, 0.75),
+        Complex64::new(-0.75, 1.25),
+        Complex64::new(0.6, -1.0),
+    ];
+
+    let grad = mixed_binary_vjp_rhs(
+        StdTensorOp::DotGeneral {
+            config: matmul_config(),
+        },
+        92_130,
+        c64_tensor(vec![2, 3], lhs_data.clone()),
+        f64_tensor(vec![3, 2], rhs_data),
+        c64_tensor(vec![2, 2], cotangent_data.clone()),
+    );
+
+    let expected = expected_dot_vjp_rhs_real(&lhs_data, &cotangent_data, 2, 3, 2);
+    assert_close_slice(get_f64_data(&grad), &expected);
+}
+
+#[test]
+fn mixed_real_complex_dot_general_jvp_promotes_lhs_tangent() {
+    let lhs_data = vec![1.0, -2.0, 0.5, 1.25, -0.75, 2.5];
+    let rhs_data = vec![
+        Complex64::new(0.5, 1.0),
+        Complex64::new(-1.0, 0.25),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(1.5, -1.25),
+        Complex64::new(-0.25, 0.75),
+        Complex64::new(0.8, 0.4),
+    ];
+    let tangent_data = vec![0.25, -0.5, 1.5, 0.75, -0.75, 1.25];
+
+    let tangent = mixed_binary_jvp_lhs(
+        StdTensorOp::DotGeneral {
+            config: matmul_config(),
+        },
+        92_140,
+        f64_tensor(vec![2, 3], lhs_data),
+        c64_tensor(vec![3, 2], rhs_data.clone()),
+        f64_tensor(vec![2, 3], tangent_data.clone()),
+    );
+
+    let expected = expected_matmul_real_complex_tangent(&tangent_data, &rhs_data, 2, 3, 2);
+    assert_close_slice_c64(get_c64_data(&tangent), &expected);
+}
+
+#[test]
+fn mixed_complex_real_dot_general_jvp_promotes_rhs_tangent() {
+    let lhs_data = vec![
+        Complex64::new(0.5, 1.0),
+        Complex64::new(-1.0, 0.25),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(1.5, -1.25),
+        Complex64::new(-0.25, 0.75),
+        Complex64::new(0.8, 0.4),
+    ];
+    let rhs_data = vec![1.0, -2.0, 0.5, 1.25, -0.75, 2.5];
+    let tangent_data = vec![0.25, -0.5, 1.5, 0.75, -0.75, 1.25];
+
+    let tangent = mixed_binary_jvp_rhs(
+        StdTensorOp::DotGeneral {
+            config: matmul_config(),
+        },
+        92_150,
+        c64_tensor(vec![2, 3], lhs_data.clone()),
+        f64_tensor(vec![3, 2], rhs_data),
+        f64_tensor(vec![3, 2], tangent_data.clone()),
+    );
+
+    let expected = expected_matmul_complex_real_tangent(&lhs_data, &tangent_data, 2, 3, 2);
     assert_close_slice_c64(get_c64_data(&tangent), &expected);
 }
 

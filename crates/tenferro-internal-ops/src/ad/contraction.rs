@@ -2,7 +2,10 @@ use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::support::{conjugate_primal_if_complex, conjugate_primal_if_dtype_complex};
+use crate::ad::support::{
+    conjugate_primal_if_complex, conjugate_primal_if_dtype_complex, convert_fixed_ref_to_dtype,
+    convert_linear_to_dtype, dtype_of_or_real, project_linear_to_dtype, promote_dtype,
+};
 use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
@@ -29,17 +32,24 @@ pub fn linearize_dot_general(
                 "invalid DotGeneral config during linearize: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
             )
         });
+    let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
+    let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
+        let dx = convert_linear_to_dtype(builder, dx, lhs_dtype, output_dtype);
+        let rhs = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[1].clone()),
+            rhs_dtype,
+            output_dtype,
+        );
         let term = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
             },
-            vec![
-                ValueRef::Local(dx),
-                ValueRef::External(primal_in[1].clone()),
-            ],
+            vec![ValueRef::Local(dx), rhs],
             OperationRole::Linearized {
                 active_mask: vec![true, false],
             },
@@ -48,14 +58,18 @@ pub fn linearize_dot_general(
     }
 
     if let Some(dy) = tangent_in[1] {
+        let lhs = convert_fixed_ref_to_dtype(
+            builder,
+            ValueRef::External(primal_in[0].clone()),
+            lhs_dtype,
+            output_dtype,
+        );
+        let dy = convert_linear_to_dtype(builder, dy, rhs_dtype, output_dtype);
         let term = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
             },
-            vec![
-                ValueRef::External(primal_in[0].clone()),
-                ValueRef::Local(dy),
-            ],
+            vec![lhs, ValueRef::Local(dy)],
             OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
@@ -225,6 +239,9 @@ pub fn transpose_dot_general(
 
     let lhs_rank = ctx.shape_of(&inputs[0]).len();
     let rhs_rank = ctx.shape_of(&inputs[1]).len();
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
@@ -248,6 +265,7 @@ pub fn transpose_dot_general(
 
     if active_mask[0] {
         let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
+        let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = builder.add_operation(
@@ -260,11 +278,18 @@ pub fn transpose_dot_general(
             },
         );
         let _ = (new_lhs_rank, new_rhs_rank);
-        result[0] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        let cotangent = add_transpose_if_needed(builder, out[0], &perm);
+        result[0] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            lhs_dtype,
+        ));
     }
 
     if active_mask[1] {
         let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
+        let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = builder.add_operation(
@@ -277,7 +302,13 @@ pub fn transpose_dot_general(
             },
         );
         let _ = (new_lhs_rank, new_rhs_rank);
-        result[1] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        let cotangent = add_transpose_if_needed(builder, out[0], &perm);
+        result[1] = Some(project_linear_to_dtype(
+            builder,
+            cotangent,
+            output_dtype,
+            rhs_dtype,
+        ));
     }
 
     result

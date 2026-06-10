@@ -223,6 +223,10 @@ committed as their own coherent review unit or clearly separated in the PR.
   inputs behind; insert linear/fixed `Convert` operations to the promoted
   output dtype, and avoid reusing a raw mixed primal output when doing so would
   force execution of an invalid mixed primitive.
+- After fixing a scalar or elementwise mixed-dtype AD issue, lightly inspect
+  same-pattern contraction rules such as `DotGeneral`; they often need the same
+  promoted-tangent and real-cotangent projection treatment even when public
+  traced frontends normally insert explicit `Convert` ops.
 - Do not synthesize hidden host tensors for AD seeds, missing tangents, or
   constants on device paths.
 - If the correct AD convention is not established, use the design gate.
