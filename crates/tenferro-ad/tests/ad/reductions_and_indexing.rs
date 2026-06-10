@@ -645,6 +645,23 @@ fn jvp_traced_index_select_gathers_tangent() {
     assert_close_slice(get_f64_data(&tangent_y), &[3.5, 1.5, 3.5]);
 }
 
+#[test]
+fn hvp_traced_index_select_repeated_positions_accumulates() {
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let weights =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![10.0, 20.0, 30.0]));
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
+
+    let selected = x.index_select(0, &[1, 1, 2]).unwrap();
+    let loss = (&(&selected * &selected) * &weights).reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+    let hvp = eval_tensor(grad.jvp(&x, &tangent));
+
+    assert_eq!(hvp.shape(), &[3]);
+    assert_close_slice(get_f64_data(&hvp), &[0.0, -60.0, 120.0]);
+}
+
 /// Build `y = ReduceSum(Scatter(operand, indices, updates, config))`,
 /// where the Scatter output has the same shape as `operand`.
 fn build_scatter_reduce_sum_graph(
