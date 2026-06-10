@@ -261,6 +261,8 @@ The release branch should converge on automated checks for:
 
 - public API inventory diffs;
 - API concept-family consistency matrices;
+- release-freeze API convention findings via
+  `python3 scripts/check-api-consistency.py --fail-on-findings`;
 - forbidden facade paths and internal crate names in user guides;
 - `_view`, `_read`, feature flag, and traced method naming conventions;
 - missing rustdoc examples on release APIs;

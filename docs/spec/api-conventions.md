@@ -90,3 +90,13 @@ The default stratum is internal.
 The concept-family matrices emitted by the checker are review aids. A matrix
 difference becomes a finding only when the relevant spec, design doc, or
 rustdoc contract does not explain the difference.
+
+The release-freeze convention gate is:
+
+```bash
+python3 scripts/check-api-consistency.py --fail-on-findings
+```
+
+This command must exit `0` before the API convention freeze is considered
+green. Concept-family matrices remain review aids until a specific matrix rule
+is promoted into this spec.
