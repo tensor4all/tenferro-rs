@@ -104,7 +104,7 @@ Status values:
 | #123 eager extension materializes lazy/view tensors | Design Gate | design-gated |
 | #124 oracle docs active CI/replay claims | Auto Fix | fixed |
 | #125 max/min/clamp boundary AD convention | Design Gate | design-gated |
-| #126 device AD seeds and missing tangents | Auto Fix | partial; eager seed and missing-tangent zeroes fixed, traced default-input seed placement remains a residual runtime-input path |
+| #126 device AD seeds and missing tangents | Auto Fix | fixed for eager seed/missing-tangent helpers and traced rank-0 default inputs; non-scalar default input auto-upload remains intentionally out of scope |
 
 ## First Batch: Docs And Rustdoc
 
@@ -225,9 +225,8 @@ Implemented:
   zero tensor and then upload it through the active backend before use.
 - Added non-hardware source-contract tests covering hidden eager indices,
   eager generated constants/shape scalars, and eager AD zero seed upload.
-- Left traced `grad()` scalar seed placement as a residual path: traced AD
-  currently builds the seed as a default input tensor, and `GraphExecutor`
-  resolves default inputs by cloning them directly into execution slots.
+- Left traced `grad()` scalar seed placement as a residual path for the later
+  graph-executor input placement fix.
 
 ## Eleventh Batch: Remaining AD Edge Fixes
 
@@ -259,6 +258,21 @@ Residual:
   for this patch because `tenferro-internal-ops` cannot depend on
   `tenferro-runtime`; a lower-crate shared promotion helper remains a cleanup
   follow-up if duplication becomes broader.
+
+## Twelfth Batch: Traced Scalar Default Placement
+
+Implemented:
+
+- Changed `GraphExecutor` default-input resolution to route rank-0 host default
+  tensors through `backend.upload_host_tensor()` before execution, covering
+  traced `grad()` scalar cotangent seeds stored as default inputs.
+- Applied the same rule to owned and borrowed-input execution paths.
+- Preserved the no-hidden-transfer boundary by leaving explicit bindings,
+  non-scalar default inputs, and already backend-resident scalar defaults
+  untouched.
+- Added source-contract tests with an upload-rejecting backend for owned and
+  borrowed scalar defaults plus guard tests for explicit scalar bindings,
+  non-scalar defaults, and backend-resident scalar defaults.
 
 ## Verification
 
@@ -307,6 +321,8 @@ Residual:
 - `cargo test -p tenferro-ad grad --test ad`
 - `cargo test -p tenferro-ad --test ad`
 - `cargo test -p tenferro-internal-ops --features autodiff`
+- `cargo test -p tenferro-runtime`
+- `cargo test -p tenferro-runtime --test graph_default_input_placement`
 - `cargo fmt --all --check`
 - `git diff --check`
 
@@ -315,16 +331,16 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
 
 ## Residual Risks
 
-- The remaining auto-fix items touch AD, runtime/performance, and GPU placement
-  behavior and should be handled in later coherent commits.
+- The remaining unresolved items are verify-first or design-gated rather than
+  straightforward auto-fix items.
 - Design-gated items should become focused design or child issues rather than
   being implemented silently in this remediation branch.
 - CUDA zero-output validation was verified with source-contract tests and
   CUDA-feature compile-only checks, not with CUDA hardware execution.
-- The eager device-placement fix was verified with source-contract tests and
-  CPU behavior tests, not CUDA hardware execution. Traced AD scalar seeds still
-  use default input tensors and should be fixed with the graph-executor input
-  placement boundary.
+- The eager and traced scalar-default device-placement fixes were verified with
+  source-contract tests and CPU behavior tests, not CUDA hardware execution.
+  Non-scalar graph default inputs remain non-uploaded to avoid silently moving
+  user-sized tensors across device boundaries.
 - Mixed real/complex binary arithmetic AD is fixed for `Add`/`Mul`/`Div`/`Pow`.
   The same direct mixed-dtype projection issue is also fixed for `DotGeneral`.
   Similar risks remain in boundary-sensitive elementwise ops, but they require

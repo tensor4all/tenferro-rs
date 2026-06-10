@@ -253,6 +253,11 @@ committed as their own coherent review unit or clearly separated in the PR.
 - Eager helper-generated constants, indices, shape scalars, AD seeds, and
   missing tangents must be backend-aware or explicitly uploaded through the
   runtime contract.
+- For graph execution, internal rank-0 host default inputs may be routed
+  through `backend.upload_host_tensor()` because they model scalar metadata or
+  AD cotangent seeds. Do not auto-upload explicit user bindings, non-scalar
+  defaults, or already backend-resident defaults without a design decision;
+  that would create a hidden data-transfer boundary.
 - Unsupported CUDA paths must fail with clear placement/backend diagnostics
   rather than silently falling back to host behavior.
 - HIP/ROCm remains stubbed unless a separate accepted backend feature issue

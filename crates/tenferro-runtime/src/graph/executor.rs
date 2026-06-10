@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{
-    DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
+    Buffer, DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
 };
 
 use super::cache::GraphExecutorCacheStats;
@@ -432,7 +432,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &GraphProgram,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<Vec<Tensor>> {
-        let input_tensors = resolve_inputs(program, bindings)?;
+        let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
         self.eval_exec_ir(&program.exec, input_tensors)
     }
 
@@ -464,7 +464,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &GraphProgram,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<Vec<TensorValue>> {
-        let input_tensors = resolve_inputs(program, bindings)?;
+        let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
         self.eval_exec_ir_values(&program.exec, input_tensors)
     }
 
@@ -501,7 +501,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a GraphProgram,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<Vec<Tensor>> {
-        let inputs = resolve_input_reads(program, bindings)?;
+        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
         self.eval_exec_ir_slots(&program.exec, inputs)
     }
 
@@ -538,7 +538,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a GraphProgram,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<Vec<TensorValue>> {
-        let inputs = resolve_input_reads(program, bindings)?;
+        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
         self.eval_exec_ir_slot_values(&program.exec, inputs)
     }
 
@@ -817,6 +817,7 @@ fn expect_single_value(outputs: &mut Vec<TensorValue>) -> Result<TensorValue> {
 fn resolve_inputs(
     program: &GraphProgram,
     bindings: &[(&TracedTensor, &Tensor)],
+    backend: &mut impl TensorBackend,
 ) -> Result<Vec<Tensor>> {
     let program_keys: HashSet<_> = program
         .inputs
@@ -861,13 +862,14 @@ fn resolve_inputs(
     program
         .inputs
         .iter()
-        .map(|input| resolve_input(input, &binding_map, &default_map))
+        .map(|input| resolve_input(input, &binding_map, &default_map, backend))
         .collect()
 }
 
 fn resolve_input_reads<'a>(
     program: &'a GraphProgram,
     bindings: &[(&TracedTensor, TensorRead<'a>)],
+    backend: &mut impl TensorBackend,
 ) -> Result<Vec<ExecSlot<'a>>> {
     let program_keys: HashSet<_> = program
         .inputs
@@ -882,7 +884,7 @@ fn resolve_input_reads<'a>(
             input
                 .default_tensor
                 .as_ref()
-                .map(|tensor| (input.key.clone(), TensorRead::from_tensor(tensor.as_ref())))
+                .map(|tensor| (input.key.clone(), tensor.as_ref()))
         })
         .collect();
     let mut binding_map = HashMap::new();
@@ -912,7 +914,7 @@ fn resolve_input_reads<'a>(
     program
         .inputs
         .iter()
-        .map(|input| resolve_input_read(input, &binding_map, &default_map))
+        .map(|input| resolve_input_read(input, &binding_map, &default_map, backend))
         .collect()
 }
 
@@ -932,11 +934,12 @@ fn resolve_input(
     input: &GraphProgramInput,
     bindings: &HashMap<TensorInputKey, &Tensor>,
     defaults: &HashMap<TensorInputKey, &Tensor>,
+    backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
     let tensor = if let Some(bound) = bindings.get(&input.key) {
         (*bound).clone()
     } else if let Some(default) = &input.default_tensor {
-        default.as_ref().clone()
+        resolve_default_tensor(default.as_ref(), backend)?
     } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings, defaults) {
         zero
     } else {
@@ -951,12 +954,17 @@ fn resolve_input(
 fn resolve_input_read<'a>(
     input: &GraphProgramInput,
     bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
-    defaults: &HashMap<TensorInputKey, TensorRead<'a>>,
+    defaults: &HashMap<TensorInputKey, &'a Tensor>,
+    backend: &mut impl TensorBackend,
 ) -> Result<ExecSlot<'a>> {
     let slot = if let Some(bound) = bindings.get(&input.key) {
         ExecSlot::Read(bound.clone())
     } else if let Some(default) = defaults.get(&input.key) {
-        ExecSlot::Read(default.clone())
+        if should_upload_default_tensor(default) {
+            ExecSlot::Owned(backend.upload_host_tensor(default)?)
+        } else {
+            ExecSlot::Read(TensorRead::from_tensor(default))
+        }
     } else if let Some(zero) = deferred_zero_for_tangent_key_read(&input.key, bindings, defaults) {
         ExecSlot::Owned(zero)
     } else {
@@ -966,6 +974,30 @@ fn resolve_input_read<'a>(
     };
     validate_input_slot(input, &slot)?;
     Ok(slot)
+}
+
+fn resolve_default_tensor(default: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
+    if should_upload_default_tensor(default) {
+        Ok(backend.upload_host_tensor(default)?)
+    } else {
+        Ok(default.clone())
+    }
+}
+
+fn should_upload_default_tensor(default: &Tensor) -> bool {
+    default.shape().is_empty() && tensor_has_host_buffer(default)
+}
+
+fn tensor_has_host_buffer(tensor: &Tensor) -> bool {
+    match tensor {
+        Tensor::F32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::F64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::I32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::I64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::Bool(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::C32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+        Tensor::C64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
+    }
 }
 
 fn validate_binding_placeholder(
@@ -1090,13 +1122,16 @@ fn deferred_zero_for_tangent_key(
 fn deferred_zero_for_tangent_key_read<'a>(
     key: &TensorInputKey,
     bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
-    defaults: &HashMap<TensorInputKey, TensorRead<'a>>,
+    defaults: &HashMap<TensorInputKey, &'a Tensor>,
 ) -> Option<Tensor> {
     if !key.is_tangent() {
         return None;
     }
     let root = tangent_primal_root(key);
-    let primal = bindings.get(root).or_else(|| defaults.get(root))?;
+    if let Some(primal) = bindings.get(root) {
+        return Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()));
+    }
+    let primal = defaults.get(root)?;
     Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
 }
 
