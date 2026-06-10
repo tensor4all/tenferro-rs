@@ -61,6 +61,10 @@ behavior it owns. If the conflict is between current design documents, the
 release cleanup must either resolve the conflict or mark one document as
 historical before relying on it.
 
+API convention rules that should remain stable after the release cleanup live
+in `docs/spec/api-conventions.md`. This design document records the cleanup
+posture, triage workflow, and migration rationale.
+
 ## Crate Ownership
 
 The release API should make crate ownership obvious.
