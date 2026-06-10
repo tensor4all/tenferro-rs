@@ -3,7 +3,10 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::optimize::EinsumPlanSpec;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_runtime::ExtensionCacheStore;
+use tenferro_tensor::{TensorOwnedView, TensorRead};
 
 #[test]
 fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
@@ -84,6 +87,30 @@ fn runtime_input_index_vec_stays_inline_for_common_arity() {
     indices.extend(0..4);
 
     assert!(!indices.spilled());
+}
+
+#[test]
+fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
+    let base = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+    let input = TensorRead::from_view(view.tensor_view());
+    let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
+    let mut backend = CpuBackend::new();
+    let mut caches = ExtensionCacheStore::new();
+    let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
+
+    let outputs = execute_einsum_extension_reads(&op, &[input], &mut ctx)
+        .expect("read-capable einsum extension execution");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(
+        outputs[0].as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
 }
 
 #[test]

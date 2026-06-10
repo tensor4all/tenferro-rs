@@ -102,6 +102,23 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
 }
 
 #[test]
+fn extension_runtime_macro_generates_optional_read_executor() {
+    let tokens = expand_extension_runtime(syn::parse_quote! {
+        runtime = EinsumRuntime,
+        family_id = EINSUM_EXTENSION_FAMILY_ID,
+        op_type = EinsumExtensionOp,
+        execute = execute_einsum_extension,
+        execute_reads = execute_einsum_extension_reads,
+        register_fn = register_runtime,
+    });
+    let source = tokens.to_string();
+
+    assert!(source.contains("fn execute_reads"));
+    assert!(source.contains("TensorRead < '_ >"));
+    assert!(source.contains("execute_einsum_extension_reads (op , inputs , ctx)"));
+}
+
+#[test]
 fn idempotent_rule_registration_macro_generates_duplicate_guard() {
     let tokens = expand_idempotent_rule_registration(syn::parse_quote! {
         register_fn = ensure_einsum_extension_rule_registered,

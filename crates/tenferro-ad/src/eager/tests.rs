@@ -10,9 +10,9 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_runtime::ExtensionExecutor;
+use tenferro_runtime::{ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
 use tenferro_tensor::{TensorFusion, TensorRead};
 use tidu::ADKey;
 
@@ -70,6 +70,24 @@ impl ExtensionOp for ReadPathFallbackProbe {
     }
 }
 
+#[derive(Debug)]
+struct ReadPathFallbackRuntime;
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.read-path-fallback-probe.v1"
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        op.eager_execute(inputs)
+    }
+}
+
 #[test]
 fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
     let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
@@ -91,6 +109,35 @@ fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
     assert!(
         message.contains("tenferro-tests.read-path-fallback-probe.v1"),
         "{message}"
+    );
+}
+
+#[test]
+fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    ctx.register_extension(|executor| {
+        executor
+            .registry_mut()
+            .register(Arc::new(ReadPathFallbackRuntime))
+    })
+    .expect("register read-path fallback runtime");
+
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx,
+    );
+    let x_t = x.transpose(&[1, 0]).unwrap();
+    assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
+    assert!(!x_t.materialized_cache_is_initialized());
+
+    let outputs = crate::extension::apply_eager(Arc::new(ReadPathFallbackProbe), &[&x_t])
+        .expect("eager extension dispatch");
+
+    assert!(!x_t.materialized_cache_is_initialized());
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].data().as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }
 

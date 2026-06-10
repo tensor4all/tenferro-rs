@@ -224,12 +224,7 @@ pub(crate) fn exec_op_on_tensor_reads_with_extension_executor<B: TensorBackend +
         let Some(extension_executor) = extension_executor else {
             return Err(missing_extension_executor_error(ext.as_ref()));
         };
-        let input_tensors = concrete_tensor_reads(inputs);
-        let input_refs: Vec<&Tensor> = input_tensors
-            .iter()
-            .map(ConcreteTensorRead::tensor)
-            .collect();
-        let outputs = extension_executor.execute(backend, ext.as_ref(), &input_refs);
+        let outputs = extension_executor.execute_reads(backend, ext.as_ref(), inputs);
         return outputs.map_err(|err| extension_error(ext.as_ref(), err));
     }
 

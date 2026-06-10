@@ -31,7 +31,7 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_runtime::extension::{
     ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
 };
-use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend};
+use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -864,6 +864,7 @@ define_extension_runtime! {
     family_id = EINSUM_EXTENSION_FAMILY_ID,
     op_type = EinsumExtensionOp,
     execute = execute_einsum_extension,
+    execute_reads = execute_einsum_extension_reads,
     register_fn = register_runtime,
 }
 
@@ -910,9 +911,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     {
         let cached =
             build_runtime_exec_program::<B>(tree.as_ref(), inputs, &shapes, compiler_options)?;
-        let retained_bytes = runtime_exec_program_key_retained_bytes(op, inputs, &shapes)
-            + cached_runtime_exec_program_retained_bytes(&cached);
-        caches.put(key, cached, retained_bytes);
+        let key_retained_bytes = runtime_exec_program_key_retained_bytes(op, inputs, &shapes);
+        caches.put_with_retained_bytes(key, cached, move |cached| {
+            key_retained_bytes + cached_runtime_exec_program_retained_bytes(cached)
+        });
     }
     let cached = caches
         .get_mut::<CachedRuntimeExecProgram<B::RuntimeCache>>(&key)
@@ -937,6 +939,48 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         ));
     }
     Ok(vec![outputs.remove(0)])
+}
+
+fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
+    op: &EinsumExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if inputs
+        .iter()
+        .all(|input| matches!(input, TensorRead::Tensor(_)))
+    {
+        let input_refs: Vec<&Tensor> = inputs
+            .iter()
+            .map(|input| match input {
+                TensorRead::Tensor(tensor) => *tensor,
+                TensorRead::View(_) => unreachable!("view input filtered above"),
+            })
+            .collect();
+        return execute_einsum_extension(op, &input_refs, ctx);
+    }
+
+    if inputs.is_empty() {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "einsum_extension",
+            message: "einsum requires at least one input tensor".into(),
+        });
+    }
+
+    let shapes: Vec<Vec<usize>> = inputs.iter().map(|input| input.shape().to_vec()).collect();
+    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+    let subs = Subscripts::from(op.subscripts());
+    let tree = if let Some(tree) = op.static_tree() {
+        Arc::clone(tree)
+    } else {
+        cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
+            resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
+        })?
+    };
+    let output = ctx
+        .backend_mut()
+        .with_backend_session(|exec| crate::eager::eager_einsum_exec_read(exec, inputs, &tree))?;
+    Ok(vec![output])
 }
 
 fn is_binary_non_contracting(subs: &Subscripts) -> bool {

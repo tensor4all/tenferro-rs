@@ -75,6 +75,29 @@ fn store_put_get_get_mut_and_stats_are_typed() {
 }
 
 #[test]
+fn dynamic_retained_bytes_follow_mutated_cache_entries() {
+    let mut store = ExtensionCacheStore::new();
+    let buffers = key(FAMILY_A, BUFFERS, 9);
+
+    store.put_with_retained_bytes(buffers, Vec::<usize>::with_capacity(2), |values| {
+        values.capacity() * std::mem::size_of::<usize>()
+    });
+    assert_eq!(
+        store.stats(ExtensionCacheSelector::All).retained_bytes,
+        2 * std::mem::size_of::<usize>()
+    );
+
+    let values = store.get_mut::<Vec<usize>>(&buffers).unwrap();
+    values.reserve_exact(8);
+    let retained_capacity = values.capacity();
+
+    assert_eq!(
+        store.stats(ExtensionCacheSelector::All).retained_bytes,
+        retained_capacity * std::mem::size_of::<usize>()
+    );
+}
+
+#[test]
 fn clear_selected_removes_only_matching_entries() {
     let mut store = ExtensionCacheStore::new();
     let a_plan = key(FAMILY_A, PLANS, 1);

@@ -10,7 +10,7 @@ use tenferro_runtime::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionExecutionContext,
     ExtensionExecutor, ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
 };
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, Tensor, TensorOwnedView, TensorRead};
 
 #[derive(Clone, Debug)]
 struct IdentityRuntimeOp {
@@ -151,6 +151,36 @@ fn extension_executor_executes_registered_runtime_and_manages_caches() {
 
     executor.clear_caches();
     assert_eq!(executor.cache_stats().entries, 0);
+}
+
+#[test]
+fn extension_executor_default_read_path_materializes_views_at_runtime_boundary() {
+    let family = "runtime.execute_reads.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(IdentityRuntime { family }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+
+    let base = Arc::new(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+    let read = TensorRead::from_view(view.tensor_view());
+    let mut backend = CpuBackend::new();
+    let op = IdentityRuntimeOp { family };
+
+    let outputs = executor
+        .execute_reads(&mut backend, &op, &[read])
+        .expect("execute read input through fallback runtime");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(
+        outputs[0].as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
 }
 
 #[test]

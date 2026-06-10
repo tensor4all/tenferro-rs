@@ -783,8 +783,7 @@ pub(crate) fn eager_einsum_exec(
     eager_einsum_exec_values(exec, values, tree)
 }
 
-#[cfg(test)]
-fn eager_einsum_exec_read(
+pub(crate) fn eager_einsum_exec_read(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
