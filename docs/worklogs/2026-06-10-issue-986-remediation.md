@@ -342,6 +342,9 @@ Implemented:
   use the read-capable eager einsum executor.
 - Added a README link to the official
   `tensor4all/tenferro-benchmark` benchmark suite.
+- Added broad graph compile-cache key payload coverage so the repository
+  coverage gate covers structural key variants and retained-byte accounting.
+- Removed a stale private intra-doc link in runtime shape-inference docs.
 
 ## Verification
 
@@ -415,9 +418,13 @@ Implemented:
 - `cargo test -p tenferro-einsum execute_einsum_extension_reads_consumes_strided_view_inputs --lib`
 - `cargo test -p tenferro-einsum --features autodiff generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops --lib`
 - `cargo test -p tenferro-einsum --features autodiff tensor_value_view_paths_materialize_and_read --lib`
-
-`cargo doc --workspace --no-deps` emitted an existing private intra-doc link
-warning in `crates/tenferro-runtime/src/shape_infer.rs`.
+- `cargo test -p tenferro-cpu --release tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches --lib`
+- `cargo test -p tenferro-runtime graph::cache::tests::cache_key_and_stats_cover_exec_op_payload_variants --lib`
+- `cargo test --workspace --release`
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+- `python3 scripts/check-coverage.py coverage.json`
+- `cargo doc --workspace --no-deps`
+- `python3 scripts/check-docs-site.py`
 
 ## Residual Risks
 
