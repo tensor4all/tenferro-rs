@@ -33,7 +33,7 @@ fn checkpoint_preserves_eval_value() {
 
     y.checkpoint(&mut compiler, &mut executor).unwrap();
 
-    let value = get_f64_scalar(y.data.as_ref().expect("checkpoint should retain data"));
+    let value = get_f64_scalar(y.attached_data().expect("checkpoint should retain data"));
     assert!((value - 9.0).abs() < 1.0e-12);
 }
 

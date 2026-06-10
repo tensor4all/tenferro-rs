@@ -57,7 +57,7 @@ use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOpTrait};
 use tenferro_runtime::{Error, Result, TracedTensor};
 use tenferro_tensor::{
-    Buffer, DType, DeviceKind, MemoryKind, Placement, Tensor, TensorBackend, TypedTensor,
+    DType, DeviceKind, MemoryKind, Placement, Tensor, TensorBackend, TypedTensor,
 };
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
@@ -342,27 +342,11 @@ fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Resul
 }
 
 fn tensor_placement(input: &Tensor) -> &Placement {
-    match input {
-        Tensor::F32(t) => &t.placement,
-        Tensor::F64(t) => &t.placement,
-        Tensor::I32(t) => &t.placement,
-        Tensor::I64(t) => &t.placement,
-        Tensor::Bool(t) => &t.placement,
-        Tensor::C32(t) => &t.placement,
-        Tensor::C64(t) => &t.placement,
-    }
+    input.placement()
 }
 
 fn tensor_has_backend_buffer(input: &Tensor) -> bool {
-    match input {
-        Tensor::F32(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::F64(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::I32(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::I64(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::Bool(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::C32(t) => matches!(&t.buffer, Buffer::Backend(_)),
-        Tensor::C64(t) => matches!(&t.buffer, Buffer::Backend(_)),
-    }
+    input.is_backend_buffer()
 }
 
 fn validate_host_fft_input(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {

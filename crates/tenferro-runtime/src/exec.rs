@@ -5,11 +5,11 @@ use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
+use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionOp, GatherConfig,
-    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue,
-    TypedTensor,
+    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
 };
 
 use crate::extension_runtime::ExtensionExecutor;

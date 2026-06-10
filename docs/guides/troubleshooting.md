@@ -24,7 +24,7 @@ An error like `expected GPU tensor ... use upload_tensor()` means a CUDA
 backend operation received CPU data. Upload first:
 
 ```rust
-use tenferro_gpu::cubecl::{upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_gpu::{upload_tensor, CubeclBackend as CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
@@ -39,7 +39,7 @@ Host access methods read CPU memory. If a tensor lives on CUDA memory, download
 it before inspecting values:
 
 ```rust
-use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();

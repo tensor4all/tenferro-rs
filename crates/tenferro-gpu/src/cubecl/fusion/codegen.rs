@@ -24,12 +24,12 @@ where
     address_type.register(&mut builder.scope);
 
     let item = T::as_type(&builder.scope);
-    let mut input_arrays = Vec::with_capacity(plan.input_count);
-    for _ in 0..plan.input_count {
+    let mut input_arrays = Vec::with_capacity(plan.input_count());
+    for _ in 0..plan.input_count() {
         input_arrays.push(builder.input_array(item.clone()));
     }
-    let mut output_arrays = Vec::with_capacity(plan.outputs.len());
-    for _ in &plan.outputs {
+    let mut output_arrays = Vec::with_capacity(plan.outputs().len());
+    for _ in plan.outputs() {
         output_arrays.push(builder.output_array(item.clone()));
     }
 
@@ -76,7 +76,7 @@ fn build_body<T>(
 where
     T: CubeElement + CubePrimitive + Clone,
 {
-    let mut values = Vec::with_capacity(plan.input_count + plan.ops.len());
+    let mut values = Vec::with_capacity(plan.input_count() + plan.ops().len());
     for array in input_arrays {
         values.push(load_array_element(
             scope,
@@ -84,15 +84,15 @@ where
             absolute_pos.clone(),
         ));
     }
-    for inst in &plan.ops {
+    for inst in plan.ops() {
         let inputs = inst
-            .inputs
+            .inputs()
             .iter()
             .map(|&value| values[value].clone())
             .collect::<Vec<_>>();
-        values.push(emit_op::<T>(scope, &inst.op, &inputs));
+        values.push(emit_op::<T>(scope, &inst.op(), &inputs));
     }
-    for (array, &value_id) in output_arrays.iter().zip(plan.outputs.iter()) {
+    for (array, &value_id) in output_arrays.iter().zip(plan.outputs().iter()) {
         store_array_element(
             scope,
             array.clone(),

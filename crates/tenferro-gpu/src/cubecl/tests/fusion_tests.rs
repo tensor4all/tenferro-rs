@@ -1,6 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use crate::backend::ElementwiseFusionPlan;
-use crate::{ElementwiseFusionInst, ElementwiseFusionOp};
+use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion};
 
 use super::{
@@ -10,21 +9,15 @@ use super::{
 
 /// Build a plan for: out = (a + b) * a
 fn add_mul_plan() -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
-        dtype: crate::DType::F64,
-        input_count: 2,
-        outputs: vec![3], // value index of final result
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Add,
-                inputs: vec![0, 1], // a + b
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Multiply,
-                inputs: vec![2, 0], // (a+b) * a
-            },
+    ElementwiseFusionPlan::new(
+        crate::DType::F64,
+        2,
+        vec![3], // value index of final result
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]), // a + b
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 0]), // (a+b) * a
         ],
-    }
+    )
 }
 
 #[test]
@@ -52,25 +45,16 @@ fn test_fused_add_mul_matches_cpu() {
 }
 
 fn complex_add_conj_mul_plan(dtype: crate::DType) -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
+    ElementwiseFusionPlan::new(
         dtype,
-        input_count: 2,
-        outputs: vec![4],
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Add,
-                inputs: vec![0, 1],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Conj,
-                inputs: vec![2],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Multiply,
-                inputs: vec![3, 0],
-            },
+        2,
+        vec![4],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Conj, vec![2]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![3, 0]),
         ],
-    }
+    )
 }
 
 #[test]
@@ -113,21 +97,15 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
 }
 
 fn complex_div_neg_plan(dtype: crate::DType) -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
+    ElementwiseFusionPlan::new(
         dtype,
-        input_count: 2,
-        outputs: vec![3],
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Divide,
-                inputs: vec![0, 1],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Negate,
-                inputs: vec![2],
-            },
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Divide, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![2]),
         ],
-    }
+    )
 }
 
 #[test]
@@ -170,21 +148,15 @@ fn test_fused_complex_c32_div_neg_matches_cpu() {
 
 /// Build a plan for: out = neg(a + b)
 fn add_neg_plan() -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
-        dtype: crate::DType::F64,
-        input_count: 2,
-        outputs: vec![3],
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Add,
-                inputs: vec![0, 1],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Negate,
-                inputs: vec![2],
-            },
+    ElementwiseFusionPlan::new(
+        crate::DType::F64,
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![2]),
         ],
-    }
+    )
 }
 
 #[test]
@@ -212,21 +184,15 @@ fn test_fused_add_neg() {
 
 /// Plan with multiple outputs: both (a+b) and neg(a+b) are live.
 fn multi_output_plan() -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
-        dtype: crate::DType::F64,
-        input_count: 2,
-        outputs: vec![2, 3], // sum and neg(sum)
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Add,
-                inputs: vec![0, 1],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Negate,
-                inputs: vec![2],
-            },
+    ElementwiseFusionPlan::new(
+        crate::DType::F64,
+        2,
+        vec![2, 3], // sum and neg(sum)
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![2]),
         ],
-    }
+    )
 }
 
 #[test]
@@ -255,25 +221,16 @@ fn test_fused_multi_output() {
 
 /// Plan with unary transcendentals: exp(sqrt(abs(a)))
 fn unary_chain_plan() -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
-        dtype: crate::DType::F64,
-        input_count: 1,
-        outputs: vec![3],
-        ops: vec![
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Abs,
-                inputs: vec![0],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Sqrt,
-                inputs: vec![1],
-            },
-            ElementwiseFusionInst {
-                op: ElementwiseFusionOp::Exp,
-                inputs: vec![2],
-            },
+    ElementwiseFusionPlan::new(
+        crate::DType::F64,
+        1,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Abs, vec![0]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Sqrt, vec![1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Exp, vec![2]),
         ],
-    }
+    )
 }
 
 #[test]

@@ -25,7 +25,7 @@
 use std::any::Any;
 
 #[cfg(feature = "cuda")]
-pub mod cubecl;
+mod cubecl;
 #[cfg(feature = "cuda")]
 mod kernels;
 
@@ -33,6 +33,16 @@ mod kernels;
 pub use cubecl::{
     device_ptr, download_tensor, gpu_available, upload_tensor, CubeclBackend, CubeclRuntime,
 };
+#[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+
+#[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub mod cuda_interop {
+    pub use crate::cubecl::interop::*;
+    pub use crate::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+}
 
 #[cfg(feature = "cuda")]
 use tenferro_tensor::*;
@@ -49,39 +59,14 @@ pub(crate) mod config {
 
 #[cfg(feature = "cuda")]
 pub(crate) mod types {
-    pub use crate::CubeclBuffer;
+    pub(crate) use crate::CubeclBuffer;
     pub use tenferro_tensor::types::*;
 }
 
-/// CubeCL-managed GPU buffer.
-///
-/// This is the backend-owned buffer type stored inside tensors uploaded to a
-/// CubeCL CUDA runtime. Application code should treat it as opaque and use
-/// [`upload_tensor`], [`download_tensor`], and [`device_ptr`] instead of
-/// constructing or inspecting buffers directly.
-///
-/// # Examples
-///
-/// ```
-/// #[cfg(feature = "cuda")]
-/// {
-///     use tenferro_gpu::{gpu_available, upload_tensor, CubeclBackend, CubeclBuffer};
-///     use tenferro_tensor::{BackendBuffer, Buffer, Tensor};
-///
-///     if gpu_available() {
-///         let backend = CubeclBackend::new(0).unwrap();
-///         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-///         let gpu = upload_tensor(backend.runtime(), &host).unwrap();
-///         let Tensor::F64(tensor) = gpu else { unreachable!() };
-///         let Buffer::Backend(buffer) = &tensor.buffer else { unreachable!() };
-///         let cubecl = buffer.as_any().downcast_ref::<CubeclBuffer<f64>>().unwrap();
-///         assert_eq!(cubecl.backend_family(), "cubecl");
-///     }
-/// }
-/// ```
+/// CubeCL-managed GPU buffer stored behind tensor backend-buffer trait objects.
 #[cfg(feature = "cuda")]
 #[derive(Clone)]
-pub struct CubeclBuffer<T> {
+pub(crate) struct CubeclBuffer<T> {
     handle: cubecl_runtime::server::Handle,
     len: usize,
     pub(crate) _marker: std::marker::PhantomData<T>,

@@ -1038,7 +1038,7 @@ fn dropped_traced_graph_releases_registered_metadata() {
         leaf_key = ValueKey::Input(x.input_key().expect("leaf input key"));
 
         y = &x + &x;
-        derived_key = y.graph.values()[y.val].key.clone();
+        derived_key = y.graph().values()[y.val].key.clone();
 
         assert!(lookup_global_metadata(&leaf_key).is_some());
         assert!(lookup_global_metadata(&derived_key).is_some());

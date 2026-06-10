@@ -36,7 +36,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
-    match &tensor.buffer {
+    match tensor.buffer() {
         Buffer::Host(_) => Err(crate::Error::backend_failure(
             op,
             "expected CubeCL GPU tensor, got host tensor. \
@@ -207,7 +207,7 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
     op: &'static str,
 ) -> crate::Result<()> {
     cubecl_buffer(tensor, op)?;
-    ensure_placement_resident_on_runtime(rt, &tensor.placement, op)
+    ensure_placement_resident_on_runtime(rt, tensor.placement(), op)
 }
 
 pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(

@@ -105,6 +105,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         StdTensorOp::Convert { to, .. } => *to,
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
         StdTensorOp::Compare(_) => DType::Bool,
+        StdTensorOp::Abs => real_dtype_for_abs(input_dtypes[0]),
         StdTensorOp::Select => promote_dtype(input_dtypes[1], input_dtypes[2]),
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
@@ -124,7 +125,6 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         // Unary / structural — output dtype equals input dtype.
         StdTensorOp::Neg
         | StdTensorOp::Conj
-        | StdTensorOp::Abs
         | StdTensorOp::Sign
         | StdTensorOp::Exp
         | StdTensorOp::Log
@@ -153,6 +153,14 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Pad(_)
         | StdTensorOp::Reverse { .. } => input_dtypes[0],
         StdTensorOp::ShapeOf { .. } => DType::F64,
+    }
+}
+
+fn real_dtype_for_abs(dtype: DType) -> DType {
+    match dtype {
+        DType::C32 => DType::F32,
+        DType::C64 => DType::F64,
+        other => other,
     }
 }
 

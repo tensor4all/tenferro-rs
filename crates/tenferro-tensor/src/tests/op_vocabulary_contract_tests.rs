@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use tenferro_core_ops::{all_primitive_descriptors, OpCategory};
 
-use crate::ElementwiseFusionOp;
+use crate::backend::ElementwiseFusionOp;
 
 #[test]
 fn tensor_view_public_surface_uses_canonical_names() {

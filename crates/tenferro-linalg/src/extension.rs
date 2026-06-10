@@ -119,15 +119,7 @@ enum EagerLinalgDevice {
 }
 
 fn tensor_placement(input: &Tensor) -> &Placement {
-    match input {
-        Tensor::F32(t) => &t.placement,
-        Tensor::F64(t) => &t.placement,
-        Tensor::I32(t) => &t.placement,
-        Tensor::I64(t) => &t.placement,
-        Tensor::Bool(t) => &t.placement,
-        Tensor::C32(t) => &t.placement,
-        Tensor::C64(t) => &t.placement,
-    }
+    input.placement()
 }
 
 fn input_eager_device(input: &Tensor) -> tenferro_tensor::Result<EagerLinalgDevice> {
@@ -177,7 +169,7 @@ fn execute_cuda_eager_linalg(
     inputs: &[&Tensor],
     device_ordinal: usize,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut backend = tenferro_gpu::cubecl::CubeclBackend::new(device_ordinal)?;
+    let mut backend = tenferro_gpu::CubeclBackend::new(device_ordinal)?;
     execute_linalg(op, inputs, &mut backend)
 }
 

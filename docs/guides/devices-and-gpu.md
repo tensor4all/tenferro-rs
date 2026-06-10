@@ -14,7 +14,7 @@ supported execution path yet.
 
 | Boundary | What happens |
 | --- | --- |
-| CPU tensor to CUDA backend | Upload first with `tenferro_gpu::cubecl::upload_tensor` |
+| CPU tensor to CUDA backend | Upload first with `tenferro_gpu::upload_tensor` |
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
 | CUDA tensor to host inspection | Direct host slice APIs panic; download first |

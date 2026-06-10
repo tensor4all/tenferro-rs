@@ -460,9 +460,11 @@ fn linearize_abs(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(elementwise::linearize_abs(builder, primal_in, tangent_in))
+    Ok(elementwise::linearize_abs(
+        builder, primal_in, tangent_in, ctx,
+    ))
 }
 
 fn linearize_sign(
@@ -482,10 +484,10 @@ fn linearize_maximum(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_maximum(
-        builder, primal_in, tangent_in,
+        builder, primal_in, tangent_in, ctx,
     ))
 }
 
@@ -495,10 +497,10 @@ fn linearize_minimum(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_minimum(
-        builder, primal_in, tangent_in,
+        builder, primal_in, tangent_in, ctx,
     ))
 }
 
@@ -568,7 +570,22 @@ fn transpose_div(
         ctx,
     ))
 }
-transpose_elementwise!(transpose_abs, elementwise::transpose_abs);
+fn transpose_abs(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(elementwise::transpose_abs(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        ctx,
+    ))
+}
 fn transpose_sign(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -579,8 +596,39 @@ fn transpose_sign(
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::transpose_sign(builder, cotangent_out, mode))
 }
-transpose_elementwise!(transpose_maximum, elementwise::transpose_maximum);
-transpose_elementwise!(transpose_minimum, elementwise::transpose_minimum);
+fn transpose_maximum(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(elementwise::transpose_maximum(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        ctx,
+    ))
+}
+
+fn transpose_minimum(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(elementwise::transpose_minimum(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        ctx,
+    ))
+}
 transpose_elementwise!(transpose_select, elementwise::transpose_select);
 transpose_elementwise!(transpose_clamp, elementwise::transpose_clamp);
 fn transpose_compare(

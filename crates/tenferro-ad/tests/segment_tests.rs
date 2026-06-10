@@ -5,7 +5,7 @@ use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, Gr
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorValue, TypedTensor};
 
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))

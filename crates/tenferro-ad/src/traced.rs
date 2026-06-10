@@ -205,7 +205,7 @@ pub trait TracedTensorAdExt {
     ///
     /// y.checkpoint(&mut compiler, &mut executor).unwrap();
     ///
-    /// let value = y.data.as_ref().unwrap();
+    /// let value = y.attached_data().unwrap();
     /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
     /// ```
     fn checkpoint<B: TensorBackend>(
@@ -379,7 +379,7 @@ impl TracedTensorAdExt for TracedTensor {
         compiler: &mut GraphCompiler,
         executor: &mut GraphExecutor<B>,
     ) -> Result<()> {
-        let data = if let Some(data) = &self.data {
+        let data = if let Some(data) = self.attached_data() {
             Arc::clone(data)
         } else {
             let program = compiler.compile(self)?;
@@ -433,7 +433,7 @@ fn jvp_optional_result_with_rules(
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
-    let output_key = output.graph.values()[output.val].key.clone();
+    let output_key = output.graph().values()[output.val].key.clone();
     let checkpoint_chain = traced_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
@@ -466,8 +466,7 @@ fn jvp_optional_result_with_rules(
             ValueKey::Input(tangent_input_key.clone()),
             tensor_meta_from_tensor(
                 tangent
-                    .data
-                    .as_ref()
+                    .attached_data()
                     .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data"))
                     .as_ref(),
             ),
@@ -481,12 +480,12 @@ fn jvp_optional_result_with_rules(
     inputs_map.insert(
         tangent_input_key,
         tangent
-            .data
-            .clone()
+            .attached_data()
+            .cloned()
             .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
     );
 
-    let mut extra_roots = vec![output.graph.clone()];
+    let mut extra_roots = vec![Arc::clone(output.graph())];
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(traced_extra_roots(output));
 
@@ -518,7 +517,7 @@ fn vjp_optional_result_with_rules(
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt);
-    let output_key = output.graph.values()[output.val].key.clone();
+    let output_key = output.graph().values()[output.val].key.clone();
     let checkpoint_chain = traced_checkpoint_chain(output);
     let aliases = checkpoint_chain
         .as_ref()
@@ -549,7 +548,7 @@ fn vjp_optional_result_with_rules(
         linear.as_graph(),
         vec![(
             ValueKey::Input(linear_seed_key),
-            registered_meta(&wrt.graph.values()[wrt.val].key),
+            registered_meta(&wrt.graph().values()[wrt.val].key),
         )],
     );
     ad_ctx.refresh_global_metadata();
@@ -563,8 +562,7 @@ fn vjp_optional_result_with_rules(
             ValueKey::Input(cotangent_input_key.clone()),
             tensor_meta_from_tensor(
                 cotangent
-                    .data
-                    .as_ref()
+                    .attached_data()
                     .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data"))
                     .as_ref(),
             ),
@@ -582,12 +580,12 @@ fn vjp_optional_result_with_rules(
     inputs_map.insert(
         cotangent_input_key.clone(),
         cotangent
-            .data
-            .clone()
+            .attached_data()
+            .cloned()
             .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
     );
 
-    let mut extra_roots = vec![output.graph.clone(), linear_graph];
+    let mut extra_roots = vec![Arc::clone(output.graph()), linear_graph];
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(traced_extra_roots(output));
 

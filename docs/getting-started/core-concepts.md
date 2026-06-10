@@ -13,7 +13,7 @@ reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::cubecl::CubeclBackend` |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CubeclBackend` |
 
 CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
 can run supported operations on CUDA tensors when data is explicitly uploaded

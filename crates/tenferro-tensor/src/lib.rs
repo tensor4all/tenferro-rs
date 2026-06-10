@@ -53,9 +53,8 @@ pub mod validate;
 
 pub use backend::{
     default_backend_session, BackendCachedDot, BackendRuntimeCache, BackendSession,
-    BackendSessionHost, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
-    SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendSessionHost, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};

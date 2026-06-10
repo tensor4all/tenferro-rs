@@ -10,7 +10,7 @@ use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError}
 use computegraph::ValueKey;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cubecl::CubeclBackend;
+use tenferro_gpu::CubeclBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
@@ -229,7 +229,7 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cubecl::CubeclBackend;
+    /// use tenferro_gpu::CubeclBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
     /// let _ctor: fn(CubeclBackend) -> std::sync::Arc<EagerRuntime> =
@@ -246,7 +246,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::cubecl::CubeclBackend;
+    /// use tenferro_gpu::CubeclBackend;
     ///
     /// let _ctor: fn(CubeclBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;

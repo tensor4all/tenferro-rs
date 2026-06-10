@@ -42,9 +42,9 @@ pub struct TracedTensor {
     pub id: TracedTensorId,
     pub rank: usize,
     pub dtype: DType,
-    pub graph: Arc<Graph<StdTensorOp>>,
+    pub(crate) graph: Arc<Graph<StdTensorOp>>,
     pub val: LocalValueId,
-    pub data: Option<Arc<Tensor>>,
+    pub(crate) data: Option<Arc<Tensor>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
@@ -191,6 +191,41 @@ impl std::ops::Div for &TracedTensor {
 }
 
 impl TracedTensor {
+    /// Return the graph that owns this traced tensor's current value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// let _graph = x.graph();
+    /// ```
+    pub fn graph(&self) -> &Arc<Graph<StdTensorOp>> {
+        &self.graph
+    }
+
+    /// Return the concrete tensor data attached to this traced value, if any.
+    ///
+    /// Placeholder tensors created with `input_concrete_shape` or
+    /// `input_symbolic_shape` have no attached data until execution bindings
+    /// provide it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, TracedTensor};
+    ///
+    /// let concrete = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// assert!(concrete.attached_data().is_some());
+    ///
+    /// let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// assert!(placeholder.attached_data().is_none());
+    /// ```
+    pub fn attached_data(&self) -> Option<&Arc<Tensor>> {
+        self.data.as_ref()
+    }
+
     /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`], keeping its
     /// shape as a concrete `shape_hint`.
     ///
@@ -613,6 +648,8 @@ impl TracedTensor {
     }
 
     /// Elementwise absolute value.
+    ///
+    /// Complex inputs return real magnitudes (`C32 -> F32`, `C64 -> F64`).
     ///
     /// # Examples
     ///
@@ -1510,7 +1547,8 @@ pub(crate) fn apply_unary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    apply_unary_with_dtype(op, input, out_rank, out_shape_hint, input.dtype)
+    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[input.dtype]);
+    apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
 pub(crate) fn apply_unary_with_dtype(

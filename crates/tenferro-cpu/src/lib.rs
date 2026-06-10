@@ -83,12 +83,40 @@ pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
     )
 }
 
+pub(crate) trait ConjElem {
+    fn conj_elem(self) -> Self;
+}
+
+impl ConjElem for f32 {
+    fn conj_elem(self) -> Self {
+        self
+    }
+}
+
+impl ConjElem for f64 {
+    fn conj_elem(self) -> Self {
+        self
+    }
+}
+
+impl ConjElem for num_complex::Complex32 {
+    fn conj_elem(self) -> Self {
+        self.conj()
+    }
+}
+
+impl ConjElem for num_complex::Complex64 {
+    fn conj_elem(self) -> Self {
+        self.conj()
+    }
+}
+
 pub(crate) fn typed_host_data<'a, T>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<&'a [T]> {
-    match &tensor.buffer {
-        Buffer::Host(data) => Ok(data),
+    match tensor.buffer() {
+        Buffer::Host(data) => Ok(data.as_slice()),
         Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
     }
 }
@@ -97,10 +125,10 @@ pub(crate) fn typed_view<'a, T: Copy>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<StridedView<'a, T>> {
-    match &tensor.buffer {
+    match tensor.buffer() {
         Buffer::Host(data) => {
             let strides = kernel_col_major_strides(tensor.shape());
-            StridedView::new(data, tensor.shape(), &strides, 0)
+            StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
                 .map_err(|err| crate::Error::backend_failure(op, err))
         }
         Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),

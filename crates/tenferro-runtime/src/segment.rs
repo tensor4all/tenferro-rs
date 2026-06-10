@@ -15,9 +15,8 @@ use crate::exec::{
     ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
-use tenferro_tensor::{
-    ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend, TensorRead, TensorValue,
-};
+use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionPlan};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///
@@ -933,7 +932,7 @@ fn build_elementwise_fusion_plan(
             .iter()
             .map(|slot| slot_to_value.get(slot).copied())
             .collect::<Option<Vec<_>>>()?;
-        ops.push(ElementwiseFusionInst { op, inputs });
+        ops.push(ElementwiseFusionInst::new(op, inputs));
         slot_to_value.insert(inst.output_slots[0], next_value);
     }
 
@@ -942,12 +941,12 @@ fn build_elementwise_fusion_plan(
         .map(|slot| slot_to_value.get(slot).copied())
         .collect::<Option<Vec<_>>>()?;
 
-    Some(ElementwiseFusionPlan {
+    Some(ElementwiseFusionPlan::new(
         dtype,
-        input_count: input_slots.len(),
+        input_slots.len(),
         outputs,
         ops,
-    })
+    ))
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorAnalytic, TensorDot,
-    TensorElementwise, TensorIndexing, TensorStructural, TypedTensor,
+    MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorAnalytic, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorIndexing, TensorStructural, TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -42,6 +42,34 @@ fn backend_failure_helper_preserves_op_and_message() {
             ref message,
         } if message == "device rejected launch"
     ));
+}
+
+#[test]
+fn cpu_device_transfer_rejects_backend_buffers_at_boundary() {
+    let mut backend = CpuBackend::new();
+    let tensor = backend_f64_tensor(vec![2]);
+
+    for (actual, expected_op, expected_hint) in [
+        (
+            backend.download_to_host(&tensor),
+            "CpuBackend::download_to_host",
+            "download",
+        ),
+        (
+            backend.upload_host_tensor(&tensor),
+            "CpuBackend::upload_host_tensor",
+            "download",
+        ),
+    ] {
+        let err = actual.unwrap_err();
+        assert!(matches!(
+            err,
+            Error::BackendFailure {
+                op,
+                ref message,
+            } if op == expected_op && message.contains(expected_hint)
+        ));
+    }
 }
 
 #[test]

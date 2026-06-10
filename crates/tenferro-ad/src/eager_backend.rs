@@ -1,12 +1,13 @@
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cubecl::CubeclBackend;
+use tenferro_gpu::CubeclBackend;
+use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig, Result as TensorResult,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorValue,
+    DotGeneralConfig, GatherConfig, PadConfig, Result as TensorResult, ScatterConfig, SliceConfig,
+    Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TensorValue,
 };
 
 pub enum EagerBackend {

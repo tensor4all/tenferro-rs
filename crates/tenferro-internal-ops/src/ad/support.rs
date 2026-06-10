@@ -170,6 +170,10 @@ pub fn is_real_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64)
 }
 
+pub(crate) fn is_differentiable_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+}
+
 fn is_complex_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::C32 | DType::C64)
 }

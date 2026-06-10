@@ -7,9 +7,9 @@ use crate::default_placement;
 #[cfg(feature = "cpu-blas")]
 use crate::elementwise::typed_conj_with_pool;
 use crate::structural::typed_transpose_with_pool;
-use crate::Error;
 #[cfg(feature = "cpu-blas")]
-use tenferro_tensor::ConjElem;
+use crate::ConjElem;
+use crate::Error;
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
     col_major_strides, Buffer, TensorRead, TensorView, TypedTensor, TypedTensorView,
@@ -131,8 +131,8 @@ impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
-        match &self.buffer {
-            Buffer::Host(v) => Some(v),
+        match self.buffer() {
+            Buffer::Host(v) => Some(v.as_slice()),
             Buffer::Backend(_) => None,
         }
     }

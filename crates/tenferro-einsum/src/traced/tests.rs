@@ -14,12 +14,12 @@ fn concrete_traced_nary_einsum_expands_to_standard_graph() {
     let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
 
     assert!(out
-        .graph
+        .graph()
         .operations()
         .iter()
         .all(|node| { !matches!(node.operation, StdTensorOp::Extension(_)) }));
     assert!(out
-        .graph
+        .graph()
         .operations()
         .iter()
         .any(|node| { matches!(node.operation, StdTensorOp::DotGeneral { .. }) }));
@@ -41,12 +41,12 @@ fn symbolic_path_traced_nary_einsum_expands_to_standard_graph() {
     .unwrap();
 
     assert!(out
-        .graph
+        .graph()
         .operations()
         .iter()
         .all(|node| { !matches!(node.operation, StdTensorOp::Extension(_)) }));
     assert!(out
-        .graph
+        .graph()
         .operations()
         .iter()
         .any(|node| { matches!(node.operation, StdTensorOp::DotGeneral { .. }) }));
@@ -62,7 +62,7 @@ fn symbolic_auto_traced_nary_einsum_remains_extension() {
     let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
 
     assert!(out
-        .graph
+        .graph()
         .operations()
         .iter()
         .any(|node| { matches!(node.operation, StdTensorOp::Extension(_)) }));

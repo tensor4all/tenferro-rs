@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{
-    Buffer, DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
+    DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
 };
 
 use super::cache::GraphExecutorCacheStats;
@@ -989,15 +989,7 @@ fn should_upload_default_tensor(default: &Tensor) -> bool {
 }
 
 fn tensor_has_host_buffer(tensor: &Tensor) -> bool {
-    match tensor {
-        Tensor::F32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::F64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::I32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::I64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::Bool(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::C32(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-        Tensor::C64(tensor) => matches!(&tensor.buffer, Buffer::Host(_)),
-    }
+    !tensor.is_backend_buffer()
 }
 
 fn validate_binding_placeholder(

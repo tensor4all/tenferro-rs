@@ -132,7 +132,7 @@ fn linearize_div_with_two_active_inputs_sums_both_terms() {
 }
 
 #[test]
-fn linearize_extrema_and_select_emit_zero_fill_for_one_sided_tangents() {
+fn linearize_extrema_uses_jax_balanced_tie_masks() {
     let mut ctx = ShapeGuardContext::default();
 
     let mut max_builder = GraphBuilder::<StdTensorOp>::new();
@@ -146,14 +146,27 @@ fn linearize_extrema_and_select_emit_zero_fill_for_one_sided_tangents() {
     );
     assert!(result[0].is_some());
     let graph = max_builder.build();
+    assert_eq!(graph.operations()[0].operation, StdTensorOp::Maximum);
     assert_eq!(
-        graph.operations()[0].operation,
-        StdTensorOp::Compare(CompareDir::Ge)
+        graph
+            .operations()
+            .iter()
+            .filter(|op| op.operation == StdTensorOp::Compare(CompareDir::Eq))
+            .count(),
+        2
+    );
+    assert!(
+        graph
+            .operations()
+            .iter()
+            .filter(|op| op.operation == StdTensorOp::Select)
+            .count()
+            >= 2
     );
     assert!(graph
         .operations()
         .iter()
-        .any(|op| op.operation == StdTensorOp::Select));
+        .any(|op| op.operation == StdTensorOp::Div));
 
     let mut min_builder = GraphBuilder::<StdTensorOp>::new();
     let dy = min_builder.add_input(tensor_input(23));
@@ -166,14 +179,27 @@ fn linearize_extrema_and_select_emit_zero_fill_for_one_sided_tangents() {
     );
     assert!(result[0].is_some());
     let graph = min_builder.build();
+    assert_eq!(graph.operations()[0].operation, StdTensorOp::Minimum);
     assert_eq!(
-        graph.operations()[0].operation,
-        StdTensorOp::Compare(CompareDir::Le)
+        graph
+            .operations()
+            .iter()
+            .filter(|op| op.operation == StdTensorOp::Compare(CompareDir::Eq))
+            .count(),
+        2
+    );
+    assert!(
+        graph
+            .operations()
+            .iter()
+            .filter(|op| op.operation == StdTensorOp::Select)
+            .count()
+            >= 2
     );
     assert!(graph
         .operations()
         .iter()
-        .any(|op| op.operation == StdTensorOp::Select));
+        .any(|op| op.operation == StdTensorOp::Div));
 }
 
 #[test]

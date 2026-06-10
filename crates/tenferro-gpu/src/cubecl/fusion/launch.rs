@@ -18,8 +18,8 @@ pub(crate) fn launch<T>(
 where
     T: CubeElement + CubePrimitive + Clone,
 {
-    let mut outputs = Vec::with_capacity(classified.plan.outputs.len());
-    for _ in &classified.plan.outputs {
+    let mut outputs = Vec::with_capacity(classified.plan.outputs().len());
+    for _ in classified.plan.outputs() {
         outputs.push(alloc_output::<T>(runtime, &classified.output_shape));
     }
     let mut input_args = Vec::with_capacity(classified.inputs.len());

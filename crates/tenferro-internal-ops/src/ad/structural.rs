@@ -2,6 +2,7 @@ use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{PadConfig, SliceConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::is_differentiable_dtype;
 use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
@@ -143,6 +144,10 @@ pub fn linearize_convert(
     from: tenferro_tensor::DType,
     to: tenferro_tensor::DType,
 ) -> Vec<Option<LocalValueId>> {
+    if !is_differentiable_dtype(from) || !is_differentiable_dtype(to) {
+        return vec![None];
+    }
+
     match tangent_in[0] {
         Some(dt) => {
             let out = builder.add_operation(
@@ -478,6 +483,10 @@ pub fn transpose_convert(
     from: tenferro_tensor::DType,
     to: tenferro_tensor::DType,
 ) -> Vec<Option<LocalValueId>> {
+    if !is_differentiable_dtype(from) || !is_differentiable_dtype(to) {
+        return vec![None];
+    }
+
     let is_active = matches!(
         mode,
         OperationRole::Linearized { active_mask } if active_mask.first().copied().unwrap_or(false)

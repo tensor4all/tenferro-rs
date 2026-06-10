@@ -238,9 +238,13 @@ fn cuda_to_contiguous_keeps_tensor_on_cuda() {
     let compact = gpu.to_contiguous(&view).unwrap();
 
     assert_eq!(compact.shape(), &[3, 2]);
-    assert_eq!(compact.placement.memory_kind, MemoryKind::Device);
+    assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
     assert!(matches!(
-        compact.placement.device.as_ref().map(|device| &device.kind),
+        compact
+            .placement()
+            .device
+            .as_ref()
+            .map(|device| &device.kind),
         Some(tenferro_tensor::DeviceKind::Gpu(GpuBackendKind::Cuda))
     ));
     let actual = download(&gpu, &Tensor::I32(compact));
@@ -280,7 +284,7 @@ fn cuda_to_contiguous_rank_zero_scalar_stays_on_cuda() {
     let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
 
     assert_eq!(compact.shape(), &[] as &[usize]);
-    assert_eq!(compact.placement.memory_kind, MemoryKind::Device);
+    assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
     let actual = download(&gpu, &Tensor::I32(compact));
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[7]);
 }
@@ -298,7 +302,7 @@ fn cuda_to_contiguous_empty_view_stays_on_cuda() {
     let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
 
     assert_eq!(compact.shape(), &[0, 3]);
-    assert_eq!(compact.placement.memory_kind, MemoryKind::Device);
+    assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
     let actual = download(&gpu, &Tensor::I32(compact));
     assert_eq!(actual.shape(), &[0, 3]);
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[] as &[i32]);

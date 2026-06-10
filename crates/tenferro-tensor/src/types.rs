@@ -121,7 +121,7 @@ pub struct Placement {
 /// ```
 #[derive(Clone)]
 pub struct BufferHandle<T> {
-    pub id: u64,
+    id: u64,
     len: usize,
     _phantom: std::marker::PhantomData<T>,
 }
@@ -143,7 +143,6 @@ impl<T> BufferHandle<T> {
     /// use tenferro_tensor::BufferHandle;
     ///
     /// let handle = BufferHandle::<f64>::new(1);
-    /// assert_eq!(handle.id, 1);
     /// assert_eq!(tenferro_tensor::BackendBuffer::len(&handle), 0);
     /// ```
     pub fn new(id: u64) -> Self {
@@ -158,7 +157,6 @@ impl<T> BufferHandle<T> {
     /// use tenferro_tensor::{BackendBuffer, BufferHandle};
     ///
     /// let handle = BufferHandle::<f64>::new_with_len(1, 4);
-    /// assert_eq!(handle.id, 1);
     /// assert_eq!(BackendBuffer::len(&handle), 4);
     /// ```
     pub fn new_with_len(id: u64, len: usize) -> Self {
@@ -231,6 +229,50 @@ pub enum Buffer<T> {
     Backend(Arc<dyn BackendBuffer<T>>),
 }
 
+impl<T: 'static> Buffer<T> {
+    /// Return the physical element count in this buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Buffer;
+    ///
+    /// assert_eq!(Buffer::Host(vec![1_i32, 2]).len(), 2);
+    /// ```
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Host(data) => data.len(),
+            Self::Backend(buffer) => buffer.len(),
+        }
+    }
+
+    /// Return whether this buffer has no physical elements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Buffer;
+    ///
+    /// assert!(Buffer::<i32>::Host(Vec::new()).is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Return whether the storage is backend-owned rather than host-owned.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Buffer;
+    ///
+    /// assert!(!Buffer::Host(vec![1_i32]).is_backend());
+    /// ```
+    pub fn is_backend(&self) -> bool {
+        matches!(self, Self::Backend(_))
+    }
+}
+
 /// Runtime typed tensor storage with compile-time scalar type and rank metadata.
 ///
 /// Owned tensors are compact column-major. Arbitrary strides and metadata-only
@@ -258,9 +300,9 @@ pub enum Buffer<T> {
 /// The dtype-erased [`Tensor`] enum remains dynamic-rank.
 #[derive(Clone, Debug)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
-    pub buffer: Buffer<T>,
+    buffer: Buffer<T>,
     layout: TensorLayout<R>,
-    pub placement: Placement,
+    placement: Placement,
 }
 
 /// Borrowed tensor buffer reference used by read-only typed views.
@@ -3558,10 +3600,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let layout = compact_layout(shape, "from_buffer_col_major");
-        let len = match &buffer {
-            Buffer::Host(data) => data.len(),
-            Buffer::Backend(data) => data.len(),
-        };
+        let len = buffer.len();
         checked_shape_len(layout.shape(), len, "from_buffer_col_major");
         Self {
             buffer,
@@ -3656,6 +3695,56 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         &self.layout
     }
 
+    /// Return the storage backing this tensor.
+    ///
+    /// This is an explicit storage-inspection API for backend glue and tests.
+    /// Host value inspection should prefer [`TypedTensor::host_data`] when the
+    /// caller requires host storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Buffer, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// assert!(matches!(t.buffer(), Buffer::Host(_)));
+    /// ```
+    pub fn buffer(&self) -> &Buffer<T> {
+        &self.buffer
+    }
+
+    /// Return placement metadata for this tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryKind, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// ```
+    pub fn placement(&self) -> &Placement {
+        &self.placement
+    }
+
+    /// Replace placement metadata without changing the storage buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryKind, Placement, TypedTensor};
+    ///
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    /// t.set_placement(Placement {
+    ///     memory_kind: MemoryKind::PinnedHost,
+    ///     device: None,
+    /// });
+    /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
+    /// ```
+    pub fn set_placement(&mut self, placement: Placement) {
+        self.placement = placement;
+    }
+
     /// Borrow this tensor as a typed view preserving rank and layout metadata.
     ///
     /// # Examples
@@ -3722,6 +3811,23 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn into_layout(self) -> TensorLayout<R> {
         self.layout
+    }
+
+    /// Consume this tensor and return its storage, layout, and placement.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Buffer, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let (buffer, layout, placement) = t.into_parts();
+    /// assert!(matches!(buffer, Buffer::Host(_)));
+    /// assert_eq!(layout.shape(), &[2]);
+    /// assert!(placement.device.is_none());
+    /// ```
+    pub fn into_parts(self) -> (Buffer<T>, TensorLayout<R>, Placement) {
+        (self.buffer, self.layout, self.placement)
     }
 }
 
@@ -3902,35 +4008,6 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     }
 }
 
-/// Element-wise conjugation helper.
-pub trait ConjElem {
-    fn conj_elem(self) -> Self;
-}
-
-impl ConjElem for f32 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for f64 {
-    fn conj_elem(self) -> Self {
-        self
-    }
-}
-
-impl ConjElem for Complex<f32> {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
-impl ConjElem for Complex<f64> {
-    fn conj_elem(self) -> Self {
-        self.conj()
-    }
-}
-
 impl Tensor {
     /// Create a tensor from a shape and column-major flat data.
     ///
@@ -4007,6 +4084,50 @@ impl Tensor {
             Tensor::Bool(_) => DType::Bool,
             Tensor::C32(_) => DType::C32,
             Tensor::C64(_) => DType::C64,
+        }
+    }
+
+    /// Return placement metadata for this dtype-erased tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{MemoryKind, Tensor};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// ```
+    pub fn placement(&self) -> &Placement {
+        match self {
+            Tensor::F32(t) => t.placement(),
+            Tensor::F64(t) => t.placement(),
+            Tensor::I32(t) => t.placement(),
+            Tensor::I64(t) => t.placement(),
+            Tensor::Bool(t) => t.placement(),
+            Tensor::C32(t) => t.placement(),
+            Tensor::C64(t) => t.placement(),
+        }
+    }
+
+    /// Return whether this tensor is backed by backend-native storage.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// assert!(!t.is_backend_buffer());
+    /// ```
+    pub fn is_backend_buffer(&self) -> bool {
+        match self {
+            Tensor::F32(t) => t.buffer().is_backend(),
+            Tensor::F64(t) => t.buffer().is_backend(),
+            Tensor::I32(t) => t.buffer().is_backend(),
+            Tensor::I64(t) => t.buffer().is_backend(),
+            Tensor::Bool(t) => t.buffer().is_backend(),
+            Tensor::C32(t) => t.buffer().is_backend(),
+            Tensor::C64(t) => t.buffer().is_backend(),
         }
     }
 

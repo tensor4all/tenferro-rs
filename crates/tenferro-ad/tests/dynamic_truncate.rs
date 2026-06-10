@@ -1,8 +1,16 @@
 use tenferro_ad::TracedTensorAdExt;
 mod support;
+use std::sync::Arc;
+
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{
+    DType, Error as RuntimeError, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
+use tenferro_tensor::{
+    Buffer, BufferHandle, DeviceId, DeviceKind, Error as TensorError, GpuBackendKind, MemoryKind,
+    Placement,
+};
 
 const TOL: f64 = 1.0e-5;
 const FD_H: f64 = 1.0e-5;
@@ -17,6 +25,20 @@ fn f64_scalar(value: f64) -> Tensor {
 
 fn i64_scalar(value: i64) -> Tensor {
     Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![value]))
+}
+
+fn backend_f64_scalar() -> Tensor {
+    Tensor::F64(TypedTensor::from_buffer_col_major(
+        vec![],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(11, 1))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    ))
 }
 
 fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
@@ -76,6 +98,26 @@ fn dynamic_truncate_accepts_i64_size() {
     let out = result.run_with(&mut engine).unwrap();
     assert_eq!(out.shape(), &[2]);
     assert_eq!(get_f64_data(&out), vec![1.0, 2.0]);
+}
+
+#[test]
+fn dynamic_truncate_rejects_backend_size_binding_on_cpu() {
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+    let size = TracedTensor::input_concrete_shape(DType::F64, &[]);
+    let result = x.dynamic_truncate(&size, 0);
+
+    let err = result
+        .run_with_inputs_auto(&mut engine, &[(&size, &backend_f64_scalar())])
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        RuntimeError::TensorRuntime(TensorError::BackendFailure {
+            op: "CpuBackend::download_to_host",
+            ref message,
+        }) if message.contains("download")
+    ));
 }
 
 #[test]

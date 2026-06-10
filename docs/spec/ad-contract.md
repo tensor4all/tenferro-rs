@@ -1,6 +1,6 @@
 # AD Contract
 
-**Date:** 2026-05-28
+**Date:** 2026-06-10
 **Parent:** [`../index.md`](../index.md)
 **Related:** [`primitive-catalog.md`](primitive-catalog.md), [`../architecture/primitive-ad.md`](../architecture/primitive-ad.md), [`../architecture/tidu.md`](../architecture/tidu.md)
 
@@ -154,6 +154,66 @@ This convention is the normative source for tenferro complex VJP behavior.
 Oracle comparisons and finite-difference tests must be interpreted under this
 real-inner-product convention.
 
+### Complex `Abs` and `Sign`
+
+tenferro follows JAX's real-output convention for complex absolute value:
+
+```text
+primal: C32 abs -> F32
+primal: C64 abs -> F64
+JVP:    d abs(z) = Re(conj(sign(z)) * dz)
+VJP:    z_bar = abs_bar * sign(z)
+```
+
+The `abs` cotangent is real because the primal output is real. The VJP maps
+that real cotangent back into the complex input tangent space by multiplying by
+`sign(z)`.
+
+`Sign` has zero AD for both real and complex inputs. Treat this as the
+operation contract, not as a holomorphic derivative.
+
+## Boundary And Nondifferentiable Elementwise Rules
+
+When a primitive has a nondifferentiable boundary and JAX has a clear rule,
+tenferro follows JAX unless a later design document explicitly says otherwise.
+
+`Convert` follows JAX's `convert_element_type` AD convention. Casts between
+floating-point and complex dtypes are differentiated by casting the tangent or
+cotangent to the corresponding tangent dtype, including lossy casts such as
+`F64 -> F32`. Casts whose input or output dtype is `I32`, `I64`, or `Bool` are
+inactive for AD. JAX represents those integer/bool tangent spaces with
+`float0`; tenferro has no public `float0` dtype, so traced AD represents the
+same contract as `None` from the `*_optional` AD APIs.
+
+`Maximum` and `Minimum` split tangent and cotangent contributions equally among
+inputs that are equal to the primal output. For a two-input tie, each active
+side receives half of the tangent/cotangent. Away from ties, the winning side
+receives the full contribution and the losing side receives zero.
+
+`Clamp(input, lower, upper)` uses strict JAX boundary masks:
+
+```text
+input tangent/cotangent active iff input > lower && input < upper
+lower tangent/cotangent active iff lower > input && lower < upper
+upper tangent/cotangent active iff upper < input
+```
+
+At exact lower or upper boundaries, the corresponding derivative contribution
+is zero. Do not review clamp AD against inclusive `<=` / `>=` masks.
+
+## Indexing Bounds Contract
+
+Indexing AD follows the JAX/StableHLO-style `promise_in_bounds` contract:
+gradients are guaranteed only for in-bounds starts and indices. Runtime primal
+behavior may clamp dynamic slices or drop out-of-range scatter windows, but
+that boundary behavior is not an AD correctness promise.
+
+Reviews and oracle tests for `Gather`, `Scatter`, `DynamicSlice`,
+`DynamicUpdateSlice`, and dynamic-slice-size gather AD must use in-bounds
+indices unless a future design changes the contract. Out-of-bounds primal
+compatibility tests are valid, but they must not be interpreted as finite
+difference requirements for AD at those discontinuous boundaries.
+
 ## Owned by this document
 
 - `Primitive` trait signature
@@ -162,6 +222,9 @@ real-inner-product convention.
 - Linear op rule
 - Primal reuse rule
 - Complex AD convention
+- Convert dtype-boundary AD convention
+- Elementwise nondifferentiable boundary AD convention
+- Indexing AD bounds contract
 
 Other documents link here for the AD contract; they do not re-state
 these definitions.

@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();

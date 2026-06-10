@@ -39,6 +39,8 @@ pub enum DTypePolicy {
     SameAny,
     SameNumeric,
     SameFloat,
+    /// Preserve real float dtype and map complex magnitude to the matching real dtype.
+    AbsToReal,
     SameFloatOrComplex,
     CompareToBool,
     BoolSelect,
@@ -84,7 +86,7 @@ macro_rules! primitive_ops {
             Neg, "neg", Elementwise, SameNumeric, 1, 1, false;
             Conj, "conj", Elementwise, SameFloatOrComplex, 1, 1, false;
             Div, "div", Elementwise, SameFloatOrComplex, 2, 2, false;
-            Abs, "abs", Elementwise, SameFloat, 1, 1, false;
+            Abs, "abs", Elementwise, AbsToReal, 1, 1, false;
             Sign, "sign", Elementwise, SameFloat, 1, 1, false;
             Maximum, "maximum", Elementwise, SameFloat, 2, 2, false;
             Minimum, "minimum", Elementwise, SameFloat, 2, 2, false;

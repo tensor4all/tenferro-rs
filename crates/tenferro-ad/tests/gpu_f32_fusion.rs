@@ -4,7 +4,7 @@
 
 mod support;
 use support::RunTraced;
-use tenferro_gpu::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {

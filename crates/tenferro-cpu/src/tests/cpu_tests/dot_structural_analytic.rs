@@ -747,8 +747,9 @@ fn test_tier2_elementwise_ops_complex() {
     let mut backend = CpuBackend::new();
 
     let abs = backend.abs(&input).unwrap();
-    assert_c64_close(get_c64(&abs, &[0]), Complex64::new(5.0, 0.0));
-    assert_c64_close(get_c64(&abs, &[1]), Complex64::new(0.0, 0.0));
+    assert_eq!(abs.dtype(), DType::F64);
+    assert_eq!(get_f64(&abs, &[0]), 5.0);
+    assert_eq!(get_f64(&abs, &[1]), 0.0);
 
     let sign = backend.sign(&input).unwrap();
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));

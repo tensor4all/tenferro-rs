@@ -98,10 +98,10 @@ fn host_view<'a, T: Copy>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<StridedView<'a, T, Identity>> {
-    match &tensor.buffer {
+    match tensor.buffer() {
         crate::Buffer::Host(data) => {
             let strides = col_major_strides(tensor.shape());
-            StridedView::new(data, tensor.shape(), &strides, 0)
+            StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
                 .map_err(|err| crate::Error::backend_failure(op, err))
         }
         crate::Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
@@ -147,8 +147,8 @@ fn clone_host_tensor_from_pool<T>(
 where
     T: Copy + PoolScalar + 'static,
 {
-    let input = match &tensor.buffer {
-        crate::Buffer::Host(data) => data,
+    let input = match tensor.buffer() {
+        crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
     // SAFETY: copy_from_slice initializes every element before returning.
@@ -157,7 +157,7 @@ where
     Ok(TypedTensor::from_buffer_col_major(
         tensor.shape().to_vec(),
         crate::Buffer::Host(data),
-        tensor.placement.clone(),
+        tensor.placement().clone(),
     ))
 }
 
@@ -423,8 +423,8 @@ pub fn typed_reshape<T: Clone + 'static>(
     }
     Ok(TypedTensor::from_buffer_col_major(
         shape.to_vec(),
-        tensor.buffer.clone(),
-        tensor.placement.clone(),
+        tensor.buffer().clone(),
+        tensor.placement().clone(),
     ))
 }
 
@@ -489,9 +489,11 @@ where
         base_dims[dst_axis] = source_dim;
         base_strides[dst_axis] = source_strides[src_axis];
     }
-    let base: StridedView<'_, T, Identity> = match &tensor.buffer {
-        crate::Buffer::Host(data) => StridedView::new(data, &base_dims, &base_strides, 0)
-            .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?,
+    let base: StridedView<'_, T, Identity> = match tensor.buffer() {
+        crate::Buffer::Host(data) => {
+            StridedView::new(data.as_slice(), &base_dims, &base_strides, 0)
+                .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?
+        }
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("broadcast_in_dim")),
     };
     let broadcast: StridedView<'_, T, Identity> = base
@@ -614,8 +616,8 @@ where
     let mut in_idx = vec![0usize; in_rank];
     let mut out_idx = vec![0usize; out_rank];
 
-    let input_data = match &tensor.buffer {
-        crate::Buffer::Host(data) => data,
+    let input_data = match tensor.buffer() {
+        crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("embed_diagonal")),
     };
 
@@ -702,16 +704,7 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     let batch_count: usize = tensor.shape()[2..].iter().product();
     let block_size = rows * cols;
     let mut out = tensor.clone();
-    let data = match &mut out.buffer {
-        crate::Buffer::Host(data) => data,
-        crate::Buffer::Backend(_) => {
-            return Err(cpu_backend_buffer_error(if upper {
-                "triu"
-            } else {
-                "tril"
-            }))
-        }
-    };
+    let data = out.host_data_mut();
 
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;
@@ -762,10 +755,7 @@ where
     let block_size = rows * cols;
     let mut out =
         clone_host_tensor_from_pool(buffers, if upper { "triu" } else { "tril" }, tensor)?;
-    let data = match &mut out.buffer {
-        crate::Buffer::Host(data) => data,
-        crate::Buffer::Backend(_) => unreachable!("clone_host_tensor_from_pool returns host data"),
-    };
+    let data = out.host_data_mut();
 
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;

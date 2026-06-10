@@ -32,7 +32,7 @@ Supersedes v1 architecture. Implements the v2.1 proposal from issue #621.
 pub struct TypedTensor<T> {
     pub buffer: Buffer<T>,    // Host(Vec<T>) | Backend(BufferHandle<T>)
     pub shape: Vec<usize>,    // strides derived from shape (col-major)
-    pub placement: Placement, // GPU/CPU placement
+    placement: Placement, // GPU/CPU placement, exposed through accessors
 }
 ```
 
@@ -40,7 +40,7 @@ Removed fields:
 - `strides` -- always col-major, derived from `shape`
 - `preferred_compute_device`
 
-Retained types: `Buffer<T>`, `BufferHandle<T>`, `Placement`, `ComputeDevice`, `MemoryKind`, `DType`, `ConjElem`.
+Retained types: `Buffer<T>`, `BufferHandle<T>`, `Placement`, `ComputeDevice`, `MemoryKind`, `DType`.
 
 `Tensor` enum inherent methods: metadata only (`shape()`, `dtype()`). All compute methods removed.
 
@@ -50,7 +50,7 @@ Retained types: `Buffer<T>`, `BufferHandle<T>`, `Placement`, `ComputeDevice`, `M
 tenferro-tensor/src/
   lib.rs
   types.rs                  TypedTensor<T>, Tensor, Buffer<T>, DType, Placement,
-                            MemoryKind, ComputeDevice, BufferHandle<T>, ConjElem
+                            MemoryKind, ComputeDevice, BufferHandle<T>
   config.rs                 DotGeneralConfig, CompareDir, GatherConfig, ScatterConfig,
                             SliceConfig, PadConfig (moved from tenferro-ops)
   backend.rs                TensorBackend + SemiringBackend<Alg> trait definitions

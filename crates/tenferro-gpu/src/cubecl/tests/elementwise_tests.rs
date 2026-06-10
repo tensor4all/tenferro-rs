@@ -325,7 +325,7 @@ fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
         panic!("expected C64 output");
     };
     let resident = tensor
-        .placement
+        .placement()
         .device
         .as_ref()
         .expect("converted tensor should preserve CUDA resident device");
@@ -348,7 +348,9 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
         Tensor::F64(tensor) => tensor,
         _ => panic!("expected F64 upload"),
     };
-    gpu_input.placement.device = None;
+    let mut placement = gpu_input.placement().clone();
+    placement.device = None;
+    gpu_input.set_placement(placement);
 
     let err = gpu.conj(&Tensor::F64(gpu_input)).unwrap_err();
 

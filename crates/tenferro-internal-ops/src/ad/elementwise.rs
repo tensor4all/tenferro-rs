@@ -5,7 +5,7 @@ use crate::ad::support::{
 };
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tenferro_tensor::CompareDir;
+use tenferro_tensor::{CompareDir, DType};
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -51,6 +51,20 @@ fn emit_fixed_div(
     rhs: ValueRef<StdTensorOp>,
 ) -> LocalValueId {
     emit_fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
+}
+
+fn emit_linear_div_fixed(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    active: LocalValueId,
+    fixed: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    builder.add_operation(
+        StdTensorOp::Div,
+        vec![ValueRef::Local(active), fixed],
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        },
+    )[0]
 }
 
 fn emit_fixed_compare(
@@ -115,6 +129,86 @@ fn emit_zero_from_active(
     )[0]
 }
 
+fn emit_scalar_constant(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    value: f64,
+) -> LocalValueId {
+    let bytes = match dtype {
+        DType::F32 => (value as f32).to_le_bytes().to_vec(),
+        DType::F64 => value.to_le_bytes().to_vec(),
+        DType::I32 => (value as i32).to_le_bytes().to_vec(),
+        DType::I64 => (value as i64).to_le_bytes().to_vec(),
+        DType::Bool => vec![(value != 0.0) as u8],
+        DType::C32 => {
+            let mut bytes = Vec::with_capacity(8);
+            bytes.extend_from_slice(&(value as f32).to_le_bytes());
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+            bytes
+        }
+        DType::C64 => {
+            let mut bytes = Vec::with_capacity(16);
+            bytes.extend_from_slice(&value.to_le_bytes());
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            bytes
+        }
+    };
+    builder.add_operation(
+        StdTensorOp::Constant { dtype, bytes },
+        vec![],
+        OperationRole::Primary,
+    )[0]
+}
+
+fn sum_linear_terms(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    terms: &[LocalValueId],
+) -> Option<LocalValueId> {
+    match terms {
+        [] => None,
+        [only] => Some(*only),
+        [first, rest @ ..] => {
+            let mut acc = *first;
+            for term in rest {
+                acc = builder.add_operation(
+                    StdTensorOp::Add,
+                    vec![ValueRef::Local(acc), ValueRef::Local(*term)],
+                    OperationRole::Linearized {
+                        active_mask: vec![true, true],
+                    },
+                )[0];
+            }
+            Some(acc)
+        }
+    }
+}
+
+fn mask_active_by_conditions(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    active: LocalValueId,
+    conditions: &[LocalValueId],
+) -> LocalValueId {
+    let zero = emit_zero_from_active(builder, active);
+    let mut value = active;
+    for condition in conditions {
+        value = emit_linear_select(builder, ValueRef::Local(*condition), value, zero);
+    }
+    value
+}
+
+fn balanced_extrema_contribution(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    active: LocalValueId,
+    self_eq_output: LocalValueId,
+    other_eq_output: LocalValueId,
+    dtype: DType,
+) -> LocalValueId {
+    let selected = mask_active_by_conditions(builder, active, &[self_eq_output]);
+    let two = emit_scalar_constant(builder, dtype, 2.0);
+    let half = emit_linear_div_fixed(builder, selected, ValueRef::Local(two));
+    emit_linear_select(builder, ValueRef::Local(other_eq_output), half, selected)
+}
+
 fn conjugate_for_input_dtypes(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
@@ -127,6 +221,18 @@ fn conjugate_for_input_dtypes(
         .map(|&index| dtype_of_or_real(ctx, &inputs[index]))
         .collect();
     conjugate_primal_if_any_dtype_complex(builder, input, &dtypes)
+}
+
+fn abs_output_dtype(input_dtype: DType) -> DType {
+    match input_dtype {
+        DType::C32 => DType::F32,
+        DType::C64 => DType::F64,
+        other => other,
+    }
+}
+
+fn is_complex_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::C32 | DType::C64)
 }
 
 fn select_tangents(
@@ -266,18 +372,25 @@ pub fn linearize_abs(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let sign_x = emit_fixed_unary(
+            let input_ref = ValueRef::External(primal_in[0].clone());
+            let input_dtype = dtype_of_or_real(ctx, &input_ref);
+            let output_dtype = abs_output_dtype(input_dtype);
+            let sign_x = emit_fixed_unary(builder, StdTensorOp::Sign, input_ref);
+            let coeff = if is_complex_dtype(input_dtype) {
+                emit_fixed_unary(builder, StdTensorOp::Conj, ValueRef::Local(sign_x))
+            } else {
+                sign_x
+            };
+            let tangent = emit_linear_mul_fixed(builder, ValueRef::Local(coeff), dx);
+            vec![Some(project_linear_to_dtype(
                 builder,
-                StdTensorOp::Sign,
-                ValueRef::External(primal_in[0].clone()),
-            );
-            vec![Some(emit_linear_mul_fixed(
-                builder,
-                ValueRef::Local(sign_x),
-                dx,
+                tangent,
+                input_dtype,
+                output_dtype,
             ))]
         }
         None => vec![None],
@@ -298,46 +411,88 @@ pub fn linearize_maximum(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
         return vec![None];
     }
 
-    let mask = emit_fixed_compare(
+    let lhs = ValueRef::External(primal_in[0].clone());
+    let rhs = ValueRef::External(primal_in[1].clone());
+    let dtype = dtype_of_or_real(ctx, &lhs);
+    let output = emit_fixed_binary(builder, StdTensorOp::Maximum, lhs.clone(), rhs.clone());
+    let lhs_eq_output = emit_fixed_compare(
         builder,
-        CompareDir::Ge,
-        ValueRef::External(primal_in[0].clone()),
-        ValueRef::External(primal_in[1].clone()),
+        CompareDir::Eq,
+        lhs.clone(),
+        ValueRef::Local(output),
     );
-    vec![select_tangents(
-        builder,
-        ValueRef::Local(mask),
-        tangent_in[0],
-        tangent_in[1],
-    )]
+    let rhs_eq_output = emit_fixed_compare(builder, CompareDir::Eq, rhs, ValueRef::Local(output));
+
+    let mut terms = Vec::new();
+    if let Some(lhs_tangent) = tangent_in[0] {
+        terms.push(balanced_extrema_contribution(
+            builder,
+            lhs_tangent,
+            lhs_eq_output,
+            rhs_eq_output,
+            dtype,
+        ));
+    }
+    if let Some(rhs_tangent) = tangent_in[1] {
+        terms.push(balanced_extrema_contribution(
+            builder,
+            rhs_tangent,
+            rhs_eq_output,
+            lhs_eq_output,
+            dtype,
+        ));
+    }
+    vec![sum_linear_terms(builder, &terms)]
 }
 
 pub fn linearize_minimum(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
         return vec![None];
     }
 
-    let mask = emit_fixed_compare(
+    let lhs = ValueRef::External(primal_in[0].clone());
+    let rhs = ValueRef::External(primal_in[1].clone());
+    let dtype = dtype_of_or_real(ctx, &lhs);
+    let output = emit_fixed_binary(builder, StdTensorOp::Minimum, lhs.clone(), rhs.clone());
+    let lhs_eq_output = emit_fixed_compare(
         builder,
-        CompareDir::Le,
-        ValueRef::External(primal_in[0].clone()),
-        ValueRef::External(primal_in[1].clone()),
+        CompareDir::Eq,
+        lhs.clone(),
+        ValueRef::Local(output),
     );
-    vec![select_tangents(
-        builder,
-        ValueRef::Local(mask),
-        tangent_in[0],
-        tangent_in[1],
-    )]
+    let rhs_eq_output = emit_fixed_compare(builder, CompareDir::Eq, rhs, ValueRef::Local(output));
+
+    let mut terms = Vec::new();
+    if let Some(lhs_tangent) = tangent_in[0] {
+        terms.push(balanced_extrema_contribution(
+            builder,
+            lhs_tangent,
+            lhs_eq_output,
+            rhs_eq_output,
+            dtype,
+        ));
+    }
+    if let Some(rhs_tangent) = tangent_in[1] {
+        terms.push(balanced_extrema_contribution(
+            builder,
+            rhs_tangent,
+            rhs_eq_output,
+            lhs_eq_output,
+            dtype,
+        ));
+    }
+    vec![sum_linear_terms(builder, &terms)]
 }
 
 pub fn linearize_select(
@@ -362,38 +517,39 @@ pub fn linearize_clamp(
         return vec![None];
     }
 
-    let upper_mask = emit_fixed_compare(
-        builder,
-        CompareDir::Le,
-        ValueRef::External(primal_in[0].clone()),
-        ValueRef::External(primal_in[2].clone()),
-    );
-    let inner_tangent = select_tangents(
-        builder,
-        ValueRef::Local(upper_mask),
-        tangent_in[0],
-        tangent_in[2],
-    );
+    let input = ValueRef::External(primal_in[0].clone());
+    let lower = ValueRef::External(primal_in[1].clone());
+    let upper = ValueRef::External(primal_in[2].clone());
+    let input_gt_lower = emit_fixed_compare(builder, CompareDir::Gt, input.clone(), lower.clone());
+    let input_lt_upper = emit_fixed_compare(builder, CompareDir::Lt, input.clone(), upper.clone());
+    let lower_gt_input = emit_fixed_compare(builder, CompareDir::Gt, lower.clone(), input.clone());
+    let lower_lt_upper = emit_fixed_compare(builder, CompareDir::Lt, lower, upper.clone());
+    let upper_lt_input = emit_fixed_compare(builder, CompareDir::Lt, upper, input);
 
-    let inner_primal = emit_fixed_binary(
-        builder,
-        StdTensorOp::Minimum,
-        ValueRef::External(primal_in[0].clone()),
-        ValueRef::External(primal_in[2].clone()),
-    );
-    let lower_mask = emit_fixed_compare(
-        builder,
-        CompareDir::Ge,
-        ValueRef::External(primal_in[1].clone()),
-        ValueRef::Local(inner_primal),
-    );
+    let mut terms = Vec::new();
+    if let Some(d_input) = tangent_in[0] {
+        terms.push(mask_active_by_conditions(
+            builder,
+            d_input,
+            &[input_gt_lower, input_lt_upper],
+        ));
+    }
+    if let Some(d_lower) = tangent_in[1] {
+        terms.push(mask_active_by_conditions(
+            builder,
+            d_lower,
+            &[lower_gt_input, lower_lt_upper],
+        ));
+    }
+    if let Some(d_upper) = tangent_in[2] {
+        terms.push(mask_active_by_conditions(
+            builder,
+            d_upper,
+            &[upper_lt_input],
+        ));
+    }
 
-    vec![select_tangents(
-        builder,
-        ValueRef::Local(lower_mask),
-        tangent_in[1],
-        inner_tangent,
-    )]
+    vec![sum_linear_terms(builder, &terms)]
 }
 
 pub fn transpose_div(
@@ -463,13 +619,17 @@ pub fn transpose_abs(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
     }
     match cotangent_out[0] {
         Some(ct) => {
+            let input_dtype = dtype_of_or_real(ctx, &inputs[0]);
+            let output_dtype = abs_output_dtype(input_dtype);
             let sign_x = emit_fixed_unary(builder, StdTensorOp::Sign, inputs[0].clone());
+            let ct = convert_linear_to_dtype(builder, ct, output_dtype, input_dtype);
             vec![Some(emit_linear_mul_fixed(
                 builder,
                 ValueRef::Local(sign_x),
@@ -499,6 +659,7 @@ pub fn transpose_maximum(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -507,16 +668,31 @@ pub fn transpose_maximum(
     if active.iter().all(|is_active| !is_active) {
         return vec![None, None];
     }
-    let mask = emit_fixed_compare(
+    let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let output = emit_fixed_binary(
         builder,
-        CompareDir::Ge,
+        StdTensorOp::Maximum,
         inputs[0].clone(),
         inputs[1].clone(),
     );
+    let lhs_eq_output = emit_fixed_compare(
+        builder,
+        CompareDir::Eq,
+        inputs[0].clone(),
+        ValueRef::Local(output),
+    );
+    let rhs_eq_output = emit_fixed_compare(
+        builder,
+        CompareDir::Eq,
+        inputs[1].clone(),
+        ValueRef::Local(output),
+    );
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
-    let (lhs, rhs) =
-        split_cotangent_by_mask(builder, ValueRef::Local(mask), ct, lhs_active, rhs_active);
+    let lhs = lhs_active
+        .then(|| balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype));
+    let rhs = rhs_active
+        .then(|| balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype));
     vec![lhs, rhs]
 }
 
@@ -525,6 +701,7 @@ pub fn transpose_minimum(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -533,16 +710,31 @@ pub fn transpose_minimum(
     if active.iter().all(|is_active| !is_active) {
         return vec![None, None];
     }
-    let mask = emit_fixed_compare(
+    let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let output = emit_fixed_binary(
         builder,
-        CompareDir::Le,
+        StdTensorOp::Minimum,
         inputs[0].clone(),
         inputs[1].clone(),
     );
+    let lhs_eq_output = emit_fixed_compare(
+        builder,
+        CompareDir::Eq,
+        inputs[0].clone(),
+        ValueRef::Local(output),
+    );
+    let rhs_eq_output = emit_fixed_compare(
+        builder,
+        CompareDir::Eq,
+        inputs[1].clone(),
+        ValueRef::Local(output),
+    );
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
-    let (lhs, rhs) =
-        split_cotangent_by_mask(builder, ValueRef::Local(mask), ct, lhs_active, rhs_active);
+    let lhs = lhs_active
+        .then(|| balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype));
+    let rhs = rhs_active
+        .then(|| balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype));
     vec![lhs, rhs]
 }
 
@@ -583,44 +775,42 @@ pub fn transpose_clamp(
     let lower_active = active.get(1).copied().unwrap_or(false);
     let upper_active = active.get(2).copied().unwrap_or(false);
 
-    let inner_primal = emit_fixed_binary(
+    let input_gt_lower = emit_fixed_compare(
         builder,
-        StdTensorOp::Minimum,
+        CompareDir::Gt,
+        inputs[0].clone(),
+        inputs[1].clone(),
+    );
+    let input_lt_upper = emit_fixed_compare(
+        builder,
+        CompareDir::Lt,
         inputs[0].clone(),
         inputs[2].clone(),
     );
-    let lower_mask = emit_fixed_compare(
+    let lower_gt_input = emit_fixed_compare(
         builder,
-        CompareDir::Ge,
+        CompareDir::Gt,
         inputs[1].clone(),
-        ValueRef::Local(inner_primal),
+        inputs[0].clone(),
     );
-    let (lower_ct, inner_ct) = split_cotangent_by_mask(
+    let lower_lt_upper = emit_fixed_compare(
         builder,
-        ValueRef::Local(lower_mask),
-        ct,
-        lower_active,
-        input_active || upper_active,
+        CompareDir::Lt,
+        inputs[1].clone(),
+        inputs[2].clone(),
+    );
+    let upper_lt_input = emit_fixed_compare(
+        builder,
+        CompareDir::Lt,
+        inputs[2].clone(),
+        inputs[0].clone(),
     );
 
-    let (input_ct, upper_ct) = match inner_ct {
-        Some(inner_ct) => {
-            let upper_mask = emit_fixed_compare(
-                builder,
-                CompareDir::Le,
-                inputs[0].clone(),
-                inputs[2].clone(),
-            );
-            split_cotangent_by_mask(
-                builder,
-                ValueRef::Local(upper_mask),
-                inner_ct,
-                input_active,
-                upper_active,
-            )
-        }
-        None => (None, None),
-    };
+    let input_ct = input_active
+        .then(|| mask_active_by_conditions(builder, ct, &[input_gt_lower, input_lt_upper]));
+    let lower_ct = lower_active
+        .then(|| mask_active_by_conditions(builder, ct, &[lower_gt_input, lower_lt_upper]));
+    let upper_ct = upper_active.then(|| mask_active_by_conditions(builder, ct, &[upper_lt_input]));
 
     vec![input_ct, lower_ct, upper_ct]
 }

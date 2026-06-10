@@ -1,7 +1,7 @@
 # GPU Backend Design
 
 This document is developer-facing. Public user docs describe the GPU surface as
-the CUDA backend exposed from `tenferro_gpu::cubecl::{CubeclBackend,
+the CUDA backend exposed from `tenferro_gpu::{CubeclBackend,
 upload_tensor, download_tensor}`. The active implementation behind that public
 surface lives in `crates/tenferro-gpu/src/cubecl/`, gated by the `cuda` feature. It
 targets NVIDIA CUDA devices through CubeCL and CubeCL-CUDA, with CUDA library
@@ -51,7 +51,7 @@ crates/tenferro-gpu/src/cubecl/
     tests/                 ignored GPU tests
 ```
 
-The public backend type is `tenferro_gpu::cubecl::CubeclBackend`. There are no
+The public backend type is `tenferro_gpu::CubeclBackend`. There are no
 separate in-tree `CudaBackend` and `RocmBackend` implementations. CUDA is
 selected by enabling the `cuda` feature, which depends on the workspace-pinned
 CubeCL fork and the CubeCL CUDA runtime.
@@ -134,7 +134,7 @@ shape/buffer validation before unsafe CubeCL launch arguments are constructed.
 Sibling operation crates must not import it directly.
 
 Operation crates that need to launch their own CubeCL kernels, such as
-`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cubecl::interop` module
+`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda_interop` module
 instead. That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:
 
@@ -240,7 +240,7 @@ compact tensors, and CUDA views may be copied into CUDA compact tensors. It is
 not a transfer mechanism.
 
 ```text
-use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
 let mut backend = CubeclBackend::new(0)?;

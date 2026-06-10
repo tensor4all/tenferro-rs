@@ -5,9 +5,9 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
-    ConjElem, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
-    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
-    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec,
+    Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
+    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use crate::{Error, SliceConfig};
@@ -261,8 +261,8 @@ fn device_model_has_typed_hashable_device_ids() {
 fn default_placement_is_unpinned_host_without_device() {
     let tensor = TypedTensor::<f64>::zeros(vec![2]);
 
-    assert_eq!(tensor.placement.memory_kind, MemoryKind::UnpinnedHost);
-    assert_eq!(tensor.placement.device, None);
+    assert_eq!(tensor.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(tensor.placement().device, None);
 }
 
 #[test]
@@ -337,15 +337,14 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
 
     assert_eq!(ranked.shape(), &[2, 3]);
     assert_eq!(ranked.layout().strides(), &[1, 2]);
-    assert_eq!(ranked.placement, placement);
-    match &ranked.buffer {
+    assert_eq!(ranked.placement(), &placement);
+    match ranked.buffer() {
         Buffer::Backend(buffer) => {
             assert_eq!(buffer.len(), 6);
-            let handle = buffer
+            buffer
                 .as_any()
                 .downcast_ref::<BufferHandle<f64>>()
                 .expect("opaque test handle");
-            assert_eq!(handle.id, 42);
         }
         Buffer::Host(_) => panic!("expected backend buffer"),
     }
@@ -437,7 +436,7 @@ fn non_contiguous_host_view_to_contiguous_preserves_host_placement() {
     let compact = view.to_contiguous().unwrap();
 
     assert_eq!(compact.as_slice(), &[1, 3, 2, 4]);
-    assert_eq!(compact.placement, placement);
+    assert_eq!(compact.placement(), &placement);
 }
 
 #[test]
@@ -885,7 +884,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 1))),
         placement.clone(),
     );
-    assert_eq!(tensor.placement.device.as_ref().unwrap().ordinal, 0);
+    assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
     let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
     assert!(host_data.is_err());
@@ -1485,20 +1484,6 @@ fn tensor_as_slice_returns_none_for_dtype_mismatch() {
     let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]);
 
     assert_eq!(tensor.as_slice::<f32>(), None);
-}
-
-#[test]
-fn conj_elem_covers_real_and_complex_scalars() {
-    assert_eq!(1.5_f32.conj_elem(), 1.5_f32);
-    assert_eq!(2.5_f64.conj_elem(), 2.5_f64);
-    assert_eq!(
-        Complex32::new(1.0, 2.0).conj_elem(),
-        Complex32::new(1.0, -2.0)
-    );
-    assert_eq!(
-        Complex64::new(-3.0, 4.5).conj_elem(),
-        Complex64::new(-3.0, -4.5)
-    );
 }
 
 #[test]
