@@ -49,6 +49,7 @@ website:
           - text: "FFT (extension)"
             href: guides/tenferro-fft.md
           - guides/autodiff.md
+          - guides/complex-ad.md
           - guides/devices-and-gpu.md
           - guides/memory-order.md
           - text: "Parallelism and Caching"

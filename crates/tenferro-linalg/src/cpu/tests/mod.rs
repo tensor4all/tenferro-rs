@@ -219,6 +219,14 @@ fn batch_vector_f64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec
     out
 }
 
+fn vector_f64_from_tensor(t: &Tensor, len: usize) -> Vec<f64> {
+    let mut out = vec![0.0; len];
+    for (i, value) in out.iter_mut().enumerate().take(len) {
+        *value = get_f64(t, &[i]);
+    }
+    out
+}
+
 fn matrix_c64_from_tensor(t: &Tensor, rows: usize, cols: usize) -> Vec<Complex64> {
     let mut out = vec![Complex64::new(0.0, 0.0); rows * cols];
     for j in 0..cols {

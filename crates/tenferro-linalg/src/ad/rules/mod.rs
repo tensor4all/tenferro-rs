@@ -18,6 +18,7 @@ mod support;
 pub(crate) use solve::{
     linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_triangular_solve,
     transpose_full_piv_lu_solve, transpose_lu_solve_prepared, transpose_triangular_solve,
+    TriangularSolveFlags,
 };
 use support::*;
 
@@ -137,12 +138,7 @@ pub(crate) fn linearize_lu(
         take_leading_cols_linear(
             builder,
             dl_full,
-            k_size,
-            n_size,
-            batch_shape,
-            l.clone(),
-            &l_shape,
-            rank,
+            LeadingMatrixSlice::new(k_size, n_size, batch_shape, l.clone(), &l_shape, rank),
         )
     } else {
         dl_full
@@ -151,12 +147,7 @@ pub(crate) fn linearize_lu(
         take_leading_rows_linear(
             builder,
             du_full,
-            k_size,
-            m_size,
-            batch_shape,
-            u.clone(),
-            &u_shape,
-            rank,
+            LeadingMatrixSlice::new(k_size, m_size, batch_shape, u.clone(), &u_shape, rank),
         )
     } else {
         du_full
@@ -523,6 +514,7 @@ pub(crate) fn linearize_eigh(
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
     let w = ValueRef::External(primal_out[0].clone());
+    let w_dtype = ctx.dtype_of(&w);
     let v = ValueRef::External(primal_out[1].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
 
@@ -542,6 +534,7 @@ pub(crate) fn linearize_eigh(
         matrix_rank,
     );
     let dw = extract_diag_linear(builder, projected);
+    let dw = convert_linear_to_dtype(builder, dw, dtype, w_dtype);
 
     let diag_w = embed_diag_fixed(builder, w.clone());
     let ones_mat = one_like_fixed(builder, ValueRef::Local(diag_w));
@@ -562,7 +555,8 @@ pub(crate) fn linearize_eigh(
     let eps_sq = fixed_scale(builder, ValueRef::Local(ones_mat), eps * eps);
     let safe_diff = fixed_add(builder, ValueRef::Local(diff_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(diff), ValueRef::Local(safe_diff));
-    let fm = hadamard_fixed_linear(builder, ValueRef::Local(f), projected);
+    let f = convert_fixed_ref_to_dtype(builder, ValueRef::Local(f), w_dtype, dtype);
+    let fm = hadamard_fixed_linear(builder, f, projected);
     let dv = matmul_linear(
         builder,
         v,

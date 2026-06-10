@@ -85,6 +85,12 @@ tracked, it also matches the scalar loss `loss.backward()` workflow with
 accumulation semantics. Traced tenferro is the API for `torch.autograd.grad`,
 `jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order compositions such as HVPs.
 
+For complex reverse-mode AD, tenferro uses a Hermitian real-inner-product
+cotangent representation. When comparing scalar `grad` values to JAX, the
+JAX-like value is `conj(tenferro_grad)` for the same scalar seed-`1`
+calculation. See [Complex Autodiff](../guides/complex-ad.md) for the full
+convention and VJP seed comparison.
+
 ### Compiler and executor ownership
 
 In tenferro, graph lowering state and backend runtime state are separate. That

@@ -870,6 +870,10 @@ impl EagerTensor {
     /// The stored gradient accumulates across repeated `backward()` calls
     /// until it is cleared explicitly.
     ///
+    /// For complex scalar losses, stored gradients use tenferro's
+    /// Hermitian-adjoint cotangent convention. See
+    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
+    ///
     /// # Examples
     ///
     /// ```
@@ -984,6 +988,10 @@ impl EagerTensor {
     /// Returns the full cotangent map produced by the reverse pass and also
     /// accumulates into `grad()` for tracked eager tensors reachable from this
     /// output.
+    ///
+    /// For complex scalar outputs, cotangents use tenferro's Hermitian
+    /// real-inner-product convention. See
+    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
     ///
     /// # Examples
     ///

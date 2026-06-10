@@ -8,15 +8,52 @@ use crate::extension::LinalgOp;
 use super::support::*;
 use super::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex, linalg_std_op};
 
+#[derive(Clone, Copy)]
+pub(crate) struct TriangularSolveFlags {
+    pub(crate) left_side: bool,
+    pub(crate) lower: bool,
+    pub(crate) transpose_a: bool,
+    pub(crate) unit_diagonal: bool,
+}
+
+impl TriangularSolveFlags {
+    pub(crate) fn new(
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Self {
+        Self {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        }
+    }
+
+    fn transposed(self) -> Self {
+        Self {
+            transpose_a: !self.transpose_a,
+            ..self
+        }
+    }
+
+    fn std_op(self) -> StdTensorOp {
+        linalg_std_op(LinalgOp::TriangularSolve {
+            left_side: self.left_side,
+            lower: self.lower,
+            transpose_a: self.transpose_a,
+            unit_diagonal: self.unit_diagonal,
+        })
+    }
+}
+
 pub(crate) fn linearize_triangular_solve(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    left_side: bool,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
+    flags: TriangularSolveFlags,
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     // Equation: op(A) @ X = B  (left_side=true)
@@ -43,27 +80,13 @@ pub(crate) fn linearize_triangular_solve(
         "linearize_triangular_solve: rank mismatch between lhs and rhs"
     );
     let rank = lhs_rank;
-    let rhs_tangent = triangular_solve_rhs_tangent(
-        builder,
-        primal_out,
-        tangent_in,
-        left_side,
-        lower,
-        transpose_a,
-        unit_diagonal,
-        rank,
-    );
+    let rhs_tangent = triangular_solve_rhs_tangent(builder, primal_out, tangent_in, flags, rank);
     let Some(rhs_tangent) = rhs_tangent else {
         return vec![None];
     };
 
     let out = builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        }),
+        flags.std_op(),
         vec![
             ValueRef::External(primal_in[0].clone()),
             ValueRef::Local(rhs_tangent),
@@ -241,18 +264,15 @@ fn triangular_solve_rhs_tangent(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    left_side: bool,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
+    flags: TriangularSolveFlags,
     rank: usize,
 ) -> Option<LocalValueId> {
     let mut rhs_tangent = tangent_in[1];
 
     if let Some(da) = tangent_in[0] {
-        let da = project_triangular_operand_linear(builder, da, lower, unit_diagonal);
+        let da = project_triangular_operand_linear(builder, da, flags.lower, flags.unit_diagonal);
         // d(op(A)) = op(dA), with op = identity or transpose.
-        let d_op_a = if transpose_a {
+        let d_op_a = if flags.transpose_a {
             transpose_matrix_linear(builder, da, rank)
         } else {
             da
@@ -260,7 +280,7 @@ fn triangular_solve_rhs_tangent(
 
         // Correction = d(op(A)) @ X  or  X @ d(op(A))
         let x = ValueRef::External(primal_out[0].clone());
-        let correction = if left_side {
+        let correction = if flags.left_side {
             matmul_linear(builder, ValueRef::Local(d_op_a), x, vec![true, false], rank)
         } else {
             matmul_linear(builder, x, ValueRef::Local(d_op_a), vec![false, true], rank)
@@ -280,10 +300,7 @@ pub(crate) fn transpose_triangular_solve(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
-    left_side: bool,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
+    flags: TriangularSolveFlags,
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
@@ -298,12 +315,7 @@ pub(crate) fn transpose_triangular_solve(
         let dtype = ctx.dtype_of(&inputs[0]);
         let conjugated_a = conjugate_primal_if_dtype_complex(builder, inputs[0].clone(), dtype);
         let out = builder.add_operation(
-            linalg_std_op(LinalgOp::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a: !transpose_a,
-                unit_diagonal,
-            }),
+            flags.transposed().std_op(),
             vec![conjugated_a, ValueRef::Local(ct)],
             OperationRole::Linearized {
                 active_mask: vec![false, true],
@@ -314,10 +326,10 @@ pub(crate) fn transpose_triangular_solve(
             let rank = ctx.shape_of(&inputs[0]).len();
             let solution = builder.add_operation(
                 linalg_std_op(LinalgOp::TriangularSolve {
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
+                    left_side: flags.left_side,
+                    lower: flags.lower,
+                    transpose_a: flags.transpose_a,
+                    unit_diagonal: flags.unit_diagonal,
                 }),
                 inputs.to_vec(),
                 OperationRole::Primary,
@@ -326,13 +338,17 @@ pub(crate) fn transpose_triangular_solve(
                 builder,
                 rhs_cotangent,
                 ValueRef::Local(solution),
-                left_side,
-                transpose_a,
+                flags.left_side,
+                flags.transpose_a,
                 rank,
                 dtype,
             );
-            let matrix_cotangent =
-                project_triangular_operand_linear(builder, matrix_cotangent, lower, unit_diagonal);
+            let matrix_cotangent = project_triangular_operand_linear(
+                builder,
+                matrix_cotangent,
+                flags.lower,
+                flags.unit_diagonal,
+            );
             result[0] = Some(matrix_cotangent);
         }
         if active_mask[1] {

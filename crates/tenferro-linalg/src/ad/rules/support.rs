@@ -141,6 +141,26 @@ pub(super) fn fixed_div(
     fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
 }
 
+pub(super) fn convert_fixed_ref_to_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: ValueRef<StdTensorOp>,
+    from: DType,
+    to: DType,
+) -> ValueRef<StdTensorOp> {
+    if from == to {
+        return input;
+    }
+    ValueRef::Local(
+        builder.add_operation(
+            StdTensorOp::Convert { from, to },
+            vec![input],
+            OperationRole::Linearized {
+                active_mask: vec![false],
+            },
+        )[0],
+    )
+}
+
 pub(super) fn fixed_scale(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
@@ -255,6 +275,24 @@ pub(super) fn linear_div_fixed(
         vec![ValueRef::Local(lhs), rhs],
         OperationRole::Linearized {
             active_mask: vec![true, false],
+        },
+    )[0]
+}
+
+pub(super) fn convert_linear_to_dtype(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    input: LocalValueId,
+    from: DType,
+    to: DType,
+) -> LocalValueId {
+    if from == to {
+        return input;
+    }
+    builder.add_operation(
+        StdTensorOp::Convert { from, to },
+        vec![ValueRef::Local(input)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
         },
     )[0]
 }
@@ -662,45 +700,76 @@ pub(super) fn augment_upper_to_square_fixed(
     )
 }
 
+pub(super) struct LeadingMatrixSlice<'a> {
+    leading: usize,
+    total: usize,
+    batch_shape: &'a [DimExpr],
+    anchor: ValueRef<StdTensorOp>,
+    anchor_shape: &'a [DimExpr],
+    rank: usize,
+}
+
+impl<'a> LeadingMatrixSlice<'a> {
+    pub(super) fn new(
+        leading: usize,
+        total: usize,
+        batch_shape: &'a [DimExpr],
+        anchor: ValueRef<StdTensorOp>,
+        anchor_shape: &'a [DimExpr],
+        rank: usize,
+    ) -> Self {
+        Self {
+            leading,
+            total,
+            batch_shape,
+            anchor,
+            anchor_shape,
+            rank,
+        }
+    }
+}
+
 pub(super) fn take_leading_cols_linear(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: LocalValueId,
-    cols: usize,
-    total_cols: usize,
-    batch_shape: &[DimExpr],
-    anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
-    rank: usize,
+    spec: LeadingMatrixSlice<'_>,
 ) -> LocalValueId {
-    let selector =
-        leading_column_selector_fixed(builder, cols, total_cols, batch_shape, anchor, anchor_shape);
-    let selector_t = transpose_matrix_fixed(builder, ValueRef::Local(selector), rank);
+    let selector = leading_column_selector_fixed(
+        builder,
+        spec.leading,
+        spec.total,
+        spec.batch_shape,
+        spec.anchor,
+        spec.anchor_shape,
+    );
+    let selector_t = transpose_matrix_fixed(builder, ValueRef::Local(selector), spec.rank);
     matmul_linear(
         builder,
         ValueRef::Local(input),
         ValueRef::Local(selector_t),
         vec![true, false],
-        rank,
+        spec.rank,
     )
 }
 
 pub(super) fn take_leading_rows_linear(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: LocalValueId,
-    rows: usize,
-    total_rows: usize,
-    batch_shape: &[DimExpr],
-    anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
-    rank: usize,
+    spec: LeadingMatrixSlice<'_>,
 ) -> LocalValueId {
-    let selector =
-        leading_column_selector_fixed(builder, rows, total_rows, batch_shape, anchor, anchor_shape);
+    let selector = leading_column_selector_fixed(
+        builder,
+        spec.leading,
+        spec.total,
+        spec.batch_shape,
+        spec.anchor,
+        spec.anchor_shape,
+    );
     matmul_linear(
         builder,
         ValueRef::Local(selector),
         ValueRef::Local(input),
         vec![false, true],
-        rank,
+        spec.rank,
     )
 }

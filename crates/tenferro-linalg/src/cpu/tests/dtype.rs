@@ -297,9 +297,18 @@ fn cpu_linalg_accepts_c32_happy_paths() {
     );
 
     let svd = backend.svd(&input).unwrap();
+    assert_eq!(svd[0].dtype(), DType::C32);
+    assert_eq!(svd[1].dtype(), DType::F32);
+    assert_eq!(svd[2].dtype(), DType::C32);
     assert_c32_slice_close(
         &matmul_c32(
-            &matmul_c32(c32_data(&svd[0]), &diag_c32(c32_data(&svd[1])), 3, 2, 2),
+            &matmul_c32(
+                c32_data(&svd[0]),
+                &diag_c32_from_real(f32_data(&svd[1])),
+                3,
+                2,
+                2,
+            ),
             c32_data(&svd[2]),
             3,
             2,

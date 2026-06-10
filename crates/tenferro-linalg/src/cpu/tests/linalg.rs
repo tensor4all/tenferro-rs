@@ -535,14 +535,23 @@ fn test_complex_svd() {
     let out = backend.svd(&input).unwrap();
 
     assert_eq!(out.len(), 3);
+    assert_eq!(out[0].dtype(), DType::C64);
+    assert_eq!(out[1].dtype(), DType::F64);
+    assert_eq!(out[2].dtype(), DType::C64);
     assert_eq!(out[0].shape(), &[3, 2]);
     assert_eq!(out[1].shape(), &[2]);
     assert_eq!(out[2].shape(), &[2, 2]);
 
     let u = matrix_c64_from_tensor(&out[0], 3, 2);
-    let s = vector_c64_from_tensor(&out[1], 2);
+    let s = vector_f64_from_tensor(&out[1], 2);
     let vt = matrix_c64_from_tensor(&out[2], 2, 2);
-    let recon = matmul_c64(&matmul_c64(&u, &diag_c64(&s), 3, 2, 2), &vt, 3, 2, 2);
+    let recon = matmul_c64(
+        &matmul_c64(&u, &diag_c64_from_real(&s), 3, 2, 2),
+        &vt,
+        3,
+        2,
+        2,
+    );
     for (actual, expected) in recon.iter().zip(input_data.iter()) {
         assert_c64_close_tol(*actual, *expected, 1.0e-9);
     }

@@ -60,6 +60,40 @@ fn svd_executes_after_runtime_registration() {
 }
 
 #[test]
+fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(3.0, 0.5),
+            Complex64::new(0.2, -0.4),
+            Complex64::new(-0.1, 0.3),
+            Complex64::new(2.0, -0.2),
+        ],
+    )));
+    let (_u, s, _vt) = tenferro_linalg::svd(&a).unwrap();
+    assert_eq!(s.dtype, DType::F64);
+
+    let weights = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![2],
+        vec![0.5_f64, 2.0],
+    ));
+    let weighted = &s * &weights;
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_many(&[&s, &weighted]).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_linalg::register_runtime)
+        .unwrap();
+    let outputs = executor.run_many(&program).unwrap();
+
+    assert_eq!(outputs[0].dtype(), DType::F64);
+    assert_eq!(outputs[1].dtype(), DType::F64);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2]);
+}
+
+#[test]
 fn missing_runtime_reports_linalg_family() {
     let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![2, 2],

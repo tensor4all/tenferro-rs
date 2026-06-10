@@ -128,10 +128,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 primal_in,
                 primal_out,
                 tangent_in,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
+                rules::TriangularSolveFlags::new(left_side, lower, transpose_a, unit_diagonal),
                 ctx,
             ),
             LinalgOp::Cholesky => {
@@ -179,10 +176,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 cotangent_out,
                 inputs,
                 mode,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
+                rules::TriangularSolveFlags::new(left_side, lower, transpose_a, unit_diagonal),
                 ctx,
             ),
             LinalgOp::LuSolvePrepared {
@@ -233,10 +227,7 @@ impl PrimitiveRuleBuilder for DynBuilder<'_> {
     }
 }
 
-fn downcast_ad_op<'a>(
-    op: &'a dyn ExtensionOpTrait,
-    kind: ADRuleKind,
-) -> ADRuleResult<&'a LinalgExtensionOp> {
+fn downcast_ad_op(op: &dyn ExtensionOpTrait, kind: ADRuleKind) -> ADRuleResult<&LinalgExtensionOp> {
     op.as_any()
         .downcast_ref::<LinalgExtensionOp>()
         .ok_or_else(|| {
