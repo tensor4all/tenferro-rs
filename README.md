@@ -103,6 +103,9 @@ The full guides, tutorials, API reference, architecture notes, and
 specifications live at <https://tensor4all.org/tenferro-rs/>. Start with
 Getting Started if you are using tenferro-rs for the first time.
 
+Official benchmark suites and result tooling live in
+[`tensor4all/tenferro-benchmark`](https://github.com/tensor4all/tenferro-benchmark).
+
 ## Community
 
 The broader tensor4all community uses the

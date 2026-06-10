@@ -6,8 +6,11 @@ This work log tracks the batched remediation pass for issue #986 against
 `origin/main` commit `043259ab5cc46dfc665159c02a480bdfb2fac8a9`.
 
 The first implemented batch fixed docs and rustdoc issues that were safe for
-automatic remediation. Broader public API, AD policy, and public cache/runtime
-boundary changes remain design-gated.
+automatic remediation. Later batches fixed runtime, performance, device,
+structural AD, complex AD, public-surface, runtime/cache-boundary, and
+JAX-compatible boundary AD items. Remaining unresolved items are broad
+verify-first coverage/performance investigations or repository policy gates,
+not silently deferred auto-fix items.
 
 ## Context Read
 
@@ -57,54 +60,56 @@ Status values:
 - `stale`: current worktree no longer has the historical issue
 - `verify-first`: needs a narrower current failing path before implementation
 - `design-gated`: requires maintainer/design decision before code changes
+- `design-gate accepted`: maintainer discussion resolved the design gate and
+  the item was implemented in this remediation branch
 - `remaining-auto`: classified as automatically fixable, not yet implemented
 
 | Finding | Classification | Current status |
 | --- | --- | --- |
-| #2 public `tenferro_gpu::cubecl`/doc-hidden modules | Design Gate | design-gated |
+| #2 public `tenferro_gpu::cubecl`/doc-hidden modules | Design Gate Accepted | fixed; CubeCL implementation modules and raw buffer internals are no longer exposed as public API |
 | #3 stale `tenferro_ops::ExtensionFamilyId` docs | Auto Fix | fixed |
 | #4 coverage policy vs thresholds | Design Gate | design-gated |
 | #6 FFT C2C transpose/oracle coverage | Auto Fix | fixed; existing C2C rule used the wrong adjoint convention |
-| #10 `TensorDeviceTransfer` clone defaults | Design Gate | design-gated |
+| #10 `TensorDeviceTransfer` clone defaults | Design Gate Accepted | fixed; backend-buffer transfers now require explicit backend behavior and CPU rejects backend buffers clearly |
 | #12 compile-cache string fingerprint | Auto Fix | fixed |
 | #13 segment later-instruction scans | Auto Fix | fixed |
-| #16 publishable internal `tenferro_ops` crate | Design Gate | design-gated |
-| #19 public tensor representation hooks | Design Gate | design-gated |
+| #16 publishable internal `tenferro_ops` crate | Design Gate Accepted | fixed; internal ops crate is no longer publishable |
+| #19 public tensor representation hooks | Design Gate Accepted | fixed; low-level tensor representation fields moved behind narrower accessors |
 | #20 `ReduceProd` zero-input AD | Auto Fix | fixed |
 | #21 broad indexing AD coverage | Verify First | verify-first |
 | #29 README ROCm support overclaim | Auto Fix | fixed |
-| #32 public `TracedTensor` fields | Design Gate | design-gated |
-| #37 traced graph builder clones | Verify First | verify-first |
+| #32 public `TracedTensor` fields | Design Gate Accepted | fixed; traced tensor internals moved behind accessors |
+| #37 traced graph builder clones | Stale / Upstream Fixed | stale; computegraph `origin/main` already contains shared `Arc<OperationKey>` keys and cached fingerprints, and tenferro pins that revision |
 | #40 FFT output zero-initialization | Auto Fix | fixed |
-| #42 complex `Abs` AD convention | Design Gate | design-gated; current primal returns complex real-embedded output while JAX uses real output, so the AD convention must be decided before code changes |
-| #43 complex `Sign` AD convention | Design Gate | design-gated; JAX treats `sign` as zero-JVP, but tenferro's complex primal is non-holomorphic and needs an explicit convention |
+| #42 complex `Abs` AD convention | Auto Fix After Contract Decision | fixed; complex `Abs` now follows JAX real-output convention (`C32 -> F32`, `C64 -> F64`) with matching JVP/VJP |
+| #43 complex `Sign` AD convention | Contract/Test Fix | fixed; AD contract documents JAX zero-AD convention and regression coverage confirms complex `Sign` JVP/VJP are zero |
 | #44/#52/#101 shape-source arity AD | Auto Fix | fixed; narrowed to current `transpose_reshape` arity gap plus verification of existing broadcast arity behavior |
-| #49 public fusion IR backend API | Design Gate | design-gated |
+| #49 public fusion IR backend API | Design Gate Accepted | fixed; fusion IR backend internals are no longer top-level public API |
 | #56/#73 executor workspace allocation/clones | Verify First | verify-first |
 | #65 explicit singleton `BroadcastInDim` VJP | Auto Fix | fixed |
 | #78/#79 diagonal VJP edge cases | Auto Fix | fixed |
 | #80 repeated-label einsum VJP | Auto Fix | fixed; verified with helper-level repeated-label projection regression |
 | #87 FFT device/backend-buffer input boundary | Stale / Out of Scope | stale; current behavior rejects device/backend-buffer input with a clear host-only diagnostic |
-| #106 integer/bool/lossy `Convert` AD policy | Design Gate | design-gated |
+| #106 integer/bool/lossy `Convert` AD policy | Design Gate Accepted | fixed; follows JAX-like `float0` convention for integer/bool boundaries while floating/complex casts remain differentiable |
 | #109 lazy value/view API rustdoc examples | Auto Fix | fixed |
 | #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | fixed |
 | #111 `TracedTensorAdExt` rustdoc examples | Auto Fix | fixed |
 | #112 CUDA zero-sized-output residency validation | Auto Fix | fixed |
-| #113 gather/scatter boundary VJP | Verify First | verify-first; narrow to current boundary cases |
+| #113 gather/scatter boundary VJP | Contract Fix | fixed by contract; indexing AD follows JAX/StableHLO-style `promise_in_bounds`, so gradients are guaranteed for in-bounds indices only |
 | #114 `Pow` zero-base singularity | Auto Fix | fixed |
 | #115 terminal lazy view base clone | Auto Fix | fixed |
-| #116 scalar helper public contract | Design Gate | design-gated |
+| #116 scalar helper public contract | Design Gate Accepted | fixed; low-level scalar conjugation/conversion hooks are no longer exposed as public tensor API |
 | #116 mixed real/complex binary VJPs | Auto Fix | fixed for binary arithmetic `Add`/`Mul`/`Div`/`Pow`; verified with direct mixed primitive JVP/VJP regressions for both real-input positions |
 | #117 einsum fallback greedy `HashSet` rebuild | Auto Fix | fixed |
 | #117 eager helper host tensors in CUDA contexts | Auto Fix | fixed |
 | #118 active crate/backend ownership docs | Auto Fix | fixed |
 | #119 primitive catalog `Constant` docs | Auto Fix | fixed |
 | #120 active in-place indexing ChainRules framing | Auto Fix | fixed |
-| #121 einsum retained-byte cache accounting | Design Gate | design-gated |
+| #121 einsum retained-byte cache accounting | Design Gate Accepted | fixed; extension cache retained bytes can be recomputed from mutated cached values |
 | #122 CPU provider-injection rustdoc placeholders | Auto Fix | fixed |
-| #123 eager extension materializes lazy/view tensors | Design Gate | design-gated |
+| #123 eager extension materializes lazy/view tensors | Design Gate Accepted | fixed; eager extension dispatch now uses `TensorRead` and read-capable runtimes can consume views directly |
 | #124 oracle docs active CI/replay claims | Auto Fix | fixed |
-| #125 max/min/clamp boundary AD convention | Design Gate | design-gated |
+| #125 max/min/clamp boundary AD convention | Auto Fix After Contract Decision | fixed; `Maximum`/`Minimum` ties split cotangents like JAX and `Clamp` uses strict JAX boundary masks |
 | #126 device AD seeds and missing tangents | Auto Fix | fixed for eager seed/missing-tangent helpers and traced rank-0 default inputs; non-scalar default input auto-upload remains intentionally out of scope |
 
 ## First Batch: Docs And Rustdoc
@@ -275,6 +280,69 @@ Implemented:
   borrowed scalar defaults plus guard tests for explicit scalar bindings,
   non-scalar defaults, and backend-resident scalar defaults.
 
+## Thirteenth Batch: JAX-Compatible Elementwise AD Contracts
+
+Implemented:
+
+- Audited JAX's current `abs`, `sign`, `max`, `min`, and `clamp` AD rules and
+  used them as the tie/boundary convention where tenferro's contract had been
+  ambiguous.
+- Changed complex `Abs` primal dtype inference and traced execution metadata
+  to return real magnitudes (`C32 -> F32`, `C64 -> F64`) instead of
+  real-embedded complex tensors.
+- Updated CPU complex `Abs` execution to return real tensors and added traced
+  dtype/execution regressions.
+- Updated complex `Abs` JVP/VJP to use JAX's real-output convention:
+  `d abs(z) = Re(conj(sign(z)) * dz)` and `z_bar = abs_bar * sign(z)`.
+- Documented and tested complex `Sign` as a zero-AD operation.
+- Updated `Maximum`/`Minimum` JVP/VJP to split contributions equally at ties,
+  matching JAX's balanced equality rule.
+- Updated `Clamp` JVP/VJP to use strict JAX boundary masks, so exact lower and
+  upper boundaries receive zero contribution.
+- Documented the indexing AD `promise_in_bounds` contract in
+  `docs/spec/ad-contract.md` and the indexing AD implementation comments.
+- Reclassified computegraph clone issue #37 as stale/upstream-fixed after
+  verifying the pinned computegraph revision already shares derived operation
+  keys via `Arc`.
+
+## Fourteenth Batch: Public Surface And Transfer Boundaries
+
+Implemented:
+
+- Hid CUDA/CubeCL implementation modules and raw buffer internals that were
+  previously exposed as public API, while preserving the intended high-level
+  CUDA backend entry points.
+- Marked the internal ops crate as non-publishable instead of presenting
+  `tenferro_ops` as an external SDK surface.
+- Moved tensor representation fields and traced tensor internals behind
+  narrower accessors.
+- Removed top-level public exposure of fusion IR backend implementation
+  details.
+- Kept low-level scalar conjugation/conversion helpers internal to their
+  owning backend/tensor layers.
+- Replaced implicit transfer defaults with explicit backend behavior and clear
+  CPU errors for backend-buffer transfers.
+
+## Fifteenth Batch: Convert, Cache, And Eager Extension Read Boundaries
+
+Implemented:
+
+- Defined `Convert` AD to follow JAX's `float0`-style inactive tangent
+  convention at integer/bool boundaries while keeping floating/complex casts
+  differentiable.
+- Changed extension cache retained-byte accounting so entries can report
+  dynamic retained bytes after nested backend caches grow.
+- Added a read-capable `ExtensionRuntime` dispatch boundary. Existing
+  tensor-only runtimes keep an explicit materializing fallback, while
+  read-aware runtimes can consume `TensorRead` views directly.
+- Routed eager extension dispatch through `TensorRead` instead of
+  `EagerTensor::materialized_arc()`.
+- Added an einsum runtime read override for eager extension dispatch. Compact
+  tensor inputs still use the existing cached runtime program path; view inputs
+  use the read-capable eager einsum executor.
+- Added a README link to the official
+  `tensor4all/tenferro-benchmark` benchmark suite.
+
 ## Verification
 
 - `cargo fmt --all --check`
@@ -326,16 +394,36 @@ Implemented:
 - `cargo test -p tenferro-runtime --test graph_default_input_placement`
 - `cargo fmt --all --check`
 - `git diff --check`
+- `cargo test -p tenferro-ad test_abs_complex_outputs_real_dtype --test dtype_propagation`
+- `cargo test -p tenferro-ad traced_abs_of_complex_tensor_returns_real_tensor --test primitive_ops`
+- `cargo test -p tenferro-cpu test_tier2_elementwise_ops_complex --lib`
+- `cargo test -p tenferro-ad complex_abs_ad_matches_jax_real_output_convention --test ad`
+- `cargo test -p tenferro-ad complex_sign_ad_is_zero_like_jax --test ad`
+- `cargo test -p tenferro-ad elementwise_extrema_ties_split_cotangents_like_jax --test ad`
+- `cargo test -p tenferro-ad clamp_ad_uses_strict_jax_boundary_masks --test ad`
+- `cargo test -p tenferro-internal-ops --features autodiff elementwise_tests`
+- `cargo test -p tenferro-cpu --test runtime_error_tests cpu_device_transfer_rejects_backend_buffers_at_boundary`
+- `cargo test -p tenferro-ad --test dynamic_truncate dynamic_truncate_rejects_backend_size_binding_on_cpu`
+- `cargo test -p tenferro-ad --test ad convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0`
+- `cargo test -p tenferro-ad --test ad convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules`
+- `cargo test -p tenferro-runtime extension_cache::tests --lib`
+- `cargo test -p tenferro-einsum --features autodiff --test traced_graph_cache runtime_planned_einsum_reuses_extension_runtime_caches`
+- `cargo test -p tenferro-einsum --features autodiff --test traced_graph_cache extension_runtime_cache_limits_bound_runtime_planned_einsum_entries`
+- `cargo test -p tenferro-ad eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache --lib`
+- `cargo test -p tenferro-runtime --test extension_runtime`
+- `cargo test -p tenferro-internal-extension-macros extension_runtime_macro_generates_optional_read_executor`
+- `cargo test -p tenferro-einsum execute_einsum_extension_reads_consumes_strided_view_inputs --lib`
+- `cargo test -p tenferro-einsum --features autodiff generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops --lib`
+- `cargo test -p tenferro-einsum --features autodiff tensor_value_view_paths_materialize_and_read --lib`
 
 `cargo doc --workspace --no-deps` emitted an existing private intra-doc link
 warning in `crates/tenferro-runtime/src/shape_infer.rs`.
 
 ## Residual Risks
 
-- The remaining unresolved items are verify-first or design-gated rather than
-  straightforward auto-fix items.
-- Design-gated items should become focused design or child issues rather than
-  being implemented silently in this remediation branch.
+- Remaining unresolved items are broad verify-first coverage/performance
+  investigations or repository-policy items that need a separate policy
+  decision, not known narrow auto-fix items.
 - CUDA zero-output validation was verified with source-contract tests and
   CUDA-feature compile-only checks, not with CUDA hardware execution.
 - The eager and traced scalar-default device-placement fixes were verified with
@@ -344,8 +432,13 @@ warning in `crates/tenferro-runtime/src/shape_infer.rs`.
   user-sized tensors across device boundaries.
 - Mixed real/complex binary arithmetic AD is fixed for `Add`/`Mul`/`Div`/`Pow`.
   The same direct mixed-dtype projection issue is also fixed for `DotGeneral`.
-  Similar risks remain in boundary-sensitive elementwise ops, but they require
-  #125 semantics before implementation.
+  Boundary-sensitive `Maximum`/`Minimum`/`Clamp` AD now follows the documented
+  JAX-compatible convention.
+- Extension runtimes that do not override the new read execution entry point
+  still materialize view inputs at the explicit runtime ABI fallback. The
+  standard einsum runtime overrides the read path; linalg and FFT remain
+  tensor-only because their current backend contracts require compact tensors
+  or host FFT inputs.
 
 ## PR-Pre Residual Audit
 
@@ -358,20 +451,30 @@ Remaining `Verify First` items:
 
 - #21 indexing AD coverage: broad coverage debt, with no narrow failing path
   identified in this pass.
-- #37 traced graph builder clones: the remaining clone concern is mostly in the
-  pinned external `computegraph` dependency, not a narrow repo-local fix.
 - #56/#73 executor workspace allocation/clones: owned execution paths already
   reuse workspace; borrowed paths still need performance/lifetime investigation.
-- #113 gather/scatter boundary VJP: strongest remaining concrete risk. Current
-  gather boundary behavior clamps indices while scatter drops out-of-range
-  windows, so a focused boundary VJP test should be written before any fix.
 
 Remaining design-gated groups:
 
-- Public surface and compatibility decisions: #2, #16, #19, #32, #49, and #116
-  scalar helper contract.
-- Repository policy decisions: #4 coverage policy and #10 transfer defaults.
-- AD semantics decisions: #42 complex `Abs`, #43 complex `Sign`, #106
-  integer/bool/lossy `Convert`, and #125 max/min/clamp boundaries.
-- Runtime/cache boundary decisions: #121 einsum retained-byte accounting and
-  #123 eager extension view/materialization ABI.
+- Repository policy decisions: #4 coverage policy.
+
+Resolved during the final contract and boundary passes:
+
+- #2, #16, #19, #32, #49, and scalar-helper #116: public surface narrowed
+  after the compatibility decision that backward compatibility is not required.
+- #10 transfer defaults: explicit backend behavior now replaces implicit clone
+  defaults.
+- #37 traced graph builder clones: upstream-fixed in computegraph and already
+  pinned by tenferro.
+- #42 complex `Abs`: JAX-compatible real-output convention implemented.
+- #43 complex `Sign`: JAX zero-AD convention documented and tested.
+- #106 `Convert`: JAX `float0`-like inactive integer/bool boundary contract
+  documented and implemented.
+- #113 gather/scatter boundary VJP: resolved as an in-bounds AD contract via
+  `promise_in_bounds`.
+- #121 retained-byte accounting: extension cache entries can dynamically
+  report nested cache growth.
+- #123 eager extension materialization: eager extension dispatch now uses
+  `TensorRead`, with an einsum read-capable runtime override.
+- #125 max/min/clamp boundaries: JAX-compatible tie split and strict clamp
+  masks implemented.
