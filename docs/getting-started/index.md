@@ -18,7 +18,7 @@ tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu" }
 
 With default features, this compiles the `cpu-faer` provider, so
 `CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
-`cpu-blas` and link a BLAS/LAPACK provider:
+`cpu-blas` and link a BLAS/LAPACK provider from the build environment:
 
 ```toml
 [dependencies]
@@ -31,14 +31,26 @@ must be enabled, and builds may enable both. `CpuBackend::new()` selects the
 compiled default provider: BLAS when `cpu-blas` is compiled, otherwise faer.
 Use `CpuBackend::with_kind` when a program needs explicit provider selection
 within a build that has multiple providers. The `cpu-blas` backend needs a
-BLAS/LAPACK provider. Link one from the system toolchain, or enable the provider
-feature on `tenferro-cpu` to build against OpenBLAS:
+BLAS/LAPACK provider. Link one from the system toolchain with `cpu-blas`, or
+enable exactly one explicit provider feature to select a source provider for
+BLAS, LAPACK, and strided einsum:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
-tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["src-openblas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas-openblas"] }
+tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas-openblas"] }
 ```
+
+The explicit provider features are `blas-openblas`, `blas-accelerate`, and
+`blas-mkl`. Cargo features are additive, so tenferro rejects builds that enable
+more than one explicit BLAS provider. The legacy `src-openblas`,
+`src-accelerate`, and `src-intel-mkl-dynamic-parallel` names remain aliases for
+the corresponding explicit provider features.
+
+Provider build scripts may need environment variables when using system
+installations. OpenBLAS setups commonly use `OPENBLAS_LIB_DIR`; MKL setups
+commonly use `MKLROOT` or `MKL_LIB_DIR`; Accelerate is the macOS system
+framework provider.
 
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or
 `tenferro-gpu` when a workflow needs those layers. Enable `autodiff` on

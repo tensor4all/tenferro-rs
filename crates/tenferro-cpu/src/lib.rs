@@ -22,6 +22,25 @@ compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
 #[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
 compile_error!("provider-inject requires cpu-blas");
 
+#[cfg(any(
+    all(feature = "blas-openblas", feature = "blas-accelerate"),
+    all(feature = "blas-openblas", feature = "blas-mkl"),
+    all(feature = "blas-accelerate", feature = "blas-mkl"),
+))]
+compile_error!(
+    "enable at most one explicit BLAS provider feature: blas-openblas, blas-accelerate, or blas-mkl"
+);
+
+#[cfg(all(
+    feature = "provider-inject",
+    any(
+        feature = "blas-openblas",
+        feature = "blas-accelerate",
+        feature = "blas-mkl"
+    )
+))]
+compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
+
 pub mod affinity;
 mod analytic;
 pub mod backend;

@@ -25,7 +25,7 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
     tenferro-owned Rayon pool entry.
 - `tenferro-cpu/benches/openblas_direct_overhead.rs`
   - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
-  - Requires the `cpu-blas` feature and is intended for `src-openblas` runs.
+  - Requires the `cpu-blas` feature and is intended for `blas-openblas` runs.
 - `scripts/bench-itensors-pairwise-contraction.jl`
   - Measures the matching ITensors.jl pairwise contractions.
 - `scripts/bench-pairwise-contraction.sh`
@@ -86,7 +86,7 @@ OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
 cargo bench -p tenferro-cpu \
   --no-default-features \
-  --features src-openblas \
+  --features blas-openblas \
   --bench pairwise_contraction -- \
   --warm-up-time 0.5 \
   --measurement-time 1 \
@@ -103,7 +103,7 @@ OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
 cargo bench -p tenferro-cpu \
   --no-default-features \
-  --features src-openblas \
+  --features blas-openblas \
   --bench openblas_direct_overhead -- \
   --warm-up-time 0.5 \
   --measurement-time 1 \
@@ -138,7 +138,7 @@ Julia reports `LBTConfig([ILP64] libopenblas64_.so)` with
 `BLAS.set_num_threads(1)`. Therefore the ITensors comparison is consistent with
 a one-thread OpenBLAS-backed Julia setup.
 
-Switching tenferro to `src-openblas` did not, by itself, remove the small-`chi`
+Switching tenferro to `blas-openblas` did not, by itself, remove the small-`chi`
 fixed cost:
 
 | chi | direct OpenBLAS 2x zgemm | direct + conj copy | tenferro OpenBLAS normal | tenferro OpenBLAS cached |
@@ -403,13 +403,13 @@ entry point without making normal eager contractions context-dependent.
 - `cargo fmt --all -- --check`
 - `cargo bench -p tenferro-cpu --bench pairwise_contraction --no-run`
 - `cargo bench -p tenferro-cpu --bench cpu_install_overhead --no-run`
-- `cargo bench -p tenferro-cpu --no-default-features --features src-openblas --bench pairwise_contraction -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-cpu --no-default-features --features src-openblas --bench dot_general_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-cpu --no-default-features --features src-openblas --bench openblas_direct_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 20`
-- `cargo bench -p tenferro-cpu --no-default-features --features src-openblas --bench pairwise_contraction --no-run`
+- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench pairwise_contraction -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
+- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench dot_general_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
+- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench openblas_direct_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 20`
+- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench pairwise_contraction --no-run`
 - `cargo test -p tenferro-cpu --release dot_general -- --nocapture`
-- `cargo test -p tenferro-cpu --no-default-features --features src-openblas --release dot_general`
-- `cargo test -p tenferro-cpu --no-default-features --features src-openblas --release`
+- `cargo test -p tenferro-cpu --no-default-features --features blas-openblas --release dot_general`
+- `cargo test -p tenferro-cpu --no-default-features --features blas-openblas --release`
 - `bash -n scripts/bench-pairwise-contraction.sh`
 - Julia `Pkg.instantiate()` and `Pkg.precompile()`
 - ITensors version check: `0.9.27`

@@ -17,6 +17,9 @@ name = "tenferro_runtime"
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
+blas-openblas = ["tenferro-cpu/blas-openblas"]
+blas-accelerate = ["tenferro-cpu/blas-accelerate"]
+blas-mkl = ["tenferro-cpu/blas-mkl"]
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }

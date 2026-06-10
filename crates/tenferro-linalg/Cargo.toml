@@ -26,6 +26,21 @@ cpu-blas = [
     "tenferro-ad?/cpu-blas",
     "tenferro-cpu/cpu-blas",
 ]
+blas-openblas = [
+    "tenferro-ad?/blas-openblas",
+    "tenferro-cpu/blas-openblas",
+    "tenferro-gpu?/blas-openblas",
+]
+blas-accelerate = [
+    "tenferro-ad?/blas-accelerate",
+    "tenferro-cpu/blas-accelerate",
+    "tenferro-gpu?/blas-accelerate",
+]
+blas-mkl = [
+    "tenferro-ad?/blas-mkl",
+    "tenferro-cpu/blas-mkl",
+    "tenferro-gpu?/blas-mkl",
+]
 provider-inject = [
     "cpu-blas",
     "tenferro-cpu/provider-inject",
