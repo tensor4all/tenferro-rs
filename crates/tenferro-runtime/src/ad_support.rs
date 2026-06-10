@@ -35,7 +35,7 @@ pub struct TracedTensorParts {
 }
 
 /// Builds a traced tensor from validated AD transform output.
-pub fn traced_tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
+pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
     TracedTensor {
         id: next_traced_id(),
         rank: parts.rank,
@@ -51,31 +51,31 @@ pub fn traced_tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
     }
 }
 
-pub fn traced_shape_hint(tensor: &TracedTensor) -> Option<Vec<SymDim>> {
+pub fn shape_hint(tensor: &TracedTensor) -> Option<Vec<SymDim>> {
     tensor.shape_hint.clone()
 }
 
-pub fn traced_inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, Arc<Tensor>>> {
+pub fn inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, Arc<Tensor>>> {
     Arc::clone(&tensor.inputs_map)
 }
 
-pub fn traced_extra_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
+pub fn extra_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.extra_roots.clone()
 }
 
-pub fn traced_checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
+pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
     tensor.checkpoint_chain.clone()
 }
 
-pub fn traced_metadata_scopes(tensor: &TracedTensor) -> &[Arc<RuntimeMetadataScope>] {
+pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<RuntimeMetadataScope>] {
     &tensor.metadata_scopes
 }
 
-pub fn traced_resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
+pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
-pub fn checkpoint_traced_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
+pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
     let old_graph = tensor.graph.clone();
     let old_output_key = old_graph.values()[tensor.val].key.clone();
     let old_inputs = (*tensor.inputs_map).clone();
