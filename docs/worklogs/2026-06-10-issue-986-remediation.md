@@ -83,7 +83,7 @@ Status values:
 | #65 explicit singleton `BroadcastInDim` VJP | Auto Fix | fixed |
 | #78/#79 diagonal VJP edge cases | Auto Fix | fixed |
 | #80 repeated-label einsum VJP | Auto Fix | fixed; verified with helper-level repeated-label projection regression |
-| #87 FFT under CUDA-backed execution | Verify First | stale/docs-only; current behavior rejects device/backend-buffer input with a clear host-only diagnostic |
+| #87 FFT device/backend-buffer input boundary | Stale / Out of Scope | stale; current behavior rejects device/backend-buffer input with a clear host-only diagnostic |
 | #106 integer/bool/lossy `Convert` AD policy | Design Gate | design-gated |
 | #109 lazy value/view API rustdoc examples | Auto Fix | fixed |
 | #110 `LuSolvePrepared` mixed complex adjoint flags | Auto Fix | fixed |

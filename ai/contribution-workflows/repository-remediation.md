@@ -38,7 +38,7 @@ information in reviewable form.
 For each finding, record:
 
 - the source issue/comment or historical finding number;
-- `Auto Fix`, `Verify First`, or `Design Gate`;
+- `Auto Fix`, `Verify First`, `Stale / Out of Scope`, or `Design Gate`;
 - current evidence from the working hash, not only historical comments;
 - the smallest useful verification target;
 - whether the item was fixed, narrowed, marked stale, or deferred;
@@ -77,11 +77,22 @@ partially fixed, or phrased as coverage debt without a concrete failing path.
 The agent must either:
 
 - narrow it to a current source path and expected behavior,
-- remove it from the active batch with evidence that it is stale, or
+- remove it from the active batch as `Stale / Out of Scope` with evidence, or
 - move it to a design-gated issue if the intended behavior is unclear.
 
 Do not keep broad historical wording as an active task after a narrower current
 state is known. Replace it with the concrete failing path or mark it stale.
+
+### Stale / Out Of Scope
+
+Use this classification when current source, docs, tests, or an earlier commit
+in the same remediation batch already resolves the historical finding, or when
+the finding no longer describes the current repository.
+
+Do not implement code for stale findings. Record the evidence that makes the
+item stale and remove it from the active fix queue. If a small docs-only
+follow-up remains, rewrite the finding to that concrete docs path instead of
+preserving the broader historical issue text.
 
 ### Design Gate
 
