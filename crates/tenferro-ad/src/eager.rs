@@ -49,9 +49,18 @@ struct EagerOpProfileEntry {
 thread_local! {
     static EAGER_OP_PROFILE_STATE: RefCell<HashMap<&'static str, EagerOpProfileEntry>> =
         RefCell::new(HashMap::new());
+    #[cfg(test)]
+    static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn eager_op_profile_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(value) = EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| *state.borrow()) {
+        return value;
+    }
+
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_OP_AGG").is_ok())
 }
@@ -82,10 +91,7 @@ pub(crate) fn maybe_print_eager_op_profile() {
     if !eager_op_profile_enabled() {
         return;
     }
-    let Ok(print_every) = env::var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY") else {
-        return;
-    };
-    let Ok(print_every) = print_every.parse::<usize>() else {
+    let Some(print_every) = eager_op_profile_print_every() else {
         return;
     };
     if print_every == 0 {
@@ -101,6 +107,18 @@ pub(crate) fn maybe_print_eager_op_profile() {
     if should_print {
         print_and_reset_eager_op_profile();
     }
+}
+
+fn eager_op_profile_print_every() -> Option<usize> {
+    #[cfg(test)]
+    if let Some(value) = EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| *state.borrow()) {
+        return value;
+    }
+
+    env::var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY")
+        .ok()?
+        .parse()
+        .ok()
 }
 
 pub(crate) fn print_and_reset_eager_op_profile() {

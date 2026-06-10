@@ -27,6 +27,37 @@ use super::{
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
 };
 
+struct EagerOpProfileOverrideGuard;
+
+impl EagerOpProfileOverrideGuard {
+    fn set(enabled: bool, print_every: Option<usize>) -> Self {
+        super::EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| {
+            *state.borrow_mut() = Some(enabled);
+        });
+        super::EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| {
+            *state.borrow_mut() = Some(print_every);
+        });
+        super::EAGER_OP_PROFILE_STATE.with(|state| {
+            state.borrow_mut().clear();
+        });
+        Self
+    }
+}
+
+impl Drop for EagerOpProfileOverrideGuard {
+    fn drop(&mut self) {
+        super::EAGER_OP_PROFILE_ENABLED_OVERRIDE.with(|state| {
+            *state.borrow_mut() = None;
+        });
+        super::EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE.with(|state| {
+            *state.borrow_mut() = None;
+        });
+        super::EAGER_OP_PROFILE_STATE.with(|state| {
+            state.borrow_mut().clear();
+        });
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ReadPathFallbackProbe;
 
@@ -143,10 +174,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
 
 #[test]
 fn eager_op_profile_helpers_cover_enabled_paths() {
-    unsafe {
-        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
-        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "2");
-    }
+    let _guard = EagerOpProfileOverrideGuard::set(true, Some(2));
 
     assert!(eager_op_profile_enabled());
     assert_eq!(profile_eager_op_section("coverage.profile", || 7), 7);
