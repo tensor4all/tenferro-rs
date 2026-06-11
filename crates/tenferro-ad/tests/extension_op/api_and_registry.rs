@@ -81,6 +81,26 @@ fn apply_eager_reports_missing_extension_runtime() {
 }
 
 #[test]
+fn apply_eager_untracked_forward_returns_untracked_result() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        ctx,
+    );
+
+    let y = apply_eager(Arc::new(TestScaleBy2), &[&x])
+        .expect("untracked eager extension apply")
+        .into_iter()
+        .next()
+        .expect("single eager extension output");
+
+    assert!(!y.tracks_grad());
+    assert_eq!(y.shape(), &[3]);
+    assert_eq!(f64_slice(y.data()), &[2.0, 4.0, 6.0]);
+}
+
+#[test]
 fn graph_executor_reports_missing_extension_runtime() {
     let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
     let y = apply(Arc::new(TestScaleBy2), &[&x])
