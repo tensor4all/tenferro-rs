@@ -113,7 +113,13 @@ fn apply_eager_rejects_mismatched_output_count() {
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("expected 2 eager outputs"));
+    let message = err.to_string();
+    assert!(
+        message.contains("tenferro-tests.bad_output_count.v1"),
+        "{message}"
+    );
+    assert!(message.contains("runtime returned 1 outputs"), "{message}");
+    assert!(message.contains("op declared 2 outputs"), "{message}");
 }
 
 #[test]
