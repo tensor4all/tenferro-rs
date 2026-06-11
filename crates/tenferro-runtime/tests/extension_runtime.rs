@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use tenferro_cpu::CpuBackend;
@@ -10,7 +11,10 @@ use tenferro_runtime::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionExecutionContext,
     ExtensionExecutor, ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
 };
-use tenferro_tensor::{DType, Tensor, TensorOwnedView, TensorRead};
+use tenferro_tensor::{
+    Buffer, BufferHandle, DType, MemoryKind, Placement, Tensor, TensorOwnedView, TensorRead,
+    TypedTensor,
+};
 
 #[derive(Clone, Debug)]
 struct IdentityRuntimeOp {
@@ -88,6 +92,29 @@ impl ExtensionRuntime<CpuBackend> for IdentityRuntime {
     }
 }
 
+#[derive(Debug)]
+struct WrongOutputCountRuntime {
+    family: &'static str,
+    return_count: usize,
+}
+
+impl ExtensionRuntime<CpuBackend> for WrongOutputCountRuntime {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn execute(
+        &self,
+        _op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(std::iter::repeat_with(|| inputs[0].clone())
+            .take(self.return_count)
+            .collect())
+    }
+}
+
 #[test]
 fn extension_registry_rejects_malformed_and_is_idempotent() {
     let mut registry = ExtensionRegistry::<CpuBackend>::new();
@@ -151,6 +178,100 @@ fn extension_executor_executes_registered_runtime_and_manages_caches() {
 
     executor.clear_caches();
     assert_eq!(executor.cache_stats().entries, 0);
+}
+
+#[test]
+fn extension_executor_rejects_runtime_output_count_mismatch() {
+    let family = "runtime.output-count.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(WrongOutputCountRuntime {
+            family,
+            return_count: 0,
+        }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+
+    let err = executor
+        .execute(&mut backend, &IdentityRuntimeOp { family }, &[&input])
+        .expect_err("runtime output count mismatch should error");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("family_id \"runtime.output-count.v1\""),
+        "{message}"
+    );
+    assert!(message.contains("returned 0 outputs"), "{message}");
+    assert!(message.contains("declared 1 outputs"), "{message}");
+}
+
+#[test]
+fn extension_executor_rejects_read_runtime_output_count_mismatch() {
+    let family = "runtime.read-output-count.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(WrongOutputCountRuntime {
+            family,
+            return_count: 2,
+        }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let read = TensorRead::from_tensor(&input);
+    let mut backend = CpuBackend::new();
+
+    let err = executor
+        .execute_reads(&mut backend, &IdentityRuntimeOp { family }, &[read])
+        .expect_err("runtime read output count mismatch should error");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("family_id \"runtime.read-output-count.v1\""),
+        "{message}"
+    );
+    assert!(message.contains("returned 2 outputs"), "{message}");
+    assert!(message.contains("declared 1 outputs"), "{message}");
+}
+
+#[test]
+fn extension_executor_read_fallback_reports_backend_view_materialization_error_without_panic() {
+    let family = "runtime.backend-view.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(IdentityRuntime { family }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+    let base = Arc::new(Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
+        vec![1],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(91, 1))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: None,
+        },
+    )));
+    let view = TensorOwnedView::from_tensor(base);
+    let read = view.tensor_read();
+    let mut backend = CpuBackend::new();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        executor.execute_reads(&mut backend, &IdentityRuntimeOp { family }, &[read])
+    }));
+
+    assert!(
+        result.is_ok(),
+        "backend view materialization should return Err, not panic"
+    );
+    let err = result
+        .unwrap()
+        .expect_err("backend view materialization should error");
+    let message = err.to_string();
+    assert!(
+        message.contains("backend buffers cannot be materialized"),
+        "{message}"
+    );
+    assert!(message.contains("download explicitly first"), "{message}");
 }
 
 #[test]

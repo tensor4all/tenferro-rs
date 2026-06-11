@@ -16,7 +16,7 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
-use tidu::{try_linear_transpose, try_linearize};
+use tidu::{try_linear_transpose, try_linearize, ADRuleError};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -39,6 +39,14 @@ fn shape_guard_context(extension_rules: Option<&ExtensionRuleSet>) -> ShapeGuard
     match extension_rules {
         Some(rules) => ctx.with_extension_rules(rules.clone()),
         None => ctx,
+    }
+}
+
+fn vjp_error_from_linearize(err: ADRuleError) -> Error {
+    match err {
+        ADRuleError::Unsupported { op, .. } => {
+            Error::Internal(format!("unsupported vjp AD rule for {op}"))
+        }
     }
 }
 
@@ -555,7 +563,7 @@ fn vjp_optional_result_with_rules(
         &mut ad_ctx,
         &aliases,
     )
-    .map_err(|err| Error::Internal(err.to_string()))?;
+    .map_err(vjp_error_from_linearize)?;
     if linear.tangent_outputs()[0].is_none() {
         return Ok(None);
     }

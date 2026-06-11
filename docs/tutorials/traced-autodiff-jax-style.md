@@ -33,7 +33,7 @@ fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runti
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let x = TracedTensor::from_vec_row_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let y = (&x * &x).reduce_sum(&[0]);
 
     let y_value = run(&y)?;
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(grad_value.shape(), &[3]);
     assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
-    let tangent = TracedTensor::from_vec_row_major(vec![3], vec![0.1_f64, 1.0, -2.0]);
+    let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0]);
     let directional = y.jvp(&x, &tangent);
     let directional_value = run(&directional)?;
     assert_eq!(directional_value.shape(), &[]);

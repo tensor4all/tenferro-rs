@@ -554,8 +554,8 @@ pub trait TensorDot: TensorElementwise {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor();
-                let rhs = rhs.to_tensor();
+                let lhs = lhs.try_to_tensor()?;
+                let rhs = rhs.try_to_tensor()?;
                 self.dot_general(&lhs, &rhs, config)
             }
         }
@@ -609,14 +609,14 @@ pub trait TensorDot: TensorElementwise {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor();
+            lhs_tmp = lhs.try_to_tensor()?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor();
+            rhs_tmp = rhs.try_to_tensor()?;
             &rhs_tmp
         };
         self.dot_general_with_conj(lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
@@ -655,8 +655,8 @@ pub trait SessionCachedDot: TensorDot {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general_cached(cache_slot, lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor();
-                let rhs = rhs.to_tensor();
+                let lhs = lhs.try_to_tensor()?;
+                let rhs = rhs.try_to_tensor()?;
                 self.dot_general_cached(cache_slot, &lhs, &rhs, config)
             }
         }
@@ -697,14 +697,14 @@ pub trait SessionCachedDot: TensorDot {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor();
+            lhs_tmp = lhs.try_to_tensor()?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor();
+            rhs_tmp = rhs.try_to_tensor()?;
             &rhs_tmp
         };
         self.dot_general_with_conj_cached(cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
@@ -917,8 +917,8 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general_cached(cache, cache_slot, lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor();
-                let rhs = rhs.to_tensor();
+                let lhs = lhs.try_to_tensor()?;
+                let rhs = rhs.try_to_tensor()?;
                 self.dot_general_cached(cache, cache_slot, &lhs, &rhs, config)
             }
         }
@@ -961,14 +961,14 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor();
+            lhs_tmp = lhs.try_to_tensor()?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor();
+            rhs_tmp = rhs.try_to_tensor()?;
             &rhs_tmp
         };
         self.dot_general_with_conj_cached(

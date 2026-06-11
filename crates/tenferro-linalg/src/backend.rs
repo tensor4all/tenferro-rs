@@ -44,9 +44,15 @@ pub trait LinalgBackend: TensorBackend {
     }
 
     /// Compute complete-pivot LU outputs `(P, L, U, Q, parity)`.
+    ///
+    /// The reconstruction convention is `A = P * L * U * Q`. `parity` is a
+    /// rank-0 `F64` tensor containing `1.0` or `-1.0`.
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Solve a linear system through the complete-pivot LU path.
+    ///
+    /// With `transpose_a = false`, this solves `A * x = b`. With
+    /// `transpose_a = true`, this solves `A^T * x = b`.
     fn full_piv_lu_solve(
         &mut self,
         a: &Tensor,
@@ -96,9 +102,15 @@ pub trait LinalgBackend: TensorBackend {
     }
 
     /// Compute public QR outputs `(Q, R)`.
+    ///
+    /// QR is thin: for an `m x n` input, `Q` has shape `m x min(m, n)` and
+    /// `R` has shape `min(m, n) x n`.
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Compute public Hermitian eigendecomposition outputs `(values, vectors)`.
+    ///
+    /// The returned vector order is `[values, vectors]`, where `values` has
+    /// shape `[n]` and `vectors` has shape `[n, n]`.
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     #[doc(hidden)]

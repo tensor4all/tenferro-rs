@@ -16,6 +16,10 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
 tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu" }
 ```
 
+The first build still needs network access unless dependencies are already
+vendored or cached. The workspace pins git dependencies and uses crates.io
+packages even when the tenferro crates themselves are local path dependencies.
+
 With default features, this compiles the `cpu-faer` provider, so
 `CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
 `cpu-blas` and link a BLAS/LAPACK provider from the build environment:
@@ -55,6 +59,13 @@ framework provider.
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or
 `tenferro-gpu` when a workflow needs those layers. Enable `autodiff` on
 operation crates such as `tenferro-linalg` when extension AD rules are needed.
+For CPU-only eager or traced AD, add:
+
+```toml
+[dependencies]
+tenferro-ad = { path = "/path/to/tenferro-rs/crates/tenferro-ad" }
+```
+
 Enable concrete backend features such as `cuda` on each crate that needs GPU
 support:
 

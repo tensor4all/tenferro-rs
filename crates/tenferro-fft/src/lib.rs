@@ -393,7 +393,7 @@ impl ExtensionAdRuleTrait for FftAdRule {
         let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
-                FFT_EXTENSION_FAMILY_ID,
+                fft_ad_family_id(fft_op.kind),
                 ADRuleKind::Jvp,
             ));
         }
@@ -425,7 +425,7 @@ impl ExtensionAdRuleTrait for FftAdRule {
         let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
-                FFT_EXTENSION_FAMILY_ID,
+                fft_ad_family_id(fft_op.kind),
                 ADRuleKind::Transpose,
             ));
         }
@@ -713,6 +713,15 @@ fn fft_op_name(kind: FftKind) -> &'static str {
         FftKind::C2C { forward: false } => "ifft",
         FftKind::R2C { .. } => "rfft",
         FftKind::C2R => "irfft",
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn fft_ad_family_id(kind: FftKind) -> &'static str {
+    match kind {
+        FftKind::C2C { .. } => FFT_EXTENSION_FAMILY_ID,
+        FftKind::R2C { .. } => "tenferro-fft.rfft.v1",
+        FftKind::C2R => "tenferro-fft.irfft.v1",
     }
 }
 

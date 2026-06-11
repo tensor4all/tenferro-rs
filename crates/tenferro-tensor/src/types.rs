@@ -2212,7 +2212,29 @@ impl TensorOwnedView {
     }
 
     pub fn to_tensor(&self) -> Tensor {
-        self.tensor_view().to_tensor()
+        self.try_to_tensor()
+            .unwrap_or_else(|err| panic!("TensorOwnedView::to_tensor failed: {err}"))
+    }
+
+    /// Try to materialize this owned view into an owned compact tensor.
+    ///
+    /// This returns an explicit error for backend-backed views because no
+    /// backend context is available for an implicit download.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::{Tensor, TensorOwnedView};
+    ///
+    /// let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
+    /// let view = TensorOwnedView::from_tensor(base);
+    /// let tensor = view.try_to_tensor()?;
+    /// assert_eq!(tensor.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
+        self.tensor_view().try_to_tensor()
     }
 
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
@@ -2350,9 +2372,32 @@ impl TensorValue {
     }
 
     pub fn to_tensor(&self) -> Tensor {
+        self.try_to_tensor()
+            .unwrap_or_else(|err| panic!("TensorValue::to_tensor failed: {err}"))
+    }
+
+    /// Try to materialize this tensor value into an owned compact tensor.
+    ///
+    /// Compact tensor values are cloned. Lazy host views are materialized.
+    /// Backend-backed views return an explicit error instead of panicking.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorValue};
+    ///
+    /// let value = TensorValue::from_tensor(Tensor::from_vec_col_major(
+    ///     vec![2],
+    ///     vec![1.0_f64, 2.0],
+    /// ));
+    /// let tensor = value.try_to_tensor()?;
+    /// assert_eq!(tensor.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
         match self {
-            Self::Tensor(tensor) => tensor.as_ref().clone(),
-            Self::View(view) => view.to_tensor(),
+            Self::Tensor(tensor) => Ok(tensor.as_ref().clone()),
+            Self::View(view) => view.try_to_tensor(),
         }
     }
 
@@ -2745,35 +2790,50 @@ impl<'a> TensorView<'a> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn to_tensor(&self) -> Tensor {
+        self.try_to_tensor()
+            .unwrap_or_else(|err| panic!("TensorView::to_tensor failed: {err}"))
+    }
+
+    /// Try to materialize this host view into an owned tensor.
+    ///
+    /// This is the checked counterpart to [`TensorView::to_tensor`]. It clones
+    /// host view data but returns an explicit error for backend-backed views
+    /// because there is no backend context available for download.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1.0_f64, 2.0];
+    /// let view = TensorView::f64(&[2], &data)?;
+    /// let tensor = view.try_to_tensor()?;
+    /// assert_eq!(tensor.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
         match self {
-            Self::F32(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::F32(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::F64(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::F64(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::I32(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::I32(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::I64(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::I64(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::Bool(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::Bool(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::C32(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::C32(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
-            Self::C64(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
-                Ok(tensor) => Tensor::C64(tensor),
-                Err(err) => panic!("TensorView::to_tensor failed: {err}"),
-            },
+            Self::F32(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::F32)
+            }
+            Self::F64(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::F64)
+            }
+            Self::I32(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::I32)
+            }
+            Self::I64(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::I64)
+            }
+            Self::Bool(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::Bool)
+            }
+            Self::C32(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::C32)
+            }
+            Self::C64(t) => {
+                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::C64)
+            }
         }
     }
 }
@@ -2831,9 +2891,31 @@ impl<'a> TensorRead<'a> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn to_tensor(&self) -> Tensor {
+        self.try_to_tensor()
+            .unwrap_or_else(|err| panic!("TensorRead::to_tensor failed: {err}"))
+    }
+
+    /// Try to convert an owned tensor reference or host view into an owned tensor.
+    ///
+    /// This is the checked counterpart to [`TensorRead::to_tensor`]. It clones
+    /// owned tensor inputs and materializes host views, but returns an explicit
+    /// error for backend-backed views.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{TensorRead, TensorView};
+    ///
+    /// let data = [1_i32, 2, 3];
+    /// let read = TensorRead::from_view(TensorView::i32(&[3], &data)?);
+    /// let tensor = read.try_to_tensor()?;
+    /// assert_eq!(tensor.shape(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
         match self {
-            Self::Tensor(tensor) => (*tensor).clone(),
-            Self::View(view) => view.to_tensor(),
+            Self::Tensor(tensor) => Ok((*tensor).clone()),
+            Self::View(view) => view.try_to_tensor(),
         }
     }
 }
