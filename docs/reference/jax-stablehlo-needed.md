@@ -42,9 +42,11 @@ The most relevant source files were:
 
 - `tenferro-rs/docs/design/supported-ops.md`
 - `tenferro-rs/docs/design/tensor-prims.md`
-- `tenferro-rs/tenferro-prims/src/families/*.rs`
+- `tenferro-rs/crates/tenferro-core-ops/src/catalog.rs`
+- `tenferro-rs/crates/tenferro-tensor/src/backend.rs`
+- `tenferro-rs/crates/tenferro-einsum/src/`
 - `tenferro-rs/crates/tenferro-linalg/src/lib.rs`
-- `tenferro-rs/crates/tenferro-linalg/src/prims_bridge.rs`
+- `tenferro-rs/crates/tenferro-linalg/src/backend.rs`
 - `jax/jax/_src/interpreters/ad.py`
 - `jax/jax/_src/numpy/einsum.py`
 - `jax/jax/_src/lax/control_flow/solves.py`
@@ -120,27 +122,25 @@ These exist today, but they are **tensor/view APIs**, not first-class
 tensor primitives with their own `linearize` / `transpose_rule`
 implementations.
 
-### Execution families in `tenferro-prims`
+### Execution families in the current runtime crates
 
-Current `tenferro-prims` is organized by backend execution families:
+The current workspace no longer has a separate `tenferro-prims` crate. Core
+execution vocabulary is represented by `StdTensorOp` / `ExecOp` in
+`tenferro-core-ops` and the runtime compiler, while backend execution is
+provided through `tenferro-tensor::TensorBackend` implementations such as
+`tenferro-cpu` and `tenferro-gpu`.
 
-- `TensorSemiringCore`
-  - `BatchedGemm`
+- contraction and semiring-oriented paths
+  - `DotGeneral`
   - `ReduceSum`
-  - `Trace`
-  - `AntiTrace`
-  - `AntiDiag`
-  - `MakeContiguous`
-- `TensorSemiringFastPath`
-  - `Contract`
-  - `ElementwiseBinary::{Add, Mul}`
-- `TensorScalarPrims`
+  - extension families such as `tenferro-einsum`
+- scalar and elementwise operations
   - unary: `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`
   - binary: `Add`, `Sub`, `Mul`, `Div`, `Maximum`, `Minimum`,
     `Greater`, `GreaterEqual`, `ClampMin`, `ClampMax`
   - ternary: `Where`
   - reductions: `Sum`, `Prod`, `Mean`, `Max`, `Min`
-- `TensorAnalyticPrims`
+- analytic operations
   - unary: `Sqrt`, `Rsqrt`, `Exp`, `Expm1`, `Ceil`, `Log`, `Log1p`, `Sin`,
     `Cos`, `Tan`, `Tanh`, `Asin`, `Acos`, `Atan`, `Sinh`, `Cosh`, `Asinh`,
     `Acosh`, `Atanh`

@@ -1,8 +1,10 @@
 # Linalg Prims
 
-`tenferro-linalg-prims` defines the backend-facing tensor linalg contracts used
-by `tenferro-linalg`. It is intentionally narrower than a full public linalg
-API surface.
+This file keeps the historical `linalg-prims.md` name, but the current
+workspace no longer has a separate `tenferro-linalg-prims` crate. The
+backend-facing tensor linalg contracts are owned by
+`tenferro-linalg::backend::LinalgBackend` and implemented by backend crates
+such as `tenferro-cpu` and `tenferro-gpu`.
 
 ## Why This Crate Exists
 
@@ -11,16 +13,17 @@ The redesign separates two concerns that were previously coupled:
 - public/composite tensor linalg APIs
 - backend-facing structured kernel contracts
 
-`tenferro-linalg` owns the first. `tenferro-linalg-prims` owns the second.
-
-This keeps `tenferro-prims` focused on semiring/scalar execution substrate and
-prevents `einsum-only` or tropical backends from inheriting linalg-specific
-requirements.
+`tenferro-linalg` owns both the public linalg API and the linalg extension
+runtime, while `LinalgBackend` defines the narrower backend kernel surface.
+Core scalar, analytic, structural, and contraction vocabulary lives in
+`tenferro-core-ops` and is executed through `tenferro-tensor::TensorBackend`.
+This prevents generic tensor backends and operation-family crates from
+inheriting linalg-specific requirements.
 
 ## What Belongs Here
 
-Only operations that naturally map to structured backend kernels belong in
-`tenferro-linalg-prims`.
+Only operations that naturally map to structured backend kernels belong in the
+`LinalgBackend` contract.
 
 Current kernel basis:
 
@@ -56,8 +59,8 @@ Examples:
 - `vander`
 
 These are public linalg operations, but they are not backend kernel contracts.
-They should lower through tensor structural ops, semiring/scalar prims, and
-the smaller kernel basis above.
+They should lower through tensor structural ops, core `StdTensorOp` families,
+operation-family runtimes, and the smaller kernel basis above.
 
 ## Relation to `tenferro-linalg`
 
@@ -65,30 +68,32 @@ the smaller kernel basis above.
 
 1. validate public API contracts
 2. normalize shape/axis options
-3. lower composites to prims or linalg-prims
+3. lower composites to core tensor ops or `LinalgBackend` kernels
 4. expose structured public results
 
 `tenferro-linalg` should not directly branch on backend types or contain
 backend-specific execution kernels.
 
-## Relation to `tenferro-prims`
+## Relation to Core Tensor Ops
 
-The two crates are peers, not parent/child abstractions.
+The linalg backend contract is peer to the core tensor backend contract, not a
+parent/child abstraction.
 
-- `tenferro-prims` covers semiring, scalar, and analytic execution families
-- `tenferro-linalg-prims` covers structured factorization and solve kernels
+- `StdTensorOp` / `ExecOp` cover scalar, analytic, structural, reduction, and
+  contraction execution vocabulary
+- `LinalgBackend` covers structured factorization and solve kernels
 
 High-level linalg code may depend on both families:
 
-- semiring/scalar prims for composites
-- linalg-prims for factorization kernels
+- core tensor ops for composites
+- `LinalgBackend` for factorization kernels
 
 ## Current Status
 
-The crate exists and is wired into backend implementations as the canonical
-backend-facing linalg contract. Some concrete backends still use local helper
-modules internally, but those helpers now sit behind `tenferro-linalg-prims`
-instead of acting as a competing public abstraction.
+`LinalgBackend` exists and is wired into backend implementations as the
+canonical backend-facing linalg contract. Some concrete backends still use
+local helper modules internally, but those helpers sit behind `LinalgBackend`
+instead of acting as competing public abstractions.
 
 The scalar side is intentionally split:
 

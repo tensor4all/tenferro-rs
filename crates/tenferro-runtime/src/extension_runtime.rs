@@ -142,7 +142,7 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let concrete_inputs = concrete_tensor_reads(inputs);
+        let concrete_inputs = concrete_tensor_reads(inputs)?;
         let input_refs: Vec<&Tensor> = concrete_inputs
             .iter()
             .map(ConcreteTensorRead::tensor)
@@ -165,14 +165,36 @@ impl ConcreteTensorRead<'_> {
     }
 }
 
-fn concrete_tensor_reads<'a>(inputs: &[TensorRead<'a>]) -> Vec<ConcreteTensorRead<'a>> {
-    inputs
-        .iter()
-        .map(|input| match input {
+fn concrete_tensor_reads<'a>(
+    inputs: &[TensorRead<'a>],
+) -> tenferro_tensor::Result<Vec<ConcreteTensorRead<'a>>> {
+    let mut concrete_inputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        concrete_inputs.push(match input {
             TensorRead::Tensor(tensor) => ConcreteTensorRead::Borrowed(tensor),
-            TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.to_tensor())),
-        })
-        .collect()
+            TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.try_to_tensor()?)),
+        });
+    }
+    Ok(concrete_inputs)
+}
+
+fn validate_runtime_output_count(
+    op: &dyn ExtensionOp,
+    outputs: Vec<Tensor>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let expected = op.output_count();
+    if outputs.len() != expected {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "extension",
+            message: format!(
+                "family_id {:?}: runtime returned {} outputs but op declared {} outputs",
+                op.family_id(),
+                outputs.len(),
+                expected
+            ),
+        });
+    }
+    Ok(outputs)
 }
 
 /// Registry of backend-specific extension runtime executors.
@@ -318,7 +340,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
             });
         };
         let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
-        executor.execute(op, inputs, &mut ctx)
+        validate_runtime_output_count(op, executor.execute(op, inputs, &mut ctx)?)
     }
 
     /// Execute an extension using borrowed tensor reads.
@@ -425,7 +447,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
             });
         };
         let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
-        executor.execute_reads(op, inputs, &mut ctx)
+        validate_runtime_output_count(op, executor.execute_reads(op, inputs, &mut ctx)?)
     }
 
     /// Clear every runtime extension cache entry.

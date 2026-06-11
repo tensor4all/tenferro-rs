@@ -747,16 +747,15 @@ implemented.
 
 | PyTorch Feature | tenferro Crate | Notes |
 |---|---|---|
-| **Tensor type, storage, views** | `tenferro-tensor` | `Tensor<T>`, `DataBuffer<T>`, view ops |
-| **Device enum, errors** | `tenferro-internal-device` | `Device`, `Error`/`Result` |
-| **Algebra dispatch** | `tenferro-algebra` | `HasAlgebra`, `Semiring` (compile-time, not runtime) |
-| **Execution prim families (GEMM, reduce, pointwise)** | `tenferro-prims` | `TensorSemiringCore/FastPath`, `TensorScalarPrims`, `TensorAnalyticPrims` |
+| **Tensor type, storage, views** | `tenferro-tensor` | `Tensor`, `TypedTensor<T, R>`, typed views |
+| **Device placement, errors** | `tenferro-tensor`, `tenferro-gpu` | `Placement`, `DeviceKind`, `DeviceId`, backend errors |
+| **Core op vocabulary and dispatch** | `tenferro-core-ops`, `tenferro-runtime`, `tenferro-tensor` | `StdTensorOp`, `ExecOp`, `TensorBackend`, `BackendSession` |
+| **CPU/GPU execution** | `tenferro-cpu`, `tenferro-gpu` | CPU provider selection and CubeCL/CUDA backend support |
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |
 | **Linalg decompositions + AD** | `tenferro-linalg` | SVD/QR/LU/eigen with `(m, n, *)` col-major convention |
-| **AD core traits** | `chainrules-core` | `Differentiable`, `ReverseRule`, `ForwardRule` |
-| **AD tape engine** | `tidu` | `Tape`, `TrackedValue`, `DualValue`, `pullback` |
-| **C FFI** | `tenferro-capi` | Opaque handles, DLPack interop |
-| **Tropical algebras** | `tenferro-ext-tropical` | MaxPlus, MinPlus, MaxMul |
+| **AD APIs and rules** | `tenferro-ad`, `tenferro-internal-ops` | Eager/traced AD surfaces and primitive rule implementations |
+| **C FFI** | planned `tenferro-capi` | Opaque handles and DLPack interop are design-only in this workspace |
+| **Tropical algebras** | out-of-tree extension | Extension-op family example, not an in-workspace crate |
 
 ### Key Design Differences from PyTorch
 
@@ -766,7 +765,7 @@ implemented.
 | **Batch convention** | `(*, m, n)` — last 2 dims | `(m, n, *)` — first 2 dims |
 | **Type dispatch** | Runtime (dynamic dtype/device) | Compile-time generics `Tensor<T>` |
 | **Algebra dispatch** | N/A (always standard arithmetic) | semiring-family traits parameterized by algebra |
-| **AD system** | Integrated (autograd built into Tensor) | Separated (chainrules-core + chainrules + tidu) |
+| **AD system** | Integrated (autograd built into Tensor) | Separated into `tenferro-ad` surfaces and internal primitive rules |
 | **Backend dispatch** | Runtime dispatcher with dispatch keys | Trait-based static dispatch |
 
 ---

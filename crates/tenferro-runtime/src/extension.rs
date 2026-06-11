@@ -27,7 +27,7 @@ use tenferro_ops::SymDim;
 use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{push_metadata_scope, register_scoped_graph_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
@@ -192,6 +192,13 @@ pub fn apply_expanded_graph(
         .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
         .collect();
     let outputs = build(&mut builder, &op_inputs)?;
+    if outputs.len() != output_metas.len() {
+        return Err(Error::Internal(format!(
+            "extension expanded graph returned {} outputs for {} output metadata entries",
+            outputs.len(),
+            output_metas.len()
+        )));
+    }
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     Ok(traced_outputs_from_graph(

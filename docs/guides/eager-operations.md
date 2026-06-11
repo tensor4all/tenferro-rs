@@ -9,11 +9,24 @@ gradient accumulation and `backward()`.
 
 ## Setup
 
+```toml
+[dependencies]
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-linalg = { path = "../crates/tenferro-linalg" }
+tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
+```
+
+Most direct tensor examples start by importing the CPU backend and concrete
+tensor types:
+
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TypedTensor};
 
-let mut ctx = CpuBackend::new();
+let mut backend = CpuBackend::new();
 ```
 
 Every direct tensor operation requires a backend context. `CpuBackend` is the
@@ -32,6 +45,22 @@ the first layer to consider when you want compile-time dtype safety, optional
 rank typing, or typed data that may live on the host or in backend-owned
 storage. Einsum is
 provided by the separate `tenferro-einsum` standard extension.
+
+Tracked `EagerTensor` values support the differentiable method surface most
+loss functions need:
+
+| Category | `EagerTensor` methods |
+| --- | --- |
+| Elementwise | `add`, `mul`, `neg`, `exp` |
+| Reduction | `reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min` |
+| Matrix products | `matmul`, `dot_general`, `dot_general_with_conj` |
+| Shape/layout | `reshape`, `transpose`, `broadcast_in_dim`, `slice`, `pad`, `reverse`, `concatenate` |
+| Indexing/diagonal | `gather`, `scatter`, `dynamic_slice`, `extract_diag`, `embed_diag`, `tril`, `triu` |
+| DType | `convert` |
+
+Operation-family crates add their own eager helpers. For example,
+`tenferro_linalg::eager_tensor` owns linalg eager helpers and
+`tenferro_einsum::eager_tensor` owns eager einsum.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -76,13 +105,13 @@ not silently upload CPU tensors or download CUDA tensors.
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};
 
-let mut ctx = CpuBackend::new();
+let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
-let sum = tensor::add(&a, &b, &mut ctx).unwrap();
-let product = tensor::mul(&a, &b, &mut ctx).unwrap();
-let negated = tensor::neg(&a, &mut ctx).unwrap();
+let sum = tensor::add(&a, &b, &mut backend).unwrap();
+let product = tensor::mul(&a, &b, &mut backend).unwrap();
+let negated = tensor::neg(&a, &mut backend).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -96,7 +125,7 @@ use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};
 
-let mut ctx = CpuBackend::new();
+let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
     2.0_f64, 1.0, 0.0,
     1.0, 3.0, 1.0,
@@ -104,20 +133,20 @@ let a = Tensor::from_vec_col_major(vec![3, 3], vec![
 ]);
 
 // SVD
-let svd = LinalgBackend::svd(&mut ctx, &a).unwrap();
+let svd = LinalgBackend::svd(&mut backend, &a).unwrap();
 
 // QR
-let qr = LinalgBackend::qr(&mut ctx, &a).unwrap();
+let qr = LinalgBackend::qr(&mut backend, &a).unwrap();
 
 // Cholesky (for positive definite matrices)
-let chol = LinalgBackend::cholesky(&mut ctx, &a).unwrap();
+let chol = LinalgBackend::cholesky(&mut backend, &a).unwrap();
 
 // Eigendecomposition (symmetric)
-let eigh = LinalgBackend::eigh(&mut ctx, &a).unwrap();
+let eigh = LinalgBackend::eigh(&mut backend, &a).unwrap();
 
 // Solve Ax = b
 let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let x = LinalgBackend::solve(&mut ctx, &a, &b).unwrap();
+let x = LinalgBackend::solve(&mut backend, &a, &b).unwrap();
 
 let s = &svd[1];
 assert_eq!(s.shape(), &[3]);
@@ -136,19 +165,19 @@ assert_eq!(x.shape(), &[3]);
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, Tensor};
 
-let mut ctx = CpuBackend::new();
+let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Transpose
-let at = tensor::transpose(&a, &[1, 0], &mut ctx).unwrap();
+let at = tensor::transpose(&a, &[1, 0], &mut backend).unwrap();
 assert_eq!(at.shape(), &[3, 2]);
 
 // Reshape
-let flat = tensor::reshape(&a, &[6], &mut ctx).unwrap();
+let flat = tensor::reshape(&a, &[6], &mut backend).unwrap();
 assert_eq!(flat.shape(), &[6]);
 
 // Reduce
-let col_sum = tensor::reduce_sum(&a, &[0], &mut ctx).unwrap();
+let col_sum = tensor::reduce_sum(&a, &[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
 
@@ -215,6 +244,32 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 ctx.clear_grads();
 assert!(x.grad().is_none());
 assert!(y.grad().is_none());
+```
+
+`matmul` participates in the same eager reverse-mode workflow:
+
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
+
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let a = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ctx.clone(),
+);
+let x = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]),
+    ctx.clone(),
+);
+
+let y = a.matmul(&x).unwrap();
+assert_eq!(y.data().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
+
+let loss = (&y * &y).reduce_sum(&[0, 1]).unwrap();
+assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[1685.0]);
+
+loss.backward().unwrap();
+assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
 ```
 
 ## When To Use Each Immediate Layer

@@ -9,6 +9,21 @@ This page focuses on traced graph workflows that you compile and execute
 explicitly. For eager forward execution and scalar loss accumulation semantics, see
 [Eager Operations](eager-operations.md).
 
+## Setup
+
+```toml
+[dependencies]
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+```
+
+Extension AD examples also need that extension crate's AD feature. For linalg:
+
+```toml
+tenferro-linalg = { path = "../crates/tenferro-linalg", features = ["autodiff"] }
+```
+
 - `grad` for reverse mode on scalar losses
 - `vjp` for vector-Jacobian products
 - `jvp` for Jacobian-vector products
@@ -22,6 +37,20 @@ Use `tenferro_ad::AdContext` to own the AD rule set used by a transform. Core
 tensor primitive rules are always available. Extension crates can provide owned
 JVP/VJP rule sets for their operations; `tenferro-linalg` exposes these through
 its `autodiff` feature.
+
+## `AdContext` And `TracedTensorAdExt`
+
+There are two public traced-AD entry points over the same graph transforms:
+
+| Entry point | Use when |
+| --- | --- |
+| `AdContext` | You want explicit ownership of the rule set, especially when adding extension AD rules such as `tenferro_linalg::ad_rules()`. |
+| `TracedTensorAdExt` | You want compact method syntax such as `loss.grad(&x)?`, `y.vjp(&x, &ct)`, or `y.jvp(&x, &dx)` for small core-rule examples. |
+
+Prefer `AdContext` in reusable code and in examples that depend on extension
+rules. The extension trait is convenience syntax for the same traced transforms;
+the [JAX-style traced tutorial](../tutorials/traced-autodiff-jax-style.md) uses
+it to keep the first example short.
 
 ## Reverse-mode gradient with `grad`
 
@@ -97,6 +126,11 @@ let program = compiler.compile(&ct_a).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 3]);
+// For y = A * B, the cotangent with respect to A is cotangent * B^T.
+assert_eq!(
+    result.as_slice::<f64>().unwrap(),
+    &[0.875, 2.75, -1.0625, 0.0, 2.75, 5.0],
+);
 ```
 
 ## Jacobian-vector product with `jvp`
@@ -128,6 +162,11 @@ let program = compiler.compile(&dy).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
+// For y = A * B, the directional derivative with respect to A is dA * B.
+assert_eq!(
+    result.as_slice::<f64>().unwrap(),
+    &[4.25, -2.25, 7.4375, -3.75],
+);
 ```
 
 ## Extension AD Rules

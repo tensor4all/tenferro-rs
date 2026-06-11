@@ -6,6 +6,16 @@ available through different tensor APIs depending on whether you need
 computation without autodiff, eager forward execution with optional
 `backward()` on scalar losses, or traced graph execution.
 
+## Setup
+
+```toml
+[dependencies]
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+tenferro-ad = { path = "../crates/tenferro-ad" }
+```
+
 ## Layer Coverage
 
 Choose the tensor API first, then choose the operation entry point.
@@ -299,11 +309,15 @@ let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 );
+// Logical matrix:
+// [[1.0, 3.0, 5.0],
+//  [2.0, 4.0, 6.0]]
 let row_sums = tensor::reduce_sum(&a, &[1], &mut backend).unwrap();
 let total = tensor::reduce_sum(&a, &[0, 1], &mut backend).unwrap();
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);
 assert_eq!(total.shape(), &[] as &[usize]);
+// Rank-0 tensors hold one scalar element; as_slice() returns a length-1 slice.
 assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
 ```

@@ -98,19 +98,19 @@ impl<'a> ExecSlot<'a> {
         }
     }
 
-    pub(crate) fn into_tensor(self) -> Tensor {
+    pub(crate) fn into_tensor(self) -> Result<Tensor> {
         match self {
-            Self::Owned(tensor) => tensor,
-            Self::Value(value) => value.to_tensor(),
-            Self::Read(read) => read.to_tensor(),
+            Self::Owned(tensor) => Ok(tensor),
+            Self::Value(value) => Ok(value.try_to_tensor()?),
+            Self::Read(read) => Ok(read.try_to_tensor()?),
         }
     }
 
-    pub(crate) fn into_value(self) -> TensorValue {
+    pub(crate) fn into_value(self) -> Result<TensorValue> {
         match self {
-            Self::Owned(tensor) => TensorValue::from_tensor(tensor),
-            Self::Value(value) => value,
-            Self::Read(read) => TensorValue::from_tensor(read.to_tensor()),
+            Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
+            Self::Value(value) => Ok(value),
+            Self::Read(read) => Ok(TensorValue::from_tensor(read.try_to_tensor()?)),
         }
     }
 }
@@ -165,10 +165,10 @@ pub(crate) fn collect_outputs_from<'input>(
         .output_slots
         .iter()
         .map(|&slot| {
-            slots[slot]
+            let value = slots[slot]
                 .take()
-                .map(ExecSlot::into_tensor)
-                .ok_or(TensorError::MissingValue { slot }.into())
+                .ok_or(TensorError::MissingValue { slot })?;
+            value.into_tensor()
         })
         .collect()
 }
@@ -181,10 +181,10 @@ pub(crate) fn collect_output_values_from<'input>(
         .output_slots
         .iter()
         .map(|&slot| {
-            slots[slot]
+            let value = slots[slot]
                 .take()
-                .map(ExecSlot::into_value)
-                .ok_or(TensorError::MissingValue { slot }.into())
+                .ok_or(TensorError::MissingValue { slot })?;
+            value.into_value()
         })
         .collect()
 }
@@ -271,10 +271,10 @@ fn tensor_value_for_lazy_view<'input>(
     consume: bool,
 ) -> Result<TensorValue> {
     if consume {
-        return slots[slot]
+        let value = slots[slot]
             .take()
-            .map(ExecSlot::into_value)
-            .ok_or(TensorError::MissingValue { slot }.into());
+            .ok_or(TensorError::MissingValue { slot })?;
+        return value.into_value();
     }
 
     match slots[slot].take() {
@@ -290,7 +290,7 @@ fn tensor_value_for_lazy_view<'input>(
             Ok(output)
         }
         Some(ExecSlot::Read(read)) => {
-            let output = TensorValue::from_tensor(read.to_tensor());
+            let output = TensorValue::from_tensor(read.try_to_tensor()?);
             slots[slot] = Some(ExecSlot::Read(read));
             Ok(output)
         }

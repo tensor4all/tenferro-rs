@@ -812,6 +812,7 @@ impl LinalgBackend for CpuBackend {
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("solve", a)?;
         ensure_host_tensor("solve", b)?;
+        ensure_supported_linalg_pair("solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }

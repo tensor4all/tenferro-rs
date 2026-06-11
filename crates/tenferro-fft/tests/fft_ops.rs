@@ -428,3 +428,62 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
         ],
     );
 }
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn rfft_vjp_unsupported_error_names_rfft_and_vjp() {
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let cotangent = TracedTensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.5, -1.0),
+            Complex64::new(2.0, 0.0),
+        ],
+    );
+
+    let y = rfft(&x, None, -1, FftNorm::Backward).unwrap();
+    let err = match y.vjp_optional_result(&x, &cotangent) {
+        Ok(_) => panic!("rfft VJP should remain unsupported"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+
+    assert!(
+        message.contains("unsupported vjp AD rule for tenferro-fft.rfft.v1"),
+        "{message}"
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
+    let spectrum = TracedTensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ],
+    );
+    let tangent = TracedTensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, -0.5),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+
+    let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward).unwrap();
+    let err = match y.jvp_optional_result(&spectrum, &tangent) {
+        Ok(_) => panic!("irfft JVP should remain unsupported"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+
+    assert!(
+        message.contains("unsupported jvp AD rule for tenferro-fft.irfft.v1"),
+        "{message}"
+    );
+}

@@ -9,6 +9,16 @@ by `rustfft` through tenferro extension operations. The public functions are
 ordinary Rust wrappers, so most users do not need to work with the lower-level
 extension machinery directly.
 
+## Setup
+
+```toml
+[dependencies]
+num-complex = "0.4"
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-fft = { path = "../crates/tenferro-fft" }
+```
+
 ## Current API
 
 The initial API mirrors the common PyTorch and JAX one-dimensional FFT
@@ -73,8 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For real-input transforms, the transformed axis follows the standard
 half-spectrum shape rule: input length `n` produces `n / 2 + 1` complex values
-using integer division. Inverse real transforms need an explicit output length
-when odd and even original signal sizes would otherwise be ambiguous.
+using integer division. When `irfft` receives `n = None`, it infers the output
+length as `2 * (input_len - 1)`. That matches even-length round trips; for odd
+original lengths it silently returns one element too short, so pass
+`Some(original_len)`.
 
 ## Planned Extensions
 
@@ -106,6 +118,17 @@ FFT is linear, so the extension can support AD through registered extension
 rules. The current package registers JVP/VJP rules for complex-to-complex
 `fft` and `ifft`: the tangent or cotangent is transformed with the same
 extension op and normalization.
+
+AD examples require `tenferro-ad` and the `tenferro-fft` `autodiff` feature.
+Add `tenferro-ad` and replace the basic `tenferro-fft` line with:
+
+```toml
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
+```
+
+Use `AdContext` for explicit extension-rule ownership, or import
+`tenferro_ad::TracedTensorAdExt` for the compact traced AD method syntax.
 
 Real-to-complex and complex-to-real AD are not enabled yet. They require the
 usual Hermitian symmetry handling so cotangents match the half-spectrum

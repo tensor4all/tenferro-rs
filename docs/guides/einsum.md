@@ -10,8 +10,12 @@ extension ops.
 ```toml
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
-tenferro-einsum = { path = "../crates/tenferro-einsum" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
 ```
+
+Graph-only users can omit `tenferro-ad` and the `autodiff` feature.
 
 ## Traced Matrix Multiply
 
@@ -47,6 +51,9 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
 With the `autodiff` feature, `tenferro-einsum` also exposes immediate
 `EagerTensor` execution.
+The `"i->ii"` form embeds a vector on a diagonal. This is a tenferro extension
+to the common NumPy/PyTorch einsum surface; NumPy rejects repeated output
+labels in that form.
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
@@ -59,7 +66,15 @@ let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij").unwrap()
 let diag = tenferro_einsum::eager_tensor::einsum(&[&v], "i->ii").unwrap();
 
 assert_eq!(outer.data().shape(), &[2, 3]);
+assert_eq!(
+    outer.data().as_slice::<f64>().unwrap(),
+    &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
+);
 assert_eq!(diag.data().shape(), &[3, 3]);
+assert_eq!(
+    diag.data().as_slice::<f64>().unwrap(),
+    &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
+);
 ```
 
 ## Tensordot Sugar
@@ -71,14 +86,36 @@ right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
 negative axes.
 
 ```rust
-use tenferro_runtime::TracedTensor;
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{traced_tensor, TensorDotAxes};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
-let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-let rhs = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+let lhs = TracedTensor::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+);
+let rhs = TracedTensor::from_vec_col_major(
+    vec![3, 4],
+    vec![
+        1.0_f64, 2.0, 3.0,
+        4.0, 5.0, 6.0,
+        7.0, 8.0, 9.0,
+        10.0, 11.0, 12.0,
+    ],
+);
 let out = traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(1)).unwrap();
 
 assert_eq!(out.rank, 2);
+let mut compiler = GraphCompiler::new();
+let program = compiler.compile(&out).unwrap();
+let mut executor = GraphExecutor::new(CpuBackend::new());
+let result = executor.run(&program).unwrap();
+
+assert_eq!(result.shape(), &[2, 4]);
+assert_eq!(
+    result.as_slice::<f64>().unwrap(),
+    &[22.0, 28.0, 49.0, 64.0, 76.0, 100.0, 103.0, 136.0],
+);
 ```
 
 ## Optimization Controls

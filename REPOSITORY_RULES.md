@@ -359,9 +359,9 @@ Tests follow implementation ownership.
 - CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
   must be enabled; enabling both is valid and must compile. `CpuBackend` owns
   the runtime provider selection. `CpuBackend::new()` selects the default
-  compiled provider (`cpu-faer` when present), and explicit constructors or
-  application configuration select BLAS/LAPACK when that provider is compiled
-  and linked.
+  compiled provider (BLAS/LAPACK when `cpu-blas` is compiled, otherwise
+  `cpu-faer`), and explicit constructors or application configuration select a
+  different compiled provider when needed.
 
 ### Tensor Core Data Model
 
