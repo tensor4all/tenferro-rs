@@ -190,6 +190,26 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
 }
 
 #[test]
+fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
+    let interop_source = cubecl_source("interop.rs");
+    let download_source = source_section(
+        &interop_source,
+        "pub fn download_typed_tensor<",
+        "/// Allocate a CubeCL-owned byte workspace",
+    );
+
+    assert_ordered_needles(
+        "interop::download_typed_tensor",
+        download_source,
+        &[
+            "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
+            "let buffer = dispatch::cubecl_buffer(tensor, op)?;",
+            "if tensor.n_elements() == 0",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
     let mod_source = cubecl_source("mod.rs");
     let banned = [
