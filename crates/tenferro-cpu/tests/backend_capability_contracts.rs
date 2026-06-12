@@ -93,3 +93,17 @@ fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
         "concatenate should use precomputed ordered segment boundaries for logarithmic lookup"
     );
 }
+
+#[test]
+fn gather_scatter_index_component_reuses_index_scratch() {
+    let indexing_source = include_str!("../src/indexing.rs");
+
+    assert!(
+        !indexing_source.contains("let mut full_idx = vec![0usize; indices.shape.len()];"),
+        "gather/scatter should not allocate index vectors for every index component"
+    );
+    assert!(
+        indexing_source.contains("index_scratch"),
+        "gather/scatter should carry reusable index scratch through index_component"
+    );
+}

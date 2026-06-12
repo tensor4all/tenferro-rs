@@ -65,6 +65,14 @@ fn svd_v_to_vt_offset<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
+pub fn fill_one_kernel<E: CubePrimitive>(out: &mut Tensor<E>) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        out[pos] = one_value::<E>();
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn svd_v_to_vt_real<E: CubePrimitive>(
     out: &mut Tensor<E>,
     v: &Tensor<E>,

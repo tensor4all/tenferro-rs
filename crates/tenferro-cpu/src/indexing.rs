@@ -701,6 +701,7 @@ fn index_component(
     batch_idx: &[usize],
     index_vector_dim: usize,
     component: usize,
+    index_scratch: &mut [usize],
 ) -> crate::Result<i64> {
     if index_vector_dim == indices.shape.len() {
         if component != 0 {
@@ -712,9 +713,9 @@ fn index_component(
         return Ok(indices.values[linear_offset(op, &indices.shape, batch_idx)?]);
     }
 
-    let mut full_idx = vec![0usize; indices.shape.len()];
+    debug_assert_eq!(index_scratch.len(), indices.shape.len());
     let mut batch_axis = 0usize;
-    for (axis, slot) in full_idx.iter_mut().enumerate() {
+    for (axis, slot) in index_scratch.iter_mut().enumerate() {
         if axis == index_vector_dim {
             *slot = component;
         } else {
@@ -722,7 +723,7 @@ fn index_component(
             batch_axis += 1;
         }
     }
-    Ok(indices.values[linear_offset(op, &indices.shape, &full_idx)?])
+    Ok(indices.values[linear_offset(op, &indices.shape, index_scratch)?])
 }
 
 fn clamp_window_start(
@@ -890,6 +891,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut operand_idx = vec![0usize; rank];
     let mut window_offsets = vec![0usize; rank];
+    let mut index_scratch = vec![0usize; start_indices.shape.len()];
 
     for out_value in out.host_data_mut().iter_mut() {
         batch_axis = 0;
@@ -911,6 +913,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
                 &batch_idx,
                 config.index_vector_dim,
                 component,
+                &mut index_scratch,
             )?;
             operand_idx[operand_dim] = clamp_window_start(
                 "gather",
@@ -1105,6 +1108,7 @@ where
     let mut update_idx = vec![0usize; update_rank];
     let mut operand_base = vec![0usize; op_rank];
     let mut operand_idx = vec![0usize; op_rank];
+    let mut index_scratch = vec![0usize; scatter_indices.shape.len()];
 
     for _ in 0..batch_elems {
         let mut window_fits = true;
@@ -1116,6 +1120,7 @@ where
                 &batch_idx,
                 config.index_vector_dim,
                 component,
+                &mut index_scratch,
             )?;
             if start < 0 {
                 window_fits = false;

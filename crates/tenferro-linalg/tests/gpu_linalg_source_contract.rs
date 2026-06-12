@@ -120,6 +120,33 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
 }
 
 #[test]
+fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
+    let source = linalg_source();
+    let zero_lu = source_section(&source, "fn zero_sized_lu_factor_outputs", "fn raw_stream");
+    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+
+    for needle in [
+        "upload_host_tensor",
+        "vec![T::one()",
+        "TypedTensor::from_vec_col_major",
+    ] {
+        assert!(
+            !zero_lu.contains(needle),
+            "zero-sized GPU LU factor parity should not build host tensors: found {needle}"
+        );
+    }
+
+    assert!(
+        zero_lu.contains("fill_one_device_tensor"),
+        "zero-sized GPU LU factor parity should be initialized by a device fill helper"
+    );
+    assert!(
+        kernels.contains("pub fn fill_one_kernel"),
+        "GPU linalg kernels should expose a one-fill kernel for scalar/empty-shape fast paths"
+    );
+}
+
+#[test]
 fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
     let source = linalg_source();
     let solve_source = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
