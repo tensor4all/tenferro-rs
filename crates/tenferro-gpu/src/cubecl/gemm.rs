@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 

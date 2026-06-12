@@ -498,3 +498,37 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         "GPU linalg should not build host zero tensors for device fast paths"
     );
 }
+
+#[test]
+fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
+    let source = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+    let lu_kernels = source_section(
+        &source,
+        "#[cube(launch_unchecked)]\npub fn lu_extract_outputs",
+        "fn zero_sized_lu_factor_outputs",
+    );
+
+    assert!(
+        !lu_kernels.contains("#[comptime] k: usize"),
+        "LU kernels must not specialize on matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n        for step in 0usize..k"),
+        "LU kernels must not unroll loops over matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n            for step in 0usize..k"),
+        "LU kernels must not unroll nested loops over matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n            for offset in 0usize..k"),
+        "LU kernels must not unroll reverse loops over matrix-size extent k"
+    );
+
+    for needle in ["while step < k", "while step > 0usize"] {
+        assert!(
+            lu_kernels.contains(needle),
+            "LU kernels should iterate over runtime k with {needle}"
+        );
+    }
+}
