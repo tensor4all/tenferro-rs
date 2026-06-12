@@ -27,11 +27,19 @@ class CheckUpstreamAdTolerancesScriptTests(unittest.TestCase):
             return [[value, 0.0]]
         return [value]
 
-    def _success_record(self, *, dtype: str, pytorch_value: float, fd_value: float) -> dict:
+    def _success_record(
+        self,
+        *,
+        dtype: str,
+        pytorch_value: float,
+        fd_value: float,
+        op: str = "abs",
+        family: str = "identity",
+    ) -> dict:
         return {
-            "case_id": f"abs_identity_{dtype}",
-            "op": "abs",
-            "family": "identity",
+            "case_id": f"{op}_{family}_{dtype}",
+            "op": op,
+            "family": family,
             "dtype": dtype,
             "expected_behavior": "success",
             "probes": [
@@ -186,6 +194,50 @@ class CheckUpstreamAdTolerancesScriptTests(unittest.TestCase):
         audit_map = {audit.case_key: audit for audit in audits}
         self.assertIn("abs/identity/float64", audit_map)
         self.assertFalse(audit_map["abs/identity/float64"].violates_upstream)
+
+    def test_audit_skips_repository_local_families_without_upstream_opinfo(self) -> None:
+        spec_index = {
+            ("full_pivot_lu", "identity"): SimpleNamespace(
+                upstream_name=None,
+                upstream_variant_name="",
+                inventory_kind="local_full_pivot_lu",
+                source_repo="tensor-ad-oracles",
+            )
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "full_pivot_lu").mkdir()
+            path = root / "full_pivot_lu" / "identity.jsonl"
+            path.write_text(
+                json.dumps(
+                    self._success_record(
+                        dtype="float64",
+                        pytorch_value=1.0,
+                        fd_value=1.0,
+                        op="full_pivot_lu",
+                        family="identity",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(check_upstream_ad_tolerances, "build_case_spec_index", return_value=spec_index),
+                patch.object(
+                    check_upstream_ad_tolerances,
+                    "resolve_upstream_ad_tolerance",
+                    side_effect=AssertionError("local family should not resolve upstream tolerance"),
+                ),
+                patch.object(
+                    check_upstream_ad_tolerances,
+                    "resolve_upstream_scalar_ad_tolerance",
+                    side_effect=AssertionError("local family should not resolve scalar tolerance"),
+                ),
+            ):
+                audits = check_upstream_ad_tolerances.audit_against_upstream_ad_tolerances(root)
+
+        self.assertEqual(audits, [])
 
 
 if __name__ == "__main__":

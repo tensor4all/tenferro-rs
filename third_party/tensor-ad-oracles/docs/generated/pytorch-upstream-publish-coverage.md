@@ -9,7 +9,7 @@ and the checked-in `cases/` tree.
 - AD-relevant scalar upstream variants: 138
 - Mapped publishable success families: 174
 - Explicit publishable error families: 2
-- Total tracked DB families: 176
+- Total tracked DB families: 178
 
 ## Publishable Family Coverage
 
@@ -74,6 +74,7 @@ publishable upstream coverage that is not yet materialized in this repository.
 | fmin | identity | success | float64, float32 | float64, float32 | - |
 | frac | identity | success | float64, float32 | float64, float32 | - |
 | frexp | identity | success | float64, float32 | float64, float32 | - |
+| full_pivot_lu | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
 | householder_product | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
 | hypot | identity | success | float64, float32 | float64, float32 | - |
 | i0 | identity | success | float64, float32 | float64, float32 | - |
@@ -186,6 +187,7 @@ publishable upstream coverage that is not yet materialized in this repository.
 | tanh | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
 | tensorinv | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
 | tensorsolve | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
+| tropical_einsum_maxplus | identity | success | float64 | float64 | - |
 | true_divide | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |
 | trunc | identity | success | float64, float32 | float64, float32 | - |
 | vander | identity | success | float64, complex128, float32, complex64 | float64, complex128, float32, complex64 | - |

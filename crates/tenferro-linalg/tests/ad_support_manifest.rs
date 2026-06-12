@@ -88,12 +88,15 @@ fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
 }
 
 #[test]
-fn linalg_ad_support_manifest_keeps_full_pivot_lu_pending_oracle() {
+fn linalg_ad_support_manifest_marks_full_pivot_lu_oracle_backed() {
     let full_piv_lu = linalg_ad_support(LinalgAdOpKind::FullPivLu);
-    assert_eq!(full_piv_lu.linearize, LinalgAdRuleSupport::PendingOracle);
+    assert_eq!(
+        full_piv_lu.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
     assert_output_status(full_piv_lu, "p", LinalgAdRuleSupport::NonDifferentiable);
-    assert_output_status(full_piv_lu, "l", LinalgAdRuleSupport::PendingOracle);
-    assert_output_status(full_piv_lu, "u", LinalgAdRuleSupport::PendingOracle);
+    assert_output_status(full_piv_lu, "l", LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_output_status(full_piv_lu, "u", LinalgAdRuleSupport::SupportedViaLinearize);
     assert_output_status(full_piv_lu, "q", LinalgAdRuleSupport::NonDifferentiable);
     assert_output_status(
         full_piv_lu,
@@ -104,16 +107,13 @@ fn linalg_ad_support_manifest_keeps_full_pivot_lu_pending_oracle() {
     let full_piv_lu_solve = linalg_ad_support(LinalgAdOpKind::FullPivLuSolve);
     assert_eq!(
         full_piv_lu_solve.linearize,
-        LinalgAdRuleSupport::PendingOracle
+        LinalgAdRuleSupport::SupportedViaLinearize
     );
-    assert_eq!(
-        full_piv_lu_solve.transpose,
-        LinalgAdRuleSupport::PendingOracle
-    );
+    assert_eq!(full_piv_lu_solve.transpose, LinalgAdRuleSupport::Supported);
     assert_output_status(
         full_piv_lu_solve,
         "solution",
-        LinalgAdRuleSupport::PendingOracle,
+        LinalgAdRuleSupport::SupportedViaLinearize,
     );
 }
 

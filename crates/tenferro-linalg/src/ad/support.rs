@@ -106,7 +106,7 @@ impl LinalgAdOpKind {
 ///
 /// let full_piv_lu = linalg_ad_support(LinalgAdOpKind::FullPivLu);
 /// let l_output = full_piv_lu.outputs.iter().find(|output| output.name == "l").unwrap();
-/// assert_eq!(l_output.status, LinalgAdRuleSupport::PendingOracle);
+/// assert_eq!(l_output.status, LinalgAdRuleSupport::SupportedViaLinearize);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinalgAdOutputSupport {
@@ -175,13 +175,16 @@ static SOLUTION_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
 )];
 static FULL_PIV_LU_OUTPUTS: [LinalgAdOutputSupport; 5] = [
     output(0, "p", LinalgAdRuleSupport::NonDifferentiable),
-    output(1, "l", LinalgAdRuleSupport::PendingOracle),
-    output(2, "u", LinalgAdRuleSupport::PendingOracle),
+    output(1, "l", LinalgAdRuleSupport::SupportedViaLinearize),
+    output(2, "u", LinalgAdRuleSupport::SupportedViaLinearize),
     output(3, "q", LinalgAdRuleSupport::NonDifferentiable),
     output(4, "parity", LinalgAdRuleSupport::NonDifferentiable),
 ];
-static FULL_PIV_LU_SOLVE_OUTPUTS: [LinalgAdOutputSupport; 1] =
-    [output(0, "solution", LinalgAdRuleSupport::PendingOracle)];
+static FULL_PIV_LU_SOLVE_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "solution",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
 static SVD_OUTPUTS: [LinalgAdOutputSupport; 3] = [
     output(0, "u", LinalgAdRuleSupport::SupportedViaLinearize),
     output(
@@ -245,14 +248,14 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::FullPivLu,
-        linearize: LinalgAdRuleSupport::PendingOracle,
+        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
         transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &FULL_PIV_LU_OUTPUTS,
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::FullPivLuSolve,
-        linearize: LinalgAdRuleSupport::PendingOracle,
-        transpose: LinalgAdRuleSupport::PendingOracle,
+        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
+        transpose: LinalgAdRuleSupport::Supported,
         outputs: &FULL_PIV_LU_SOLVE_OUTPUTS,
     },
     LinalgAdSupport {

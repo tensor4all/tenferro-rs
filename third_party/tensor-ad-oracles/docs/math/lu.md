@@ -257,3 +257,18 @@ nondifferentiable metadata.
 
 The extended factorization uses the same derivative contract on the factor
 tensor; status outputs remain metadata.
+
+<a id="family-full-pivot-lu-identity"></a>
+### `full_pivot_lu/identity`
+
+The DB publishes the differentiable $(L, U)$ factors for the full-pivot
+contract
+
+$$
+P A Q = L U
+$$
+
+or, in plain text, P A Q = L U. Row pivots, column pivots, parity, and status
+are nondifferentiable metadata. Cases cover square, wide, and tall matrices
+under fixed-pivot finite-difference probes because pinned PyTorch does not
+expose an upstream full-pivot LU OpInfo.
