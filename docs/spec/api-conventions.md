@@ -65,8 +65,10 @@ The default stratum is internal.
 
 ## Documentation Checks
 
-1. `README.md`, `docs/guides/`, and `docs/getting-started/` must not reference
-   internal crates, internal graph/IR vocabulary, or deleted public paths.
+1. `README.md`, `docs/index.md`, `docs/guides/`,
+   `docs/getting-started/`, `docs/tutorials/`, and `docs/performance/` must
+   not reference internal crates, internal graph/IR vocabulary, or deleted
+   public paths.
 2. User-facing examples must use direct public crates and must not rely on a
    root facade path.
 3. Flat-buffer constructors, exports, examples, and FFI contracts must state or

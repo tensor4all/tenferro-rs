@@ -183,9 +183,14 @@ def collect_public_items(root: pathlib.Path, crates: list[CrateInfo]) -> list[Pu
 
 
 def user_facing_docs(root: pathlib.Path) -> list[pathlib.Path]:
-    docs = [root / "README.md"]
-    for relative in ("docs/guides", "docs/getting-started"):
-        directory = root / relative
+    docs = [root / "README.md", root / "docs" / "index.md"]
+    for relative in (
+        "guides",
+        "getting-started",
+        "tutorials",
+        "performance",
+    ):
+        directory = root / "docs" / relative
         if directory.exists():
             docs.extend(sorted(directory.rglob("*.md")))
     return [path for path in docs if path.exists()]
@@ -244,8 +249,16 @@ def check_features(root: pathlib.Path, crates: list[CrateInfo]) -> list[Finding]
 def check_user_docs(root: pathlib.Path) -> list[Finding]:
     findings: list[Finding] = []
     for doc in user_facing_docs(root):
+        in_readme_implementation_crates = False
         for line_no, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             location = f"{doc.relative_to(root)}:{line_no}"
+            if doc == root / "README.md":
+                if line.strip() == "### Implementation Crates":
+                    in_readme_implementation_crates = True
+                elif line.startswith("## ") or line.startswith("### "):
+                    in_readme_implementation_crates = False
+                if in_readme_implementation_crates:
+                    continue
             if "tenferro::" in line:
                 findings.append(
                     Finding(

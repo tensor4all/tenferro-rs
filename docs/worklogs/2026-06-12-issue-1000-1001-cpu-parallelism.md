@@ -10,12 +10,14 @@ per-output segment scan, reuses LAPACK batched input scratch, tightens CPU and
 CUDA/CubeCL validation, placement, and device-native fast-path contracts,
 keeps LU GPU kernels from specializing on matrix-size extents, aligns the
 linalg values-only AD support manifest with pending oracle coverage, and fixes
-the publish-layout and active crate-ownership documentation drift detected by
-the audit.
+the publish-layout, API-consistency scope/false-positive gaps, and active
+crate-ownership documentation drift detected by the audit. Superseded
+historical design/reference notes are archived under `docs/plans/historical/`
+so the active design and reference indexes only point at current material.
 
 The PR should use `Closes #1001` and `Refs #1000`. #1000 remains an umbrella
-backlog with residual oracle-family, public API, remaining benchmark-backed
-performance, and tooling-scope items that still need separate focused
+backlog with residual oracle-family, public API, and remaining
+benchmark-backed performance items that still need separate focused
 verification or design work.
 
 ## Context Read
@@ -94,9 +96,11 @@ verification or design work.
 | LAPACK batched helpers allocated a fresh input `Vec` for every batch slice | Source-risk / Fixed | Reused pooled input scratch tensors and refilled them from each batch slice. Added a source-contract test that rejects per-batch input `to_vec()` copies. |
 | CUDA LU helper kernels specialized on matrix-size extent `k` and unrolled loops over it | Source-risk / Fixed | Changed `k` to a runtime kernel argument and replaced unrolled `0..k` loops with runtime `while` loops. Rank and axis-count `#[comptime]` parameters remain intentional because they define indexing structure. |
 | Active reference docs still blurred primitive metadata, graph vocabulary, and execution IR ownership | Policy-doc gap / Fixed | Updated active docs to distinguish `tenferro-core-ops` primitive metadata, `tenferro-internal-ops::StdTensorOp`, and `tenferro-runtime::ExecOp`; refreshed the computegraph trait excerpt. |
+| Historical design/reference notes were still linked from active indexes | Policy-doc gap / Fixed | Moved superseded migration, linalg, einsum, and external-survey notes to `docs/plans/historical/`; removed them from `docs/design/index.md` and `docs/reference/index.md`. |
+| API consistency checker missed some rendered user-facing docs and flagged README implementation-crate inventory as jargon | Tooling gap / Fixed | Expanded the user-doc jargon check to `docs/index.md`, tutorials, and performance docs while keeping internals/spec/architecture out of scope; exempted README's implementation-crate inventory table. |
 | #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
 | #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, LAPACK batched input scratch reuse, one CubeCL GEMM host-materialization fast path, and LU `k` specialization. Other performance findings still need focused benchmarks or source-specific follow-up. |
-| #1000 broader docs/tooling drift | Partially narrowed | This PR fixes stale `CpuContext` docs, publish-layout drift, and active crate-ownership docs. Snippet/API tooling expansion remains deferred. |
+| #1000 broader docs/tooling drift | Fixed for accepted current-tree docs/tooling findings | This PR fixes stale `CpuContext` docs, publish-layout drift, active crate-ownership docs, historical-doc indexing, and API-consistency scope/false-positive gaps. Snippet-source tooling remains intentionally scoped to `snippet-source` blocks. |
 
 ## Decisions Made
 
@@ -120,8 +124,9 @@ verification or design work.
 - Did not disable active AD implementations solely because oracle coverage is
   incomplete; this PR marks concrete values-only linalg gaps as
   `PendingOracle`, while full oracle-family expansion remains separate work.
-- Did not close #1000 as a whole because the remaining findings are unrelated
-  verify-first or design-gated slices.
+- Treated historical design and reference material as archive content rather
+  than current design after active-index notes proved too weak to prevent docs
+  drift.
 
 ## Verification Performed
 
@@ -187,6 +192,7 @@ verification or design work.
 - GREEN: `cargo doc --workspace --no-deps`
 - GREEN: `python3 scripts/check-doc-snippets.py --check`
 - GREEN: `python3 scripts/check-docs-site.py`
+- GREEN: `python3 scripts/check-api-consistency.py --fail-on-findings`
 - GREEN:
   `cargo test -p tenferro-cpu --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"`
 - GREEN: `git diff --check`
@@ -200,5 +206,4 @@ verification or design work.
   design for this PR.
 - #1000 remains open for oracle-family expansion beyond the values-only linalg
   manifest fix, public API panic/operator-overload follow-ups not already
-  covered by #1015, remaining benchmark-backed performance work, and broader
-  snippet/API tooling-scope expansion.
+  covered by #1015, and remaining benchmark-backed performance work.

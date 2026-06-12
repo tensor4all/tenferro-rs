@@ -12,10 +12,10 @@ live API guidance.
 > primitive families (`TensorSemiringCore` / `TensorSemiringFastPath`) and
 > `PrimDescriptor` as the corresponding family descriptors.
 
-See [tensor-prims.md](./tensor-prims.md) for the canonical family-trait
+See [tensor-prims.md](../../design/tensor-prims.md) for the canonical family-trait
 definitions, plan-cache key policy, and the `CpuBackend` / `CpuContext` type
 definitions referenced throughout this document. See
-[gpu-backend-design.md](./gpu-backend-design.md) for the GPU-specific plan
+[gpu-backend-design.md](../../design/gpu-backend-design.md) for the GPU-specific plan
 lifecycle, stride-sensitive cache key policy, and the tropical GPU kernel
 integration plan.
 
@@ -109,7 +109,7 @@ for i in 0..I {
 No dependency on strided-einsum2, Contract, or any einsum-level logic.
 GPU backends may compose these via `Contract(eye, ∂C)` using
 cuTENSOR/hipTENSOR — see
-[gpu-backend-design.md](./gpu-backend-design.md).
+[gpu-backend-design.md](../../design/gpu-backend-design.md).
 
 ### Type Adaptation
 
@@ -135,7 +135,7 @@ In CpuBackend, convert to strided-view's `Conj` op when building
 
 On GPU, cuTENSOR supports `CUTENSOR_OP_CONJ` in tensor descriptors for
 lazy conjugation. Standalone `Tensor::conj()` requires CPU transfer for
-GPU tensors. See [gpu-backend-design.md](./gpu-backend-design.md) G11.
+GPU tensors. See [gpu-backend-design.md](../../design/gpu-backend-design.md) G11.
 
 **Algebra parameterization**: strided-einsum2 has no algebra concept.
 `TensorPrims<A>` is parameterized by algebra `A`.  For `Standard<S>` algebra,
@@ -267,7 +267,7 @@ calls to strided-kernel from the einsum layer.
 **Next action**: N/A — decision is recorded. Update the current
 `tenferro-prims/src/cpu/` module tree and `tenferro-einsum` implementation to
 implement accordingly when moving out of POC phase. Cache key policy details are in
-[tensor-prims.md](./tensor-prims.md) under "PlanCache".
+[tensor-prims.md](../../design/tensor-prims.md) under "PlanCache".
 
 **Success condition**: `single_tensor_einsum` is implemented entirely via
 `TensorPrims` calls; no direct import of `strided-kernel` symbols from
@@ -339,7 +339,7 @@ before/after signatures.
 
 **Next action**: Update all 9 einsum function stubs + all AD function stubs in
 `crates/tenferro-einsum/src/lib.rs`. The `TensorPrims<A>` trait is defined in
-[tensor-prims.md](./tensor-prims.md); implementations live in `tenferro-prims`.
+[tensor-prims.md](../../design/tensor-prims.md); implementations live in `tenferro-prims`.
 
 **Success condition**: `cargo check -p tenferro-einsum` passes with the new
 signatures; no einsum function remains with the old single-type-parameter form.
@@ -372,7 +372,7 @@ Cargo.toml` (workspace and all crates) returns no results.
 write-to-diagonal for anti_diag). No dependency on strided-einsum2 or on the
 `Contract` extended operation. GPU backends compose these via
 `Contract(eye(I), ∂C)` using cuTENSOR/hipTENSOR — see
-[gpu-backend-design.md](./gpu-backend-design.md) under "AntiTrace / AntiDiag
+[gpu-backend-design.md](../../design/gpu-backend-design.md) under "AntiTrace / AntiDiag
 GPU Implementation".
 
 **Next action**: N/A — decision is recorded. Implement the loop bodies in the
