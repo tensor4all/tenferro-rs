@@ -16,7 +16,9 @@ The redesign separates two concerns that were previously coupled:
 `tenferro-linalg` owns both the public linalg API and the linalg extension
 runtime, while `LinalgBackend` defines the narrower backend kernel surface.
 Core scalar, analytic, structural, and contraction vocabulary lives in
-`tenferro-core-ops` and is executed through `tenferro-tensor::TensorBackend`.
+`tenferro-internal-ops::StdTensorOp`, with primitive metadata supplied by
+`tenferro-core-ops`, and is executed through `tenferro-runtime::ExecOp` and
+`tenferro-tensor::TensorBackend`.
 This prevents generic tensor backends and operation-family crates from
 inheriting linalg-specific requirements.
 

@@ -43,6 +43,8 @@ The most relevant source files were:
 - `tenferro-rs/docs/design/supported-ops.md`
 - `tenferro-rs/docs/design/tensor-prims.md`
 - `tenferro-rs/crates/tenferro-core-ops/src/catalog.rs`
+- `tenferro-rs/crates/tenferro-internal-ops/src/std_tensor_op.rs`
+- `tenferro-rs/crates/tenferro-runtime/src/exec.rs`
 - `tenferro-rs/crates/tenferro-tensor/src/backend.rs`
 - `tenferro-rs/crates/tenferro-einsum/src/`
 - `tenferro-rs/crates/tenferro-linalg/src/lib.rs`
@@ -125,10 +127,11 @@ implementations.
 ### Execution families in the current runtime crates
 
 The current workspace no longer has a separate `tenferro-prims` crate. Core
-execution vocabulary is represented by `StdTensorOp` / `ExecOp` in
-`tenferro-core-ops` and the runtime compiler, while backend execution is
-provided through `tenferro-tensor::TensorBackend` implementations such as
-`tenferro-cpu` and `tenferro-gpu`.
+primitive metadata lives in `tenferro-core-ops`, graph vocabulary lives in
+`tenferro-internal-ops::StdTensorOp`, and execution vocabulary lives in
+`tenferro-runtime::ExecOp`. Backend execution is provided through
+`tenferro-tensor::TensorBackend` implementations such as `tenferro-cpu` and
+`tenferro-gpu`.
 
 - contraction and semiring-oriented paths
   - `DotGeneral`

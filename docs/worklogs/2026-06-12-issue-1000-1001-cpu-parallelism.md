@@ -6,15 +6,17 @@ This batch resolves GitHub issue #1001 and fixes several concrete, testable
 findings from the #1000 umbrella audit. It wires tenferro-owned CPU tensor
 kernels to the existing `CpuContext` parallelism contract, fixes the cached faer
 GEMM helper so it enters the owned Rayon pool, removes a CPU concatenate
-per-output segment scan, tightens CUDA/CubeCL placement and device-native fast
-path contracts, aligns the linalg values-only AD support manifest with pending
-oracle coverage, and fixes the publish-layout metadata drift detected by the
-audit.
+per-output segment scan, reuses LAPACK batched input scratch, tightens CPU and
+CUDA/CubeCL validation, placement, and device-native fast-path contracts,
+keeps LU GPU kernels from specializing on matrix-size extents, aligns the
+linalg values-only AD support manifest with pending oracle coverage, and fixes
+the publish-layout and active crate-ownership documentation drift detected by
+the audit.
 
 The PR should use `Closes #1001` and `Refs #1000`. #1000 remains an umbrella
-backlog with residual oracle-family, public API, benchmark-backed performance,
-and docs/tooling-scope items that still need separate focused verification or
-design work.
+backlog with residual oracle-family, public API, remaining benchmark-backed
+performance, and tooling-scope items that still need separate focused
+verification or design work.
 
 ## Context Read
 
@@ -42,9 +44,19 @@ design work.
 - `crates/tenferro-gpu/src/cubecl/interop.rs`
 - `crates/tenferro-gpu/tests/cubecl_launch_contract.rs`
 - `crates/tenferro-linalg/src/gpu/linalg.rs`
+- `crates/tenferro-linalg/src/gpu/kernels.rs`
+- `crates/tenferro-linalg/src/cpu/backend.rs`
+- `crates/tenferro-linalg/src/cpu/linalg/lapack_linalg/helpers.rs`
 - `crates/tenferro-linalg/src/ad/support.rs`
+- `crates/tenferro-linalg/tests/backend_errors.rs`
+- `crates/tenferro-linalg/tests/cpu_linalg_source_contract.rs`
 - `crates/tenferro-linalg/tests/ad_support_manifest.rs`
 - `crates/tenferro-linalg/tests/gpu_linalg_source_contract.rs`
+- `docs/design/linalg-prims.md`
+- `docs/reference/jax-stablehlo-needed.md`
+- `docs/reference/libtorch.md`
+- `docs/reference/pytorch-dense-cpu-parity.md`
+- `docs/spec/primitive-catalog.md`
 - `docs/guides/parallelism-and-caching.md`
 - `docs/design/tensor-prims.md`
 - `docs/design/exec-session.md`
@@ -78,9 +90,13 @@ design work.
 | CUDA linalg `solve` and prepared LU solve could validate dtype or zero fast paths before residency | Source-risk / Fixed | Reordered residency checks ahead of dtype-pair and zero-dimension handling and added source-contract coverage. |
 | CubeCL interop downloads could return empty host tensors before checking residency | Source-risk / Fixed | `download_typed_tensor` now validates CubeCL buffer and runtime/device residency before the empty fast path. Added source-contract coverage. |
 | CubeCL GEMM zero-contracting fast path built a host zero `Vec` and uploaded it | Source-risk / Fixed | Replaced host zero materialization with device allocation plus the existing device `fill_zero_kernel`. Added source-contract coverage. |
+| CPU `full_piv_lu_solve` could return a zero-sized output before validating dtype-pair support | Source-risk / Fixed | Moved dtype-pair validation ahead of the zero-dimension fast path and added backend-error coverage for mixed and unsupported dtype pairs. |
+| LAPACK batched helpers allocated a fresh input `Vec` for every batch slice | Source-risk / Fixed | Reused pooled input scratch tensors and refilled them from each batch slice. Added a source-contract test that rejects per-batch input `to_vec()` copies. |
+| CUDA LU helper kernels specialized on matrix-size extent `k` and unrolled loops over it | Source-risk / Fixed | Changed `k` to a runtime kernel argument and replaced unrolled `0..k` loops with runtime `while` loops. Rank and axis-count `#[comptime]` parameters remain intentional because they define indexing structure. |
+| Active reference docs still blurred primitive metadata, graph vocabulary, and execution IR ownership | Policy-doc gap / Fixed | Updated active docs to distinguish `tenferro-core-ops` primitive metadata, `tenferro-internal-ops::StdTensorOp`, and `tenferro-runtime::ExecOp`; refreshed the computegraph trait excerpt. |
 | #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
-| #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, and one CubeCL GEMM host-materialization fast path. Other linalg scratch and GPU-kernel-size findings still need focused benchmarks or source-specific follow-up. |
-| #1000 broader docs/tooling drift | Partially narrowed | This PR fixes stale `CpuContext` docs and publish-layout drift. Snippet/API tooling expansion remains deferred. |
+| #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, LAPACK batched input scratch reuse, one CubeCL GEMM host-materialization fast path, and LU `k` specialization. Other performance findings still need focused benchmarks or source-specific follow-up. |
+| #1000 broader docs/tooling drift | Partially narrowed | This PR fixes stale `CpuContext` docs, publish-layout drift, and active crate-ownership docs. Snippet/API tooling expansion remains deferred. |
 
 ## Decisions Made
 
@@ -98,6 +114,9 @@ design work.
 - Treated source-contract tests as appropriate for #1000 cases where the
   accepted finding is a source-risk without a hardware-independent behavior
   reproducer.
+- Kept GPU kernel `rank` and axis-count values as `#[comptime]` because they
+  define indexing structure, while treating matrix-size extent `k` as runtime
+  data to avoid per-shape kernel specialization.
 - Did not disable active AD implementations solely because oracle coverage is
   incomplete; this PR marks concrete values-only linalg gaps as
   `PendingOracle`, while full oracle-family expansion remains separate work.
@@ -134,10 +153,24 @@ design work.
 - RED:
   `cargo test -p tenferro-gpu --test cubecl_launch_contract cubecl_gemm_zero_contracting_path_stays_device_native`
   failed before the GEMM zero-contracting path stopped materializing host zeros.
+- RED:
+  `cargo test -p tenferro-linalg --test backend_errors full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path`
+  failed before CPU `full_piv_lu_solve` validated dtype pairs before the
+  zero-dimension fast path.
+- RED:
+  `cargo test -p tenferro-linalg --test cpu_linalg_source_contract`
+  failed before LAPACK batched helpers stopped allocating fresh input vectors
+  per batch.
+- RED:
+  `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized`
+  failed while LU helper kernels still used `#[comptime] k` and unrolled loops.
 - GREEN: `cargo test -p tenferro-cpu`
 - GREEN: `cargo test -p tenferro-cpu concatenate`
 - GREEN: `cargo test -p tenferro-gpu --test cubecl_launch_contract`
 - GREEN: `cargo test -p tenferro-linalg --test gpu_linalg_source_contract`
+- GREEN: `cargo test -p tenferro-linalg --test cpu_linalg_source_contract`
+- GREEN: `cargo test -p tenferro-linalg --test backend_errors`
+- GREEN: `cargo check -p tenferro-linalg --features cuda`
 - GREEN:
   `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest`
 - GREEN: `cargo test -p tenferro-internal-ops --test publication_contract`
@@ -167,5 +200,5 @@ design work.
   design for this PR.
 - #1000 remains open for oracle-family expansion beyond the values-only linalg
   manifest fix, public API panic/operator-overload follow-ups not already
-  covered by #1015, benchmark-backed linalg scratch/kernel-size work, and
-  broader snippet/API tooling-scope expansion.
+  covered by #1015, remaining benchmark-backed performance work, and broader
+  snippet/API tooling-scope expansion.
