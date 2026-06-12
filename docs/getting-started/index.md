@@ -5,6 +5,22 @@ optional `backward()` on scalar losses, traced graph execution, `grad`, `vjp`,
 and `jvp` on traced graphs, einsum, linear algebra, and CUDA execution through
 the feature-gated CUDA backend.
 
+## Mental Model
+
+tenferro has three independent choices. Pick the smallest tensor layer that
+matches the program, decide whether work should run immediately or through a
+compiled traced program, then choose a CPU or CUDA backend explicitly.
+
+| Choice | Question | Common starting point |
+| --- | --- | --- |
+| Tensor layer | What kind of value do I pass around? | `TypedTensor<T>` for typed CPU values, `Tensor` for runtime dtype |
+| Execution model | When does computation run? | Direct/eager for ordinary code, traced for `grad`, `vjp`, `jvp`, or reuse |
+| Backend/device | Where does computation run? | `CpuBackend`; upload/download explicitly for CUDA |
+
+CUDA, eager execution, and traced graphs are not competing APIs. They compose
+when a workflow needs them, but the first CPU program below only needs the
+runtime crate and CPU backend.
+
 ## Setup
 
 Start with the runtime crate and CPU backend crate. Use a local checkout while
@@ -105,6 +121,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 <!-- end-snippet-source -->
+
+Expected output: the program exits silently because the shape and value
+assertions pass.
 
 ## Next Steps
 

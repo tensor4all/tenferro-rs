@@ -44,6 +44,20 @@ graphs, symbolic inputs, graph optimization, and repeated execution. The
 executor backend decides whether the compiled program runs on CPU or CUDA for
 supported operations.
 
+### Dynamic Shapes in Traced Mode
+
+Traced programs can carry shape metadata whose exact size is resolved at
+execution time. That lets operations such as truncated SVD return a rank chosen
+from the input values and still feed later traced operations without re-tracing
+or padding to a fixed rank.
+
+This is the main difference from shape-specialized compilation systems such as
+JAX/XLA. Static-shape workloads can benefit from aggressive specialization;
+runtime-rank workflows need a representation that keeps exact, upper-bound, or
+unknown extents in the program until dispatch. See
+[Dynamic and Symbolic Shape Metadata](../design/dynamic-symbolic-shapes.md) for
+the implementation contract.
+
 ## Why Support Both?
 
 Eager and traced serve different workflows on the same tensor stack.

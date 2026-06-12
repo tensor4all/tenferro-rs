@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from html.parser import HTMLParser
+from urllib.parse import unquote, urlsplit
 
 try:
     import tomllib
@@ -29,12 +30,73 @@ class LinkCollector(HTMLParser):
             self.links.add(match.group(1))
 
 
+class RenderedPageLinkCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href") or ""
+        if href:
+            self.links.add(href)
+
+
+def rendered_page_links(path: pathlib.Path) -> set[str]:
+    parser = RenderedPageLinkCollector()
+    parser.feed(path.read_text(encoding="utf-8"))
+    return parser.links
+
+
+def is_external_href(href: str) -> bool:
+    parsed = urlsplit(href)
+    if parsed.scheme or parsed.netloc:
+        return True
+    return href.startswith("#") or href.startswith("/")
+
+
+def rendered_html_pages(site_root: pathlib.Path) -> list[pathlib.Path]:
+    if not site_root.exists():
+        return []
+    pages: list[pathlib.Path] = []
+    for path in sorted(site_root.rglob("*.html")):
+        try:
+            relative = path.relative_to(site_root)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0] == "api":
+            continue
+        pages.append(path)
+    return pages
+
+
+def missing_rendered_html_links(site_root: pathlib.Path) -> list[tuple[pathlib.Path, str, pathlib.Path]]:
+    missing: list[tuple[pathlib.Path, str, pathlib.Path]] = []
+    for page in rendered_html_pages(site_root):
+        for href in sorted(rendered_page_links(page)):
+            if is_external_href(href):
+                continue
+            parsed = urlsplit(href)
+            if not parsed.path or not parsed.path.endswith(".html"):
+                continue
+            target = (page.parent / unquote(parsed.path)).resolve()
+            try:
+                target.relative_to(site_root)
+            except ValueError:
+                continue
+            if not target.is_file():
+                missing.append((page, href, target))
+    return missing
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify docs-site completeness for workspace library crates.")
     parser.add_argument("--root-dir", default=".", help="Repository root (default: current directory)")
     parser.add_argument("--doc-root", help="Rustdoc output directory (default: <root>/target/doc)")
     parser.add_argument("--api-index-md", help="Markdown API index (default: <root>/docs/api/index.md if it exists)")
     parser.add_argument("--site-index", help="Rendered API landing page HTML (default: <root>/target/docs-site/api/index.html if it exists)")
+    parser.add_argument("--docs-site-root", help="Rendered Quarto site root (default: <root>/target/docs-site)")
     parser.add_argument("--quiet", action="store_true", help="Suppress success output")
     return parser.parse_args()
 
@@ -122,6 +184,11 @@ def main() -> int:
     doc_root = pathlib.Path(args.doc_root) if args.doc_root else root / "target" / "doc"
     api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api" / "index.md"
     site_index = pathlib.Path(args.site_index) if args.site_index else root / "target" / "docs-site" / "api" / "index.html"
+    docs_site_root = (
+        pathlib.Path(args.docs_site_root).resolve()
+        if args.docs_site_root
+        else root / "target" / "docs-site"
+    )
 
     crates = load_workspace_libs(root)
     missing_doc = [pkg for _member, pkg, doc_dir in crates if not (doc_root / doc_dir / "index.html").exists()]
@@ -147,6 +214,15 @@ def main() -> int:
             for pkg in missing_links:
                 print(f"- {pkg}", file=sys.stderr)
             return 1
+
+    missing_site_links = missing_rendered_html_links(docs_site_root)
+    if missing_site_links:
+        print("rendered docs links outside the rendered docs set:", file=sys.stderr)
+        for source, href, target in missing_site_links:
+            source_rel = source.relative_to(docs_site_root)
+            target_rel = target.relative_to(docs_site_root)
+            print(f"- {source_rel}: {href} -> {target_rel}", file=sys.stderr)
+        return 1
 
     if not args.quiet:
         print(f"docs-site-ok: {len(crates)} workspace library crates verified")
