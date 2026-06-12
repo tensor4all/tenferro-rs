@@ -93,6 +93,21 @@ class PytorchV1RegistryTests(unittest.TestCase):
         self.assertEqual(index[("sum", "identity")].upstream_name, "sum")
         self.assertTrue(index[("add", "identity")].hvp_enabled)
 
+    def test_build_case_spec_index_includes_local_full_pivot_lu(self) -> None:
+        index = pytorch_v1.build_case_spec_index()
+
+        spec = index[("full_pivot_lu", "identity")]
+
+        self.assertEqual(spec.inventory_kind, "local_full_pivot_lu")
+        self.assertIsNone(spec.upstream_name)
+        self.assertEqual(spec.source_repo, "tensor-ad-oracles")
+        self.assertEqual(spec.observable_kind, "identity")
+        self.assertTrue(spec.hvp_enabled)
+        self.assertEqual(
+            spec.supported_dtype_names,
+            ("float64", "complex128", "float32", "complex64"),
+        )
+
     def test_build_case_spec_index_tracks_publishable_dtype_coverage(self) -> None:
         index = pytorch_v1.build_case_spec_index()
 
@@ -118,6 +133,7 @@ class PytorchV1RegistryTests(unittest.TestCase):
         self.assertIn("abs: identity", output)
         self.assertIn("add: identity", output)
         self.assertIn("sum: identity", output)
+        self.assertIn("full_pivot_lu: identity", output)
 
     def test_build_case_families_includes_full_supported_mapping_subset(self) -> None:
         registry = pytorch_v1.build_case_families()

@@ -88,6 +88,39 @@ class SolveGenerationTests(unittest.TestCase):
             self.assertEqual(len(saved), len(spec.supported_dtype_names))
             self.assertEqual(saved[0]["case_id"], record["case_id"])
 
+    def test_generate_full_pivot_lu_records_cover_rectangular_cases(self) -> None:
+        try:
+            import torch  # noqa: F401
+            import expecttest  # noqa: F401
+        except Exception as exc:
+            self.skipTest(f"uv generation dependencies unavailable: {exc}")
+
+        records = pytorch_v1.generate_full_pivot_lu_identity_records(limit=None)
+        spec = pytorch_v1.build_case_spec_index()[("full_pivot_lu", "identity")]
+
+        self.assertEqual(len(records), 3 * len(spec.supported_dtype_names))
+        self.assertEqual(
+            {
+                tuple(record["inputs"]["a"]["shape"])
+                for record in records
+                if record["dtype"] == "float64"
+            },
+            {(3, 3), (2, 4), (4, 2)},
+        )
+
+        record = records[0]
+        self.assertEqual(record["op"], "full_pivot_lu")
+        self.assertEqual(record["family"], "identity")
+        self.assertEqual(record["observable"], {"kind": "identity"})
+        self.assertIn("row_perm", record["op_kwargs"])
+        self.assertIn("col_perm", record["op_kwargs"])
+        self.assertIn("parity", record["op_kwargs"])
+        self.assertEqual(record["provenance"]["source_repo"], "tensor-ad-oracles")
+        self.assertIn("no upstream full-pivot LU", record["provenance"]["comment"])
+        self.assertIn("second_order", record["comparison"])
+        self.assertIn("hvp", record["probes"][0]["pytorch_ref"])
+        self.assertIn("hvp", record["probes"][0]["fd_ref"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -211,6 +211,16 @@ class MathRegistryTests(unittest.TestCase):
         self.assertIn("Tall case", text)
         self.assertIn("triangular solves", text)
 
+    def test_repo_lu_note_exposes_full_pivot_lu_family(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1] / "docs" / "math" / "lu.md"
+        ).read_text(encoding="utf-8")
+        anchors = math_registry.extract_markdown_anchors(text)
+
+        self.assertIn("P A Q = L U", text)
+        self.assertIn("full_pivot_lu/identity", text)
+        self.assertIn("family-full-pivot-lu-identity", anchors)
+
     def test_repo_eig_note_retains_gap_and_normalization_details(self) -> None:
         text = (
             Path(__file__).resolve().parents[1] / "docs" / "math" / "eig.md"

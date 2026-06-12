@@ -35,6 +35,7 @@ Version 1 targets the full PyTorch `OpInfo`-backed AD-relevant dense family set 
   - `lu_factor`
   - `lu_factor_ex`
   - `lu_solve`
+  - `full_pivot_lu`
   - `inv`
   - `inv_ex`
   - `matrix_power`

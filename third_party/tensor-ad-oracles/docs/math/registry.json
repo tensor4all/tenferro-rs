@@ -338,6 +338,12 @@
       "anchor": "op-frexp"
     },
     {
+      "op": "full_pivot_lu",
+      "family": "identity",
+      "note_path": "docs/math/lu.md",
+      "anchor": "family-full-pivot-lu-identity"
+    },
+    {
       "op": "householder_product",
       "family": "identity",
       "note_path": "docs/math/scalar_ops.md",

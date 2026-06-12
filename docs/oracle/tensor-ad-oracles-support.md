@@ -6,11 +6,11 @@ local generation registry are not active CI gates in the current workspace.
 
 ## Summary
 
-- Total published records: 9572
-- Supported success records: 2661
-- Supported success records with HVP payloads: 1884
+- Total published records: 9585
+- Supported success records: 2673
+- Supported success records with HVP payloads: 1896
 - Expected error records: 2
-- Unsupported success records: 6909
+- Unsupported success records: 6910
 
 ## Supported
 
@@ -21,6 +21,7 @@ local generation registry are not active CI gates in the current workspace.
 | cond | identity | identity | 3 |
 | cross | identity | identity | 3 |
 | det | identity | identity | 36 |
+| full_pivot_lu | identity | identity | 12 |
 | eig | values_vectors_abs | eig_values_vectors_abs | 16 |
 | eigh | values_vectors_abs | eigh_values_vectors_abs | 32 |
 | householder_product | identity | identity | 8 |
@@ -222,6 +223,7 @@ local generation registry are not active CI gates in the current workspace.
 | tanh | identity | identity | 4 | tenferro replay does not implement this oracle family yet |
 | tensorinv | identity | identity | 6 | tenferro replay currently supports this family only for float64 |
 | tensorsolve | identity | identity | 12 | tenferro replay currently supports this family only for float64 |
+| tropical_einsum_maxplus | identity | identity | 1 | tenferro replay does not implement this oracle family yet |
 | true_divide | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | trunc | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
 | vander | identity | identity | 30 | tenferro replay currently supports this family only for float64 |

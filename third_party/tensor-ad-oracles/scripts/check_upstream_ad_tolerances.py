@@ -34,6 +34,13 @@ class UpstreamAdToleranceAudit:
     violates_upstream: bool = False
 
 
+def _has_upstream_ad_tolerance(spec) -> bool:
+    return (
+        getattr(spec, "source_repo", "pytorch") == "pytorch"
+        and bool(getattr(spec, "upstream_name", None))
+    )
+
+
 def audit_against_upstream_ad_tolerances(
     cases_root: Path = CASES_ROOT,
 ) -> list[UpstreamAdToleranceAudit]:
@@ -70,6 +77,8 @@ def audit_against_upstream_ad_tolerances(
     for key, residuals in sorted(first_order.items()):
         op, family, dtype = key
         spec = spec_index[(op, family)]
+        if not _has_upstream_ad_tolerance(spec):
+            continue
         resolver = (
             resolve_upstream_scalar_ad_tolerance
             if spec.inventory_kind == "scalar"
@@ -114,6 +123,8 @@ def audit_against_upstream_ad_tolerances(
     for key, residuals in sorted(second_order.items()):
         op, family, dtype = key
         spec = spec_index[(op, family)]
+        if not _has_upstream_ad_tolerance(spec):
+            continue
         resolver = (
             resolve_upstream_scalar_ad_tolerance
             if spec.inventory_kind == "scalar"

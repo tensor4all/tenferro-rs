@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from generators import full_pivot_lu
 from generators.pytorch_v1 import build_case_spec_index
 from generators.runtime import (
     apply_spec_observable,
@@ -419,6 +420,151 @@ def _replay_success_case_for_sample(
     return None
 
 
+def _replay_full_pivot_lu_success_case(
+    torch,
+    *,
+    record: dict,
+    inputs: dict[str, object],
+    direction: dict[str, object],
+    cotangent: dict[str, object],
+    stored_pytorch_jvp: dict[str, object],
+    stored_pytorch_vjp: dict[str, object],
+    stored_pytorch_hvp: dict[str, object] | None,
+    stored_fd_jvp: dict[str, object],
+    fd_step: float,
+    stored_fd_hvp: dict[str, object] | None,
+) -> None:
+    comparison = record["comparison"]
+    first_order = _first_order_comparison(comparison)
+    second_order = _second_order_comparison(comparison)
+    row_perm = list(record["op_kwargs"]["row_perm"])
+    col_perm = list(record["op_kwargs"]["col_perm"])
+    a = inputs["a"]
+    observable = full_pivot_lu.fixed_permutation_lu(
+        torch,
+        a,
+        row_perm=row_perm,
+        col_perm=col_perm,
+    )
+    output_names = tuple(observable.keys())
+
+    def observable_fn(a_value):
+        return full_pivot_lu.fixed_permutation_lu_tuple(
+            torch,
+            a_value,
+            row_perm=row_perm,
+            col_perm=col_perm,
+        )
+
+    _, jvp_tuple = torch.func.jvp(
+        observable_fn,
+        (a,),
+        (direction["a"],),
+    )
+    pytorch_jvp = tuple_to_tensor_map(output_names, jvp_tuple)
+    grads = torch.autograd.grad(
+        tensor_map_to_tuple(observable),
+        (a,),
+        grad_outputs=tuple(cotangent[name] for name in output_names),
+        allow_unused=True,
+    )
+    pytorch_vjp = zeros_like_input_map(torch, inputs, grads)
+    plus_output = full_pivot_lu.fixed_permutation_lu(
+        torch,
+        a + fd_step * direction["a"],
+        row_perm=row_perm,
+        col_perm=col_perm,
+    )
+    minus_output = full_pivot_lu.fixed_permutation_lu(
+        torch,
+        a - fd_step * direction["a"],
+        row_perm=row_perm,
+        col_perm=col_perm,
+    )
+    fd_jvp = {
+        name: (plus_output[name] - minus_output[name]) / (2.0 * fd_step)
+        for name in output_names
+    }
+    pytorch_hvp = None
+    fd_hvp = None
+    if stored_pytorch_hvp is not None or stored_fd_hvp is not None:
+        scalarized_fn = build_scalarized_observable_function(
+            torch,
+            observable_fn,
+            output_names=output_names,
+            cotangent=cotangent,
+        )
+        pytorch_hvp = compute_pytorch_hvp(
+            torch,
+            scalarized_fn,
+            inputs=inputs,
+            direction=direction,
+        )
+        fd_hvp = compute_fd_hvp(
+            torch,
+            scalarized_fn,
+            inputs=inputs,
+            direction=direction,
+            step=fd_step,
+        )
+
+    if not map_allclose(
+        torch,
+        stored_pytorch_jvp,
+        pytorch_jvp,
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
+    ):
+        raise ValueError("stored and replayed PyTorch JVP disagree")
+    if not map_allclose(
+        torch,
+        stored_pytorch_vjp,
+        pytorch_vjp,
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
+    ):
+        raise ValueError("stored and replayed PyTorch VJP disagree")
+    if not map_allclose(
+        torch,
+        stored_fd_jvp,
+        fd_jvp,
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
+    ):
+        raise ValueError("stored and replayed FD-JVP disagree")
+    if stored_pytorch_hvp is not None and stored_fd_hvp is not None:
+        if second_order is None:
+            raise ValueError("missing second-order comparison block")
+        if not map_allclose(
+            torch,
+            stored_pytorch_hvp,
+            pytorch_hvp,
+            rtol=second_order["rtol"],
+            atol=second_order["atol"],
+        ):
+            raise ValueError("stored and replayed PyTorch HVP disagree")
+        if not map_allclose(
+            torch,
+            stored_fd_hvp,
+            fd_hvp,
+            rtol=second_order["rtol"],
+            atol=second_order["atol"],
+        ):
+            raise ValueError("stored and replayed FD-HVP disagree")
+
+    validate_live_success_probe(
+        torch,
+        comparison=comparison,
+        direction=direction,
+        cotangent=cotangent,
+        pytorch_jvp=pytorch_jvp,
+        pytorch_vjp=pytorch_vjp,
+        fd_jvp=fd_jvp,
+        pytorch_hvp=pytorch_hvp,
+        fd_hvp=fd_hvp,
+    )
+
+
 def _replay_success_case(
     record: dict,
     *,
@@ -440,6 +586,21 @@ def _replay_success_case(
         stored_fd_hvp,
     ) = _decode_success_probe(record)
     stored_fd_jvp = decode_tensor_map(record["probes"][0]["fd_ref"]["jvp"])
+    if getattr(spec, "inventory_kind", "linalg") == "local_full_pivot_lu":
+        _replay_full_pivot_lu_success_case(
+            torch,
+            record=record,
+            inputs=inputs,
+            direction=direction,
+            cotangent=cotangent,
+            stored_pytorch_jvp=stored_pytorch_jvp,
+            stored_pytorch_vjp=stored_pytorch_vjp,
+            stored_pytorch_hvp=stored_pytorch_hvp,
+            stored_fd_jvp=stored_fd_jvp,
+            fd_step=fd_step,
+            stored_fd_hvp=stored_fd_hvp,
+        )
+        return
     cache_key = (record["op"], record["family"], record["dtype"])
     prepared_samples = prepared_sample_cache.get(cache_key)
     if prepared_samples is None:
