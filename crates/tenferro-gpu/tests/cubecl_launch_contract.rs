@@ -210,6 +210,30 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
 }
 
 #[test]
+fn cubecl_gemm_zero_contracting_path_stays_device_native() {
+    let gemm_source = cubecl_source("gemm.rs");
+    let zero_alloc_source = source_section(&gemm_source, "fn zero_alloc<", "fn build_layout<");
+
+    for banned in [
+        "vec![T::zero(); len]",
+        "create_from_slice(T::as_bytes(&zeros))",
+    ] {
+        assert!(
+            !zero_alloc_source.contains(banned),
+            "CubeCL GEMM zero-contracting fast path must not materialize host zeros: {banned}"
+        );
+    }
+    assert_ordered_needles(
+        "gemm::zero_alloc",
+        zero_alloc_source,
+        &[
+            "alloc_output::<T>(rt, shape)",
+            "structural::fill_zero_kernel",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
     let mod_source = cubecl_source("mod.rs");
     let banned = [
