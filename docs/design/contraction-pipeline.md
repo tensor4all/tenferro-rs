@@ -98,8 +98,9 @@ CPU execution is handled by `CpuBackend`:
 - elementwise/reduction/structural work uses strided-kernel and dedicated CPU
   implementations,
 - `dot_general` uses the selected CPU GEMM backend (`cpu-faer` or `cpu-blas`),
-- faer-backed work receives the `CpuContext` thread-count hint through
-  `CpuExecSession` without entering a tenferro-owned Rayon pool.
+- faer-backed work runs inside the `CpuContext` Rayon pool through
+  `CpuExecSession`, with `Par::Seq` for one-thread contexts and `Par::rayon(0)`
+  for multi-thread contexts.
 
 ## CubeCL/CUDA Execution
 

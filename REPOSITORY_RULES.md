@@ -362,6 +362,15 @@ Tests follow implementation ownership.
   compiled provider (BLAS/LAPACK when `cpu-blas` is compiled, otherwise
   `cpu-faer`), and explicit constructors or application configuration select a
   different compiled provider when needed.
+- Tensor-sized CPU kernels must run through the repository CPU threading
+  policy. `strided-kernel` must be compiled with its `parallel` feature for
+  elementwise, reduction, and structural materialization kernels; CPU
+  contraction features that use `strided-einsum2` must propagate
+  `strided-einsum2/parallel`.
+- If a tensor-sized CPU operation remains a dedicated sequential loop because
+  no strided-kernel/backend-native parallel primitive fits the indexing pattern
+  yet, keep a nearby source comment naming that rationale. Do not let
+  undocumented serial loops become the default fallback pattern.
 
 ### Tensor Core Data Model
 
@@ -453,6 +462,11 @@ Tests follow implementation ownership.
 - Do not derive faer parallelism independently inside individual ops or helper functions.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
 - Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
+- Tensor-sized strided CPU kernels that are not provider-owned must also run
+  inside `CpuContext::install(...)`, so Rayon-backed `strided-kernel` work uses
+  the backend's owned pool. BLAS/LAPACK provider-owned threading remains
+  controlled by provider variables such as `OPENBLAS_NUM_THREADS`,
+  `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
 
 ### GPU Backend Contract
 

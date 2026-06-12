@@ -37,11 +37,11 @@ backend segment instead of one per instruction.
 
 ### CPU (faer)
 
-`CpuContext` stores the requested CPU thread count as a faer parallelism hint.
-It does not own a Rayon thread pool and `CpuContext::install` runs the closure
-on the caller thread. faer-backed kernels use `Par::Seq` for one thread and
-`Par::rayon(n)` otherwise, letting faer/rayon use the current or global Rayon
-pool without a tenferro-owned pool entry on each session.
+`CpuContext` stores the requested CPU thread count and owns the Rayon pool used
+by tenferro-owned multi-threaded CPU work. `CpuContext::install` runs the
+closure on that owned pool for multi-thread contexts and inline for one-thread
+contexts. faer-backed kernels use `Par::Seq` for one thread and
+`Par::rayon(0)` otherwise, so faer joins the already-entered `CpuContext` pool.
 
 ```rust
 impl TensorBackend for CpuBackend {
@@ -51,8 +51,10 @@ impl TensorBackend for CpuBackend {
     ) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
         let ctx = Arc::clone(&self.ctx);
-        let mut session = CpuExecSession { ctx: &ctx, buffers: &mut buffers };
-        let result = f(&mut session);
+        let result = ctx.install(|| {
+            let mut session = CpuExecSession { ctx: &ctx, buffers: &mut buffers };
+            f(&mut session)
+        });
         self.buffers = buffers;
         result
     }
@@ -60,7 +62,8 @@ impl TensorBackend for CpuBackend {
 ```
 
 `CpuExecSession` implements `BackendSession` by calling kernel functions
-directly, with no Rayon pool entry per op.
+directly after the session has entered `CpuContext`. Individual ops should not
+re-enter the pool.
 
 ### CubeCL/CUDA
 
@@ -75,8 +78,8 @@ or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
 
 | CPU concept | CubeCL/CUDA concept |
 |---|---|
-| `CpuContext` (thread-count hint) | `CubeclRuntime` (CUDA device/client) |
-| `Par::rayon(n)` / `Par::Seq` | CubeCL launch through the stored runtime |
+| `CpuContext` (thread count and Rayon pool) | `CubeclRuntime` (CUDA device/client) |
+| `Par::rayon(0)` / `Par::Seq` | CubeCL launch through the stored runtime |
 | `BufferPool` (host `Vec<T>`) | CubeCL device buffers plus upload/download helpers |
 | faer/rayon CPU work | kernel launch on stream |
 | per-step session setup overhead | per-kernel launch/runtime dispatch overhead |

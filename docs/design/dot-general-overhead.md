@@ -44,10 +44,11 @@ backend.dot_general_with_conj(...)
 
 When this sequence is repeated for every tiny local contraction, the
 `backend.with_backend_session` / dtype dispatch / wrapper path cost dominates.
-Earlier measurements also included `rayon::ThreadPool::install`; current CPU
-execution no longer enters a tenferro-owned Rayon pool. Reusing a persistent
-runtime cache helps only slightly in this benchmark, which indicates that GEMM
-analysis caching is not the principal bottleneck for low bond dimensions.
+Current CPU execution enters the tenferro-owned `CpuContext` Rayon pool for
+backend calls and sessions; use one-thread measurements when isolating fixed
+wrapper/session overhead from parallel scheduling. Reusing a persistent runtime
+cache helps only slightly in this benchmark, which indicates that GEMM analysis
+caching is not the principal bottleneck for low bond dimensions.
 
 For larger bond dimensions the actual GEMM work becomes dominant, so the gap
 between `fresh_backend_cache` and `single_exec_session` naturally shrinks.

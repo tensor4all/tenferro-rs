@@ -63,6 +63,21 @@ For `cpu-faer`, tenferro passes the `CpuContext` thread count to faer-backed
 kernels. A one-thread context uses sequential faer execution; a multi-thread
 context uses faer's Rayon parallelism with the requested thread count.
 
+## CPU Operation Parallelism
+
+`CpuContext` owns the Rayon pool used by tenferro-owned CPU tensor kernels.
+Standalone backend calls and compiled `BackendSession` execution enter that
+pool before dispatching tensor-sized kernels.
+
+| Operation family | Threading behavior |
+| --- | --- |
+| Elementwise and analytic ops | `strided-kernel` map/zip kernels run under `CpuContext` and can use Rayon when the context has more than one thread. |
+| Reductions | `strided-kernel::reduce_axis` runs under `CpuContext` and can use Rayon when the context has more than one thread. |
+| Materialized transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
+| `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and `Par::rayon(0)` inside the owned `CpuContext` pool for multi-thread contexts. |
+| GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
+| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
+
 ## BLAS And LAPACK Threads
 
 For `cpu-blas`, `CpuBackend::with_threads(n)` controls tenferro's CPU context,
