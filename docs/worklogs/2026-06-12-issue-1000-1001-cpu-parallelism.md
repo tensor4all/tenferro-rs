@@ -98,6 +98,7 @@ verification or design work.
 | Active reference docs still blurred primitive metadata, graph vocabulary, and execution IR ownership | Policy-doc gap / Fixed | Updated active docs to distinguish `tenferro-core-ops` primitive metadata, `tenferro-internal-ops::StdTensorOp`, and `tenferro-runtime::ExecOp`; refreshed the computegraph trait excerpt. |
 | Historical design/reference notes were still linked from active indexes | Policy-doc gap / Fixed | Moved superseded migration, linalg, einsum, and external-survey notes to `docs/plans/historical/`; removed them from `docs/design/index.md` and `docs/reference/index.md`. |
 | API consistency checker missed some rendered user-facing docs and flagged README implementation-crate inventory as jargon | Tooling gap / Fixed | Expanded the user-doc jargon check to `docs/index.md`, tutorials, and performance docs while keeping internals/spec/architecture out of scope; exempted README's implementation-crate inventory table. |
+| Traced `norm`, `pinv`, and `pinv_with_rtol` could encode floating scalar constants as integer/bool tensors | Source-risk / Fixed | Added traced-helper dtype validation so integer and boolean inputs return unsupported-dtype errors before `f64` scalar constants can be rounded or converted to booleans. |
 | #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
 | #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, LAPACK batched input scratch reuse, one CubeCL GEMM host-materialization fast path, and LU `k` specialization. Other performance findings still need focused benchmarks or source-specific follow-up. |
 | #1000 broader docs/tooling drift | Fixed for accepted current-tree docs/tooling findings | This PR fixes stale `CpuContext` docs, publish-layout drift, active crate-ownership docs, historical-doc indexing, and API-consistency scope/false-positive gaps. Snippet-source tooling remains intentionally scoped to `snippet-source` blocks. |
@@ -169,12 +170,16 @@ verification or design work.
 - RED:
   `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized`
   failed while LU helper kernels still used `#[comptime] k` and unrolled loops.
+- RED:
+  `cargo test -p tenferro-linalg --test traced_extension traced_`
+  failed before traced `norm` and `pinv` rejected integer/bool inputs.
 - GREEN: `cargo test -p tenferro-cpu`
 - GREEN: `cargo test -p tenferro-cpu concatenate`
 - GREEN: `cargo test -p tenferro-gpu --test cubecl_launch_contract`
 - GREEN: `cargo test -p tenferro-linalg --test gpu_linalg_source_contract`
 - GREEN: `cargo test -p tenferro-linalg --test cpu_linalg_source_contract`
 - GREEN: `cargo test -p tenferro-linalg --test backend_errors`
+- GREEN: `cargo test -p tenferro-linalg --test traced_extension traced_`
 - GREEN: `cargo check -p tenferro-linalg --features cuda`
 - GREEN:
   `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest`

@@ -403,6 +403,9 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 
 /// Build a traced Moore-Penrose pseudoinverse op.
 ///
+/// Floating-point and complex inputs are supported. Integer and boolean inputs
+/// return an unsupported-dtype error.
+///
 /// # Examples
 ///
 /// ```
@@ -414,6 +417,7 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(inverse.rank, 2);
 /// ```
 pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
+    ensure_float_or_complex("pinv", a.dtype)?;
     let shape = a.concrete_shape();
     let max_dim = match (shape.first(), shape.get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
@@ -424,6 +428,9 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 }
 
 /// Build a traced Moore-Penrose pseudoinverse op with an explicit relative tolerance.
+///
+/// Floating-point and complex inputs are supported. Integer and boolean inputs
+/// return an unsupported-dtype error.
 ///
 /// # Examples
 ///
@@ -436,6 +443,7 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(inverse.rank, 2);
 /// ```
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
+    ensure_float_or_complex("pinv_with_rtol", a.dtype)?;
     let (u, s, vt) = svd(a)?;
     let abs_s = s.abs();
     let s_max = abs_s.reduce_max(&[0]);
@@ -457,6 +465,9 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
 
 /// Build a traced vector, matrix, or tensor norm op.
 ///
+/// Floating-point and complex inputs are supported. Integer and boolean inputs
+/// return an unsupported-dtype error.
+///
 /// # Examples
 ///
 /// ```
@@ -473,6 +484,7 @@ pub fn norm(
     dim: Option<&[usize]>,
     keepdim: bool,
 ) -> Result<TracedTensor> {
+    ensure_float_or_complex("norm", a.dtype)?;
     let axes = dim.map_or_else(|| (0..a.rank).collect::<Vec<_>>(), |dims| dims.to_vec());
     if axes.is_empty() {
         return Ok(a.clone());
@@ -588,6 +600,15 @@ fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
         }
+    }
+}
+
+fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
+    match dtype {
+        DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
+        DType::I32 | DType::I64 | DType::Bool => Err(Error::TensorRuntime(
+            tenferro_tensor::Error::backend_failure(op, format!("unsupported dtype {dtype:?}")),
+        )),
     }
 }
 
