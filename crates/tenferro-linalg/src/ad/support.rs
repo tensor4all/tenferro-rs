@@ -200,7 +200,7 @@ static SVD_OUTPUTS: [LinalgAdOutputSupport; 3] = [
 static SVD_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
     0,
     "singular_values",
-    LinalgAdRuleSupport::PendingOracle,
+    LinalgAdRuleSupport::SupportedViaLinearize,
 )];
 static QR_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "q", LinalgAdRuleSupport::SupportedViaLinearize),
@@ -214,14 +214,20 @@ static EIGH_OUTPUTS: [LinalgAdOutputSupport; 2] = [
         LinalgAdRuleSupport::SupportedViaLinearize,
     ),
 ];
-static EIGH_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] =
-    [output(0, "eigenvalues", LinalgAdRuleSupport::PendingOracle)];
+static EIGH_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "eigenvalues",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
 static EIG_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "eigenvalues", LinalgAdRuleSupport::SupportedViaLinearize),
     output(1, "eigenvectors", LinalgAdRuleSupport::Unsupported),
 ];
-static EIG_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] =
-    [output(0, "eigenvalues", LinalgAdRuleSupport::PendingOracle)];
+static EIG_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "eigenvalues",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
 
 static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     LinalgAdSupport {
@@ -268,7 +274,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::SvdVals,
-        linearize: LinalgAdRuleSupport::PendingOracle,
+        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
         transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &SVD_VALS_OUTPUTS,
     },
@@ -286,7 +292,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::EighVals,
-        linearize: LinalgAdRuleSupport::PendingOracle,
+        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
         transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &EIGH_VALS_OUTPUTS,
     },
@@ -298,7 +304,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::EigVals,
-        linearize: LinalgAdRuleSupport::PendingOracle,
+        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
         transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &EIG_VALS_OUTPUTS,
     },

@@ -9,19 +9,22 @@ GEMM helper so it enters the owned Rayon pool, removes a CPU concatenate
 per-output segment scan, reuses LAPACK batched input scratch, tightens CPU and
 CUDA/CubeCL validation, placement, and device-native fast-path contracts,
 keeps LU GPU kernels from specializing on matrix-size extents, aligns the
-linalg values-only AD support manifest with pending oracle coverage, and fixes
-the publish-layout, API-consistency scope/false-positive gaps, and active
+linalg values-only AD support manifest with finite-difference evidence, adds
+local finite-difference coverage for einsum and FFT extension AD rules, removes
+per-component gather/scatter index-vector allocation, and fixes the
+publish-layout, API-consistency scope/false-positive gaps, and active
 crate-ownership documentation drift detected by the audit. Superseded
 historical design/reference notes are archived under `docs/plans/historical/`
 so the active design and reference indexes only point at current material.
-The final #1000 cleanup slice documents runtime dtype-conversion semantics and
+The final #1000 cleanup slice documents runtime dtype-conversion semantics,
 routes traced `eigvals` through a general eigenvalues-only extension/backend
-hook instead of materializing eigenvectors and discarding them.
+hook instead of materializing eigenvectors and discarding them, and keeps
+zero-sized GPU LU parity initialization device-native.
 
-The PR should use `Closes #1001` and `Refs #1000`. #1000 remains an umbrella
-backlog with residual oracle-family, public API, and remaining
-benchmark-backed performance items that still need separate focused
-verification or design work.
+The PR should use `Closes #1001` and `Closes #1000`. Remaining public tracing
+builder panics are classified as design-gated because their current public
+signatures do not return `Result`; compatible extension runtime output-count
+loss paths are already fixed on the included `main`.
 
 ## Context Read
 
@@ -91,11 +94,13 @@ verification or design work.
 | Active docs said `CpuContext` does not own a Rayon pool | Auto Fix / Fixed | Updated active guide/design docs to match `CpuContext` ownership and session entry behavior. |
 | README/publish metadata drift for implementation crates | Auto Fix / Fixed | Updated `scripts/check-publish-layout.py` and the README implementation-crate table so published implementation crates inherit publish metadata while `tenferro-internal-ops` remains explicitly unpublished. |
 | CPU concatenate scanned input segment ends for every output element | Auto Fix / Fixed | Replaced the hot-loop linear `.position(...)` scan with `slice::partition_point` over precomputed ordered segment ends. Added a source-contract test for the complexity pattern and kept existing concatenate behavior tests green. |
-| Linalg values-only AD manifest claimed oracle-backed support for `svdvals` and `eighvals` | Policy-doc gap / Fixed | Marked those values-only entries as `PendingOracle` until matching oracle replay coverage exists. Full-pivot LU oracle coverage landed separately in #1016. Broader core/einsum/FFT oracle-family expansion remains outside this PR. |
+| Active AD rules exceeded oracle/replay evidence | Policy-doc gap / Fixed | Kept the inactive oracle replay snapshot honest, added crate-local finite-difference coverage for values-only linalg (`SvdVals`, `EighVals`, `EigVals`), einsum, and FFT C2C JVP rules, documented those local coverage rows in `docs/oracle/tensor-ad-oracles-support.md`, and aligned the linalg AD support manifest to `SupportedViaLinearize`. Full-pivot LU oracle coverage landed separately in #1016 and is included through `main`. |
 | CUDA linalg `solve` and prepared LU solve could validate dtype or zero fast paths before residency | Source-risk / Fixed | Reordered residency checks ahead of dtype-pair and zero-dimension handling and added source-contract coverage. |
 | CubeCL interop downloads could return empty host tensors before checking residency | Source-risk / Fixed | `download_typed_tensor` now validates CubeCL buffer and runtime/device residency before the empty fast path. Added source-contract coverage. |
 | CubeCL GEMM zero-contracting fast path built a host zero `Vec` and uploaded it | Source-risk / Fixed | Replaced host zero materialization with device allocation plus the existing device `fill_zero_kernel`. Added source-contract coverage. |
+| CUDA LU zero-sized factor parity built a host one `Vec` and uploaded it | Source-risk / Fixed | Added a linalg `fill_one_kernel` and initialized zero-sized LU parity on the device. Added source-contract coverage. |
 | CPU `full_piv_lu_solve` could return a zero-sized output before validating dtype-pair support | Source-risk / Fixed | Moved dtype-pair validation ahead of the zero-dimension fast path and added backend-error coverage for mixed and unsupported dtype pairs. |
+| CPU gather/scatter index-component lookup allocated an index vector per component | Source-risk / Fixed | Reused caller-owned `index_scratch` across gather/scatter component lookups and added source-contract coverage. |
 | LAPACK batched helpers allocated a fresh input `Vec` for every batch slice | Source-risk / Fixed | Reused pooled input scratch tensors and refilled them from each batch slice. Added a source-contract test that rejects per-batch input `to_vec()` copies. |
 | CUDA LU helper kernels specialized on matrix-size extent `k` and unrolled loops over it | Source-risk / Fixed | Changed `k` to a runtime kernel argument and replaced unrolled `0..k` loops with runtime `while` loops. Rank and axis-count `#[comptime]` parameters remain intentional because they define indexing structure. |
 | Active reference docs still blurred primitive metadata, graph vocabulary, and execution IR ownership | Policy-doc gap / Fixed | Updated active docs to distinguish `tenferro-core-ops` primitive metadata, `tenferro-internal-ops::StdTensorOp`, and `tenferro-runtime::ExecOp`; refreshed the computegraph trait excerpt. |
@@ -104,8 +109,8 @@ verification or design work.
 | Traced `norm`, `pinv`, and `pinv_with_rtol` could encode floating scalar constants as integer/bool tensors | Source-risk / Fixed | Added traced-helper dtype validation so integer and boolean inputs return unsupported-dtype errors before `f64` scalar constants can be rounded or converted to booleans. |
 | CPU structural `convert` semantics were tested but not documented for public users | Low/Medium docs gap / Fixed | Documented runtime-dtype conversion semantics in the tensor guide and public convert rustdocs: Rust primitive numeric casts, real-part extraction for complex-to-real/integer, nonzero bool conversion, and zero-imaginary real-to-complex conversion. |
 | Traced `eigvals` materialized full general eigendecomposition outputs and discarded eigenvectors | Source-risk / Fixed | Added internal `EigVals` extension op, hidden backend hook, CPU Faer/LAPACK values-only implementations, traced `eigvals` routing, source-contract coverage, and direct `eigvals` JVP regression coverage. |
-| #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
-| #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, LAPACK batched input scratch reuse, one CubeCL GEMM host-materialization fast path, and LU `k` specialization. Other performance findings still need focused benchmarks or source-specific follow-up. |
+| #1000 public API and extension-boundary panic risks | Fixed where compatible / Design-gated otherwise | Included the `main` fixes from #1015 for extension runtime output-count validation and materialization error boundaries. Existing panic-capture tests still document `TracedTensor::dot_general` and `extension::apply` panic behavior for invalid builder inputs; changing those to typed errors requires a public API design because the signatures return `TracedTensor` / `Vec<TracedTensor>`, not `Result`. |
+| #1000 broader performance/materialization risks | Fixed for accepted current-tree source risks | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, CPU gather/scatter index scratch allocation, LAPACK batched input scratch reuse, CubeCL GEMM zero host materialization, CUDA LU zero-sized parity host materialization, and LU `k` specialization. |
 | #1000 broader docs/tooling drift | Fixed for accepted current-tree docs/tooling findings | This PR fixes stale `CpuContext` docs, publish-layout drift, active crate-ownership docs, historical-doc indexing, and API-consistency scope/false-positive gaps. Snippet-source tooling remains intentionally scoped to `snippet-source` blocks. |
 
 ## Decisions Made
@@ -127,9 +132,10 @@ verification or design work.
 - Kept GPU kernel `rank` and axis-count values as `#[comptime]` because they
   define indexing structure, while treating matrix-size extent `k` as runtime
   data to avoid per-shape kernel specialization.
-- Did not disable active AD implementations solely because oracle coverage is
-  incomplete; this PR marks concrete values-only linalg gaps as
-  `PendingOracle`, while full oracle-family expansion remains separate work.
+- Did not disable active AD implementations solely because the old root-facade
+  oracle replay harness is inactive. Active extension AD rules now have
+  explicit crate-local finite-difference coverage rows while the replay
+  snapshot still truthfully records replay-adapter support.
 - Treated historical design and reference material as archive content rather
   than current design after active-index notes proved too weak to prevent docs
   drift.
@@ -155,8 +161,9 @@ verification or design work.
   `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths`
   failed before the linalg residency-ordering fix.
 - RED:
-  `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest linalg_ad_support_manifest_marks_values_only_oracle_gaps_pending`
-  failed before the values-only manifest entries were marked `PendingOracle`.
+  `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest linalg_ad_support_manifest_marks_values_only_rules_finite_diff_backed`
+  failed before the values-only manifest entries were aligned with finite-diff
+  coverage.
 - RED:
   `cargo test -p tenferro-cpu --test backend_capability_contracts concatenate_hot_loop_does_not_linearly_scan_input_segments`
   failed before the concatenate lookup change.
@@ -179,6 +186,17 @@ verification or design work.
   `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized`
   failed while LU helper kernels still used `#[comptime] k` and unrolled loops.
 - RED:
+  `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_zero_sized_lu_factor_parity_is_filled_on_device`
+  failed before zero-sized LU parity stopped materializing a host one-vector.
+- RED:
+  `cargo test -p tenferro-cpu --test backend_capability_contracts gather_scatter_index_component_reuses_index_scratch`
+  failed before gather/scatter index-component lookup reused caller-owned
+  scratch.
+- RED:
+  `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest linalg_values_only_finite_diff_support_is_documented_next_to_oracle_snapshot`
+  failed before the oracle snapshot documented crate-local finite-difference
+  coverage for values-only linalg rules.
+- RED:
   `cargo test -p tenferro-linalg --test traced_extension traced_`
   failed before traced `norm` and `pinv` rejected integer/bool inputs.
 - RED:
@@ -195,6 +213,10 @@ verification or design work.
 - GREEN: `cargo test -p tenferro-linalg --test linalg_internal_path_contract`
 - GREEN: `cargo test -p tenferro-linalg --test traced_correctness`
 - GREEN: `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit`
+- GREEN:
+  `cargo test -p tenferro-einsum --features autodiff --test traced_ad_migration grad_einsum_matmul_real_matches_finite_diff_for_both_inputs`
+- GREEN:
+  `cargo test -p tenferro-fft --features autodiff --test fft_ops fft_c64_jvp_matches_finite_diff`
 - GREEN: `cargo check -p tenferro-linalg --features cpu-blas`
 - GREEN:
   `cargo check -p tenferro-linalg --no-default-features --features cpu-blas`
@@ -233,6 +255,6 @@ verification or design work.
   pinned thread counts when reviewing actual speedups.
 - Dedicated indexing and triangular/embedding loops remain sequential by
   design for this PR.
-- #1000 remains open for oracle-family expansion beyond the values-only linalg
-  manifest fix, public API panic/operator-overload follow-ups not already
-  covered by #1015, and remaining benchmark-backed performance work.
+- Changing non-`Result` public tracing builders such as `dot_general` and
+  `extension::apply` to typed errors remains a public API design item rather
+  than a compatible bug-fix edit.

@@ -30,6 +30,17 @@ fn assert_c64_close(actual: &[Complex64], expected: &[Complex64]) {
     }
 }
 
+#[cfg(feature = "autodiff")]
+fn assert_c64_close_tol(actual: &[Complex64], expected: &[Complex64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (a, e)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (a.re - e.re).abs() <= tol && (a.im - e.im).abs() <= tol,
+            "idx {idx}: actual={a:?}, expected={e:?}"
+        );
+    }
+}
+
 fn assert_f64_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
     for (idx, (a, e)) in actual.iter().zip(expected).enumerate() {
@@ -52,6 +63,33 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
     for (idx, (a, e)) in actual.iter().zip(expected).enumerate() {
         assert!((a - e).abs() < 1e-5, "idx {idx}: actual={a}, expected={e}");
     }
+}
+
+#[cfg(feature = "autodiff")]
+fn finite_diff_c64_directional(
+    f: impl Fn(&[Complex64]) -> Vec<Complex64>,
+    base: &[Complex64],
+    tangent: &[Complex64],
+    h: f64,
+) -> Vec<Complex64> {
+    assert_eq!(base.len(), tangent.len());
+    let plus: Vec<_> = base
+        .iter()
+        .zip(tangent)
+        .map(|(&value, &delta)| value + delta * h)
+        .collect();
+    let minus: Vec<_> = base
+        .iter()
+        .zip(tangent)
+        .map(|(&value, &delta)| value - delta * h)
+        .collect();
+    let plus_out = f(&plus);
+    let minus_out = f(&minus);
+    plus_out
+        .iter()
+        .zip(minus_out.iter())
+        .map(|(&plus, &minus)| (plus - minus) / (2.0 * h))
+        .collect()
 }
 
 fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
@@ -353,6 +391,41 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
             Complex64::new(0.0, 2.0),
         ],
     );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn fft_c64_jvp_matches_finite_diff() {
+    let data = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(2.0, -0.25),
+        Complex64::new(3.0, 0.75),
+        Complex64::new(4.0, -1.0),
+    ];
+    let tangent_data = vec![
+        Complex64::new(0.2, -0.1),
+        Complex64::new(0.0, 0.3),
+        Complex64::new(-0.4, 0.2),
+        Complex64::new(0.1, -0.5),
+    ];
+    let x = TracedTensor::from_vec_col_major(vec![4], data.clone());
+    let dx = TracedTensor::from_vec_col_major(vec![4], tangent_data.clone());
+
+    let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
+    let dy = y.jvp(&x, &dx);
+    let out = run(&dy);
+
+    let expected = finite_diff_c64_directional(
+        |xs| {
+            let x = TracedTensor::from_vec_col_major(vec![4], xs.to_vec());
+            let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
+            run(&y).as_slice::<Complex64>().unwrap().to_vec()
+        },
+        &data,
+        &tangent_data,
+        1.0e-6,
+    );
+    assert_c64_close_tol(out.as_slice::<Complex64>().unwrap(), &expected, 1.0e-8);
 }
 
 #[test]

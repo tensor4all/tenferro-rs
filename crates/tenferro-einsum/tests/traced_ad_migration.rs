@@ -58,6 +58,34 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
+fn finite_diff_scalar_lhs(
+    f: impl Fn(&[f64], &[f64]) -> f64,
+    lhs: &[f64],
+    rhs: &[f64],
+    idx: usize,
+    h: f64,
+) -> f64 {
+    let mut plus = lhs.to_vec();
+    let mut minus = lhs.to_vec();
+    plus[idx] += h;
+    minus[idx] -= h;
+    (f(&plus, rhs) - f(&minus, rhs)) / (2.0 * h)
+}
+
+fn finite_diff_scalar_rhs(
+    f: impl Fn(&[f64], &[f64]) -> f64,
+    lhs: &[f64],
+    rhs: &[f64],
+    idx: usize,
+    h: f64,
+) -> f64 {
+    let mut plus = rhs.to_vec();
+    let mut minus = rhs.to_vec();
+    plus[idx] += h;
+    minus[idx] -= h;
+    (f(lhs, &plus) - f(lhs, &minus)) / (2.0 * h)
+}
+
 #[test]
 fn grad_einsum_matmul_real_uses_extension_ad_rule() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
@@ -85,6 +113,57 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
         result.as_slice::<f64>().unwrap(),
         &[6.0, 6.0, 1.0, 1.0, -2.0, -2.0],
     );
+}
+
+#[test]
+fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
+    let a_data = vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75];
+    let b_data = vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5];
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
+    let mut compiler = GraphCompiler::new();
+
+    let y = tenferro_einsum::einsum_with(
+        &mut compiler,
+        &[&a, &b],
+        "ij,jk->ik",
+        EinsumOptimize::Path(vec![(0, 1)]),
+    )
+    .unwrap();
+    let loss = y.reduce_sum(&[0, 1]);
+    let grad_a = run_traced(&loss.grad(&a).unwrap());
+    let grad_b = run_traced(&loss.grad(&b).unwrap());
+
+    let eval_loss = |lhs: &[f64], rhs: &[f64]| {
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], lhs.to_vec()));
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], rhs.to_vec()));
+        let mut compiler = GraphCompiler::new();
+        let y = tenferro_einsum::einsum_with(
+            &mut compiler,
+            &[&a, &b],
+            "ij,jk->ik",
+            EinsumOptimize::Path(vec![(0, 1)]),
+        )
+        .unwrap();
+        run_traced(&y.reduce_sum(&[0, 1]))
+            .as_slice::<f64>()
+            .unwrap()[0]
+    };
+
+    for (idx, actual) in grad_a.as_slice::<f64>().unwrap().iter().enumerate() {
+        let expected = finite_diff_scalar_lhs(eval_loss, &a_data, &b_data, idx, 1.0e-6);
+        assert!(
+            (*actual - expected).abs() <= 1.0e-6,
+            "lhs idx {idx}: expected {expected}, got {actual}"
+        );
+    }
+    for (idx, actual) in grad_b.as_slice::<f64>().unwrap().iter().enumerate() {
+        let expected = finite_diff_scalar_rhs(eval_loss, &a_data, &b_data, idx, 1.0e-6);
+        assert!(
+            (*actual - expected).abs() <= 1.0e-6,
+            "rhs idx {idx}: expected {expected}, got {actual}"
+        );
+    }
 }
 
 #[test]

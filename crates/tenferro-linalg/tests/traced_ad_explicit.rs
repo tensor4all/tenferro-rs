@@ -178,6 +178,36 @@ fn svd_values_grad_matches_finite_diff() {
 }
 
 #[test]
+fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
+    let ad = ad_context();
+    let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
+    let tangent_data = vec![0.04, -0.03, 0.05, 0.02, -0.06, 0.01];
+    let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone()));
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], tangent_data.clone()));
+
+    let norm = tenferro_linalg::norm(&matrix, Some(2.0), Some(&[0, 1]), false).unwrap();
+    let actual = eval(&ad.jvp(&norm, &matrix, &tangent).unwrap());
+
+    assert_close_scalar(
+        "spectral norm directional JVP",
+        get_f64_data(&actual)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()));
+                let norm = tenferro_linalg::norm(&input, Some(2.0), Some(&[0, 1]), false).unwrap();
+                get_f64_data(&eval(&norm))[0]
+            },
+            &data,
+            &tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+}
+
+#[test]
 fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
     let ad = ad_context();
 
@@ -361,6 +391,37 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
 
     assert_eq!(results[7].shape(), &[] as &[usize]);
     assert_finite_tensor(&results[7]);
+}
+
+#[test]
+fn eigvalsh_jvp_matches_finite_diff_through_values_only_eigh() {
+    let ad = ad_context();
+    let data = vec![2.0, 0.2, 0.2, 4.0];
+    let tangent_data = vec![0.1, 0.03, 0.03, -0.2];
+    let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], data.clone()));
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], tangent_data.clone()));
+
+    let values = tenferro_linalg::eigvalsh(&matrix).unwrap();
+    let loss = reduce_all(&values);
+    let actual = eval(&ad.jvp(&loss, &matrix, &tangent).unwrap());
+
+    assert_close_scalar(
+        "eigvalsh directional JVP",
+        get_f64_data(&actual)[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let values = tenferro_linalg::eigvalsh(&input).unwrap();
+                get_f64_data(&eval(&reduce_all(&values)))[0]
+            },
+            &data,
+            &tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
 }
 
 #[test]
