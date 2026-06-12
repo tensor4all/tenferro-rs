@@ -522,6 +522,20 @@ Tests follow implementation ownership.
   explicitly show upload/download boundaries, and assert downloaded CPU results
   for at least one supported operation.
 
+### Diagram Consistency
+
+- Diagrams in docs and `README.md` (SVG under `docs/assets/`, ASCII diagrams
+  in design, architecture, and spec pages) are part of the documented surface:
+  crate names, layer assignments, dependency directions, and public entry
+  points shown in a diagram must match the current implementation.
+- A PR that adds, removes, renames, or re-layers a crate, or changes an
+  extension or backend boundary shown in a diagram, must update the affected
+  diagrams in the same PR.
+- Stale diagrams are worse than missing diagrams. Delete a diagram rather than
+  leave it inaccurate.
+- Diagrams follow the same source-of-truth rule as text: show boundaries and
+  dependencies, not internal implementation detail that the source code owns.
+
 ### Doc Examples
 
 - Doc examples (`/// # Examples`) must NOT use `ignore` or `no_run` attributes.
