@@ -92,6 +92,19 @@ docs/tooling items that need separate focused verification.
 - GREEN: `cargo test -p tenferro-cpu`
 - Feature graph check:
   `cargo tree -p tenferro-cpu -e features -i strided-kernel`
+- GREEN: `cargo fmt --all --check`
+- GREEN: `cargo clippy --workspace --all-targets -- -D warnings`
+- GREEN:
+  `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`
+- GREEN: `cargo test --workspace --release`
+- GREEN: `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+- GREEN: `python3 scripts/check-coverage.py coverage.json`
+- GREEN: `cargo doc --workspace --no-deps`
+- GREEN: `python3 scripts/check-doc-snippets.py --check`
+- GREEN: `python3 scripts/check-docs-site.py`
+- GREEN:
+  `cargo test -p tenferro-cpu --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"`
+- GREEN: `git diff --check`
 
 ## Remaining Risks
 
