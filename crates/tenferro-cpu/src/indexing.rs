@@ -8,6 +8,12 @@ use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
+// Indexing-family kernels stay as dedicated sequential loops for now. Their
+// per-output gather/scatter/slice/pad/concatenate/reverse index transforms do
+// not currently map to a strided-kernel or backend-native parallel primitive.
+// Backend entrypoints still run these loops inside CpuContext::install, so a
+// future parallel implementation can use the same CPU threading policy.
+
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
 }

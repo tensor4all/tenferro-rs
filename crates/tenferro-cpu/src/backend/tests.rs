@@ -3,6 +3,31 @@ use std::time::Duration;
 use super::*;
 
 #[test]
+fn cpu_tensor_kernel_parallel_features_are_wired() {
+    let workspace_manifest = include_str!("../../../../Cargo.toml");
+    let cpu_manifest = include_str!("../../Cargo.toml");
+
+    let strided_kernel_line = workspace_manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("strided-kernel ="))
+        .expect("workspace manifest should declare strided-kernel");
+    assert!(
+        strided_kernel_line.contains("features")
+            && strided_kernel_line.contains("\"parallel\""),
+        "workspace strided-kernel dependency must enable the parallel feature: {strided_kernel_line}"
+    );
+
+    let cpu_faer_line = cpu_manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("cpu-faer ="))
+        .expect("tenferro-cpu manifest should declare cpu-faer");
+    assert!(
+        cpu_faer_line.contains("strided-einsum2/parallel"),
+        "cpu-faer must propagate strided-einsum2/parallel: {cpu_faer_line}"
+    );
+}
+
+#[test]
 fn default_backend_kind_prefers_blas_when_compiled() {
     let backend = CpuBackend::new();
 
@@ -146,6 +171,21 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 
     #[cfg(feature = "cpu-faer")]
     assert_eq!(backend.linalg_context().num_threads(), 1);
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn cached_faer_gemm_pool_helper_enters_owned_rayon_pool() {
+    let ambient_threads = rayon::current_num_threads();
+    let configured_threads = if ambient_threads == 2 { 3 } else { 2 };
+    let mut backend =
+        CpuBackend::try_with_threads_and_kind(configured_threads, CpuBackendKind::Faer).unwrap();
+    let mut cache = gemm::GemmAnalysisCache::default();
+
+    let seen_threads =
+        backend.install_with_pool_and_gemm_cache(&mut cache, |_, _| rayon::current_num_threads());
+
+    assert_eq!(seen_threads, configured_threads);
 }
 
 #[test]

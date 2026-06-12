@@ -108,7 +108,7 @@ fn host_view<'a, T: Copy>(
     }
 }
 
-fn copy_view_to_array<T: Copy + Clone>(
+fn copy_view_to_array<T: Copy + Clone + Send + Sync>(
     op: &'static str,
     mut out: strided_kernel::StridedArray<T>,
     src: &StridedView<'_, T>,
@@ -350,7 +350,7 @@ pub(crate) fn triu_with_pool(
 }
 
 #[cfg(test)]
-pub(crate) fn typed_transpose<T: Copy + Clone>(
+pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -370,7 +370,7 @@ fn typed_transpose_view_impl<T, R>(
     make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + 'static,
+    T: Copy + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
     validate_permutation("transpose", perm, view.shape().len())?;
@@ -429,7 +429,7 @@ pub fn typed_reshape<T: Clone + 'static>(
 }
 
 #[cfg(test)]
-pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone>(
+pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
@@ -460,7 +460,7 @@ fn typed_broadcast_in_dim_impl<T>(
     make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone,
+    T: Copy + Clone + Send + Sync,
 {
     validate_rank("broadcast_in_dim", tensor.shape().len(), dims.len())?;
     let mut seen = vec![false; shape.len()];
@@ -509,10 +509,10 @@ where
 fn typed_convert_with_pool<S, T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<S>,
-    f: impl Fn(S) -> T,
+    f: impl Fn(S) -> T + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
-    S: Copy,
+    S: Copy + Send + Sync,
     T: Copy + Clone + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
@@ -523,7 +523,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_extract_diagonal<T: Copy + Clone>(
+pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -621,6 +621,8 @@ where
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("embed_diagonal")),
     };
 
+    // Intentionally sequential: embed_diagonal writes a sparse diagonal subset
+    // into a zeroed output and has no current strided-kernel parallel primitive.
     for (flat, value) in input_data
         .iter()
         .copied()
@@ -706,6 +708,8 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     let mut out = tensor.clone();
     let data = out.host_data_mut();
 
+    // Intentionally sequential: triangular masks are index-dependent in the
+    // innermost matrix plane and remain a dedicated CPU-kernel exception.
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;
         for col in 0..cols {
@@ -757,6 +761,8 @@ where
         clone_host_tensor_from_pool(buffers, if upper { "triu" } else { "tril" }, tensor)?;
     let data = out.host_data_mut();
 
+    // Intentionally sequential: triangular masks are index-dependent in the
+    // innermost matrix plane and remain a dedicated CPU-kernel exception.
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;
         for col in 0..cols {

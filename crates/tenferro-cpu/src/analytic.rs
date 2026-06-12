@@ -162,7 +162,7 @@ fn typed_unary_view_with_pool<T, R>(
     op: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensorView<'_, T, R>,
-    f: impl Fn(T) -> T + Copy,
+    f: impl Fn(T) -> T + Copy + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + PoolScalar + 'static,

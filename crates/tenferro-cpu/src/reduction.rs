@@ -316,9 +316,9 @@ fn typed_reduce<T, M, R>(
     label: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone,
-    M: Fn(T) -> T + Copy,
-    R: Fn(T, T) -> T + Copy,
+    T: Copy + Clone + Send + Sync,
+    M: Fn(T) -> T + Copy + Sync,
+    R: Fn(T, T) -> T + Copy + Sync,
 {
     validate_axes(label, axes, input.shape().len())?;
     if axes.is_empty() {
@@ -363,9 +363,9 @@ pub(crate) fn typed_reduce_view<T, M, R, TR>(
     label: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + 'static,
-    M: Fn(T) -> T + Copy,
-    R: Fn(T, T) -> T + Copy,
+    T: Copy + Clone + Send + Sync + 'static,
+    M: Fn(T) -> T + Copy + Sync,
+    R: Fn(T, T) -> T + Copy + Sync,
     TR: TensorRank,
 {
     validate_axes(label, axes, input.shape().len())?;
@@ -426,21 +426,21 @@ fn view_to_contiguous_tensor(input: TensorView<'_>) -> crate::Result<Tensor> {
 
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Add<Output = T>,
+    T: Copy + Clone + Send + Sync + Zero + Add<Output = T>,
 {
     typed_reduce(input, axes, |x| x, |a, b| a + b, T::zero(), "reduce_sum")
 }
 
 pub fn typed_reduce_prod<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + One + Mul<Output = T>,
+    T: Copy + Clone + Send + Sync + One + Mul<Output = T>,
 {
     typed_reduce(input, axes, |x| x, |a, b| a * b, T::one(), "reduce_prod")
 }
 
 pub fn typed_reduce_max<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Float,
+    T: Float + Send + Sync,
 {
     typed_reduce(
         input,
@@ -454,7 +454,7 @@ where
 
 pub fn typed_reduce_min<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Float,
+    T: Float + Send + Sync,
 {
     typed_reduce(
         input,

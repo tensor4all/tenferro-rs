@@ -607,13 +607,14 @@ impl CpuBackend {
     // Selected when the Faer provider handles cached GEMM execution; some
     // feature combinations compile only the uncached or BLAS path.
     #[allow(dead_code)]
-    fn install_with_pool_and_gemm_cache<R>(
+    fn install_with_pool_and_gemm_cache<R: Send>(
         &mut self,
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
+        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
     ) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
-        let result = op(&mut buffers, gemm_analysis_cache);
+        let ctx = Arc::clone(&self.ctx);
+        let result = ctx.install(|| op(&mut buffers, gemm_analysis_cache));
         self.buffers = buffers;
         result
     }
