@@ -79,3 +79,17 @@ fn indexing_hot_loops_do_not_recompute_multi_indices_from_flat_offsets() {
         "indexing kernels should carry column-major indices incrementally after validation"
     );
 }
+
+#[test]
+fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
+    let indexing_source = include_str!("../src/indexing.rs");
+
+    assert!(
+        !indexing_source.contains(".position(|&end| concat_idx < end)"),
+        "concatenate should not linearly scan all input segment ends for each output element"
+    );
+    assert!(
+        indexing_source.contains("partition_point"),
+        "concatenate should use precomputed ordered segment boundaries for logarithmic lookup"
+    );
+}

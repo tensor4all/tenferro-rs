@@ -484,13 +484,13 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     debug_assert_eq!(out.n_elements(), out_len);
     for out_value in out.host_data_mut().iter_mut() {
         let concat_idx = out_idx[axis];
-        let input_pos = segment_ends
-            .iter()
-            .position(|&end| concat_idx < end)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        let input_pos = segment_ends.partition_point(|&end| concat_idx >= end);
+        if input_pos == segment_ends.len() {
+            return Err(crate::Error::InvalidConfig {
                 op: "concatenate",
                 message: "output index must map to an input".to_string(),
-            })?;
+            });
+        }
         let axis_base = if input_pos == 0 {
             0
         } else {
