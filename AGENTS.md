@@ -298,8 +298,10 @@ Layer 3: tenferro-runtime  - Concrete tensor helpers, traced tensors, graph comp
          tenferro-linalg   - Linear algebra traced APIs, eager helpers, extension runtime,
                              optional linalg AD rules
          tenferro-fft      - FFT extension runtime and public FFT APIs
-Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits, CPU backend,
-                             core execution kernels
+Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits,
+                             backend-independent contracts
+         tenferro-cpu      - CPU backend, execution sessions, kernels,
+                             buffer pools
          tenferro-gpu      - CubeCL/CUDA backend and GPU transfer helpers
 Layer 1: tenferro-tensor-core - Host-only tensor data model, dtype tags,
                                 scalar trait, metadata-only views
@@ -312,9 +314,9 @@ Internal: tenferro-core-ops  - Internal core primitive operation catalog
 tensor type, and owns graph transforms such as `linearize` and
 `linear_transpose`.
 `tenferro-tensor-core` owns the lightweight host tensor data model.
-`tenferro-tensor` owns concrete dense runtime value types and CPU backend
-execution surface. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer
-helpers.
+`tenferro-tensor` owns concrete dense runtime value types and
+backend-independent tensor contracts. `tenferro-cpu` owns CPU backend
+execution. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer helpers.
 `tenferro-internal-ops/src/ad/` is the semantic source of truth for core
 primitive AD rules. `tenferro-runtime` owns traced graph construction,
 lowering, execution, extension registration, and cache ownership. `tenferro-ad`

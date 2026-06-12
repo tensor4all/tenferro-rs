@@ -485,8 +485,13 @@ Tests follow implementation ownership.
 ### Source of Truth
 
 - **Source code** is the source of truth for internal design (op catalog, backend contract, AD rules, compilation pipeline).
-- **Online docs** are user-facing only — how to use the explicit runtime, AD,
-  tensor, GPU, and standard operation crates.
+- **Online docs** are primarily user-facing — how to use the explicit runtime,
+  AD, tensor, GPU, and standard operation crates.
+- The online **Internals section** is the exception for implementation-oriented
+  readers: it may publish curated architecture, specification, and active
+  design notes when those pages are linked from rendered docs. Historical
+  `docs/plans/` records stay offline unless a maintainer explicitly decides
+  otherwise.
 - **AGENTS.md** is the entry point for developers and AI agents. It contains pointers to source code locations.
 - Do NOT duplicate source-code-level information in online docs. If it can be learned by reading the source, put a pointer instead of a copy.
 - Development assumes AI agentic coding. Keep machine-readable sources (code + doc comments) authoritative.

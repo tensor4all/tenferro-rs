@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-labelledby="tf-arch-title tf-arch-desc">
   <title id="tf-arch-title">tenferro-rs architecture overview</title>
-  <desc id="tf-arch-desc">Four-layer crate stack with user entry points on top, external foundations on the left, and operation-family crates on the right all plugging into the same ExtensionOp registry of tenferro-runtime.</desc>
+  <desc id="tf-arch-desc">Four-layer crate stack with user entry points on top, external foundations on the left, CPU and GPU backends in layer two, and operation-family crates on the right all plugging into the same ExtensionOp registry of tenferro-runtime.</desc>
   <defs>
     <marker id="arr" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 9 3.5 L 0 7 z" fill="#334155"/>
@@ -21,6 +21,8 @@
       .busa { stroke: #2563eb; stroke-width: 1.6; marker-end: url(#arr); fill: none; }
     </style>
   </defs>
+
+  <rect width="100%" height="100%" fill="#ffffff"/>
 
   <text x="460" y="22" class="hdr">USER ENTRY POINTS</text>
   <rect x="260" y="30" width="128" height="52" rx="6" class="box"/>
@@ -51,16 +53,19 @@
 
   <line x1="460" y1="282" x2="460" y2="304" class="dep"/>
 
-  <rect x="260" y="308" width="235" height="68" rx="6" class="box"/>
+  <rect x="260" y="308" width="125" height="68" rx="6" class="box"/>
   <text x="272" y="324" class="tag">L2</text>
-  <text x="377" y="330" class="name">tenferro-tensor</text>
-  <text x="377" y="347" class="sub">dense tensors · backend traits</text>
-  <text x="377" y="363" class="sub" style="font-size:10px">CPU: faer | BLAS/LAPACK</text>
-  <rect x="510" y="308" width="150" height="68" rx="6" class="box"/>
-  <text x="585" y="330" class="name">tenferro-gpu</text>
-  <text x="585" y="347" class="sub">CubeCL · CUDA</text>
-  <text x="585" y="363" class="sub" style="font-size:10px">cuTENSOR/cuSOLVER/cuBLAS</text>
-  <line x1="508" y1="342" x2="499" y2="342" class="dep"/>
+  <text x="322" y="330" class="name" style="font-size:12px">tenferro-tensor</text>
+  <text x="322" y="347" class="sub">dense tensors</text>
+  <text x="322" y="363" class="sub">backend traits</text>
+  <rect x="395" y="308" width="125" height="68" rx="6" class="box"/>
+  <text x="457" y="330" class="name" style="font-size:12px">tenferro-cpu</text>
+  <text x="457" y="347" class="sub">CPU backend</text>
+  <text x="457" y="363" class="sub" style="font-size:9px">faer | BLAS/LAPACK</text>
+  <rect x="530" y="308" width="130" height="68" rx="6" class="box"/>
+  <text x="595" y="330" class="name" style="font-size:12px">tenferro-gpu</text>
+  <text x="595" y="347" class="sub">CubeCL · CUDA</text>
+  <text x="595" y="363" class="sub" style="font-size:9px">cuTENSOR/cuSOLVER</text>
 
   <line x1="377" y1="378" x2="377" y2="400" class="dep"/>
 

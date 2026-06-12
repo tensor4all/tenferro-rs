@@ -72,6 +72,8 @@ def rendered_html_pages(site_root: pathlib.Path) -> list[pathlib.Path]:
 
 
 def missing_rendered_html_links(site_root: pathlib.Path) -> list[tuple[pathlib.Path, str, pathlib.Path]]:
+    # This check intentionally starts with rendered page-to-page links. Asset
+    # link validation can be added here once docs-site asset ownership settles.
     missing: list[tuple[pathlib.Path, str, pathlib.Path]] = []
     for page in rendered_html_pages(site_root):
         for href in sorted(rendered_page_links(page)):
