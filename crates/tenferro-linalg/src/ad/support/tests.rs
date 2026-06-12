@@ -35,6 +35,12 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             LinalgAdOpKind::Eig,
         ),
         (
+            LinalgOp::EigVals {
+                input_dtype: DType::F64,
+            },
+            LinalgAdOpKind::EigVals,
+        ),
+        (
             LinalgOp::TriangularSolve {
                 left_side: true,
                 lower: true,

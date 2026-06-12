@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -9,7 +9,7 @@ use super::helpers::{
     tensor_from_vec_with_template,
 };
 
-pub(crate) trait LapackCholesky: Clone + Copy + Default {
+pub(crate) trait LapackCholesky: Clone + Copy + Default + PoolScalar {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32);
 }
 

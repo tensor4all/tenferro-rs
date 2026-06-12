@@ -127,6 +127,17 @@ pub trait LinalgBackend: TensorBackend {
     /// Compute public general eigendecomposition outputs `(values, vectors)`.
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
+    #[doc(hidden)]
+    fn eig_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "eig_values",
+            format!(
+                "backend {} does not implement internal general eigenvalues-only decomposition",
+                std::any::type_name::<Self>()
+            ),
+        ))
+    }
+
     /// Solve a dense linear system.
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor>;
 

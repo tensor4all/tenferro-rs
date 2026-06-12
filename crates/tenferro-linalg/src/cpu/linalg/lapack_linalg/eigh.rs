@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -9,7 +9,7 @@ use super::helpers::{
     vector_with_batch_shape, work_len,
 };
 
-pub(crate) trait LapackEigh: Clone + Copy + Default {
+pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
     type Real: Clone + Copy + Default;
 
     fn eigh_2d(

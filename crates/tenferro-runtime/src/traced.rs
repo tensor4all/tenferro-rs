@@ -868,8 +868,11 @@ impl TracedTensor {
 
     /// Convert the tensor to a different dtype.
     ///
-    /// For real-to-complex conversions this embeds the real values as
-    /// `x + 0i`. For complex-to-real conversions this extracts the real part.
+    /// Numeric casts follow Rust primitive cast semantics. Real-to-complex
+    /// conversion embeds real values as `x + 0i`. Complex-to-real or
+    /// complex-to-integer conversion uses the real part. Boolean conversion
+    /// uses nonzero testing, and `bool` converts to numeric dtypes as `0` or
+    /// `1`.
     ///
     /// # Examples
     ///

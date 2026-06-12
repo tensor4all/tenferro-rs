@@ -749,6 +749,41 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("eig_values", input)?;
+        if !matches!(
+            input,
+            Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
+        ) {
+            return Err(unsupported_dtype("eig_values", input.dtype()));
+        }
+        match self.kind() {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| {
+                        linalg::faer::eig_values(ctx.as_ref(), buffers, input)
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("eig_values", self.kind()))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.with_linalg_pool(|buffers| linalg::blas::eig_values(buffers, input))
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unsupported_provider("eig_values", self.kind()))
+                }
+            }
+        }
+    }
+
     fn lu_solve_prepared(
         &mut self,
         a: &Tensor,

@@ -398,7 +398,7 @@ pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(values.rank, 1);
 /// ```
 pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
-    Ok(eig(a)?.0)
+    eig_values(a)
 }
 
 /// Build a traced Moore-Penrose pseudoinverse op.
@@ -740,6 +740,18 @@ fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
             &[a],
         ),
         "eigh_values",
+    )
+}
+
+fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
+    one_output(
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::EigVals {
+                input_dtype: a.dtype,
+            })),
+            &[a],
+        ),
+        "eig_values",
     )
 }
 

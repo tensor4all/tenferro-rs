@@ -364,6 +364,37 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
 }
 
 #[test]
+fn eigvals_jvp_matches_finite_diff() {
+    let ad = ad_context();
+    let data = vec![2.0, 0.5, 0.25, 3.0];
+    let tangent_data = vec![0.2, 0.1, -0.1, 0.4];
+    let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], data.clone()));
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], tangent_data.clone()));
+
+    let values = tenferro_linalg::eigvals(&matrix).unwrap();
+    let loss = reduce_all(&values);
+    let actual = eval(&ad.jvp(&loss, &matrix, &tangent).unwrap());
+
+    assert_close_complex_scalar(
+        "eigvals directional JVP",
+        get_c64_data(&actual)[0],
+        finite_diff_directional_complex(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+                let values = tenferro_linalg::eigvals(&input).unwrap();
+                get_c64_data(&eval(&reduce_all(&values)))[0]
+            },
+            &data,
+            &tangent_data,
+            1.0e-6,
+        ),
+        1.0e-4,
+    );
+}
+
+#[test]
 fn solve_matrix_operand_jvp_matches_finite_diff() {
     let ad = ad_context();
 

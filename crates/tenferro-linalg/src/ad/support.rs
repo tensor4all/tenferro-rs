@@ -44,11 +44,12 @@ pub enum LinalgAdOpKind {
     Eigh,
     EighVals,
     Eig,
+    EigVals,
     TriangularSolve,
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -73,7 +74,8 @@ impl LinalgAdOpKind {
             Self::Eigh => 9,
             Self::EighVals => 10,
             Self::Eig => 11,
-            Self::TriangularSolve => 12,
+            Self::EigVals => 12,
+            Self::TriangularSolve => 13,
         }
     }
 
@@ -92,6 +94,7 @@ impl LinalgAdOpKind {
             LinalgOp::Eigh { .. } => Self::Eigh,
             LinalgOp::EighVals { .. } => Self::EighVals,
             LinalgOp::Eig { .. } => Self::Eig,
+            LinalgOp::EigVals { .. } => Self::EigVals,
             LinalgOp::TriangularSolve { .. } => Self::TriangularSolve,
         }
     }
@@ -217,6 +220,8 @@ static EIG_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "eigenvalues", LinalgAdRuleSupport::SupportedViaLinearize),
     output(1, "eigenvectors", LinalgAdRuleSupport::Unsupported),
 ];
+static EIG_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] =
+    [output(0, "eigenvalues", LinalgAdRuleSupport::PendingOracle)];
 
 static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     LinalgAdSupport {
@@ -290,6 +295,12 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         linearize: LinalgAdRuleSupport::PartiallySupported,
         transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &EIG_OUTPUTS,
+    },
+    LinalgAdSupport {
+        kind: LinalgAdOpKind::EigVals,
+        linearize: LinalgAdRuleSupport::PendingOracle,
+        transpose: LinalgAdRuleSupport::Unsupported,
+        outputs: &EIG_VALS_OUTPUTS,
     },
     LinalgAdSupport {
         kind: LinalgAdOpKind::TriangularSolve,

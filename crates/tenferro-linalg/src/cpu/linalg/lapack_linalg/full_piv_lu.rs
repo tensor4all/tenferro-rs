@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -96,7 +96,7 @@ extern "C" {
     );
 }
 
-pub(crate) trait LapackFullPivLu: Clone + Copy + Default {
+pub(crate) trait LapackFullPivLu: Clone + Copy + Default + PoolScalar {
     type Scale: Copy;
 
     fn one() -> Self;

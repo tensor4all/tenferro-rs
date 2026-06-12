@@ -14,6 +14,9 @@ the publish-layout, API-consistency scope/false-positive gaps, and active
 crate-ownership documentation drift detected by the audit. Superseded
 historical design/reference notes are archived under `docs/plans/historical/`
 so the active design and reference indexes only point at current material.
+The final #1000 cleanup slice documents runtime dtype-conversion semantics and
+routes traced `eigvals` through a general eigenvalues-only extension/backend
+hook instead of materializing eigenvectors and discarding them.
 
 The PR should use `Closes #1001` and `Refs #1000`. #1000 remains an umbrella
 backlog with residual oracle-family, public API, and remaining
@@ -99,6 +102,8 @@ verification or design work.
 | Historical design/reference notes were still linked from active indexes | Policy-doc gap / Fixed | Moved superseded migration, linalg, einsum, and external-survey notes to `docs/plans/historical/`; removed them from `docs/design/index.md` and `docs/reference/index.md`. |
 | API consistency checker missed some rendered user-facing docs and flagged README implementation-crate inventory as jargon | Tooling gap / Fixed | Expanded the user-doc jargon check to `docs/index.md`, tutorials, and performance docs while keeping internals/spec/architecture out of scope; exempted README's implementation-crate inventory table. |
 | Traced `norm`, `pinv`, and `pinv_with_rtol` could encode floating scalar constants as integer/bool tensors | Source-risk / Fixed | Added traced-helper dtype validation so integer and boolean inputs return unsupported-dtype errors before `f64` scalar constants can be rounded or converted to booleans. |
+| CPU structural `convert` semantics were tested but not documented for public users | Low/Medium docs gap / Fixed | Documented runtime-dtype conversion semantics in the tensor guide and public convert rustdocs: Rust primitive numeric casts, real-part extraction for complex-to-real/integer, nonzero bool conversion, and zero-imaginary real-to-complex conversion. |
+| Traced `eigvals` materialized full general eigendecomposition outputs and discarded eigenvectors | Source-risk / Fixed | Added internal `EigVals` extension op, hidden backend hook, CPU Faer/LAPACK values-only implementations, traced `eigvals` routing, source-contract coverage, and direct `eigvals` JVP regression coverage. |
 | #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
 | #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, LAPACK batched input scratch reuse, one CubeCL GEMM host-materialization fast path, and LU `k` specialization. Other performance findings still need focused benchmarks or source-specific follow-up. |
 | #1000 broader docs/tooling drift | Fixed for accepted current-tree docs/tooling findings | This PR fixes stale `CpuContext` docs, publish-layout drift, active crate-ownership docs, historical-doc indexing, and API-consistency scope/false-positive gaps. Snippet-source tooling remains intentionally scoped to `snippet-source` blocks. |
@@ -128,6 +133,9 @@ verification or design work.
 - Treated historical design and reference material as archive content rather
   than current design after active-index notes proved too weak to prevent docs
   drift.
+- Kept forward `eigvals` values-only but allowed the `EigVals` AD rule to emit
+  an internal full `Eig` op during linearization, because the eigenvalue
+  derivative needs eigenvectors while the ordinary forward public path does not.
 
 ## Verification Performed
 
@@ -173,6 +181,10 @@ verification or design work.
 - RED:
   `cargo test -p tenferro-linalg --test traced_extension traced_`
   failed before traced `norm` and `pinv` rejected integer/bool inputs.
+- RED:
+  `cargo test -p tenferro-linalg --test linalg_internal_path_contract`
+  failed before traced `eigvals` emitted `EigVals` and the backend surface/CPU
+  backend exposed an `eig_values` hook.
 - GREEN: `cargo test -p tenferro-cpu`
 - GREEN: `cargo test -p tenferro-cpu concatenate`
 - GREEN: `cargo test -p tenferro-gpu --test cubecl_launch_contract`
@@ -180,7 +192,19 @@ verification or design work.
 - GREEN: `cargo test -p tenferro-linalg --test cpu_linalg_source_contract`
 - GREEN: `cargo test -p tenferro-linalg --test backend_errors`
 - GREEN: `cargo test -p tenferro-linalg --test traced_extension traced_`
+- GREEN: `cargo test -p tenferro-linalg --test linalg_internal_path_contract`
+- GREEN: `cargo test -p tenferro-linalg --test traced_correctness`
+- GREEN: `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit`
+- GREEN: `cargo check -p tenferro-linalg --features cpu-blas`
+- GREEN:
+  `cargo check -p tenferro-linalg --no-default-features --features cpu-blas`
+- GREEN:
+  `cargo check -p tenferro-linalg --no-default-features --features cpu-faer`
 - GREEN: `cargo check -p tenferro-linalg --features cuda`
+- BLOCKED:
+  `cargo test -p tenferro-linalg --no-default-features --features cpu-blas --test backend_errors cpu_values_only_decompositions_cover_real_complex_and_batched_inputs`
+  could not link in this environment because LAPACK symbols such as `sgeev_`,
+  `dgeev_`, and `sgetc2_` were unavailable to the local linker.
 - GREEN:
   `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest`
 - GREEN: `cargo test -p tenferro-internal-ops --test publication_contract`

@@ -10,6 +10,11 @@ pub use tenferro_tensor::Tensor;
 
 /// Convert a tensor to a different dtype.
 ///
+/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
+/// conversion sets the imaginary part to zero; complex-to-real or
+/// complex-to-integer conversion uses the real part. Boolean conversion uses
+/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+///
 /// # Examples
 ///
 /// ```rust

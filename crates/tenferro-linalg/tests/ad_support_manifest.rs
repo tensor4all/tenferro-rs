@@ -19,6 +19,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::Eigh,
         LinalgAdOpKind::EighVals,
         LinalgAdOpKind::Eig,
+        LinalgAdOpKind::EigVals,
         LinalgAdOpKind::TriangularSolve,
     ];
 
@@ -100,6 +101,10 @@ fn linalg_ad_support_manifest_marks_values_only_oracle_gaps_pending() {
     let eigh_vals = linalg_ad_support(LinalgAdOpKind::EighVals);
     assert_eq!(eigh_vals.linearize, LinalgAdRuleSupport::PendingOracle);
     assert_output_status(eigh_vals, "eigenvalues", LinalgAdRuleSupport::PendingOracle);
+
+    let eig_vals = linalg_ad_support(LinalgAdOpKind::EigVals);
+    assert_eq!(eig_vals.linearize, LinalgAdRuleSupport::PendingOracle);
+    assert_output_status(eig_vals, "eigenvalues", LinalgAdRuleSupport::PendingOracle);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -8,7 +8,7 @@ use super::helpers::{
     matrix_dims, square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
 };
 
-pub(crate) trait LapackSolve: Clone + Copy {
+pub(crate) trait LapackSolve: Clone + Copy + PoolScalar {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);
     fn getrs(
         trans: u8,

@@ -150,6 +150,9 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             LinalgOp::Eig { input_dtype } => {
                 rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
             }
+            LinalgOp::EigVals { input_dtype } => {
+                rules::linearize_eig_values(builder, primal_in, tangent_in, input_dtype, ctx)
+            }
         };
         Ok(tangents)
     }
@@ -208,7 +211,8 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             | LinalgOp::Qr
             | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
-            | LinalgOp::Eig { .. } => vec![None; op.input_count()],
+            | LinalgOp::Eig { .. }
+            | LinalgOp::EigVals { .. } => vec![None; op.input_count()],
         };
         Ok(cotangents)
     }
