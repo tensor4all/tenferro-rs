@@ -88,6 +88,21 @@ fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
 }
 
 #[test]
+fn linalg_ad_support_manifest_marks_values_only_oracle_gaps_pending() {
+    let svd_vals = linalg_ad_support(LinalgAdOpKind::SvdVals);
+    assert_eq!(svd_vals.linearize, LinalgAdRuleSupport::PendingOracle);
+    assert_output_status(
+        svd_vals,
+        "singular_values",
+        LinalgAdRuleSupport::PendingOracle,
+    );
+
+    let eigh_vals = linalg_ad_support(LinalgAdOpKind::EighVals);
+    assert_eq!(eigh_vals.linearize, LinalgAdRuleSupport::PendingOracle);
+    assert_output_status(eigh_vals, "eigenvalues", LinalgAdRuleSupport::PendingOracle);
+}
+
+#[test]
 fn linalg_ad_support_manifest_marks_full_pivot_lu_oracle_backed() {
     let full_piv_lu = linalg_ad_support(LinalgAdOpKind::FullPivLu);
     assert_eq!(
