@@ -1,16 +1,20 @@
-# Issues 1000 And 1001 CPU Parallelism Remediation
+# Issues 1000 And 1001 Remediation Batch
 
 ## Session Summary
 
-This slice resolves GitHub issue #1001 and narrows the CPU-performance part of
-the #1000 umbrella audit. It wires tenferro-owned CPU tensor kernels to the
-existing `CpuContext` parallelism contract, fixes the cached faer GEMM helper
-so it enters the owned Rayon pool, and updates active docs/rules that still
-described the older no-owned-pool design.
+This batch resolves GitHub issue #1001 and fixes several concrete, testable
+findings from the #1000 umbrella audit. It wires tenferro-owned CPU tensor
+kernels to the existing `CpuContext` parallelism contract, fixes the cached faer
+GEMM helper so it enters the owned Rayon pool, removes a CPU concatenate
+per-output segment scan, tightens CUDA/CubeCL placement and device-native fast
+path contracts, aligns the linalg values-only AD support manifest with pending
+oracle coverage, and fixes the publish-layout metadata drift detected by the
+audit.
 
 The PR should use `Closes #1001` and `Refs #1000`. #1000 remains an umbrella
-backlog with GPU placement, AD oracle, public API, broader materialization, and
-docs/tooling items that need separate focused verification.
+backlog with residual oracle-family, public API, benchmark-backed performance,
+and docs/tooling-scope items that still need separate focused verification or
+design work.
 
 ## Context Read
 
@@ -33,11 +37,20 @@ docs/tooling items that need separate focused verification.
 - `crates/tenferro-cpu/src/reduction.rs`
 - `crates/tenferro-cpu/src/structural.rs`
 - `crates/tenferro-cpu/src/indexing.rs`
+- `crates/tenferro-gpu/src/cubecl/dispatch.rs`
+- `crates/tenferro-gpu/src/cubecl/gemm.rs`
+- `crates/tenferro-gpu/src/cubecl/interop.rs`
+- `crates/tenferro-gpu/tests/cubecl_launch_contract.rs`
+- `crates/tenferro-linalg/src/gpu/linalg.rs`
+- `crates/tenferro-linalg/src/ad/support.rs`
+- `crates/tenferro-linalg/tests/ad_support_manifest.rs`
+- `crates/tenferro-linalg/tests/gpu_linalg_source_contract.rs`
 - `docs/guides/parallelism-and-caching.md`
 - `docs/design/tensor-prims.md`
 - `docs/design/exec-session.md`
 - `docs/design/dot-general-overhead.md`
 - `docs/design/contraction-pipeline.md`
+- `scripts/check-publish-layout.py`
 
 ## Reference Code
 
@@ -59,11 +72,15 @@ docs/tooling items that need separate focused verification.
 | `embed_diagonal`, triangular masks, and indexing-family kernels remain dedicated sequential loops | Intentional Sequential / Documented | Added nearby source comments explaining that these loops do not yet map to a strided-kernel or backend-native parallel primitive. They still run inside `CpuContext::install`, so a future parallel implementation can use the same policy. |
 | BLAS/LAPACK threading | Provider-owned | Left unchanged. Docs now distinguish provider-owned BLAS/LAPACK threading from Rayon-backed tenferro/faer work. |
 | Active docs said `CpuContext` does not own a Rayon pool | Auto Fix / Fixed | Updated active guide/design docs to match `CpuContext` ownership and session entry behavior. |
-| #1000 AD oracle/support coverage | Verify First / Out of scope for this PR | Full-pivot LU oracle coverage landed in #1016. Broader oracle/support alignment remains outside this CPU-parallelism slice. |
-| #1000 CUDA placement diagnostics | Verify First / Deferred | Not touched; needs CUDA-specific behavior tests. |
+| README/publish metadata drift for implementation crates | Auto Fix / Fixed | Updated `scripts/check-publish-layout.py` and the README implementation-crate table so published implementation crates inherit publish metadata while `tenferro-internal-ops` remains explicitly unpublished. |
+| CPU concatenate scanned input segment ends for every output element | Auto Fix / Fixed | Replaced the hot-loop linear `.position(...)` scan with `slice::partition_point` over precomputed ordered segment ends. Added a source-contract test for the complexity pattern and kept existing concatenate behavior tests green. |
+| Linalg values-only AD manifest claimed oracle-backed support for `svdvals` and `eighvals` | Policy-doc gap / Fixed | Marked those values-only entries as `PendingOracle` until matching oracle replay coverage exists. Full-pivot LU oracle coverage landed separately in #1016. Broader core/einsum/FFT oracle-family expansion remains outside this PR. |
+| CUDA linalg `solve` and prepared LU solve could validate dtype or zero fast paths before residency | Source-risk / Fixed | Reordered residency checks ahead of dtype-pair and zero-dimension handling and added source-contract coverage. |
+| CubeCL interop downloads could return empty host tensors before checking residency | Source-risk / Fixed | `download_typed_tensor` now validates CubeCL buffer and runtime/device residency before the empty fast path. Added source-contract coverage. |
+| CubeCL GEMM zero-contracting fast path built a host zero `Vec` and uploaded it | Source-risk / Fixed | Replaced host zero materialization with device allocation plus the existing device `fill_zero_kernel`. Added source-contract coverage. |
 | #1000 public API and extension-boundary panic risks | Partially fixed by #1015 / Deferred here | Not touched in this PR. |
-| #1000 broader performance/materialization risks | Partially narrowed | This PR fixes the concrete CPU parallelism source-risk tracked as #1001. Other performance/materialization findings need focused tests or benchmarks. |
-| #1000 broader docs/tooling drift | Partially narrowed | This PR fixes stale `CpuContext` parallelism docs. Snippet/API tooling expansion remains deferred. |
+| #1000 broader performance/materialization risks | Partially narrowed | This PR fixes CPU parallelism wiring, CPU concatenate segment lookup, and one CubeCL GEMM host-materialization fast path. Other linalg scratch and GPU-kernel-size findings still need focused benchmarks or source-specific follow-up. |
+| #1000 broader docs/tooling drift | Partially narrowed | This PR fixes stale `CpuContext` docs and publish-layout drift. Snippet/API tooling expansion remains deferred. |
 
 ## Decisions Made
 
@@ -78,6 +95,12 @@ docs/tooling items that need separate focused verification.
 - Did not parallelize the indexing-family and triangular/embedding loops in
   this PR. Their indexing patterns need separate design or backend-native
   helpers before parallelization would be reviewable.
+- Treated source-contract tests as appropriate for #1000 cases where the
+  accepted finding is a source-risk without a hardware-independent behavior
+  reproducer.
+- Did not disable active AD implementations solely because oracle coverage is
+  incomplete; this PR marks concrete values-only linalg gaps as
+  `PendingOracle`, while full oracle-family expansion remains separate work.
 - Did not close #1000 as a whole because the remaining findings are unrelated
   verify-first or design-gated slices.
 
@@ -89,7 +112,36 @@ docs/tooling items that need separate focused verification.
 - RED: `cargo test -p tenferro-cpu cached_faer_gemm_pool_helper_enters_owned_rayon_pool`
   failed before the implementation because the cached faer helper observed the
   ambient Rayon pool instead of the configured `CpuContext` pool.
+- RED: `python3 scripts/check-publish-layout.py` failed before the publish
+  metadata fix because README/publish metadata omitted implementation crates.
+- RED: `cargo test --workspace --release` initially exposed that the first
+  publish-layout fix incorrectly made `tenferro-internal-ops` inherit the
+  workspace publish setting. The final script distinguishes published crates
+  from unpublished internal workspace crates.
+- RED:
+  `cargo test -p tenferro-linalg --test gpu_linalg_source_contract gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths`
+  failed before the linalg residency-ordering fix.
+- RED:
+  `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest linalg_ad_support_manifest_marks_values_only_oracle_gaps_pending`
+  failed before the values-only manifest entries were marked `PendingOracle`.
+- RED:
+  `cargo test -p tenferro-cpu --test backend_capability_contracts concatenate_hot_loop_does_not_linearly_scan_input_segments`
+  failed before the concatenate lookup change.
+- RED:
+  `cargo test -p tenferro-gpu --test cubecl_launch_contract cubecl_interop_download_validates_buffer_before_empty_fast_path`
+  failed before CubeCL interop downloads validated residency ahead of the empty
+  fast path.
+- RED:
+  `cargo test -p tenferro-gpu --test cubecl_launch_contract cubecl_gemm_zero_contracting_path_stays_device_native`
+  failed before the GEMM zero-contracting path stopped materializing host zeros.
 - GREEN: `cargo test -p tenferro-cpu`
+- GREEN: `cargo test -p tenferro-cpu concatenate`
+- GREEN: `cargo test -p tenferro-gpu --test cubecl_launch_contract`
+- GREEN: `cargo test -p tenferro-linalg --test gpu_linalg_source_contract`
+- GREEN:
+  `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest`
+- GREEN: `cargo test -p tenferro-internal-ops --test publication_contract`
+- GREEN: `python3 scripts/check-publish-layout.py`
 - Feature graph check:
   `cargo tree -p tenferro-cpu -e features -i strided-kernel`
 - GREEN: `cargo fmt --all --check`
@@ -113,5 +165,7 @@ docs/tooling items that need separate focused verification.
   pinned thread counts when reviewing actual speedups.
 - Dedicated indexing and triangular/embedding loops remain sequential by
   design for this PR.
-- #1000 remains open for GPU, AD, public API, and broader performance/docs
-  follow-up slices.
+- #1000 remains open for oracle-family expansion beyond the values-only linalg
+  manifest fix, public API panic/operator-overload follow-ups not already
+  covered by #1015, benchmark-backed linalg scratch/kernel-size work, and
+  broader snippet/API tooling-scope expansion.
