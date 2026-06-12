@@ -234,6 +234,61 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
 }
 
 #[test]
+fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
+    let source = linalg_source();
+    let solve = source_section(
+        &source,
+        "pub(super) fn solve",
+        "pub(super) fn lu_solve_prepared",
+    );
+    let lu_solve_prepared = source_section(
+        &source,
+        "pub(super) fn lu_solve_prepared",
+        "fn cholesky_typed",
+    );
+
+    for needle in [
+        "ensure_cubecl_resident_tensor(OP, a)?",
+        "ensure_cubecl_resident_tensor(OP, b)?",
+    ] {
+        assert_before(solve, needle, "ensure_supported_linalg_pair(OP, a, b)?");
+        assert_before(
+            solve,
+            needle,
+            "if has_zero_dim(a.shape()) || has_zero_dim(b.shape())",
+        );
+    }
+
+    for needle in [
+        "ensure_cubecl_resident_tensor(OP, a)?",
+        "ensure_cubecl_resident_tensor(OP, packed_lu)?",
+        "ensure_cubecl_resident_tensor(OP, pivots)?",
+        "ensure_cubecl_resident_tensor(OP, b)?",
+    ] {
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "ensure_supported_linalg_pair(OP, a, b)?",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "ensure_supported_linalg_pair(OP, a, packed_lu)?",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "if !matches!(pivots, Tensor::I32(_))",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "if has_zero_dim(a.shape()) || has_zero_dim(b.shape())",
+        );
+    }
+}
+
+#[test]
 fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     let source = linalg_source();
     let svd = source_section(&source, "fn svd_typed", "fn svd_values_typed");

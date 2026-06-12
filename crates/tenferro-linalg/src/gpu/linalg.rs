@@ -410,9 +410,9 @@ pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Resu
     const OP: &str = "solve";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    ensure_supported_linalg_pair(OP, a, b)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
     }
@@ -453,12 +453,12 @@ pub(super) fn lu_solve_prepared(
     const OP: &str = "lu_solve_prepared";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    ensure_supported_linalg_pair(OP, a, b)?;
-    ensure_supported_linalg_pair(OP, a, packed_lu)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, packed_lu)?;
     ensure_cubecl_resident_tensor(OP, pivots)?;
     ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
+    ensure_supported_linalg_pair(OP, a, packed_lu)?;
     if !matches!(pivots, Tensor::I32(_)) {
         return Err(Error::DTypeMismatch {
             op: OP,
