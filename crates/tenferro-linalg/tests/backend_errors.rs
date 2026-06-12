@@ -564,6 +564,38 @@ fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
 }
 
 #[test]
+fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
+    let mut backend = CpuBackend::new();
+    let f64_a = f64_tensor(vec![0, 0], Vec::new());
+    let c64_b = c64_tensor(vec![0, 1], Vec::new());
+    let i32_a = i32_tensor(vec![0, 0], Vec::new());
+    let i32_b = i32_tensor(vec![0, 1], Vec::new());
+
+    let err = backend
+        .full_piv_lu_solve(&f64_a, &c64_b, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DTypeMismatch {
+            op: "full_piv_lu_solve",
+            lhs: DType::F64,
+            rhs: DType::C64,
+        }
+    ));
+
+    let err = backend
+        .full_piv_lu_solve(&i32_a, &i32_b, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "full_piv_lu_solve",
+            ref message,
+        } if message.contains("unsupported dtype I32")
+    ));
+}
+
+#[test]
 fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
     let input = f64_tensor(vec![0], Vec::new());
     let mut backend = CpuBackend::new();

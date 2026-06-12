@@ -354,6 +354,7 @@ impl LinalgBackend for CpuBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
+        ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
