@@ -35,6 +35,18 @@ IMPLEMENTATION_CRATE_ORDER = [
 TENFERRO_CRATES = (
     USER_CRATE_ORDER + EXTENSION_CRATE_ORDER + IMPLEMENTATION_CRATE_ORDER
 )
+PUBLISHED_CRATES = set(
+    USER_CRATE_ORDER
+    + EXTENSION_CRATE_ORDER
+    + [
+        "tenferro-tensor-core",
+        "tenferro-core-ops",
+        "tenferro-internal-extension-macros",
+    ]
+)
+UNPUBLISHED_WORKSPACE_CRATES = {
+    "tenferro-internal-ops",
+}
 
 
 def rel(path: Path) -> str:
@@ -116,7 +128,22 @@ def check_package_metadata(errors: list[str]) -> None:
 
         manifest_text = manifest_path.read_text(encoding="utf-8")
         package_section = section(manifest_text, "package")
-        for key in ("publish", "readme", "repository", "homepage"):
+        if crate in PUBLISHED_CRATES:
+            if "publish.workspace = true" not in package_section:
+                errors.append(
+                    f"{rel(manifest_path)} package.publish must inherit workspace metadata"
+                )
+        elif crate in UNPUBLISHED_WORKSPACE_CRATES:
+            if "publish = false" not in package_section:
+                errors.append(f"{rel(manifest_path)} package.publish must be false")
+            if "publish.workspace = true" in package_section:
+                errors.append(
+                    f"{rel(manifest_path)} package.publish must not inherit workspace metadata"
+                )
+        else:
+            errors.append(f"no publish-layout classification for crate {crate!r}")
+
+        for key in ("readme", "repository", "homepage"):
             if f"{key}.workspace = true" not in package_section:
                 errors.append(
                     f"{rel(manifest_path)} package.{key} must inherit workspace metadata"
@@ -147,7 +174,7 @@ def check_readme(errors: list[str]) -> None:
         "There is intentionally no `tenferro` facade crate",
         "### Core User Crates",
         "### Standard Operation Extensions",
-        "### Published Implementation Crates",
+        "### Implementation Crates",
     ]
     for fragment in required_fragments:
         if fragment not in readme:

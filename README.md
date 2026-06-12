@@ -74,6 +74,15 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | `tenferro-einsum` | Einsum and contraction planning |
 | `tenferro-fft` | FFT operations |
 
+### Implementation Crates
+
+| Crate | Use when you need |
+| --- | --- |
+| `tenferro-tensor-core` | Host tensor storage, dtype tags, and metadata-only layouts |
+| `tenferro-core-ops` | Core primitive operation metadata shared by runtimes and backends |
+| `tenferro-internal-ops` | Unpublished internal graph op vocabulary and AD rule implementations used by tenferro crates |
+| `tenferro-internal-extension-macros` | Procedural macros for registering internal extension operation descriptors |
+
 ## Minimal CPU Example
 
 <!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
