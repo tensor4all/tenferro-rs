@@ -101,17 +101,17 @@ print("</ul>")
 PY
 }
 
-echo "[1/7] Checking user-facing snippets"
+echo "[1/8] Checking user-facing snippets"
 python3 "$ROOT_DIR/scripts/check-doc-snippets.py" --root-dir "$ROOT_DIR" --check
 
-echo "[2/7] Building rustdoc"
+echo "[2/8] Building rustdoc"
 rm -rf "$DOC_ROOT"
 cargo doc --workspace --no-deps
 
-echo "[3/7] Copying rustdoc output"
+echo "[3/8] Copying rustdoc output"
 cp -a "$DOC_ROOT/." "$API_DIR/"
 
-echo "[4/7] Generating optional dependency graph"
+echo "[4/8] Generating optional dependency graph"
 if [[ -x "$ROOT_DIR/scripts/gen_dep_graph.py" || -f "$ROOT_DIR/scripts/gen_dep_graph.py" ]]; then
   if command -v dot >/dev/null 2>&1; then
     python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" | dot -Tsvg > "$API_DIR/dep_graph.svg"
@@ -126,7 +126,7 @@ else
   echo "  No scripts/gen_dep_graph.py found; skipping dependency graph."
 fi
 
-echo "[5/7] Rendering API landing page"
+echo "[5/8] Rendering API landing page"
 OVERVIEW_HTML="$(render_overview_html)"
 CRATE_INVENTORY_HTML="$(render_crate_inventory_html)"
 {
@@ -160,9 +160,7 @@ HEADER
 FOOTER
 } >"$API_DIR/index.html"
 
-python3 "$ROOT_DIR/scripts/check-docs-site.py" --root-dir "$ROOT_DIR" --site-index "$API_DIR/index.html"
-
-echo "[6/7] Rendering design docs if configured"
+echo "[6/8] Rendering design docs if configured"
 if [[ -f "$ROOT_DIR/docs/_quarto.yml" ]]; then
   if command -v quarto >/dev/null 2>&1; then
     quarto render "$ROOT_DIR/docs"
@@ -177,7 +175,10 @@ else
   echo "  No docs/_quarto.yml found; skipping design docs render."
 fi
 
-echo "[7/7] Verifying site top page"
+echo "[7/8] Verifying docs site links and API inventory"
+python3 "$ROOT_DIR/scripts/check-docs-site.py" --root-dir "$ROOT_DIR" --site-index "$API_DIR/index.html"
+
+echo "[8/8] Verifying site top page"
 REPO_TITLE="$(basename "$ROOT_DIR")"
 if [[ -f "$OUT_DIR/index.html" ]]; then
   echo "  Using Quarto-rendered site index."

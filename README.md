@@ -42,6 +42,29 @@ help.
 - Validate numerical behavior with tests, oracle data, invariants, residual
   checks, provenance checks, and reproducible benchmarks.
 
+## When tenferro Is a Good Fit
+
+tenferro-rs is designed for workloads where tensor shapes are not always fixed
+before execution. If your computation involves runtime-dependent ranks,
+threshold-based filtering, data-dependent iteration counts, or shape-parametric
+models, tenferro's traced execution can reuse a compiled program while resolving
+the concrete sizes at runtime.
+
+| tenferro is a good fit when | XLA/JAX may be a better fit when |
+| --- | --- |
+| Shapes depend on runtime values | All shapes are static and known before compilation |
+| Small-to-medium batched linear algebra with AD | Large static-shape matmul or contraction throughput dominates |
+| You need `grad`, `vjp`, `jvp`, or HVP workflows in Rust | You can use Python as the host language |
+| You are building a Rust-native tensor application | You need the mature compiler and ecosystem around JAX today |
+| You need extension points for custom algebra or operation families | You only need standard tensor operations |
+
+The planned optional XLA backend in
+[#984](https://github.com/tensor4all/tenferro-rs/issues/984) is intended for
+static-shape traced graphs. Dynamic-shape graphs remain the native runtime's
+core use case.
+
+![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
+
 ## Which API Should I Use?
 
 | If your workflow needs | Start with |
@@ -111,6 +134,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The full guides, tutorials, API reference, architecture notes, and
 specifications live at <https://tensor4all.org/tenferro-rs/>. Start with
 Getting Started if you are using tenferro-rs for the first time.
+
+- [Design: dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
+  explains how tenferro represents runtime-dependent dimensions in traced
+  programs.
 
 Official benchmark suites and result tooling live in
 [`tensor4all/tenferro-benchmark`](https://github.com/tensor4all/tenferro-benchmark).

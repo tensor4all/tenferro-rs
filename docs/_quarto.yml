@@ -11,6 +11,7 @@ project:
     - internals/**/*.md
     - architecture/**/*.md
     - spec/**/*.md
+    - design/**/*.md
 
 format:
   html:
@@ -74,6 +75,28 @@ website:
               - architecture/primitive-ad.md
               - architecture/tidu.md
               - architecture/ad-pipeline.md
+          - section: "Design Notes"
+            contents:
+              - design/index.md
+              - design/api-and-convention-freeze.md
+              - design/supported-ops.md
+              - design/tensor.md
+              - design/tensor-prims.md
+              - design/algebra.md
+              - design/einsum.md
+              - design/contraction-pipeline.md
+              - design/dot-general-overhead.md
+              - design/dynamic-symbolic-shapes.md
+              - design/exec-session.md
+              - design/gpu-backend-design.md
+              - design/inplace-indexing.md
+              - design/linalg.md
+              - design/linalg-prims.md
+              - design/refactor-roadmap-912.md
+              - design/capi.md
+              - design/capi-error-handling.md
+              - design/testing.md
+              - design/review-decision-records.md
           - section: "Specification"
             contents:
               - spec/index.md

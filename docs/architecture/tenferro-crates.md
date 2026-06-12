@@ -24,6 +24,8 @@ The design goal is to keep these concerns separate:
 - first-class operation families such as einsum, linalg, and FFT
 - internal graph operation vocabulary and primitive metadata
 
+![tenferro-rs architecture overview](../assets/tenferro-architecture.svg)
+
 ## II. Current Workspace Crates
 
 | Crate | Role |

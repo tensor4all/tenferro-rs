@@ -71,6 +71,21 @@ CUDA support targets NVIDIA CUDA. See
 [Devices and GPU](../guides/devices-and-gpu.md) for the current coverage and
 setup commands.
 
+### Dynamic shapes and static-shape specialization
+
+JAX/XLA specializes compiled programs to known shapes. That is a strong fit for
+large static-shape workloads where compiler optimization dominates. tenferro's
+native traced runtime is built for the complementary case: programs whose
+output sizes may depend on runtime values, such as thresholded or truncated
+linear algebra.
+
+When shapes are static, the proposed optional XLA backend
+([#984](https://github.com/tensor4all/tenferro-rs/issues/984)) may eventually
+route traced programs to XLA. When ranks or extents are value-dependent,
+tenferro keeps dynamic shape metadata in the traced program and resolves the
+concrete sizes during execution. See
+[Dynamic and Symbolic Shape Metadata](../design/dynamic-symbolic-shapes.md).
+
 ### Lazy traced execution
 
 PyTorch users usually expect every operation to execute immediately. JAX users

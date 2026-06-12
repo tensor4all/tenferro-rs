@@ -9,6 +9,8 @@ The project covers both ordinary tensor computation and autodiff workflows.
 Start with the smallest API that solves your problem, then add autodiff, graph
 compilation, or CUDA only when the workflow needs them.
 
+![tenferro-rs architecture overview](assets/tenferro-architecture.svg)
+
 ## Where To Start
 
 | Workflow | Start with |
@@ -20,6 +22,7 @@ compilation, or CUDA only when the workflow needs them.
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
 | CPU and CUDA backend behavior | [Devices and GPU](guides/devices-and-gpu.md) |
+| Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |
 
 ## First CPU Example

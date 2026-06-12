@@ -105,5 +105,9 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends graphviz
           fi
+      - name: Run docs script tests
+        run: |
+          python3 scripts/test-check-docs-site.py
+          python3 scripts/test-doc-consistency.py
       - name: Build docs site
         run: bash scripts/build_docs_site.sh
