@@ -190,6 +190,13 @@ Arbitrary non-numeric Rust structs can be useful as host-side typed storage,
 but they are not part of backend math, CUDA execution, AD, or the runtime-dtype
 `Tensor` operation API.
 
+Runtime-dtype `convert` follows Rust primitive cast semantics for real,
+integer, and precision-changing casts. Real and integer values convert to
+`bool` by nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+Real-to-complex conversion sets the imaginary part to zero. Complex-to-real or
+complex-to-integer conversion uses the real part; complex-to-`bool` is true
+when either the real or imaginary part is nonzero.
+
 ## Runtime-DType Tensor Example
 
 Use `Tensor` with a backend when you want direct computation without autodiff but the dtype

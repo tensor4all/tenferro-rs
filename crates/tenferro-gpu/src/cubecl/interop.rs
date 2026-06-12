@@ -147,13 +147,14 @@ pub fn download_typed_tensor<T>(
 where
     T: CubeElement + Clone + 'static,
 {
+    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
+    let buffer = dispatch::cubecl_buffer(tensor, op)?;
     if tensor.n_elements() == 0 {
         return Ok(TypedTensor::from_vec_col_major(
             tensor.shape().to_vec(),
             Vec::new(),
         ));
     }
-    let buffer = dispatch::cubecl_buffer(tensor, op)?;
     let bytes = rt
         .client()
         .read_one(buffer.handle().clone())

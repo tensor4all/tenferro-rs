@@ -12,6 +12,20 @@ local generation registry are not active CI gates in the current workspace.
 - Expected error records: 2
 - Unsupported success records: 6910
 
+## Crate-Local AD Coverage Outside Replay
+
+The support tables below describe the inactive oracle replay adapter snapshot.
+Some active AD manifest entries are instead guarded by crate-local
+finite-difference tests until a crate-local replay harness is restored.
+
+| manifest op | coverage type | public path | test |
+| --- | --- | --- | --- |
+| Einsum extension | finite-difference | `einsum_with(..., "ij,jk->ik", ...)` | `cargo test -p tenferro-einsum --features autodiff --test traced_ad_migration grad_einsum_matmul_real_matches_finite_diff_for_both_inputs` |
+| FFT C2C extension | finite-difference | `fft(...).jvp(...)` | `cargo test -p tenferro-fft --features autodiff --test fft_ops fft_c64_jvp_matches_finite_diff` |
+| SvdVals | finite-difference | `norm(..., ord=2)` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit spectral_norm_jvp_matches_finite_diff_through_values_only_svd` |
+| EighVals | finite-difference | `eigvalsh` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit eigvalsh_jvp_matches_finite_diff_through_values_only_eigh` |
+| EigVals | finite-difference | `eigvals` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit eigvals_jvp_matches_finite_diff` |
+
 ## Supported
 
 | op | family | observable | sample count |

@@ -749,7 +749,7 @@ implemented.
 |---|---|---|
 | **Tensor type, storage, views** | `tenferro-tensor` | `Tensor`, `TypedTensor<T, R>`, typed views |
 | **Device placement, errors** | `tenferro-tensor`, `tenferro-gpu` | `Placement`, `DeviceKind`, `DeviceId`, backend errors |
-| **Core op vocabulary and dispatch** | `tenferro-core-ops`, `tenferro-runtime`, `tenferro-tensor` | `StdTensorOp`, `ExecOp`, `TensorBackend`, `BackendSession` |
+| **Core op vocabulary and dispatch** | `tenferro-core-ops`, `tenferro-internal-ops`, `tenferro-runtime`, `tenferro-tensor` | Primitive catalog, `StdTensorOp`, `ExecOp`, `TensorBackend`, `BackendSession` |
 | **CPU/GPU execution** | `tenferro-cpu`, `tenferro-gpu` | CPU provider selection and CubeCL/CUDA backend support |
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |
 | **Linalg decompositions + AD** | `tenferro-linalg` | SVD/QR/LU/eigen with `(m, n, *)` col-major convention |

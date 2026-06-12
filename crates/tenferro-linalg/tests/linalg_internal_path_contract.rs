@@ -104,6 +104,35 @@ fn traced_eigvalsh_uses_hermitian_values_only_path() {
 }
 
 #[test]
+fn traced_eigvals_uses_general_values_only_path() {
+    let source = crate_source("src/traced.rs");
+    let eigvals_source = source_section(
+        &source,
+        "pub fn eigvals",
+        "/// Build a traced Moore-Penrose pseudoinverse op",
+    );
+
+    assert!(
+        eigvals_source.contains("eig_values("),
+        "eigvals should emit a general eigenvalues-only internal op"
+    );
+    assert!(
+        !eigvals_source.contains("eig(a)?.0"),
+        "eigvals should not materialize eigenvectors and then discard them"
+    );
+
+    let extension_source = crate_source("src/extension.rs");
+    assert!(
+        extension_source.contains("LinalgOp::EigVals"),
+        "linalg extension should define an internal EigVals op"
+    );
+    assert!(
+        extension_source.contains("backend.eig_values"),
+        "EigVals execution should dispatch to a backend values-only hook"
+    );
+}
+
+#[test]
 fn traced_pinv_scales_svd_vectors_without_dense_diagonal_materialization() {
     let source = crate_source("src/traced.rs");
     let pinv_source = source_section(
@@ -135,7 +164,12 @@ fn cpu_backend_overrides_prepared_lu_and_values_only_paths() {
         !lu_factor_source.contains("identity_pivots"),
         "CPU lu_factor should return real pivot metadata, not identity pivots"
     );
-    for needle in ["fn lu_solve_prepared", "fn svd_values", "fn eigh_values"] {
+    for needle in [
+        "fn lu_solve_prepared",
+        "fn svd_values",
+        "fn eigh_values",
+        "fn eig_values",
+    ] {
         assert!(
             source.contains(needle),
             "CPU backend should override {needle}"
@@ -157,6 +191,65 @@ fn backend_surface_has_hidden_hermitian_values_only_hook() {
         ),
         "default eigh_values should fail explicitly instead of silently using full eigh"
     );
+    assert!(
+        source.contains("fn eig_values"),
+        "backend surface should include a hidden eig_values hook"
+    );
+    assert!(
+        source.contains(
+            "backend {} does not implement internal general eigenvalues-only decomposition"
+        ),
+        "default eig_values should fail explicitly instead of silently using full eig"
+    );
+}
+
+#[test]
+fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
+    let lapack_source = crate_source("src/cpu/linalg/lapack_linalg/eig.rs");
+    let lapack_real_values = source_section(
+        &lapack_source,
+        "macro_rules! impl_eig_values_real_2d",
+        "macro_rules! impl_eig_complex_2d",
+    );
+    let lapack_complex_values = source_section(
+        &lapack_source,
+        "macro_rules! impl_eig_values_complex_2d",
+        "impl_real_eig_to_complex_outputs!",
+    );
+
+    for section in [lapack_real_values, lapack_complex_values] {
+        assert!(
+            section.contains("b'N'"),
+            "LAPACK eig_values should request no left or right eigenvectors"
+        );
+        assert!(
+            !section.contains("b'V'"),
+            "LAPACK eig_values should not request eigenvectors"
+        );
+    }
+
+    let faer_source = crate_source("src/cpu/linalg/faer_linalg.rs");
+    let faer_real_values = source_section(
+        &faer_source,
+        "macro_rules! impl_eig_values_real_2d",
+        "macro_rules! impl_eig_complex_2d",
+    );
+    let faer_complex_values = source_section(
+        &faer_source,
+        "macro_rules! impl_eig_values_complex_2d",
+        "impl_eig_real_2d!",
+    );
+
+    for section in [faer_real_values, faer_complex_values] {
+        assert!(
+            section.contains("ComputeEigenvectors::No"),
+            "Faer eig_values should request no eigenvectors"
+        );
+        assert!(
+            !section.contains("ComputeEigenvectors::Yes"),
+            "Faer eig_values should not request eigenvectors"
+        );
+    }
 }
 
 #[test]

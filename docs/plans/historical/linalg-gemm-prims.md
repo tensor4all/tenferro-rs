@@ -1,5 +1,14 @@
 # Routing `tenferro-linalg` GEMM Paths Through `tenferro-prims`
 
+> Historical note (2026-06-12): this document predates the current workspace
+> split. The live implementation no longer has a `tenferro-prims` crate.
+> Current core primitive metadata lives in `tenferro-core-ops`, graph
+> vocabulary in `tenferro-internal-ops::StdTensorOp`, execution IR in
+> `tenferro-runtime::ExecOp`, and dense backend execution in
+> `tenferro-tensor` plus concrete backend crates. See
+> [`tensor-prims.md`](../../design/tensor-prims.md) and
+> [`linalg-prims.md`](../../design/linalg-prims.md) for current contracts.
+
 ## Summary
 
 Issue #245 should be treated as a focused GEMM-path cleanup, not as a full

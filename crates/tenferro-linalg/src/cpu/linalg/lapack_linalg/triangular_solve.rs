@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -9,7 +9,7 @@ use super::helpers::{
     transpose_col_major_data,
 };
 
-pub(crate) trait LapackTriangularSolve: Clone + Copy {
+pub(crate) trait LapackTriangularSolve: Clone + Copy + PoolScalar {
     fn trtrs(
         uplo: u8,
         trans: u8,

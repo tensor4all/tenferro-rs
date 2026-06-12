@@ -1,8 +1,17 @@
 #![cfg(feature = "autodiff")]
 
+use std::{fs, path::Path};
+
 use tenferro_linalg::{
     all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdRuleSupport,
 };
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("tenferro-linalg should live inside workspace/crates")
+}
 
 #[test]
 fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
@@ -19,6 +28,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::Eigh,
         LinalgAdOpKind::EighVals,
         LinalgAdOpKind::Eig,
+        LinalgAdOpKind::EigVals,
         LinalgAdOpKind::TriangularSolve,
     ];
 
@@ -85,6 +95,64 @@ fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
         "eigenvectors",
         LinalgAdRuleSupport::SupportedViaLinearize,
     );
+}
+
+#[test]
+fn linalg_ad_support_manifest_marks_values_only_rules_finite_diff_backed() {
+    let svd_vals = linalg_ad_support(LinalgAdOpKind::SvdVals);
+    assert_eq!(
+        svd_vals.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
+    assert_output_status(
+        svd_vals,
+        "singular_values",
+        LinalgAdRuleSupport::SupportedViaLinearize,
+    );
+
+    let eigh_vals = linalg_ad_support(LinalgAdOpKind::EighVals);
+    assert_eq!(
+        eigh_vals.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
+    assert_output_status(
+        eigh_vals,
+        "eigenvalues",
+        LinalgAdRuleSupport::SupportedViaLinearize,
+    );
+
+    let eig_vals = linalg_ad_support(LinalgAdOpKind::EigVals);
+    assert_eq!(
+        eig_vals.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
+    assert_output_status(
+        eig_vals,
+        "eigenvalues",
+        LinalgAdRuleSupport::SupportedViaLinearize,
+    );
+}
+
+#[test]
+fn linalg_values_only_finite_diff_support_is_documented_next_to_oracle_snapshot() {
+    let docs = fs::read_to_string(
+        workspace_root()
+            .join("docs")
+            .join("oracle")
+            .join("tensor-ad-oracles-support.md"),
+    )
+    .expect("oracle support docs should be readable");
+
+    for needle in [
+        "| SvdVals | finite-difference | `norm(..., ord=2)` |",
+        "| EighVals | finite-difference | `eigvalsh` |",
+        "| EigVals | finite-difference | `eigvals` |",
+    ] {
+        assert!(
+            docs.contains(needle),
+            "oracle support docs should include local linalg AD coverage row {needle}"
+        );
+    }
 }
 
 #[test]

@@ -41,7 +41,7 @@ Status labels in the matrix use:
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
 | Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | tenferro exposes metadata-only view APIs such as `transpose_view`, `slice_view`, `reshape_view`, broadcast views, and diagonal views; AD coverage is not yet documented as a first-class family surface |
-| Semiring core / fast path (`tenferro-core-ops` + `tenferro-einsum`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the core op surface, and semiring execution now routes through `StdTensorOp` / `ExecOp` plus operation-family runtimes; the remaining gap is GPU capability breadth, not legacy layering |
+| Semiring core / fast path (`tenferro-internal-ops` + `tenferro-runtime` + `tenferro-einsum`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the core op surface, and semiring execution now routes through `StdTensorOp` / `ExecOp` plus operation-family runtimes; the remaining gap is GPU capability breadth, not legacy layering |
 | Scalar (`StdTensorOp` elementwise/reduction ops) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`StdTensorOp` analytic ops) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
 | Linalg kernel (`tenferro-linalg::backend::LinalgBackend`) | Yes | Partial | Partial | Partial | Partial | Partial | Solve/factorization kernels exist and now gate through backend-generic linalg/runtime contracts; the remaining gap is backend breadth, not CPU-named scalar contracts |
@@ -77,7 +77,9 @@ These are tensor metadata or view operations and should not be execution prims.
 
 ### Semiring family
 
-Owned by `tenferro-core-ops` / `tenferro-einsum` and backend dispatch:
+Owned by the `tenferro-core-ops` primitive catalog,
+`tenferro-internal-ops::StdTensorOp`, `tenferro-runtime::ExecOp`,
+`tenferro-einsum`, and backend dispatch:
 
 - `einsum`, `matmul`, `bmm`, `tensordot`
 - semiring-valid `trace`
@@ -236,7 +238,8 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 ## Issue Traceability
 
 - `#443`: the workspace architecture references must reflect the split among
-  `tenferro-core-ops`, `tenferro-einsum`, and `tenferro-linalg`
+  `tenferro-core-ops`, `tenferro-internal-ops`, `tenferro-runtime`,
+  `tenferro-einsum`, and `tenferro-linalg`
 - `#444`: the new scalar and analytic family traits need rustdoc that explains
   current support and reserved vocabulary
 - `#445`: the LAPACK-specific eig helper split belongs in

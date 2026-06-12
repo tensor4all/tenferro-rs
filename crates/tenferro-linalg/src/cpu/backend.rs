@@ -354,6 +354,7 @@ impl LinalgBackend for CpuBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
+        ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
@@ -743,6 +744,41 @@ impl LinalgBackend for CpuBackend {
                 #[cfg(not(feature = "cpu-blas"))]
                 {
                     Err(unsupported_provider("eig", self.kind()))
+                }
+            }
+        }
+    }
+
+    fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("eig_values", input)?;
+        if !matches!(
+            input,
+            Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
+        ) {
+            return Err(unsupported_dtype("eig_values", input.dtype()));
+        }
+        match self.kind() {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| {
+                        linalg::faer::eig_values(ctx.as_ref(), buffers, input)
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("eig_values", self.kind()))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.with_linalg_pool(|buffers| linalg::blas::eig_values(buffers, input))
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unsupported_provider("eig_values", self.kind()))
                 }
             }
         }

@@ -10,7 +10,7 @@ mod svd;
 mod triangular_solve;
 
 pub(crate) use cholesky::cholesky;
-pub(crate) use eig::eig;
+pub(crate) use eig::{eig, eig_values};
 pub(crate) use eigh::{eigh, eigh_values};
 pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
 pub(crate) use lu::{lu, lu_factor};

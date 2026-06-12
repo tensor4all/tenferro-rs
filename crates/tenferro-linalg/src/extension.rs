@@ -44,6 +44,9 @@ pub(crate) enum LinalgOp {
     Eig {
         input_dtype: DType,
     },
+    EigVals {
+        input_dtype: DType,
+    },
     TriangularSolve {
         left_side: bool,
         lower: bool,
@@ -57,6 +60,7 @@ impl LinalgOp {
         match self {
             Self::Cholesky
             | Self::EighVals { .. }
+            | Self::EigVals { .. }
             | Self::FullPivLuSolve { .. }
             | Self::LuSolvePrepared { .. }
             | Self::SvdVals { .. }
@@ -92,6 +96,7 @@ impl LinalgOp {
             Self::LuSolvePrepared { .. } => 11,
             Self::SvdVals { .. } => 12,
             Self::EighVals { .. } => 13,
+            Self::EigVals { .. } => 14,
         }
     }
 }
@@ -201,7 +206,9 @@ impl ExtensionOpTrait for LinalgExtensionOp {
             | LinalgOp::SvdVals { eps }
             | LinalgOp::Eigh { eps }
             | LinalgOp::EighVals { eps } => hasher.write_u64(eps.to_bits()),
-            LinalgOp::Eig { input_dtype } => hash_dtype(hasher, input_dtype),
+            LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
+                hash_dtype(hasher, input_dtype);
+            }
             LinalgOp::FullPivLuSolve { transpose_a } => {
                 hasher.write_u8(u8::from(transpose_a));
             }
@@ -289,6 +296,9 @@ impl ExtensionOpTrait for LinalgExtensionOp {
             LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0]),
             LinalgOp::EighVals { .. } => vec![eigh_values_meta(input_dtypes[0], input_shapes[0])],
             LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0]),
+            LinalgOp::EigVals { input_dtype } => {
+                vec![eig_values_meta(input_dtype, input_shapes[0])]
+            }
         }
     }
 
@@ -366,6 +376,7 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::Eigh { .. } => backend.eigh(inputs[0]),
         LinalgOp::EighVals { .. } => Ok(vec![backend.eigh_values(inputs[0])?]),
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
+        LinalgOp::EigVals { .. } => Ok(vec![backend.eig_values(inputs[0])?]),
         LinalgOp::TriangularSolve {
             left_side,
             lower,
@@ -473,6 +484,13 @@ fn eig_meta(input_dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
         (dtype, vector_shape(n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
     ]
+}
+
+fn eig_values_meta(input_dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
+    let dtype = eig_output_dtype(input_dtype);
+    let n = shape[0].clone();
+    let batch = &shape[2..];
+    (dtype, vector_shape(n, batch))
 }
 
 fn matrix_shape(rows: SymDim, cols: SymDim, batch: &[SymDim]) -> Vec<SymDim> {

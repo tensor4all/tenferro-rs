@@ -11,6 +11,21 @@ use crate::{CompareDir, DType, DotGeneralConfig};
 pub use crate::traced::{TracedTensor, TracedTensorId};
 
 /// Convert a traced tensor to a different dtype.
+///
+/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
+/// conversion sets the imaginary part to zero; complex-to-real or
+/// complex-to-integer conversion uses the real part. Boolean conversion uses
+/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::{traced_tensor, DType, TracedTensor};
+///
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let y = traced_tensor::convert(&x, DType::C64);
+/// assert_eq!(y.dtype, DType::C64);
+/// ```
 pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
     input.convert(to)
 }

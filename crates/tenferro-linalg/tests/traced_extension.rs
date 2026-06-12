@@ -1,6 +1,9 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{
+    DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
+use tenferro_tensor::Error as TensorError;
 
 fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let n_elements = shape.iter().product();
@@ -227,5 +230,62 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
         assert_eq!(vectors.dtype, expected_dtype);
         assert_eq!(values.concrete_shape(), vec![2]);
         assert_eq!(vectors.concrete_shape(), vec![2, 2]);
+    }
+}
+
+#[test]
+fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
+    for dtype in [DType::I32, DType::I64, DType::Bool] {
+        let tensor = traced_with_dtype(dtype, vec![3]);
+        let err = match tenferro_linalg::norm(&tensor, Some(2.0), Some(&[0]), false) {
+            Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                err,
+                Error::TensorRuntime(TensorError::BackendFailure {
+                    op: "norm",
+                    ref message,
+                }) if message.contains("unsupported dtype")
+            ),
+            "expected unsupported dtype error for {dtype:?}, got {err:?}"
+        );
+
+        let err = match tenferro_linalg::pinv_with_rtol(&tensor, 1.0e-12) {
+            Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                err,
+                Error::TensorRuntime(TensorError::BackendFailure {
+                    op: "pinv_with_rtol",
+                    ref message,
+                }) if message.contains("unsupported dtype")
+            ),
+            "expected unsupported dtype error for {dtype:?}, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
+    for dtype in [DType::I32, DType::I64, DType::Bool] {
+        let tensor = traced_with_dtype(dtype, vec![2, 2]);
+        let err = match tenferro_linalg::pinv(&tensor) {
+            Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                err,
+                Error::TensorRuntime(TensorError::BackendFailure {
+                    op: "pinv",
+                    ref message,
+                }) if message.contains("unsupported dtype")
+            ),
+            "expected unsupported dtype error for {dtype:?}, got {err:?}"
+        );
     }
 }

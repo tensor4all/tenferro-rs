@@ -13,13 +13,14 @@ This document answers the question:
 > What exactly counts as a "primitive" or "instruction" in the current design at each
 > level of the IR hierarchy, and what does each op mean?
 
-**Current implementation note (2026-05-27):** the live source of truth for core
+**Current implementation note (2026-06-12):** the live source of truth for core
 primitive identity and metadata is the internal `tenferro-core-ops` crate. The
-graph carrier is `StdTensorOp`, extension operation families use
-`StdTensorOp::Extension`, and execution lowers to `ExecOp` directly. There is no
-live StableHLO IR layer. Where older StableHLO-era wording in this document
-conflicts with [`backend-contract.md`](backend-contract.md) or
-`tenferro-core-ops`, those current sources win.
+graph carrier is `tenferro-internal-ops::StdTensorOp`; extension operation
+families use `StdTensorOp::Extension`; and execution lowers to
+`tenferro-runtime::ExecOp` directly. There is no live StableHLO IR layer. Where
+older StableHLO-era wording in this document conflicts with
+[`backend-contract.md`](backend-contract.md), `tenferro-core-ops`,
+`tenferro-internal-ops`, or `tenferro-runtime`, those current sources win.
 
 The design docs use "primitive" and "instruction" in several nearby but
 different senses. For readability, this document separates them explicitly:
@@ -162,45 +163,24 @@ it and never references specific primitives.
 
 ```rust
 trait GraphOperation: Clone + Debug + Hash + Eq + Send + Sync + 'static {
-    type Operand: Operand;
+    type Operand: Clone + Send + Sync + 'static;
     type Context;
     type InputKey: Clone + Debug + Hash + Eq + Send + Sync + 'static;
 
     fn input_count(&self) -> usize;
     fn output_count(&self) -> usize;
-    fn eval(&self, ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand>;
 }
 ```
 
-### Operand
-
-`Operand` is the runtime value type. Defined in
-`computegraph-rs/src/traits.rs`. Contains both algebraic and structural
-methods; computegraph-rs is a tensor computation graph engine, not a
-fully generic DAG engine.
-
-```rust
-pub trait Operand: Clone + Send + Sync + 'static {
-    fn zero(shape: &[usize]) -> Self;
-    fn one(shape: &[usize]) -> Self;
-    fn reshape(&self, shape: &[usize]) -> Self;
-    fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Self;
-    fn add(&self, other: &Self) -> Self;
-    fn multiply(&self, other: &Self) -> Self;
-    fn reduce_sum(&self, axes: &[usize]) -> Self;
-    fn dot_general(
-        &self, other: &Self,
-        lhs_contracting: &[usize], rhs_contracting: &[usize],
-        lhs_batch: &[usize], rhs_batch: &[usize],
-    ) -> Self;
-    fn conj(&self) -> Self;
-}
-```
+Evaluation is provided by computegraph's separate `EvaluableGraphOperation`
+extension trait. The normal tenferro runtime path lowers `StdTensorOp` graphs
+to `ExecProgram` and dispatches through `ExecOp`, so runtime tensor storage and
+placement are governed by backend APIs rather than by a computegraph operand
+trait.
 
 Runtime tensor storage and placement are described in
-[`tensor-semantics.md`](tensor-semantics.md). The graph-level `Operand`
-contract is separate from backend buffer access; execution dispatch must go
-through the runtime tensor and backend APIs described in
+[`tensor-semantics.md`](tensor-semantics.md). Execution dispatch must go through
+the runtime tensor and backend APIs described in
 [`backend-contract.md`](backend-contract.md).
 
 ---

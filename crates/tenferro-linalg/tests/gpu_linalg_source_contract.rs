@@ -120,6 +120,33 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
 }
 
 #[test]
+fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
+    let source = linalg_source();
+    let zero_lu = source_section(&source, "fn zero_sized_lu_factor_outputs", "fn raw_stream");
+    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+
+    for needle in [
+        "upload_host_tensor",
+        "vec![T::one()",
+        "TypedTensor::from_vec_col_major",
+    ] {
+        assert!(
+            !zero_lu.contains(needle),
+            "zero-sized GPU LU factor parity should not build host tensors: found {needle}"
+        );
+    }
+
+    assert!(
+        zero_lu.contains("fill_one_device_tensor"),
+        "zero-sized GPU LU factor parity should be initialized by a device fill helper"
+    );
+    assert!(
+        kernels.contains("pub fn fill_one_kernel"),
+        "GPU linalg kernels should expose a one-fill kernel for scalar/empty-shape fast paths"
+    );
+}
+
+#[test]
 fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
     let source = linalg_source();
     let solve_source = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
@@ -231,6 +258,61 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
         !qr.contains("copy_device_to_host"),
         "QR should not synchronize inside the per-batch loop"
     );
+}
+
+#[test]
+fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
+    let source = linalg_source();
+    let solve = source_section(
+        &source,
+        "pub(super) fn solve",
+        "pub(super) fn lu_solve_prepared",
+    );
+    let lu_solve_prepared = source_section(
+        &source,
+        "pub(super) fn lu_solve_prepared",
+        "fn cholesky_typed",
+    );
+
+    for needle in [
+        "ensure_cubecl_resident_tensor(OP, a)?",
+        "ensure_cubecl_resident_tensor(OP, b)?",
+    ] {
+        assert_before(solve, needle, "ensure_supported_linalg_pair(OP, a, b)?");
+        assert_before(
+            solve,
+            needle,
+            "if has_zero_dim(a.shape()) || has_zero_dim(b.shape())",
+        );
+    }
+
+    for needle in [
+        "ensure_cubecl_resident_tensor(OP, a)?",
+        "ensure_cubecl_resident_tensor(OP, packed_lu)?",
+        "ensure_cubecl_resident_tensor(OP, pivots)?",
+        "ensure_cubecl_resident_tensor(OP, b)?",
+    ] {
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "ensure_supported_linalg_pair(OP, a, b)?",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "ensure_supported_linalg_pair(OP, a, packed_lu)?",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "if !matches!(pivots, Tensor::I32(_))",
+        );
+        assert_before(
+            lu_solve_prepared,
+            needle,
+            "if has_zero_dim(a.shape()) || has_zero_dim(b.shape())",
+        );
+    }
 }
 
 #[test]
@@ -442,4 +524,38 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         !source.contains("fn zeros_like_tensor"),
         "GPU linalg should not build host zero tensors for device fast paths"
     );
+}
+
+#[test]
+fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
+    let source = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+    let lu_kernels = source_section(
+        &source,
+        "#[cube(launch_unchecked)]\npub fn lu_extract_outputs",
+        "fn zero_sized_lu_factor_outputs",
+    );
+
+    assert!(
+        !lu_kernels.contains("#[comptime] k: usize"),
+        "LU kernels must not specialize on matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n        for step in 0usize..k"),
+        "LU kernels must not unroll loops over matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n            for step in 0usize..k"),
+        "LU kernels must not unroll nested loops over matrix-size extent k"
+    );
+    assert!(
+        !lu_kernels.contains("#[unroll]\n            for offset in 0usize..k"),
+        "LU kernels must not unroll reverse loops over matrix-size extent k"
+    );
+
+    for needle in ["while step < k", "while step > 0usize"] {
+        assert!(
+            lu_kernels.contains(needle),
+            "LU kernels should iterate over runtime k with {needle}"
+        );
+    }
 }

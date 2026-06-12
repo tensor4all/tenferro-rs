@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_cpu::linalg_interop::BufferPool;
+use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
@@ -9,7 +9,7 @@ use super::helpers::{
     matrix_with_batch_shape, tensor_from_vec_with_template, vector_with_batch_shape,
 };
 
-pub(crate) trait LapackLu: Clone + Copy + Default {
+pub(crate) trait LapackLu: Clone + Copy + Default + PoolScalar {
     fn one() -> Self;
     fn negative_one() -> Self;
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);

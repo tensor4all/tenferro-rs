@@ -2,6 +2,15 @@
 
 Date: 2026-02-16
 
+> Historical note (2026-06-12): this reference predates the current tenferro-rs
+> crate split. Mentions of `tenferro-prims` and
+> `tenferro-internal-device` are historical layering vocabulary, not current
+> crate names. Current dense execution is owned by `tenferro-tensor` plus
+> concrete backend crates; standard operation families live in
+> `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. See
+> [`../../architecture/tenferro-crates.md`](../../architecture/tenferro-crates.md)
+> for the live crate map.
+
 ## Purpose
 
 Analyze how the ITensor Julia ecosystem maps to tenferro-rs, assess whether

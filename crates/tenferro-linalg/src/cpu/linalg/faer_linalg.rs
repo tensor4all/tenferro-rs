@@ -444,8 +444,27 @@ macro_rules! impl_real_eig_to_complex_outputs {
     };
 }
 
+macro_rules! impl_real_eig_to_complex_values {
+    ($name:ident, $real:ty, $complex:ty) => {
+        fn $name(
+            buffers: &mut BufferPool,
+            s_re: DiagRef<'_, $real>,
+            s_im: DiagRef<'_, $real>,
+        ) -> Vec<$complex> {
+            let n = s_re.column_vector().nrows();
+            let mut s = buffers.acquire_with_capacity::<$complex>(n);
+            for j in 0..n {
+                s.push(<$complex>::new(s_re[j], s_im[j]));
+            }
+            s
+        }
+    };
+}
+
 impl_real_eig_to_complex_outputs!(real32_eig_to_complex_outputs, f32, Complex32);
 impl_real_eig_to_complex_outputs!(real64_eig_to_complex_outputs, f64, Complex64);
+impl_real_eig_to_complex_values!(real32_eig_to_complex_values, f32, Complex32);
+impl_real_eig_to_complex_values!(real64_eig_to_complex_values, f64, Complex64);
 
 fn split_shape_core_and_batch<'a>(
     shape: &'a [usize],
@@ -2853,6 +2872,43 @@ macro_rules! impl_eig_real_2d {
     };
 }
 
+macro_rules! impl_eig_values_real_2d {
+    ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_values:ident) => {
+        fn $name(
+            ctx: &CpuContext,
+            buffers: &mut BufferPool,
+            input: &TypedTensor<$real>,
+        ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
+            let n = square_matrix_dim(input, "eig_values")?;
+            let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+            let mut s_re = Diag::zeros(n);
+            let mut s_im = Diag::zeros(n);
+            let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$real>(
+                n,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                ctx.faer_par(),
+                Default::default(),
+            ));
+            let stack = MemStack::new(&mut mem);
+            faer::linalg::evd::evd_real(
+                mat,
+                s_re.as_mut(),
+                s_im.as_mut(),
+                None,
+                None,
+                ctx.faer_par(),
+                stack,
+                Default::default(),
+            )
+            .map_err(|_| decomposition_failed("eig_values"))?;
+            let s = $real_eig_to_complex_values(buffers, s_re.as_ref(), s_im.as_ref());
+
+            Ok(tensor_from_vec_with_template(vec![n], s, input))
+        }
+    };
+}
+
 macro_rules! impl_eig_complex_2d {
     (
         $name:ident,
@@ -2902,8 +2958,64 @@ macro_rules! impl_eig_complex_2d {
     };
 }
 
+macro_rules! impl_eig_values_complex_2d {
+    (
+        $name:ident,
+        $complex:ty,
+        $faer_complex:ty,
+        $to_faer_slice:ident,
+        $vec_from_diag:ident
+    ) => {
+        fn $name(
+            ctx: &CpuContext,
+            buffers: &mut BufferPool,
+            input: &TypedTensor<$complex>,
+        ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
+            let n = square_matrix_dim(input, "eig_values")?;
+            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+            let mut s = Diag::zeros(n);
+            let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
+                n,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                ctx.faer_par(),
+                Default::default(),
+            ));
+            let stack = MemStack::new(&mut mem);
+            faer::linalg::evd::evd_cplx(
+                mat,
+                s.as_mut(),
+                None,
+                None,
+                ctx.faer_par(),
+                stack,
+                Default::default(),
+            )
+            .map_err(|_| decomposition_failed("eig_values"))?;
+
+            Ok(tensor_from_vec_with_template(
+                vec![n],
+                $vec_from_diag(buffers, s.as_ref()),
+                input,
+            ))
+        }
+    };
+}
+
 impl_eig_real_2d!(eig_real32_2d, f32, Complex32, real32_eig_to_complex_outputs);
 impl_eig_real_2d!(eig_real64_2d, f64, Complex64, real64_eig_to_complex_outputs);
+impl_eig_values_real_2d!(
+    eig_values_real32_2d,
+    f32,
+    Complex32,
+    real32_eig_to_complex_values
+);
+impl_eig_values_real_2d!(
+    eig_values_real64_2d,
+    f64,
+    Complex64,
+    real64_eig_to_complex_values
+);
 impl_eig_complex_2d!(
     eig_complex32_2d,
     Complex32,
@@ -2919,6 +3031,20 @@ impl_eig_complex_2d!(
     complex64_to_faer_slice,
     complex64_vec_from_diag,
     complex64_vec_from_mat
+);
+impl_eig_values_complex_2d!(
+    eig_values_complex32_2d,
+    Complex32,
+    faer::c32,
+    complex32_to_faer_slice,
+    complex32_vec_from_diag
+);
+impl_eig_values_complex_2d!(
+    eig_values_complex64_2d,
+    Complex64,
+    faer::c64,
+    complex64_to_faer_slice,
+    complex64_vec_from_diag
 );
 
 pub(crate) fn eig(
@@ -2997,6 +3123,75 @@ pub(crate) fn eig(
         }
         _ => Err(tenferro_tensor::Error::backend_failure(
             "eig",
+            format!("unsupported dtype {:?}", input.dtype()),
+        )),
+    }
+}
+
+pub(crate) fn eig_values(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Tensor> {
+    if has_zero_dim(input.shape()) {
+        let (matrix_shape, batch_shape) =
+            split_shape_core_and_batch(input.shape(), 2, "eig_values")?;
+        let n = matrix_shape[0];
+        if matrix_shape[1] != n {
+            return Err(tenferro_tensor::Error::ShapeMismatch {
+                op: "eig_values",
+                lhs: vec![n],
+                rhs: vec![matrix_shape[1]],
+            });
+        }
+        let value_shape = vector_with_batch_shape(n, batch_shape);
+        return match input {
+            Tensor::F32(_) | Tensor::C32(_) => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            ))),
+            Tensor::F64(_) | Tensor::C64(_) => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
+                value_shape,
+                Vec::new(),
+            ))),
+            _ => Err(tenferro_tensor::Error::backend_failure(
+                "eig_values",
+                format!("unsupported dtype {:?}", input.dtype()),
+            )),
+        };
+    }
+
+    match input {
+        Tensor::F32(t) => {
+            let mut outputs =
+                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+                    eig_values_real32_2d(ctx, buffers, batch).map(|values| vec![values])
+                })?;
+            Ok(Tensor::C32(outputs.remove(0)))
+        }
+        Tensor::F64(t) => {
+            let mut outputs =
+                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+                    eig_values_real64_2d(ctx, buffers, batch).map(|values| vec![values])
+                })?;
+            Ok(Tensor::C64(outputs.remove(0)))
+        }
+        Tensor::C32(t) => {
+            let mut outputs =
+                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+                    eig_values_complex32_2d(ctx, buffers, batch).map(|values| vec![values])
+                })?;
+            Ok(Tensor::C32(outputs.remove(0)))
+        }
+        Tensor::C64(t) => {
+            let mut outputs =
+                batched_multi_convert_result("eig_values", buffers, t, 2, |buffers, batch| {
+                    eig_values_complex64_2d(ctx, buffers, batch).map(|values| vec![values])
+                })?;
+            Ok(Tensor::C64(outputs.remove(0)))
+        }
+        _ => Err(tenferro_tensor::Error::backend_failure(
+            "eig_values",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
     }

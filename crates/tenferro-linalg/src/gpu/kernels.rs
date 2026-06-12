@@ -65,6 +65,14 @@ fn svd_v_to_vt_offset<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
+pub fn fill_one_kernel<E: CubePrimitive>(out: &mut Tensor<E>) {
+    let pos = ABSOLUTE_POS as usize;
+    if pos < out.len() {
+        out[pos] = one_value::<E>();
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn svd_v_to_vt_real<E: CubePrimitive>(
     out: &mut Tensor<E>,
     v: &Tensor<E>,
@@ -96,7 +104,7 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
     parity_out: &mut Tensor<E>,
     work: &Tensor<E>,
     pivots: &Array<i32>,
-    #[comptime] k: usize,
+    k: usize,
     #[comptime] rank: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
@@ -105,8 +113,8 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
         let col = p_out.coordinate(pos, 1usize);
         let batch = batch_linear_index(p_out, pos, 2usize, rank);
         let mut final_row = col as i32;
-        #[unroll]
-        for step in 0usize..k {
+        let mut step = 0usize;
+        while step < k {
             let step_i32 = step as i32;
             let pivot = pivots[step + batch * k] - 1i32;
             if final_row == step_i32 {
@@ -114,6 +122,7 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
             } else if final_row == pivot {
                 final_row = step_i32;
             }
+            step += 1usize;
         }
         p_out[pos] = if final_row == row as i32 {
             one_value::<E>()
@@ -149,13 +158,14 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
     if pos < parity_out.len() {
         let batch = pos;
         let mut sign = one_value::<E>();
-        #[unroll]
-        for step in 0usize..k {
+        let mut step = 0usize;
+        while step < k {
             let step_i32 = step as i32;
             let pivot = pivots[step + batch * k] - 1i32;
             if pivot != step_i32 {
                 sign = -sign;
             }
+            step += 1usize;
         }
         parity_out[pos] = sign;
     }
@@ -165,18 +175,19 @@ pub fn lu_extract_outputs<E: CubePrimitive + core::ops::Neg<Output = E>>(
 pub fn lu_parity<E: CubePrimitive + core::ops::Neg<Output = E>>(
     parity_out: &mut Tensor<E>,
     pivots: &Array<i32>,
-    #[comptime] k: usize,
+    k: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < parity_out.len() {
         let mut sign = one_value::<E>();
-        #[unroll]
-        for step in 0usize..k {
+        let mut step = 0usize;
+        while step < k {
             let step_i32 = step as i32;
             let pivot = pivots[step + pos * k] - 1i32;
             if pivot != step_i32 {
                 sign = -sign;
             }
+            step += 1usize;
         }
         parity_out[pos] = sign;
     }
@@ -187,7 +198,7 @@ pub fn lu_apply_pivots<E: CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     pivots: &Array<i32>,
-    #[comptime] k: usize,
+    k: usize,
     #[comptime] rank: usize,
     #[comptime] inverse: bool,
 ) {
@@ -198,8 +209,8 @@ pub fn lu_apply_pivots<E: CubePrimitive>(
         let batch = batch_linear_index(out, pos, 2usize, rank);
         let mut source_row = row as i32;
         if inverse {
-            #[unroll]
-            for step in 0usize..k {
+            let mut step = 0usize;
+            while step < k {
                 let step_i32 = step as i32;
                 let pivot = pivots[step + batch * k] - 1i32;
                 if source_row == step_i32 {
@@ -207,11 +218,12 @@ pub fn lu_apply_pivots<E: CubePrimitive>(
                 } else if source_row == pivot {
                     source_row = step_i32;
                 }
+                step += 1usize;
             }
         } else {
-            #[unroll]
-            for offset in 0usize..k {
-                let step = k - 1usize - offset;
+            let mut step = k;
+            while step > 0usize {
+                step -= 1usize;
                 let step_i32 = step as i32;
                 let pivot = pivots[step + batch * k] - 1i32;
                 if source_row == step_i32 {

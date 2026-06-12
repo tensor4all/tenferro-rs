@@ -90,7 +90,7 @@ pub struct BufferPool {
 /// buf.copy_from_slice(&[3.0, 4.0]);
 /// <f64 as PoolScalar>::pool_release(&mut pool, buf);
 /// ```
-pub trait PoolScalar: Copy + Sized + Send + private::Sealed {
+pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// Acquire a buffer with length `len`.
     ///
     /// The vector length is set without initializing its contents. Callers must

@@ -2,8 +2,11 @@
 
 > Historical proposal: this document captures the design discussion that led to
 > the eventual `tenferro-linalg-prims` split. It is not the source of truth for
-> the current workspace layout. See `linalg-prims.md`, `linalg.md`, and
-> `architecture.md` for the current contracts.
+> the current workspace layout. See
+> [`linalg-prims.md`](../../design/linalg-prims.md),
+> [`linalg.md`](../../design/linalg.md), and
+> [`tenferro-crates.md`](../../architecture/tenferro-crates.md) for the current
+> contracts.
 
 ## Summary
 

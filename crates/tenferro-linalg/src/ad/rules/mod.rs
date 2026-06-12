@@ -283,6 +283,57 @@ pub(crate) fn linearize_eig(
     vec![Some(dw), None]
 }
 
+pub(crate) fn linearize_eig_values(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    input_dtype: DType,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValueId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None];
+    };
+
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
+    let rank = input_shape.len();
+    let eig_outputs = builder.add_operation(
+        linalg_std_op(LinalgOp::Eig { input_dtype }),
+        vec![ValueRef::External(primal_in[0].clone())],
+        OperationRole::Primary,
+    );
+    let v = ValueRef::Local(eig_outputs[1]);
+    let da_complex = match input_dtype {
+        DType::F64 | DType::F32 => builder.add_operation(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: match input_dtype {
+                    DType::F64 => DType::C64,
+                    DType::F32 => DType::C32,
+                    _ => unreachable!("real dtype branch"),
+                },
+            },
+            vec![ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::C64 | DType::C32 => da,
+        DType::I32 | DType::I64 | DType::Bool => return vec![None],
+    };
+
+    let dav = matmul_linear(
+        builder,
+        ValueRef::Local(da_complex),
+        v.clone(),
+        vec![true, false],
+        rank,
+    );
+    let projected = solve_in_graph(builder, v, ValueRef::Local(dav), rank);
+    let dw = extract_diag_linear(builder, projected);
+    vec![Some(dw)]
+}
+
 pub(crate) fn linearize_svd(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],

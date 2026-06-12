@@ -17,15 +17,14 @@ use tenferro_gpu::cuda_interop::{
     alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
     ensure_typed_tensor_resident, flush_cubecl_client, raw_cuda_stream,
     typed_device_ptr as interop_typed_device_ptr, typed_tensor_array_arg, typed_tensor_binding,
-    upload_device_bytes, upload_typed_tensor, with_cubecl_client, CudaExtensionCacheGuard,
-    DeviceByteBuffer,
+    upload_device_bytes, with_cubecl_client, CudaExtensionCacheGuard, DeviceByteBuffer,
 };
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
 use tenferro_gpu::{download_tensor, CubeclBackend, CubeclRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    Buffer, DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
+    DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -410,9 +409,9 @@ pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Resu
     const OP: &str = "solve";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    ensure_supported_linalg_pair(OP, a, b)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
     }
@@ -453,12 +452,12 @@ pub(super) fn lu_solve_prepared(
     const OP: &str = "lu_solve_prepared";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    ensure_supported_linalg_pair(OP, a, b)?;
-    ensure_supported_linalg_pair(OP, a, packed_lu)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, packed_lu)?;
     ensure_cubecl_resident_tensor(OP, pivots)?;
     ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
+    ensure_supported_linalg_pair(OP, a, packed_lu)?;
     if !matches!(pivots, Tensor::I32(_)) {
         return Err(Error::DTypeMismatch {
             op: OP,
@@ -1634,6 +1633,28 @@ where
     Ok(parity)
 }
 
+fn fill_one_device_tensor<T>(
+    rt: &CubeclRuntime,
+    shape: &[usize],
+    op: &'static str,
+) -> Result<TypedTensor<T>>
+where
+    T: LinalgScalar,
+{
+    let out = alloc_output::<T>(rt, shape);
+    let out_arg = typed_tensor_binding(&out, op)?;
+    with_cubecl_client(rt, |client| unsafe {
+        cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(out.n_elements()),
+            cube_dim_1d(),
+            out_arg.into_tensor_arg(),
+        );
+    });
+    flush_cubecl_client(rt, op)?;
+    Ok(out)
+}
+
 fn apply_lu_pivots_typed<T>(
     rt: &CubeclRuntime,
     input: &TypedTensor<T>,
@@ -1682,11 +1703,7 @@ where
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
-    let parity_len = batch_count(batch_shape);
-    let parity = upload_host_tensor(
-        rt,
-        TypedTensor::from_vec_col_major(parity_shape, vec![T::one(); parity_len.max(1)]),
-    )?;
+    let parity = fill_one_device_tensor(rt, &parity_shape, "lu_factor")?;
     Ok((
         alloc_output(rt, shape),
         alloc_output(rt, &pivot_shape),
@@ -1748,24 +1765,6 @@ where
         op,
     )?;
     Ok(out)
-}
-
-fn upload_host_tensor<T>(rt: &CubeclRuntime, tensor: TypedTensor<T>) -> Result<TypedTensor<T>>
-where
-    T: CubeElement + Clone + Send + Sync + 'static,
-{
-    let shape = tensor.shape().to_vec();
-    let (buffer, _, _) = tensor.into_parts();
-    let (shape, data) = match buffer {
-        Buffer::Host(data) => (shape, data),
-        Buffer::Backend(_) => {
-            return Err(Error::backend_failure(
-                "cubecl_linalg",
-                "upload_host_tensor expects host-backed tensor".to_string(),
-            ));
-        }
-    };
-    Ok(upload_typed_tensor(rt, shape, data))
 }
 
 fn upload_pointer_array(

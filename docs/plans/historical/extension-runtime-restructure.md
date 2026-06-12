@@ -4,7 +4,7 @@
 `tenferro` facade; runtime APIs live in `tenferro-runtime`, AD APIs in
 `tenferro-ad`, and operation families are imported directly from crates such as
 `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. See
-[`../architecture/tenferro-crates.md`](../architecture/tenferro-crates.md) for
+[`../../architecture/tenferro-crates.md`](../../architecture/tenferro-crates.md) for
 the current crate-boundary design.
 
 This note sketches a post-`origin/main` restructure for making tenferro a lean

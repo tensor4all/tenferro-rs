@@ -2,7 +2,8 @@
 
 Implementation-focused design notes for specific subsystems. For high-level
 architecture see [Architecture](../architecture/). For normative specs see
-[Specification](../spec/).
+[Specification](../spec/). Historical implementation plans and superseded
+migration notes live under [Plans](../plans/), not this active design index.
 
 ## Core Design
 
@@ -17,16 +18,10 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape metadata contract |
-| [extension-runtime-restructure.md](./extension-runtime-restructure.md) | Historical migration note for extension crates, backend-aware execution, multi-output, linalg migration boundaries, and autodiff feature gates |
-| [einsum-extension-migration-audit.md](./einsum-extension-migration-audit.md) | Source-to-target migration checklist for moving einsum into tenferro-einsum without regenerating the implementation |
-| [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration for einsum + frontend |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |
 | [linalg.md](./linalg.md) | Linalg public/composite layer |
 | [linalg-prims.md](./linalg-prims.md) | Backend-facing factorization and solve contracts |
-| [linalg-backend-api.md](./linalg-backend-api.md) | Earlier linalg backend layer proposal |
-| [linalg-gemm-prims.md](./linalg-gemm-prims.md) | GEMM-backed linalg migration notes |
-| [einsum-cpu-porting-notes.md](./einsum-cpu-porting-notes.md) | CPU einsum porting notes |
 | [capi.md](./capi.md) | C-API: opaque handles, DLPack, einsum + SVD + AD |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |

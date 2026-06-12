@@ -7,8 +7,8 @@ sketches below are not current public API guidance.
 `tenferro-einsum` now records graph-level extension operations and routes AD
 through extension rules registered with `tenferro-ad`.
 
-For the core AD contracts, see [autodiff.md](../architecture/ad-pipeline.md). For math
-derivations, see [AD Formula Notes](../AD/index.md).
+For the core AD contracts, see [autodiff.md](../../architecture/ad-pipeline.md). For math
+derivations, see [AD Formula Notes](../../AD/index.md).
 
 ## Scope
 

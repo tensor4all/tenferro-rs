@@ -1,16 +1,21 @@
 use std::ffi::c_void;
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
-use super::dispatch::{alloc_output, cubecl_buffer, dtype_mismatch, typed_from_cubecl};
+use super::dispatch::{
+    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, dtype_mismatch,
+    launch_nullary_into,
+};
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::{CubeclBackend, CubeclRuntime};
 use crate::config::DotGeneralConfig;
+use crate::kernels::structural;
 use crate::{col_major_strides, Error, Tensor, TypedTensor};
 
 const OP: &str = "dot_general";
@@ -172,7 +177,7 @@ where
         return Ok(output);
     }
     if layout.contracting_elements == 0 {
-        return Ok(zero_alloc::<T>(backend.runtime(), &layout.output_shape));
+        return zero_alloc::<T>(backend.runtime(), &layout.output_shape);
     }
 
     let cutensor = backend.cutensor_handle()?;
@@ -301,18 +306,24 @@ fn typed_device_ptr<T: 'static>(
     Ok(resource.resource().ptr as usize as *mut c_void)
 }
 
-fn zero_alloc<T>(rt: &CubeclRuntime, shape: &[usize]) -> TypedTensor<T>
+fn zero_alloc<T>(rt: &CubeclRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: CutensorScalar,
 {
-    let len: usize = shape.iter().product();
-    let zeros = vec![T::zero(); len];
-    let handle = rt.client().create_from_slice(T::as_bytes(&zeros));
-    typed_from_cubecl(
-        shape.to_vec(),
-        crate::CubeclBuffer::new(handle, len),
-        rt.device_ordinal(),
-    )
+    let output = alloc_output::<T>(rt, shape);
+    launch_nullary_into(
+        rt,
+        &output,
+        OP,
+        cube_count_for_len(output.n_elements()),
+        cube_dim_1d(),
+        |client, count, dim, out| unsafe {
+            structural::fill_zero_kernel::launch_unchecked::<T, CudaRuntime>(
+                client, count, dim, out,
+            );
+        },
+    )?;
+    Ok(output)
 }
 
 fn build_layout<T>(

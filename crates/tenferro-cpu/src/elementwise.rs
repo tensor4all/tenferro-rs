@@ -32,14 +32,14 @@ macro_rules! dispatch_ternary_result_with_pool {
     };
 }
 
-pub(crate) trait Tier2Elem: Copy + Clone + One + Zero {
+pub(crate) trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
     fn abs_elem(self) -> Self;
     fn sign_elem(self) -> Self;
     fn max_elem(self, other: Self) -> Self;
     fn min_elem(self, other: Self) -> Self;
 }
 
-pub(crate) trait CompareElem: Copy {
+pub(crate) trait CompareElem: Copy + Send + Sync {
     fn compare_elem(self, other: Self, dir: &CompareDir) -> bool;
 }
 
@@ -597,7 +597,7 @@ fn typed_binary_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
-    f: impl Fn(T, T) -> T + Copy,
+    f: impl Fn(T, T) -> T + Copy + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + PoolScalar + 'static,
@@ -643,7 +643,7 @@ fn typed_unary_view_with_pool<T, R>(
     op: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensorView<'_, T, R>,
-    f: impl Fn(T) -> T + Copy,
+    f: impl Fn(T) -> T + Copy + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + PoolScalar + 'static,
@@ -660,10 +660,10 @@ fn typed_same_shape_binary_view_with_pool<T, O, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
-    f: impl Fn(T, T) -> O + Copy,
+    f: impl Fn(T, T) -> O + Copy + Sync,
 ) -> crate::Result<TypedTensor<O>>
 where
-    T: Copy + 'static,
+    T: Copy + Send + Sync + 'static,
     O: Copy + PoolScalar,
     L: TensorRank,
     R: TensorRank,
