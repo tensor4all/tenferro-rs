@@ -81,6 +81,15 @@ pub enum ProviderRegistrationError {
     /// The underlying inject crate returned an unknown status code.
     #[error("{symbol} provider registration returned status {status}")]
     UnknownStatus { symbol: &'static str, status: i32 },
+    /// A raw provider pointer cannot be represented as the requested function pointer type.
+    #[error(
+        "{symbol} provider pointer size {pointer_size} does not match function pointer size {function_pointer_size}"
+    )]
+    FunctionPointerSizeMismatch {
+        symbol: &'static str,
+        pointer_size: usize,
+        function_pointer_size: usize,
+    },
 }
 
 // --- Raw-pointer provider sets -------------------------------------------
@@ -623,16 +632,36 @@ macro_rules! register_lapack_symbol {
         }
         let status = match $abi {
             ProviderAbi::Lp64 => {
-                let f = unsafe { std::mem::transmute::<*const std::ffi::c_void, $lp64_ty>(raw) };
+                let f = unsafe { cast_provider_function_pointer::<$lp64_ty>($symbol, raw)? };
                 unsafe { $lp64_reg(f) }
             }
             ProviderAbi::Ilp64 => {
-                let f = unsafe { std::mem::transmute::<*const std::ffi::c_void, $ilp64_ty>(raw) };
+                let f = unsafe { cast_provider_function_pointer::<$ilp64_ty>($symbol, raw)? };
                 unsafe { $ilp64_reg(f) }
             }
         };
         lapack_registration_status($symbol, status)?;
     }};
+}
+
+unsafe fn cast_provider_function_pointer<F: Copy>(
+    symbol: &'static str,
+    raw: *const c_void,
+) -> Result<F, ProviderRegistrationError> {
+    let pointer_size = std::mem::size_of::<*const c_void>();
+    let function_pointer_size = std::mem::size_of::<F>();
+    if pointer_size != function_pointer_size {
+        return Err(ProviderRegistrationError::FunctionPointerSizeMismatch {
+            symbol,
+            pointer_size,
+            function_pointer_size,
+        });
+    }
+
+    // SAFETY: Callers provide a non-null provider symbol pointer for the exact
+    // LAPACK ABI type `F`. The size check above rejects targets where an opaque
+    // provider pointer cannot be represented as that function pointer type.
+    Ok(unsafe { std::mem::transmute_copy::<*const c_void, F>(&raw) })
 }
 
 /// Register LAPACK provider pointers with a selected ABI.
@@ -1043,4 +1072,25 @@ pub unsafe fn register_lapack_provider_ptrs(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_function_pointer_cast_rejects_size_mismatch() {
+        let err = unsafe {
+            cast_provider_function_pointer::<[usize; 2]>("dgesvd", 1usize as *const c_void)
+        }
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ProviderRegistrationError::FunctionPointerSizeMismatch {
+                symbol: "dgesvd",
+                ..
+            }
+        ));
+    }
 }
