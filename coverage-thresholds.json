@@ -1,5 +1,6 @@
 {
   "_comment": "Per-file line coverage thresholds (%). Files not listed use 'default'. GPU device-kernel files are excluded because llvm-cov does not measure GPU kernel execution.",
+  "_comment_linalg_ad": "The crates/tenferro-linalg/src/ad/rules/*.rs files carry below-default thresholds ON PURPOSE. They are graph-emitting AD rules (linearize/transpose) whose correctness guarantee is NUMERICAL, not line-based: every differentiable output is checked by finite-difference and/or Torch oracle tests (crates/tenferro-linalg/tests/traced_ad_explicit.rs, ad_support_manifest.rs; docs/oracle/tensor-ad-oracles-support.md) and the per-op/per-output support status is machine-asserted against the manifest in crates/tenferro-linalg/src/ad/support.rs. The uncovered lines are mostly dtype-guard arms (real->complex casts, integer-dtype early returns) and F32/error branches that the numerical oracles do not exercise. Do NOT raise these thresholds by adding line-padding tests; the AD Rule Coverage section of REPOSITORY_RULES.md is the source of truth for what 'covered' means here.",
   "default": 80,
   "exclude": [
     "crates/tenferro-gpu/src/kernels/diagonal.rs",

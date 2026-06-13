@@ -1,3 +1,22 @@
+// Graph-emitting linalg AD rules (`linearize` / `transpose_rule`).
+//
+// Correctness here is validated NUMERICALLY, not by line coverage. Every
+// differentiable output of these rules is checked against finite-difference
+// and/or Torch oracles, and each op's per-output support status is asserted
+// against the machine-readable manifest:
+//   - finite-diff sweep: ../../../tests/traced_ad_explicit.rs
+//     (`remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu` covers
+//     cholesky, qr, eig, eigh, lu, full_piv_lu, solve, triangular_solve;
+//     plus svd/eigh/eig *values* tests)
+//   - manifest: `super::support::all_linalg_ad_support` asserted by
+//     ../../../tests/ad_support_manifest.rs
+//   - oracle table: docs/oracle/tensor-ad-oracles-support.md
+//
+// These files therefore carry intentionally below-default per-file thresholds
+// in coverage-thresholds.json; the uncovered lines are dtype-guard arms
+// (real->complex casts, integer-dtype early returns) and F32/error branches the
+// oracles do not exercise. See the "AD Rule Coverage" section of
+// REPOSITORY_RULES.md before changing a rule or its threshold.
 use std::sync::Arc;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 

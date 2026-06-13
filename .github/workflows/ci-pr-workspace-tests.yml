@@ -1,4 +1,19 @@
-name: CI_rs_selfhost
+# Full workspace test suite for pull requests.
+#
+# This is the home of `cargo nextest run --workspace` + workspace doc tests.
+# `ci.yml` deliberately does NOT contain a workspace test job; it only runs the
+# fast checks (fmt, clippy, inject tests, coverage, docs) on push and PRs. The
+# heavy suite lives here so it runs once per PR instead of also on every push to
+# `main`. The `ci-gate` job below is the branch-protection check that proves the
+# workspace tests passed (via either the fork or same-repo path). GPU tests are
+# in `CI_gpu.yml`.
+#
+# Named for its PURPOSE (PR workspace tests), not its runner. The `ci-maintainer`
+# job is intended to run on a self-hosted pool but currently uses GitHub-hosted
+# runners while that pool is down — so a runner-derived name would be misleading.
+# The branch-protection required check is the job name `CI gate (PR workspace
+# tests)`, not this workflow name, so renaming the workflow is safe.
+name: CI PR workspace tests
 
 on:
   pull_request:

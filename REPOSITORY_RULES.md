@@ -177,11 +177,55 @@ rules from `tensor4all-agent-rules`.
   finite-difference integration test that verifies numerical correctness.
 - For linalg ops, prefer oracle families with both Torch reference data and
   finite-difference checks when available in `third_party/tensor-ad-oracles/`.
+- **Numerical coverage is the real guarantee for AD rules, not line coverage.**
+  An AD rule is "covered" when its differentiable outputs match a
+  finite-difference and/or Torch oracle, and its per-output support status is
+  asserted against the machine-readable manifest — not when llvm-cov reports a
+  high line percentage. For linalg this is enforced by:
+  - the finite-difference sweep in
+    `crates/tenferro-linalg/tests/traced_ad_explicit.rs` (cholesky, qr, eig,
+    eigh, lu, full_piv_lu, solve, triangular_solve, svd/eig/eigh values),
+  - the manifest assertions in
+    `crates/tenferro-linalg/tests/ad_support_manifest.rs` against
+    `crates/tenferro-linalg/src/ad/support.rs`
+    (`all_linalg_ad_support()` covers every dispatch arm and output status), and
+  - the oracle support table in `docs/oracle/tensor-ad-oracles-support.md`.
+- Consequently the `crates/tenferro-linalg/src/ad/rules/*.rs` files carry
+  intentionally below-default per-file thresholds in `coverage-thresholds.json`.
+  Their uncovered lines are dtype-guard arms (real→complex casts, integer-dtype
+  early returns) and F32/error branches that the numerical oracles do not
+  exercise. Do not "fix" the low line coverage by adding line-padding tests, and
+  do not read it as missing AD validation. If you add or change a linalg AD rule,
+  extend the finite-difference sweep and the manifest first; raise the threshold
+  only if real new numerical tests warrant it.
 
 ## No Ad Hoc Fixes
 
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
+
+## Unsafe Code Boundary
+
+`unsafe` is intentionally confined to FFI bindings and backend leaf code, and is
+near-absent from the algorithmic layers. Reviewers must not read the raw count
+as a red flag without first checking *where* it lives.
+
+- **Count it correctly.** A plain `grep -c unsafe` over-counts ~30%+: it picks
+  up `// SAFETY:` comments, doc comments, string literals, test code, and
+  generated code under `target/`. Use `python3 scripts/count-unsafe.py` for the
+  real production figure with a per-crate / per-category breakdown. As of this
+  writing the real total is ~460, of which essentially all is FFI/backend:
+  cuSOLVER/cuTENSOR/cuBLAS and LAPACK bindings, the batched raw-pointer setup
+  that feeds those calls, SIMD elementwise kernels, thread affinity, and buffer
+  pools (`tenferro-linalg`, `tenferro-cpu`, `tenferro-gpu`).
+- **Keep the higher layers unsafe-free.** `tenferro-runtime`, `tenferro-einsum`,
+  `tenferro-ad`, and the graph/AD logic in `tenferro-tensor` are ~zero `unsafe`
+  by design. Do not introduce `unsafe` there; if a kernel or FFI call is needed,
+  it belongs behind the backend/FFI seam, not in graph or rule code.
+- **Document each block.** As in the slicing rules above, keep the validation
+  invariant next to the `unsafe` block (a `// SAFETY:` note) and test the
+  boundary conditions. New FFI binding files should follow the existing
+  `cusolver.rs` / `lapack_linalg/*` patterns.
 
 ## File Organization
 

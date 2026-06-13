@@ -50,13 +50,9 @@ threshold-based filtering, data-dependent iteration counts, or shape-parametric
 models, tenferro's traced execution can reuse a compiled program while resolving
 the concrete sizes at runtime.
 
-| tenferro is a good fit when | XLA/JAX may be a better fit when |
-| --- | --- |
-| Shapes depend on runtime values | All shapes are static and known before compilation |
-| Small-to-medium batched linear algebra with AD | Large static-shape matmul or contraction throughput dominates |
-| You need `grad`, `vjp`, `jvp`, or HVP workflows in Rust | You can use Python as the host language |
-| You are building a Rust-native tensor application | You need the mature compiler and ecosystem around JAX today |
-| You need extension points for custom algebra or operation families | You only need standard tensor operations |
+It also fits small-to-medium batched linear algebra with autodiff,
+`grad`/`vjp`/`jvp`/HVP workflows in Rust, Rust-native tensor applications, and
+extension points for custom algebra or operation families.
 
 The planned optional XLA backend in
 [#984](https://github.com/tensor4all/tenferro-rs/issues/984) is intended for
@@ -64,6 +60,37 @@ static-shape traced graphs. Dynamic-shape graphs remain the native runtime's
 core use case.
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
+
+## Why Build On tenferro-rs
+
+tenferro-rs aims to be a pure-Rust tensor stack for scientific and numerical
+computing — one you can build on, extend, and ship as a single binary, rather
+than a wrapper around a C++ or Python engine. What that gives you:
+
+- **A complete stack, natively in Rust.** Typed tensors, eager execution with
+  `backward()`, traced graphs with reuse, `grad`/`vjp`/`jvp`/HVP autodiff, linear
+  algebra, einsum, and FFT — all carried by Rust's type system, ownership model,
+  and tooling, with no Python runtime.
+- **Extensible operations and AD rules.** Operations and their AD rules live
+  *outside* the core tensor crates. An external crate can introduce a new
+  operation family — even a different algebra — register its
+  `linearize`/`transpose_rule`, and have it flow through the same eager and
+  traced autodiff as the built-in ops. The `ext/tropical` semiring extension is a
+  worked example; see
+  [`docs/guides/custom-operations.md`](docs/guides/custom-operations.md).
+- **Fits the numerical-computing world.** Column-major storage lines up with
+  Fortran, Julia, MATLAB, Eigen3, and LAPACK/BLAS, and strided views bridge to
+  row-major data without eager copies (see
+  [`docs/guides/memory-order.md`](docs/guides/memory-order.md)). tenferro-rs
+  builds on `faer` for dense linear algebra and on
+  [CubeCL](https://github.com/tracel-ai/cubecl) for GPU kernels, contributing to
+  the Rust ecosystem rather than reinventing it.
+- **Built for shapes you only know at runtime.** A traced program is compiled
+  once and reused while concrete sizes — ranks, truncation thresholds,
+  data-dependent iteration counts — resolve at execution time.
+
+If your host language is Python, JAX and PyTorch are the natural choice.
+tenferro-rs is for the projects that want this kind of stack natively in Rust.
 
 ## Which API Should I Use?
 
@@ -138,9 +165,26 @@ Getting Started if you are using tenferro-rs for the first time.
 - [Design: dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
   explains how tenferro represents runtime-dependent dimensions in traced
   programs.
+- [Oracle-based AD validation](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
+  documents how AD rules are validated against finite-difference and Torch
+  reference oracles, and which operation/output gradients are covered. The
+  oracle datasets live in
+  [`tensor4all/tensor-ad-oracles`](https://github.com/tensor4all/tensor-ad-oracles).
+
+## Benchmarks And Numerical Validation
 
 Official benchmark suites and result tooling live in
 [`tensor4all/tenferro-benchmark`](https://github.com/tensor4all/tenferro-benchmark).
+Run them there for reproducible cross-backend performance numbers rather than
+relying on ad hoc local timings.
+
+Numerical correctness — especially automatic differentiation — is validated
+against reference *oracles* (finite-difference checks and Torch reference data)
+rather than line coverage alone. See the
+[oracle support table](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
+for the per-operation AD coverage status and the
+[`tensor4all/tensor-ad-oracles`](https://github.com/tensor4all/tensor-ad-oracles)
+dataset repository.
 
 ## Community
 
