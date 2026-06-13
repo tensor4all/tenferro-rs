@@ -138,9 +138,26 @@ Getting Started if you are using tenferro-rs for the first time.
 - [Design: dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
   explains how tenferro represents runtime-dependent dimensions in traced
   programs.
+- [Oracle-based AD validation](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
+  documents how AD rules are validated against finite-difference and Torch
+  reference oracles, and which operation/output gradients are covered. The
+  oracle datasets live in
+  [`tensor4all/tensor-ad-oracles`](https://github.com/tensor4all/tensor-ad-oracles).
+
+## Benchmarks And Numerical Validation
 
 Official benchmark suites and result tooling live in
 [`tensor4all/tenferro-benchmark`](https://github.com/tensor4all/tenferro-benchmark).
+Run them there for reproducible cross-backend performance numbers rather than
+relying on ad hoc local timings.
+
+Numerical correctness — especially automatic differentiation — is validated
+against reference *oracles* (finite-difference checks and Torch reference data)
+rather than line coverage alone. See the
+[oracle support table](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
+for the per-operation AD coverage status and the
+[`tensor4all/tensor-ad-oracles`](https://github.com/tensor4all/tensor-ad-oracles)
+dataset repository.
 
 ## Community
 

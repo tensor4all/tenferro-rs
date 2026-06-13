@@ -12,6 +12,7 @@ project:
     - architecture/**/*.md
     - spec/**/*.md
     - design/**/*.md
+    - oracle/**/*.md
 
 format:
   html:
@@ -106,3 +107,8 @@ website:
               - spec/extension-op.md
               - spec/optimizer-passes.md
               - spec/tensor-semantics.md
+          - section: "Oracle Validation"
+            contents:
+              - oracle/index.md
+              - text: "AD oracle support table"
+                href: oracle/tensor-ad-oracles-support.md
