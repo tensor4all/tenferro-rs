@@ -915,10 +915,11 @@ where
     }
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
+    let launch_count = cube_count_for_len(vt.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(vt.n_elements()),
+            launch_count,
             cube_dim_1d(),
             vt_arg.into_tensor_arg(),
             v_arg.into_tensor_arg(),
@@ -942,10 +943,11 @@ where
     }
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
+    let launch_count = cube_count_for_len(vt.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(vt.n_elements()),
+            launch_count,
             cube_dim_1d(),
             vt_arg.into_tensor_arg(),
             v_arg.into_tensor_arg(),
@@ -1587,10 +1589,11 @@ where
     let parity_arg = typed_tensor_binding(&parity, "lu")?;
     let work_arg = typed_tensor_binding(lu, "lu")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
+    let launch_count = cube_count_for_len(launch_len)?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(launch_len),
+            launch_count,
             cube_dim_1d(),
             p_arg.into_tensor_arg(),
             l_arg.into_tensor_arg(),
@@ -1619,10 +1622,11 @@ where
     let parity = alloc_output::<T>(rt, batch_shape);
     let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
+    let launch_count = cube_count_for_len(parity.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_parity::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(parity.n_elements()),
+            launch_count,
             cube_dim_1d(),
             parity_arg.into_tensor_arg(),
             pivots_arg,
@@ -1643,10 +1647,11 @@ where
 {
     let out = alloc_output::<T>(rt, shape);
     let out_arg = typed_tensor_binding(&out, op)?;
+    let launch_count = cube_count_for_len(out.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(out.n_elements()),
+            launch_count,
             cube_dim_1d(),
             out_arg.into_tensor_arg(),
         );
@@ -1672,10 +1677,11 @@ where
     let out_arg = typed_tensor_binding(&out, "lu_solve_prepared")?;
     let input_arg = typed_tensor_binding(input, "lu_solve_prepared")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
+    let launch_count = cube_count_for_len(out.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CudaRuntime>(
             client,
-            cube_count_for_len(out.n_elements()),
+            launch_count,
             cube_dim_1d(),
             out_arg.into_tensor_arg(),
             input_arg.into_tensor_arg(),

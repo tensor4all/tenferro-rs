@@ -61,7 +61,7 @@ where
         // launches over `classified.n_elements`, and guards the body with
         // `ABSOLUTE_POS < out.len()`.
         launcher.launch_unchecked(
-            cube_count_for_len(classified.n_elements),
+            cube_count_for_len(classified.n_elements)?,
             kernel,
             runtime.client(),
         );

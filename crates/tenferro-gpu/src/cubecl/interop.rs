@@ -66,7 +66,7 @@ pub fn raw_cuda_stream(rt: &CubeclRuntime, op: &'static str) -> crate::Result<u6
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
-pub fn cube_count_for_len(len: usize) -> CubeCount {
+pub fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     dispatch::cube_count_for_len(len)
 }
 
