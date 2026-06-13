@@ -639,7 +639,7 @@ fn jvp_traced_index_select_gathers_tangent() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.5, 1.5, 2.5, 3.5]));
 
     let y = x.index_select(0, &[3, 1, 3]).unwrap();
-    let tangent_y = eval_tensor(y.jvp(&x, &tangent));
+    let tangent_y = eval_tensor(y.jvp(&x, &tangent).unwrap());
 
     assert_eq!(tangent_y.shape(), &[3]);
     assert_close_slice(get_f64_data(&tangent_y), &[3.5, 1.5, 3.5]);
@@ -656,7 +656,7 @@ fn hvp_traced_index_select_repeated_positions_accumulates() {
     let selected = x.index_select(0, &[1, 1, 2]).unwrap();
     let loss = (&(&selected * &selected) * &weights).reduce_sum(&[0]);
     let grad = loss.grad(&x).unwrap();
-    let hvp = eval_tensor(grad.jvp(&x, &tangent));
+    let hvp = eval_tensor(grad.jvp(&x, &tangent).unwrap());
 
     assert_eq!(hvp.shape(), &[3]);
     assert_close_slice(get_f64_data(&hvp), &[0.0, -60.0, 120.0]);

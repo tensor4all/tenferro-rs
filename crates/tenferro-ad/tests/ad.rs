@@ -181,7 +181,7 @@ fn register_graph_metadata_for_test(
         for (&output_id, extents) in op_node
             .outputs
             .iter()
-            .zip(infer_output_extents(&op_node.operation, &input_shape_refs))
+            .zip(infer_output_extents(&op_node.operation, &input_shape_refs).unwrap())
         {
             let resolved_extents = extents
                 .into_iter()
@@ -251,7 +251,7 @@ fn eval_graph_outputs(
             _ => panic!("expected input key"),
         })
         .collect();
-    let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
+    let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor.eval_exec_ir(&exec, inputs).unwrap()
 }
@@ -876,7 +876,7 @@ fn jvp_extract_diag() {
     ));
 
     let diag = a.extract_diag(0, 1);
-    let jvp = diag.jvp(&a, &da);
+    let jvp = diag.jvp(&a, &da).unwrap();
 
     let result = eval_tensor(jvp);
     assert_eq!(result.shape(), &[3]);
@@ -889,7 +889,7 @@ fn jvp_embed_diag() {
     let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
 
     let diag = x.embed_diag(0, 1);
-    let jvp = diag.jvp(&x, &dx);
+    let jvp = diag.jvp(&x, &dx).unwrap();
 
     let result = eval_tensor(jvp);
     assert_eq!(result.shape(), &[3, 3]);
@@ -1048,7 +1048,7 @@ fn jvp_elementwise_mul() {
     let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 0.0, 0.0]));
 
     let prod = &x * &y;
-    let jvp = prod.jvp(&x, &dx);
+    let jvp = prod.jvp(&x, &dx).unwrap();
 
     let result = eval_tensor(jvp);
     assert_close_slice(get_f64_data(&result), &[4.0, 0.0, 0.0]);
@@ -1061,7 +1061,7 @@ fn jvp_elementwise_mul_y_tangent() {
     let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.0, -1.0, 2.0]));
 
     let prod = &x * &y;
-    let jvp = prod.jvp(&y, &dy);
+    let jvp = prod.jvp(&y, &dy).unwrap();
 
     let result = eval_tensor(jvp);
     assert_close_slice(get_f64_data(&result), &[0.0, -2.0, 6.0]);
@@ -1074,7 +1074,7 @@ fn jvp_elementwise_add_y_tangent() {
     let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
 
     let sum = &x + &y;
-    let jvp = sum.jvp(&y, &dy);
+    let jvp = sum.jvp(&y, &dy).unwrap();
 
     let result = eval_tensor(jvp);
     assert_close_slice(get_f64_data(&result), &[0.5, -1.0, 2.0]);
@@ -1170,11 +1170,11 @@ fn complex_abs_ad_matches_jax_real_output_convention() {
 
     let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], input_data.clone()));
     let dx = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], tangent_data.clone()));
-    let dy = x.abs().jvp(&x, &dx);
+    let dy = x.abs().jvp(&x, &dx).unwrap();
 
     let cotangent =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], cotangent_data.clone()));
-    let grad = x.abs().vjp(&x, &cotangent);
+    let grad = x.abs().vjp(&x, &cotangent).unwrap();
 
     let results =
         run_many_traced_with(&mut GraphExecutor::new(CpuBackend::new()), &[&dy, &grad]).unwrap();
@@ -1215,8 +1215,8 @@ fn complex_sign_ad_is_zero_like_jax() {
     ));
 
     let signed = x.sign();
-    let tangent = signed.jvp(&x, &dx);
-    let grad = signed.vjp(&x, &cotangent);
+    let tangent = signed.jvp(&x, &dx).unwrap();
+    let grad = signed.vjp(&x, &cotangent).unwrap();
 
     let results = run_many_traced_with(
         &mut GraphExecutor::new(CpuBackend::new()),
@@ -1237,16 +1237,16 @@ fn elementwise_extrema_ties_split_cotangents_like_jax() {
     let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 6.0]));
     let maximum = traced_tensor::maximum(&x, &y);
 
-    let max_jvp_x = maximum.jvp(&x, &dx);
-    let max_jvp_y = maximum.jvp(&y, &dy);
-    let max_vjp_x = maximum.vjp(&x, &cotangent);
-    let max_vjp_y = maximum.vjp(&y, &cotangent);
+    let max_jvp_x = maximum.jvp(&x, &dx).unwrap();
+    let max_jvp_y = maximum.jvp(&y, &dy).unwrap();
+    let max_vjp_x = maximum.vjp(&x, &cotangent).unwrap();
+    let max_vjp_y = maximum.vjp(&y, &cotangent).unwrap();
 
     let min_lhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0]));
     let min_rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 4.0]));
     let minimum = traced_tensor::minimum(&min_lhs, &min_rhs);
-    let min_vjp_lhs = minimum.vjp(&min_lhs, &cotangent);
-    let min_vjp_rhs = minimum.vjp(&min_rhs, &cotangent);
+    let min_vjp_lhs = minimum.vjp(&min_lhs, &cotangent).unwrap();
+    let min_vjp_rhs = minimum.vjp(&min_rhs, &cotangent).unwrap();
 
     let results = run_many_traced_with(
         &mut GraphExecutor::new(CpuBackend::new()),
@@ -1287,12 +1287,12 @@ fn clamp_ad_uses_strict_jax_boundary_masks() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]));
 
     let clamped = traced_tensor::clamp(&input, &lower, &upper);
-    let input_jvp = clamped.jvp(&input, &d_input);
-    let lower_jvp = clamped.jvp(&lower, &d_lower);
-    let upper_jvp = clamped.jvp(&upper, &d_upper);
-    let input_vjp = clamped.vjp(&input, &cotangent);
-    let lower_vjp = clamped.vjp(&lower, &cotangent);
-    let upper_vjp = clamped.vjp(&upper, &cotangent);
+    let input_jvp = clamped.jvp(&input, &d_input).unwrap();
+    let lower_jvp = clamped.jvp(&lower, &d_lower).unwrap();
+    let upper_jvp = clamped.jvp(&upper, &d_upper).unwrap();
+    let input_vjp = clamped.vjp(&input, &cotangent).unwrap();
+    let lower_vjp = clamped.vjp(&lower, &cotangent).unwrap();
+    let upper_vjp = clamped.vjp(&upper, &cotangent).unwrap();
 
     let results = run_many_traced_with(
         &mut GraphExecutor::new(CpuBackend::new()),
@@ -1322,8 +1322,8 @@ fn complex_div_and_pow_vjps_conjugate_holomorphic_coefficients() {
         TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], cotangent_data.clone()));
     let quotient = x.div(&y);
 
-    let div_vjp_x = eval_tensor(quotient.vjp(&x, &cotangent));
-    let div_vjp_y = eval_tensor(quotient.vjp(&y, &cotangent));
+    let div_vjp_x = eval_tensor(quotient.vjp(&x, &cotangent).unwrap());
+    let div_vjp_y = eval_tensor(quotient.vjp(&y, &cotangent).unwrap());
 
     let expected_div_x: Vec<_> = y_data
         .iter()
@@ -1340,8 +1340,8 @@ fn complex_div_and_pow_vjps_conjugate_holomorphic_coefficients() {
     assert_close_slice_c64(get_c64_data(&div_vjp_y), &expected_div_y);
 
     let pow = x.pow(&y);
-    let pow_vjp_x = eval_tensor(pow.vjp(&x, &cotangent));
-    let pow_vjp_y = eval_tensor(pow.vjp(&y, &cotangent));
+    let pow_vjp_x = eval_tensor(pow.vjp(&x, &cotangent).unwrap());
+    let pow_vjp_y = eval_tensor(pow.vjp(&y, &cotangent).unwrap());
 
     let expected_pow_x: Vec<_> = x_data
         .iter()
@@ -1763,8 +1763,8 @@ fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
     ));
 
     let roundtrip = x.convert(DType::C64).convert(DType::F64);
-    let jvp = x.convert(DType::C64).jvp(&x, &dx);
-    let vjp = x.convert(DType::C64).vjp(&x, &cotangent);
+    let jvp = x.convert(DType::C64).jvp(&x, &dx).unwrap();
+    let vjp = x.convert(DType::C64).vjp(&x, &cotangent).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let results = run_many_traced_with(&mut engine, &[&roundtrip, &jvp, &vjp]).unwrap();
@@ -1877,7 +1877,7 @@ fn vjp_matmul() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, 1.0]));
 
     let y = a.dot_general(&b, matmul_config());
-    let vjp = y.vjp(&a, &cotangent);
+    let vjp = y.vjp(&a, &cotangent).unwrap();
 
     let result = eval_tensor(vjp);
     assert_close_slice(get_f64_data(&result), &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]);

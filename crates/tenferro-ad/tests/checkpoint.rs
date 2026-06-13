@@ -86,7 +86,7 @@ fn checkpoint_hvp_correct() {
 
     let grad = z.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
-    let hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v).unwrap();
     let hv_value = get_f64_scalar(&eval_tensor(hv));
     let expected = 12.0 * x_value * x_value;
     assert!(

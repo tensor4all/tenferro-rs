@@ -157,7 +157,7 @@ fn matrix_eager_input_uses_column_major_values() {
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]),
         test_ctx(),
     );
-    let y = &x + &x;
+    let y = x.add(&x).unwrap();
 
     assert_eq!(y.data().shape(), &[2, 3]);
     assert_eq!(f64_data(y.data()), &[2.0, 8.0, 4.0, 10.0, 6.0, 12.0]);
@@ -170,14 +170,14 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
         ctx.clone(),
     );
-    let scale = &plain + &plain;
+    let scale = plain.add(&plain).unwrap();
     assert!(!scale.tracks_grad());
 
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]),
         ctx,
     );
-    let loss = (&x * &scale).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&scale).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
@@ -367,7 +367,7 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
     );
 
     let selected = x.index_select(0, &[1, 1, 2]).unwrap();
-    let loss = (&selected * &weights).reduce_sum(&[0]).unwrap();
+    let loss = selected.mul(&weights).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
@@ -384,7 +384,7 @@ fn eager_x_squared_gradient_matches_finite_difference() {
         Tensor::from_vec_col_major(vec![3], x_data.clone()),
         test_ctx(),
     );
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap();
 
@@ -408,11 +408,11 @@ fn eager_repeated_backward_accumulates_across_calls() {
         test_ctx(),
     );
 
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
 
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[4.0, 8.0, 12.0], TOL);
 }
@@ -473,7 +473,7 @@ fn eager_fan_out_accumulates_gradient() {
         Tensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]),
         test_ctx(),
     );
-    let loss = (&x + &x).reduce_sum(&[0]).unwrap();
+    let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap();
@@ -492,7 +492,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
         ctx.clone(),
     );
 
-    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     x.clear_grad();
@@ -500,7 +500,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
     assert!(x.grad().is_none());
     assert_close_slice(f64_data(y.grad().unwrap().as_ref()), &[1.0, 2.0, 3.0], TOL);
 
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
@@ -519,7 +519,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
         ctx.clone(),
     );
 
-    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     ctx.clear_grads();
@@ -527,7 +527,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     assert!(x.grad().is_none());
     assert!(y.grad().is_none());
 
-    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[4.0, 5.0, 6.0], TOL);
@@ -546,11 +546,11 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
         ctx.clone(),
     );
 
-    let loss_x = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss_x = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss_x.backward().unwrap();
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
 
-    let loss_y = (&y * &y).reduce_sum(&[0]).unwrap();
+    let loss_y = y.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     let _ = loss_y.backward().unwrap();
 
     assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
@@ -591,7 +591,7 @@ fn eager_context_and_tensor_are_backend_erased_public_types() {
 
     let ctx: Arc<EagerRuntime> = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
     let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     loss.backward().unwrap();
 
     assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
@@ -604,7 +604,7 @@ fn eager_detach_cuts_one_gradient_path() {
         test_ctx(),
     );
     let detached = x.detach();
-    let loss = (&detached * &x).reduce_sum(&[0]).unwrap();
+    let loss = detached.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap();
@@ -622,7 +622,7 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
         Tensor::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]),
         test_ctx(),
     );
-    let z = &x * &y;
+    let z = x.mul(&y).unwrap();
 
     assert_close_slice(f64_data(z.data()), &[4.0, 10.0, 18.0], TOL);
     assert!(x.grad().is_none());

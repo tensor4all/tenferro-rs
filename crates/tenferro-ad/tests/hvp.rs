@@ -86,7 +86,7 @@ fn hvp_for_scalar_cubic() {
 
     let g = y.grad(&x).unwrap(); // reverse: f'(x) = 3x^2
     let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
-    let hv = g.jvp(&x, &v); // forward-of-reverse: f''(x)
+    let hv = g.jvp(&x, &v).unwrap(); // forward-of-reverse: f''(x)
 
     let hv_tensor = eval_tensor(hv);
     let hv_val = get_f64_data(&hv_tensor)[0];
@@ -111,7 +111,7 @@ fn hvp_for_scalar_exp_sin() {
 
     let g = y.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
-    let hv = g.jvp(&x, &v);
+    let hv = g.jvp(&x, &v).unwrap();
 
     let hv_tensor = eval_tensor(hv);
     let hv_val = get_f64_data(&hv_tensor)[0];
@@ -138,7 +138,7 @@ fn hvp_for_vector_exp_sum() {
 
     let g = y.grad(&x).unwrap(); // shape [n]
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone()));
-    let hv = g.jvp(&x, &v); // FoR: shape [n]
+    let hv = g.jvp(&x, &v).unwrap(); // FoR: shape [n]
 
     let hv_tensor = eval_tensor(hv);
     let hv_val = get_f64_data(&hv_tensor);
@@ -173,7 +173,7 @@ fn hvp_for_quadratic_form() {
     let y = vector_dot(&x, &ax);
 
     let g = y.grad(&x).unwrap();
-    let hv = g.jvp(&x, &v);
+    let hv = g.jvp(&x, &v).unwrap();
 
     let hv_tensor = eval_tensor(hv);
     let hv_val = get_f64_data(&hv_tensor);

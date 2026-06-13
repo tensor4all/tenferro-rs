@@ -45,7 +45,7 @@ There are two public traced-AD entry points over the same graph transforms:
 | Entry point | Use when |
 | --- | --- |
 | `AdContext` | You want explicit ownership of the rule set, especially when adding extension AD rules such as `tenferro_linalg::ad_rules()`. |
-| `TracedTensorAdExt` | You want compact method syntax such as `loss.grad(&x)?`, `y.vjp(&x, &ct)`, or `y.jvp(&x, &dx)` for small core-rule examples. |
+| `TracedTensorAdExt` | You want compact method syntax such as `loss.grad(&x)?`, `y.vjp(&x, &ct)?`, or `y.jvp(&x, &dx)?` for small core-rule examples. |
 
 Prefer `AdContext` in reusable code and in examples that depend on extension
 rules. The extension trait is convenience syntax for the same traced transforms;

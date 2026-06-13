@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let y = scalar_z.exp();
     let seed = Complex64::new(2.0, -3.0);
     let cotangent = TracedTensor::from_vec_col_major(vec![1], vec![seed]);
-    let vjp = y.vjp(&scalar_z, &cotangent);
+    let vjp = y.vjp(&scalar_z, &cotangent)?;
     let vjp_value = run(&vjp)?;
     let expected_vjp = seed
         * Complex64::new(0.0, std::f64::consts::FRAC_PI_2)

@@ -19,6 +19,11 @@ rules from `tensor4all-agent-rules`.
 - Keep the public API intentionally small. Prefer `pub(crate)` for types,
   functions, traits, modules, fields, and helper constructors unless external
   users are expected to call them directly.
+- Public types should implement `Debug`. Prefer `derive(Debug)` when the output
+  is cheap, useful, and does not expose unstable internals. Use a hand-written
+  summary for graph, runtime, cache, tensor, backend, or FFI wrapper types when
+  derived output would materialize data, dump large buffers, leak internal
+  representation details, or make future implementation changes harder.
 - Do not make implementation details public just because another module needs
   them. First consider whether the code belongs in the same crate/module, or
   whether a narrower crate-private helper is the right abstraction.
