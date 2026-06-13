@@ -5,6 +5,11 @@ is operational, not aspirational: unsupported families are called out
 explicitly. Public user docs import the direct public crates instead of a broad
 facade.
 
+The user-facing operation **contract** — categories × surfaces and the
+Eager/Traced parity rule — is specified in
+[operation-categories.md](../spec/operation-categories.md). This inventory should
+conform to that contract.
+
 ---
 
 ## `tenferro-tensor`
