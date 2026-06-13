@@ -54,8 +54,9 @@ an extension crate.
 
 ## 3. Elementwise — analytic (ufunc catalog)
 
-The named analytic set is the supported elementwise surface. **There is no
-arbitrary-closure `map`/`mapv`** — see Non-goals.
+The named analytic set is the supported elementwise surface **on the AD surfaces
+(`Eager`/`Traced`)**. Arbitrary-closure `map`/`mapv` is available only on the non-AD
+surfaces — see Section 10.
 
 | Operation | Eager | Traced |
 |---|---|---|
@@ -120,6 +121,30 @@ and traced surfaces (subject to the same parity rule within each family):
 Not value operations; listed for completeness. `grad` / `vjp` / `jvp` / HVP on
 `Traced`; `backward` on `Eager` scalar losses.
 
+## 10. Host iteration and closure map (non-AD surfaces only)
+
+These are convenient for the "lightweight array" path and are provided on the
+**non-AD** surfaces (`TypedTensor`, `Tensor`, and their views). They are **not**
+on `Eager`/`Traced`: an opaque closure cannot be GPU-lowered or differentiated, so
+the AD surfaces use the named ufunc catalog (Section 3) instead.
+
+| Operation | TypedTensor | Tensor | Eager | Traced | Notes |
+|---|---|---|---|---|---|
+| `map` (closure) → new tensor | ⬜ | ⬜ | — | — | host/CPU; non-differentiable |
+| `map_inplace` / `map_into` | ⬜ | ⬜ | — | — | in-place / out-param variants |
+| `iter` / `iter_mut` (elements) | ⬜ | ⬜ | — | — | over a view; respects layout |
+| `indexed_iter` | ⬜ | ⬜ | — | — | yields `(index, &value)` |
+| axis / lane iteration | · | · | — | — | optional, ndarray-style |
+
+Constraints (document in the API):
+
+- **Host-only.** `map`/iterators operate on host data; a GPU-resident tensor must
+  be downloaded first (explicit, per the no-silent-transfer rule).
+- **Non-AD.** These live on the non-AD value types by definition; gradients do not
+  flow through a closure. Use the AD surfaces + named ufuncs when you need autodiff.
+- **Layout-aware.** Iteration order follows column-major storage; logical-order
+  traversal is via a view (e.g. a transposed/permuted view).
+
 ## Argument convention (fixed across categories)
 
 Multi-input structural ops (`concatenate`, `stack`, `split`, …) must accept owned
@@ -129,10 +154,11 @@ ecosystems (e.g. rust-ndarray#1591).
 
 ## Non-goals
 
-- **No arbitrary-closure `map` / `mapv`.** An opaque Rust closure cannot be lowered
-  to GPU kernels and is not differentiable through the traced/AD path. The supported
-  elementwise surface is the named ufunc catalog (Section 3). A CPU-only, non-AD
-  closure map could be considered separately but is explicitly out of this contract.
+- **No arbitrary-closure `map`/`mapv` on the AD surfaces (`Eager`/`Traced`).** An
+  opaque Rust closure cannot be lowered to GPU kernels and is not differentiable
+  through the traced/AD path; those surfaces use the named ufunc catalog (Section 3).
+  Closure `map` and element iterators **are** provided on the non-AD surfaces
+  (`TypedTensor`/`Tensor`) — see Section 10.
 
 ## Enforcement
 
