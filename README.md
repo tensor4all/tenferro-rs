@@ -193,15 +193,30 @@ The broader tensor4all community uses the
 announcements and [Matrix](https://tensor4all.org/matrix.html) for real-time
 chat. The community entry point is <https://tensor4all.org/>.
 
-## Project Status
+## Stability Policy
 
-tenferro-rs is pre-1.0. Public APIs, crate boundaries, backend contracts,
-feature flags, and internal architecture are still evolving. The stack is
+tenferro-rs v0.1 is an **experimental** release. The project is developed
+rapidly with AI-assisted workflows, and the public API may change substantially
+**even across 0.1.x releases**. Do not expect semver-style API stability before
+v1.0.
+
+v0.1 does not promise a stable API; it promises a usable, documented preview:
+
+- a usable preview of the tensor, AD, einsum, linalg, CUDA, and (planned)
+  WebGPU stack,
+- runnable examples and tutorials,
+- migration notes and changelog entries for breaking changes, so they are
+  trackable,
+- enough structure for AI-assisted downstream migration.
+
+If you depend on tenferro-rs today, **pin exact versions or commits** and use
+AI-assisted refactoring (codemods / search-replace) when upgrading. The stack is
 dogfooded in [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and
 related tensor4all projects.
 
-If you build against `main`, pin commits and expect breaking changes. For
-non-trivial upgrades, AI-assisted migration is recommended.
+This is deliberate: tenferro-rs optimizes for evolving a Rust-native
+tensor/AD/GPU stack on a fast, AI-assisted iteration cycle, not for presenting a
+frozen surface before the design has settled.
 
 ## Development And Trust Model
 
