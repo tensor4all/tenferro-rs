@@ -275,6 +275,12 @@ memory is what keeps a fast, AI-assisted workflow coherent: rules and recorded
 decisions constrain new changes — including AI-generated ones — toward the
 established design.
 
+Documentation–implementation consistency is itself audited regularly by agents,
+on top of the automated doc-snippet and docs-site checks in CI (every doc example
+must compile and run). Because the current API documentation is the primary
+reference for following the library as it evolves, keeping the docs aligned with
+the code is treated as a correctness concern, not an afterthought.
+
 ## Contributing
 
 Bug-fix pull requests, feature requests, design discussions, documentation
