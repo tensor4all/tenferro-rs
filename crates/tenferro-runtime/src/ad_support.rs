@@ -171,3 +171,6 @@ pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
     }
 }
+
+#[cfg(test)]
+mod tests;

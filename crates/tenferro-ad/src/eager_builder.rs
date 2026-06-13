@@ -152,3 +152,6 @@ fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor
         .upload_host_tensor(&host)
         .unwrap_or_else(|err| panic!("eager primitive zero_like upload failed: {}", err))
 }
+
+#[cfg(test)]
+mod tests;
