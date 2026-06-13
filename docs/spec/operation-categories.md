@@ -64,6 +64,12 @@ surfaces — see Section 10.
 | `expm1` (`expm`) | ✅ | ✅ |
 | `log1p` | · | · |
 
+**Parallelism.** The elementwise categories (2 and 3) are embarrassingly parallel.
+Their CPU kernels are data-parallel via rayon behind the `parallel` feature (the
+same feature that gates the strided parallel kernels), so the built-in named ufuncs
+parallelize automatically. For user-supplied closures, parallelism is explicit:
+`map` vs `par_map` (Section 10).
+
 ## 4. Reductions
 
 | Operation | Eager | Traced |
@@ -130,11 +136,21 @@ the AD surfaces use the named ufunc catalog (Section 3) instead.
 
 | Operation | TypedTensor | Tensor | Eager | Traced | Notes |
 |---|---|---|---|---|---|
-| `map` (closure) → new tensor | ⬜ | ⬜ | — | — | host/CPU; non-differentiable |
+| `map` (closure) → new tensor | ⬜ | ⬜ | — | — | sequential; `FnMut`; ordered; available in minimal builds |
 | `map_inplace` / `map_into` | ⬜ | ⬜ | — | — | in-place / out-param variants |
+| `par_map` / `par_map_inplace` | ⬜ | ⬜ | — | — | rayon data-parallel; `Fn + Sync` closure, `Send` elements; behind `parallel` feature |
 | `iter` / `iter_mut` (elements) | ⬜ | ⬜ | — | — | over a view; respects layout |
+| `par_iter` / `par_iter_mut` | ⬜ | ⬜ | — | — | rayon parallel iterators; behind `parallel` feature |
 | `indexed_iter` | ⬜ | ⬜ | — | — | yields `(index, &value)` |
 | axis / lane iteration | · | · | — | — | optional, ndarray-style |
+
+**Sequential vs parallel is a deliberate API split** (different trait bounds, not a
+flag): `map` takes `FnMut`, preserves order, and works even in minimal/`no_std`
+builds; `par_map` requires a `Fn + Sync` closure over `Send` elements, is
+order-independent (the closure must be pure / position-independent), uses rayon, and
+is **std-only, feature-gated** (`parallel`). Keeping them distinct avoids silently
+requiring `Send`/`Sync` bounds on the sequential path and keeps the `no_std` data
+layer (the no_std epic) free of rayon.
 
 Constraints (document in the API):
 
