@@ -1,3 +1,5 @@
+use std::fmt;
+
 use cubecl::client::ComputeClient;
 use cubecl::Runtime;
 use cubecl_common::future;
@@ -30,6 +32,14 @@ pub fn webgpu_available() -> bool {
 pub struct WebGpuRuntime {
     client: ComputeClient<WgpuRuntime>,
     device_ordinal: usize,
+}
+
+impl fmt::Debug for WebGpuRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebGpuRuntime")
+            .field("device_ordinal", &self.device_ordinal)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WebGpuRuntime {

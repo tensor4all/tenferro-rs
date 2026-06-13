@@ -6,6 +6,7 @@
 //! representation on `CubeclRuntime` or `CubeclBuffer` themselves.
 
 use std::ffi::c_void;
+use std::fmt;
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
@@ -19,6 +20,15 @@ use super::{dispatch, CubeclRuntime};
 pub struct DeviceByteBuffer {
     handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,
+}
+
+impl fmt::Debug for DeviceByteBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceByteBuffer")
+            .field("is_empty", &self.is_empty())
+            .field("ptr", &self.ptr)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeviceByteBuffer {
@@ -66,7 +76,7 @@ pub fn raw_cuda_stream(rt: &CubeclRuntime, op: &'static str) -> crate::Result<u6
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
-pub fn cube_count_for_len(len: usize) -> CubeCount {
+pub fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     dispatch::cube_count_for_len(len)
 }
 

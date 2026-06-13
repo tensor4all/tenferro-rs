@@ -172,7 +172,7 @@ fn dynamic_truncate_jvp_correct() {
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
 
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
-    let jvp_result = loss.jvp(&x, &v);
+    let jvp_result = loss.jvp(&x, &v).unwrap();
     let jvp_value = get_f64_data(&jvp_result.run_with(&mut engine).unwrap())[0];
     assert!(
         (jvp_value - 12.0).abs() < TOL,
@@ -194,7 +194,7 @@ fn dynamic_truncate_hvp_correct() {
 
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
-    let hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v).unwrap();
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     assert_eq!(hv_data.len(), 5);
@@ -245,7 +245,7 @@ fn dynamic_truncate_hvp_finite_diff() {
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], v_data));
-    let hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v).unwrap();
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     for (index, (actual, expected)) in hv_data.iter().zip(&fd_hv).enumerate() {
@@ -287,7 +287,7 @@ fn pad_to_match_jvp_correct() {
     let loss = (&padded * &padded).reduce_sum(&[0]);
 
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
-    let jvp_result = loss.jvp(&x, &v);
+    let jvp_result = loss.jvp(&x, &v).unwrap();
     let jvp_val = get_f64_data(&jvp_result.run_with(&mut engine).unwrap())[0];
     // dot(grad, v) = 2+4+6 = 12
     assert!((jvp_val - 12.0).abs() < TOL, "jvp={jvp_val}, expected=12");
@@ -306,7 +306,7 @@ fn pad_to_match_hvp_correct() {
 
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
-    let hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v).unwrap();
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     for (i, val) in hv_data.iter().enumerate() {

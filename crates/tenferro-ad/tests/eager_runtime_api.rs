@@ -11,7 +11,7 @@ fn eager_runtime_replaces_eager_context_public_name() {
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
         runtime.clone(),
     );
-    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 
     loss.backward().unwrap();
 

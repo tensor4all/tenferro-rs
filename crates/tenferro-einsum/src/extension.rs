@@ -1107,7 +1107,8 @@ fn build_runtime_exec_program<B: TensorBackend>(
         &input_dtypes,
         &input_shapes,
         compiler_options,
-    );
+    )
+    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
     Ok(CachedRuntimeExecProgram {
         program,
         input_indices,

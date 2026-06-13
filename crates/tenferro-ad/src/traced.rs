@@ -247,11 +247,11 @@ pub trait TracedTensorAdExt {
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
     /// let y = &x * &x;
-    /// let dy = y.jvp(&x, &tangent);
+    /// let dy = y.jvp(&x, &tangent).unwrap();
     ///
     /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
     /// ```
-    fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
+    fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`jvp`](Self::jvp), but returns `None` when `wrt` is inactive.
     ///
@@ -266,11 +266,19 @@ pub trait TracedTensorAdExt {
     /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
     /// let loss = &y * &y;
     ///
-    /// assert!(loss.jvp_optional(&x, &tangent).is_none());
+    /// assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
     /// ```
-    fn jvp_optional(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor>;
+    fn jvp_optional(
+        &self,
+        wrt: &TracedTensor,
+        tangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>>;
 
     /// Fallible forward-mode Jacobian-vector product.
+    ///
+    /// This is an alias for [`jvp_optional`](Self::jvp_optional), retained for
+    /// callers that adopted the explicit fallible name before the compact
+    /// method became fallible.
     ///
     /// # Examples
     ///
@@ -323,11 +331,11 @@ pub trait TracedTensorAdExt {
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]);
     /// let y = &x * &x;
-    /// let dx = y.vjp(&x, &cotangent);
+    /// let dx = y.vjp(&x, &cotangent).unwrap();
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
-    fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor;
+    fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`vjp`](Self::vjp), but returns `None` when `wrt` is inactive.
     ///
@@ -342,11 +350,19 @@ pub trait TracedTensorAdExt {
     /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
     /// let loss = &y * &y;
     ///
-    /// assert!(loss.vjp_optional(&x, &cotangent).is_none());
+    /// assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
     /// ```
-    fn vjp_optional(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor>;
+    fn vjp_optional(
+        &self,
+        wrt: &TracedTensor,
+        cotangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>>;
 
     /// Fallible reverse-mode vector-Jacobian product.
+    ///
+    /// This is an alias for [`vjp_optional`](Self::vjp_optional), retained for
+    /// callers that adopted the explicit fallible name before the compact
+    /// method became fallible.
     ///
     /// Complex cotangents use tenferro's Hermitian real-inner-product
     /// convention. Non-real complex cotangent seeds therefore need an explicit
@@ -413,14 +429,21 @@ impl TracedTensorAdExt for TracedTensor {
         Ok(())
     }
 
-    fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
-        self.jvp_optional(wrt, tangent)
-            .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
+    fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor> {
+        self.jvp_optional(wrt, tangent)?.ok_or_else(|| {
+            Error::Internal(format!(
+                "jvp output is inactive for {:?}",
+                leaf_input_key(wrt)
+            ))
+        })
     }
 
-    fn jvp_optional(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
+    fn jvp_optional(
+        &self,
+        wrt: &TracedTensor,
+        tangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
         self.jvp_optional_result(wrt, tangent)
-            .unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn jvp_optional_result(
@@ -431,14 +454,21 @@ impl TracedTensorAdExt for TracedTensor {
         jvp_optional_result_with_rules(self, wrt, tangent, None)
     }
 
-    fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
-        self.vjp_optional(wrt, cotangent)
-            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)))
+    fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
+        self.vjp_optional(wrt, cotangent)?.ok_or_else(|| {
+            Error::Internal(format!(
+                "vjp output is inactive for {:?}",
+                leaf_input_key(wrt)
+            ))
+        })
     }
 
-    fn vjp_optional(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
+    fn vjp_optional(
+        &self,
+        wrt: &TracedTensor,
+        cotangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
         self.vjp_optional_result(wrt, cotangent)
-            .unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn vjp_optional_result(

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -50,6 +51,19 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
+}
+
+impl fmt::Debug for TracedTensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TracedTensor")
+            .field("id", &self.id)
+            .field("rank", &self.rank)
+            .field("dtype", &self.dtype)
+            .field("val", &self.val)
+            .field("shape_hint", &self.shape_hint)
+            .field("has_data", &self.data.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {

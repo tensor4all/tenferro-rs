@@ -315,7 +315,7 @@ where
         rt,
         &output,
         OP,
-        cube_count_for_len(output.n_elements()),
+        cube_count_for_len(output.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
             structural::fill_zero_kernel::launch_unchecked::<T, CudaRuntime>(

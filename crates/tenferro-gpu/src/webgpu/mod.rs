@@ -2,6 +2,7 @@
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
 use cubecl_wgpu::WgpuRuntime;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{
@@ -98,9 +99,18 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         })
 }
 
-fn cube_count_for_len(len: usize) -> CubeCount {
-    let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize) as u32;
-    CubeCount::Static(cubes.max(1), 1, 1)
+fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
+    let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
+    let cubes = u32::try_from(cubes).map_err(|_| {
+        Error::backend_failure(
+            "cube_count_for_len",
+            format!(
+                "1D WebGPU launch for {len} elements requires {cubes} cubes, \
+                 which exceeds u32::MAX"
+            ),
+        )
+    })?;
+    Ok(CubeCount::Static(cubes.max(1), 1, 1))
 }
 
 fn cube_dim_1d() -> CubeDim {
@@ -307,6 +317,14 @@ fn webgpu_placement(device_ordinal: usize) -> Placement {
 /// ```
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
+}
+
+impl fmt::Debug for WebGpuBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebGpuBackend")
+            .field("runtime", &self.runtime)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WebGpuBackend {

@@ -12,7 +12,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `GraphExecutor::run` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor`) |
 | Eager forward and gradients | eager ops plus `loss.backward()` | — | `EagerTensor` forward ops, with `backward()` for tracked scalar losses |
-| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()`; HVP via composition |
+| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()?`, `.jvp()?`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro_einsum::traced_tensor::einsum` standard extension |
@@ -35,8 +35,8 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `tenferro_linalg::LinalgBackend::solve(&mut ctx, &a, &b)?` | `tenferro_linalg::traced_tensor::solve(&a, &b)?` |
 | Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | — | `loss.grad(&x)` |
-| VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | — | `y.vjp(&x, &cotangent)` |
-| JVP | `torch.func.jvp` | `jax.jvp` | — | `y.jvp(&x, &tangent)` |
+| VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | — | `y.vjp(&x, &cotangent)?` |
+| JVP | `torch.func.jvp` | `jax.jvp` | — | `y.jvp(&x, &tangent)?` |
 
 ## Key differences
 

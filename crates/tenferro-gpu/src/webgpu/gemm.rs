@@ -282,7 +282,7 @@ where
         // per guarded launch position.
         kernels::pack_lhs_dot_general::launch_unchecked::<T, WgpuRuntime>(
             backend.runtime().client(),
-            cube_count_for_len(len),
+            cube_count_for_len(len)?,
             cube_dim_1d(),
             output_binding.into_tensor_arg(),
             input_binding.into_tensor_arg(),
@@ -327,7 +327,7 @@ where
         // to CubeK `[batch..., K, N]` order.
         kernels::pack_rhs_dot_general::launch_unchecked::<T, WgpuRuntime>(
             backend.runtime().client(),
-            cube_count_for_len(len),
+            cube_count_for_len(len)?,
             cube_dim_1d(),
             output_binding.into_tensor_arg(),
             input_binding.into_tensor_arg(),

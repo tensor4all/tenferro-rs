@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::extension_runtime::ExtensionExecutor;
@@ -15,6 +16,17 @@ pub struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
     pub extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     pub external_data: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     pub results: Vec<Arc<Tensor>>,
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EagerPrimitiveBuilder")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("has_extension_executor", &self.extension_executor.is_some())
+            .field("external_data_len", &self.external_data.len())
+            .field("results_len", &self.results.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
@@ -140,3 +152,6 @@ fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor
         .upload_host_tensor(&host)
         .unwrap_or_else(|err| panic!("eager primitive zero_like upload failed: {}", err))
 }
+
+#[cfg(test)]
+mod tests;

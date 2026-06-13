@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new();
     let x = runtime.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
 
-    let prediction = &x * &x;
+    let prediction = x.mul(&x).unwrap();
     let loss = prediction.reduce_sum(&[0])?;
 
     assert_eq!(loss.data().shape(), &[]);

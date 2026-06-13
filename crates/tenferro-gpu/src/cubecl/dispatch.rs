@@ -12,9 +12,18 @@ use crate::types::{
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
-pub(crate) fn cube_count_for_len(len: usize) -> CubeCount {
-    let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize) as u32;
-    CubeCount::Static(cubes.max(1), 1, 1)
+pub(crate) fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
+    let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
+    let cubes = u32::try_from(cubes).map_err(|_| {
+        crate::Error::backend_failure(
+            "cube_count_for_len",
+            format!(
+                "1D CubeCL launch for {len} elements requires {cubes} cubes, \
+                 which exceeds u32::MAX"
+            ),
+        )
+    })?;
+    Ok(CubeCount::Static(cubes.max(1), 1, 1))
 }
 
 pub(crate) fn cube_dim_1d() -> CubeDim {
@@ -440,7 +449,7 @@ where
     // `ABSOLUTE_POS < out.len()`.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         input_arg,
@@ -481,7 +490,7 @@ where
     // launched index domain before mapping logical indices.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         input_arg,
@@ -586,7 +595,7 @@ where
     // with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         lhs_arg,
@@ -630,7 +639,7 @@ where
     // guards with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         lhs_arg,
@@ -677,7 +686,7 @@ where
     // index domain.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         lhs_arg,
@@ -725,7 +734,7 @@ where
     // matching the Array<bool> kernel view.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         pred_arg,
@@ -779,7 +788,7 @@ where
     // this helper guard with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
-        cube_count_for_len(len),
+        cube_count_for_len(len)?,
         cube_dim_1d(),
         output_arg,
         a_arg,

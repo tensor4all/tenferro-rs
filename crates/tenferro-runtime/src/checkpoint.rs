@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use computegraph::graph::Graph;
@@ -14,6 +15,17 @@ pub struct CheckpointNode {
     pub alias_target: ValueKey<StdTensorOp>,
     pub old_inputs: HashMap<TensorInputKey, Arc<Tensor>>,
     pub prev: Option<Arc<CheckpointNode>>,
+}
+
+impl fmt::Debug for CheckpointNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CheckpointNode")
+            .field("alias_key", &self.alias_key)
+            .field("alias_target", &self.alias_target)
+            .field("old_inputs_len", &self.old_inputs.len())
+            .field("has_prev", &self.prev.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CheckpointNode {
