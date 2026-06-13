@@ -197,6 +197,18 @@ The broader tensor4all community uses the
 announcements and [Matrix](https://tensor4all.org/matrix.html) for real-time
 chat. The community entry point is <https://tensor4all.org/>.
 
+## Acknowledgments
+
+tenferro-rs stands on excellent Rust work. The GPU backend is built on
+[CubeCL](https://github.com/tracel-ai/cubecl) by the [tracel-ai](https://github.com/tracel-ai)
+team (also the foundation of the [Burn](https://github.com/tracel-ai/burn) deep
+learning framework); we use it for portable GPU kernels and aim to contribute
+improvements upstream rather than fork the ecosystem. Dense CPU linear algebra
+builds on [`faer`](https://github.com/sarah-quinones/faer-rs), and the numeric
+foundations on [`num-traits`](https://github.com/rust-num/num-traits) and
+[`num-complex`](https://github.com/rust-num/num-complex). Thanks to these
+projects and their maintainers.
+
 ## Stability Policy
 
 tenferro-rs is a **pre-1.0 experimental research platform**. Before v1.0, public
