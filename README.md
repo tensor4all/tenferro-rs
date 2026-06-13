@@ -39,8 +39,12 @@ help.
   runtime.
 - Treat extension operations and AD rules as part of the design, so external
   crates can add operations without growing the core tensor crates.
-- Validate numerical behavior with tests, oracle data, invariants, residual
-  checks, provenance checks, and reproducible benchmarks.
+- Manage engineering quality through three pillars — reference **oracles**
+  (finite-difference and Torch reference data), a comprehensive **unit-test**
+  suite with enforced per-file coverage thresholds, and a reproducible
+  **benchmark suite** — backed by invariants, residual checks, and provenance
+  checks. This engineering discipline is what lets the project iterate quickly
+  (see [Stability Policy](#stability-policy)) without sacrificing correctness.
 
 ## When tenferro Is a Good Fit
 
