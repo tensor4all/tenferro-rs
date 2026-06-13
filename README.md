@@ -199,15 +199,33 @@ chat. The community entry point is <https://tensor4all.org/>.
 
 ## Acknowledgments
 
-tenferro-rs stands on excellent Rust work. The GPU backend is built on
-[CubeCL](https://github.com/tracel-ai/cubecl) by the [tracel-ai](https://github.com/tracel-ai)
-team (also the foundation of the [Burn](https://github.com/tracel-ai/burn) deep
-learning framework); we use it for portable GPU kernels and aim to contribute
-improvements upstream rather than fork the ecosystem. Dense CPU linear algebra
-builds on [`faer`](https://github.com/sarah-quinones/faer-rs), and the numeric
-foundations on [`num-traits`](https://github.com/rust-num/num-traits) and
-[`num-complex`](https://github.com/rust-num/num-complex). Thanks to these
-projects and their maintainers.
+tenferro-rs stands on excellent work across several ecosystems, and aims to
+integrate with and contribute back to them rather than wall itself off — even as
+it iterates quickly.
+
+- **GPU.** The GPU backend is built on
+  [CubeCL](https://github.com/tracel-ai/cubecl) by the
+  [tracel-ai](https://github.com/tracel-ai) team (also the foundation of the
+  [Burn](https://github.com/tracel-ai/burn) deep learning framework); we use it
+  for portable GPU kernels and aim to contribute improvements upstream rather
+  than fork the ecosystem.
+- **CPU / numerics.** Dense CPU linear algebra builds on
+  [`faer`](https://github.com/sarah-quinones/faer-rs), with numeric foundations
+  from [`num-traits`](https://github.com/rust-num/num-traits) and
+  [`num-complex`](https://github.com/rust-num/num-complex).
+- **Contraction ordering.** Einsum contraction-order optimization uses
+  [`omeco`](https://crates.io/crates/omeco), carrying over ideas from the Julia
+  tensor-network ecosystem (OMEinsum/contraction-order tooling).
+- **Design heritage.** The modular structure — operation semantics and AD rules
+  living *outside* an all-in-one tensor type — is influenced by the **Julia
+  numerical-computing community** (e.g. the ChainRules and OMEinsum/tensor-network
+  ecosystems), and by JAX/PyTorch for the eager/traced/AD split.
+- **Generic autodiff.** Autodiff is built on `tidu`, a tensor4all crate providing
+  `Primitive`-generic graph transforms (`linearize` / `linear_transpose`) that are
+  **not tied to tensors** and can drive autodiff for other domains; alongside the
+  `strided` and `computegraph` foundation crates.
+
+Thanks to these projects, communities, and their maintainers.
 
 ## Stability Policy
 
