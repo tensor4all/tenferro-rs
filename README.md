@@ -195,29 +195,25 @@ chat. The community entry point is <https://tensor4all.org/>.
 
 ## Stability Policy
 
-tenferro-rs v0.1 is an **experimental** release. The project is developed
-rapidly with AI-assisted workflows, and the public API may change substantially
-**even across 0.1.x releases**. Do not expect semver-style API stability before
-v1.0.
+tenferro-rs is a **pre-1.0 experimental research platform**. Before v1.0, public
+APIs may change substantially, including across 0.1.x releases: at this stage we
+prioritize rapid iteration, backend exploration, and AI-assisted development over
+API stability.
 
-v0.1 does not promise a stable API; it promises a usable, well-documented
-preview:
+This does **not** mean correctness or engineering discipline is relaxed. We keep
+tests, runnable examples, documentation, and migration notes for major changes up
+to date, and changes are accepted only after the checks described in
+[Development And Trust Model](#development-and-trust-model) — repository rules, CI,
+oracle-based validation, reproducible benchmarks, provenance checks, and maintainer
+review. The detailed, current API documentation is the primary reference for
+following the library as it evolves; we write migration notes for major breaking
+changes rather than maintaining exhaustive compatibility tables.
 
-- a usable preview of the tensor, AD, einsum, linalg, CUDA, and WebGPU stack,
-- runnable examples and tutorials,
-- **detailed, up-to-date documentation of the current API at each release** —
-  we document what the API *is now* rather than maintaining long-lived migration
-  guides or compatibility tables.
-
-If you depend on tenferro-rs today, **pin exact versions or commits**, and when
-upgrading, use AI-assisted refactoring (codemods / search-replace) against the
-current docs to follow breaking changes. The stack is dogfooded in
-[tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and related
-tensor4all projects.
-
-This is deliberate: tenferro-rs optimizes for evolving a Rust-native
-tensor/AD/GPU stack on a fast, AI-assisted iteration cycle, not for presenting a
-frozen surface before the design has settled.
+For downstream projects, **pin exact versions or commits**, and when upgrading use
+AI-assisted refactoring against the current docs to follow breaking changes. The
+stack is dogfooded in
+[tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and related tensor4all
+projects.
 
 ## Development And Trust Model
 
