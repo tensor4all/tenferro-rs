@@ -200,19 +200,20 @@ rapidly with AI-assisted workflows, and the public API may change substantially
 **even across 0.1.x releases**. Do not expect semver-style API stability before
 v1.0.
 
-v0.1 does not promise a stable API; it promises a usable, documented preview:
+v0.1 does not promise a stable API; it promises a usable, well-documented
+preview:
 
-- a usable preview of the tensor, AD, einsum, linalg, CUDA, and (planned)
-  WebGPU stack,
+- a usable preview of the tensor, AD, einsum, linalg, CUDA, and WebGPU stack,
 - runnable examples and tutorials,
-- migration notes and changelog entries for breaking changes, so they are
-  trackable,
-- enough structure for AI-assisted downstream migration.
+- **detailed, up-to-date documentation of the current API at each release** —
+  we document what the API *is now* rather than maintaining long-lived migration
+  guides or compatibility tables.
 
-If you depend on tenferro-rs today, **pin exact versions or commits** and use
-AI-assisted refactoring (codemods / search-replace) when upgrading. The stack is
-dogfooded in [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and
-related tensor4all projects.
+If you depend on tenferro-rs today, **pin exact versions or commits**, and when
+upgrading, use AI-assisted refactoring (codemods / search-replace) against the
+current docs to follow breaking changes. The stack is dogfooded in
+[tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and related
+tensor4all projects.
 
 This is deliberate: tenferro-rs optimizes for evolving a Rust-native
 tensor/AD/GPU stack on a fast, AI-assisted iteration cycle, not for presenting a

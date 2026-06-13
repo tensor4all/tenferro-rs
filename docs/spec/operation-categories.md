@@ -20,6 +20,11 @@ Related:
 | **Eager** | `EagerTensor` | PyTorch-style immediate execution + `backward()` |
 | **Traced** | `TracedTensor` | JAX-style traced graph + `grad`/`vjp`/`jvp` |
 
+**Rank model.** `TypedTensor<T, R = DynRank>` offers `Rank<N>` (opt-in static rank)
+and `DynRank` (default). `DynRank` is the canonical rank for AD and traced execution
+(`TracedTensor`/`EagerTensor` are rank-erased); do not push const-generic `Rank<N>`
+through the AD/traced surfaces. This is current design intent, not a frozen contract.
+
 **Parity rule (the core of the contract):** every operation in the Elementwise,
 Reductions, Shape/structural, and Indexing categories **must be exposed on both
 `Eager` and `Traced`**. "Exists on Eager but not Traced" (or vice versa) is a spec
