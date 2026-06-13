@@ -65,6 +65,40 @@ core use case.
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
+## How tenferro-rs Relates To Other Tools
+
+tenferro-rs is **not** an attempt to replace JAX or PyTorch, and it does not
+require Python. The goal is a pure-Rust software stack that offers comparable
+capabilities — typed tensors, eager execution with `backward()`, traced graphs,
+`grad`/`vjp`/`jvp` autodiff, linear algebra, einsum, and FFT — to applications
+that want to stay in the Rust ecosystem. The comparison tables above describe
+*workload fit*, not a rivalry: if Python is your host language, JAX and PyTorch
+remain excellent choices.
+
+- **Versus ML-focused Rust frameworks (`candle`, `burn`).** Those target deep
+  learning. tenferro-rs targets scientific and numerical computing, where
+  linear algebra, einsum, FFT, and autodiff *through* those operations are the
+  primary workload. They are complementary, not competitors: tenferro-rs builds
+  on [CubeCL](https://github.com/tracel-ai/cubecl) for GPU kernels — the same
+  infrastructure `burn` uses — and aims to contribute upstream rather than
+  reinvent that layer.
+- **Versus binding-based stacks (`tch-rs`).** A key tenferro-rs advantage is
+  that operations and their AD rules are extensible from *outside* the core
+  tensor crates: an external crate can add a new operation family, register its
+  `linearize`/`transpose_rule`, and have it participate in the same eager and
+  traced AD workflows as built-in ops (see
+  [`docs/guides/custom-operations.md`](docs/guides/custom-operations.md) and the
+  worked `ext/tropical` semiring extension). Binding-based stacks like `tch-rs`
+  cannot add a custom primitive with custom autodiff rules without dropping down
+  to C++ (`TORCH_LIBRARY`) or Python (`PyO3`); the custom-autograd surface is not
+  reachable from Rust alone.
+- **Column-major is an interop feature, not a hazard.** Owned tensors are
+  column-major to connect cleanly with Fortran, Julia, MATLAB, Eigen3, and
+  LAPACK/BLAS conventions. The column-major↔row-major boundary is bridged by
+  strided views and slices, so interop does not require eager copies (see
+  [`docs/guides/memory-order.md`](docs/guides/memory-order.md)). Do not treat the
+  ordering as a barrier to adoption.
+
 ## Which API Should I Use?
 
 | If your workflow needs | Start with |
