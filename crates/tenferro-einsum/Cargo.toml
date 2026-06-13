@@ -38,6 +38,7 @@ blas-mkl = [
     "tenferro-cpu/blas-mkl",
 ]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
+webgpu = ["tenferro-ad?/webgpu", "tenferro-internal-ops/webgpu"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 
 [dependencies]
@@ -56,6 +57,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.1.0", default-features = false }
 criterion.workspace = true
 num-complex.workspace = true
 

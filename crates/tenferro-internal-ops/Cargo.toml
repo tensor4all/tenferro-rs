@@ -18,6 +18,7 @@ default = ["autodiff"]
 autodiff = ["dep:tidu"]
 gpu = []
 cuda = ["gpu"]
+webgpu = ["gpu"]
 rocm = ["gpu"]
 
 [dependencies]
