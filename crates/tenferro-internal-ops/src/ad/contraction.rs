@@ -1,5 +1,6 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{
@@ -18,7 +19,7 @@ pub fn linearize_dot_general(
     tangent_in: &[Option<LocalValueId>],
     config: &DotGeneralConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let lhs_rank = ctx
         .shape_of(&ValueRef::External(primal_in[0].clone()))
         .len();
@@ -27,11 +28,9 @@ pub fn linearize_dot_general(
         .len();
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .unwrap_or_else(|err| {
-            panic!(
-                "invalid DotGeneral config during linearize: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
-            )
-        });
+        .map_err(|err| ad_rule_error(format!(
+            "invalid DotGeneral config during linearize: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
+        ), ADRuleKind::Jvp))?;
     let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
     let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
     let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
@@ -78,8 +77,8 @@ pub fn linearize_dot_general(
     }
 
     match terms.as_slice() {
-        [] => vec![None],
-        [only] => vec![Some(*only)],
+        [] => Ok(vec![None]),
+        [only] => Ok(vec![Some(*only)]),
         [lhs, rhs] => {
             let sum = builder.add_operation(
                 StdTensorOp::Add,
@@ -88,7 +87,7 @@ pub fn linearize_dot_general(
                     active_mask: vec![true, true],
                 },
             );
-            vec![Some(sum[0])]
+            Ok(vec![Some(sum[0])])
         }
         _ => unreachable!("dot_general linearization creates at most two terms"),
     }
@@ -231,10 +230,10 @@ pub fn transpose_dot_general(
     mode: &OperationRole,
     config: &DotGeneralConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let lhs_rank = ctx.shape_of(&inputs[0]).len();
@@ -245,19 +244,25 @@ pub fn transpose_dot_general(
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
+
+    config
+        .validate_dims_with_ranks(lhs_rank, rhs_rank)
+        .map_err(|err| ad_rule_error(format!(
+            "invalid DotGeneral config during transpose: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
+        ), ADRuleKind::Transpose))?;
 
     let lhs_free = compute_free_dims(
         lhs_rank,
         &config.lhs_contracting_dims,
         &config.lhs_batch_dims,
-    );
+    )?;
     let rhs_free = compute_free_dims(
         rhs_rank,
         &config.rhs_contracting_dims,
         &config.rhs_batch_dims,
-    );
+    )?;
     let output_rank = config.lhs_batch_dims.len() + lhs_free.len() + rhs_free.len();
     let cotangent = normalize_scalar_cotangent(builder, ct, output_rank);
 
@@ -267,7 +272,7 @@ pub fn transpose_dot_general(
         let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
         let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
-            transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
+            transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
         let out = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
@@ -291,7 +296,7 @@ pub fn transpose_dot_general(
         let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
         let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
-            transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
+            transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
         let out = builder.add_operation(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
@@ -311,7 +316,7 @@ pub fn transpose_dot_general(
         ));
     }
 
-    result
+    Ok(result)
 }
 
 pub fn transpose_reduce_sum(
@@ -513,16 +518,32 @@ pub fn transpose_reduce_chooser(
     }
 }
 
-fn compute_free_dims(rank: usize, contracting: &[usize], batch: &[usize]) -> Vec<usize> {
+fn compute_free_dims(
+    rank: usize,
+    contracting: &[usize],
+    batch: &[usize],
+) -> ADRuleResult<Vec<usize>> {
     let mut is_bound = vec![false; rank];
     for &dim in batch {
+        if dim >= rank {
+            return Err(ad_rule_error(
+                format!("batch dimension {dim} out of bounds for rank {rank}"),
+                ADRuleKind::Transpose,
+            ));
+        }
         is_bound[dim] = true;
     }
     for &dim in contracting {
+        if dim >= rank {
+            return Err(ad_rule_error(
+                format!("contracting dimension {dim} out of bounds for rank {rank}"),
+                ADRuleKind::Transpose,
+            ));
+        }
         is_bound[dim] = true;
     }
 
-    (0..rank).filter(|&dim| !is_bound[dim]).collect()
+    Ok((0..rank).filter(|&dim| !is_bound[dim]).collect())
 }
 
 fn kept_dims(rank: usize, axes: &[usize]) -> Vec<usize> {
@@ -835,18 +856,18 @@ fn transpose_plan_for_lhs(
     rhs_rank: usize,
     lhs_free: &[usize],
     rhs_free: &[usize],
-) -> (
+) -> ADRuleResult<(
     DotGeneralConfig,
     /* new_lhs_rank */ usize,
     /* new_rhs_rank */ usize,
     Vec<usize>,
-) {
+)> {
     let n_batch = config.lhs_batch_dims.len();
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
     let ct_rhs_free_positions: Vec<usize> =
         (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
 
-    let rhs_contracting_order = compute_free_dims(rhs_rank, rhs_free, &config.rhs_batch_dims);
+    let rhs_contracting_order = compute_free_dims(rhs_rank, rhs_free, &config.rhs_batch_dims)?;
     let mut result_order = Vec::with_capacity(lhs_rank);
     result_order.extend(lhs_free.iter().copied());
     for rhs_dim in rhs_contracting_order {
@@ -854,7 +875,12 @@ fn transpose_plan_for_lhs(
             .rhs_contracting_dims
             .iter()
             .position(|&dim| dim == rhs_dim)
-            .expect("rhs contracting dimension must be paired");
+            .ok_or_else(|| {
+                ad_rule_error(
+                    format!("rhs contracting dimension {rhs_dim} has no lhs pair during transpose"),
+                    ADRuleKind::Transpose,
+                )
+            })?;
         result_order.push(config.lhs_contracting_dims[pair_idx]);
     }
     result_order.extend(config.lhs_batch_dims.iter().copied());
@@ -865,12 +891,12 @@ fn transpose_plan_for_lhs(
         lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
         rhs_batch_dims: config.rhs_batch_dims.clone(),
     };
-    (
+    Ok((
         new_config,
         output_rank,
         rhs_rank,
         permutation_to_original_order(lhs_rank, &result_order),
-    )
+    ))
 }
 
 fn transpose_plan_for_rhs(
@@ -879,23 +905,28 @@ fn transpose_plan_for_rhs(
     rhs_rank: usize,
     lhs_free: &[usize],
     rhs_free: &[usize],
-) -> (
+) -> ADRuleResult<(
     DotGeneralConfig,
     /* new_lhs_rank */ usize,
     /* new_rhs_rank */ usize,
     Vec<usize>,
-) {
+)> {
     let n_batch = config.lhs_batch_dims.len();
     let ct_lhs_free_positions: Vec<usize> = (0..lhs_free.len()).collect();
 
-    let lhs_contracting_order = compute_free_dims(lhs_rank, lhs_free, &config.lhs_batch_dims);
+    let lhs_contracting_order = compute_free_dims(lhs_rank, lhs_free, &config.lhs_batch_dims)?;
     let mut result_order = Vec::with_capacity(rhs_rank);
     for lhs_dim in lhs_contracting_order {
         let pair_idx = config
             .lhs_contracting_dims
             .iter()
             .position(|&dim| dim == lhs_dim)
-            .expect("lhs contracting dimension must be paired");
+            .ok_or_else(|| {
+                ad_rule_error(
+                    format!("lhs contracting dimension {lhs_dim} has no rhs pair during transpose"),
+                    ADRuleKind::Transpose,
+                )
+            })?;
         result_order.push(config.rhs_contracting_dims[pair_idx]);
     }
     result_order.extend(rhs_free.iter().copied());
@@ -908,12 +939,12 @@ fn transpose_plan_for_rhs(
         lhs_batch_dims: config.lhs_batch_dims.clone(),
         rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
     };
-    (
+    Ok((
         new_config,
         lhs_rank,
         output_rank,
         permutation_to_original_order(rhs_rank, &result_order),
-    )
+    ))
 }
 
 fn permutation_to_original_order(rank: usize, result_order: &[usize]) -> Vec<usize> {
@@ -922,6 +953,10 @@ fn permutation_to_original_order(rank: usize, result_order: &[usize]) -> Vec<usi
         perm[original_dim] = result_axis;
     }
     perm
+}
+
+fn ad_rule_error(message: impl Into<String>, kind: ADRuleKind) -> ADRuleError {
+    ADRuleError::unsupported(message.into(), kind)
 }
 
 fn add_transpose_if_needed(
