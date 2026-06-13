@@ -25,6 +25,8 @@ def test_architecture_svg_lists_cpu_crate_and_background() -> None:
     tensor_section = text[text.index("tenferro-tensor") : text.index("tenferro-cpu")]
     assert "faer | BLAS/LAPACK" not in tensor_section
 
+    assert '<line x1="460" y1="378" x2="460" y2="400" class="dep"/>' in text
+
 
 def test_agents_layer_diagram_lists_cpu_crate() -> None:
     text = read("AGENTS.md")

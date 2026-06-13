@@ -67,7 +67,7 @@
   <text x="595" y="347" class="sub">CubeCL · CUDA</text>
   <text x="595" y="363" class="sub" style="font-size:9px">cuTENSOR/cuSOLVER</text>
 
-  <line x1="377" y1="378" x2="377" y2="400" class="dep"/>
+  <line x1="460" y1="378" x2="460" y2="400" class="dep"/>
 
   <rect x="260" y="404" width="400" height="52" rx="6" class="box"/>
   <text x="272" y="420" class="tag">L1</text>
