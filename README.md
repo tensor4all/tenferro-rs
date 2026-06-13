@@ -264,6 +264,17 @@ output is not trusted by itself. Changes are trusted only after explicit
 repository rules, CI, oracle-based validation, reproducible benchmarks,
 provenance checks, and maintainer review.
 
+Correctness and consistency are also kept by a retained knowledge base that the
+project builds on rather than rediscovers each time: durable **repository and
+engineering rules** ([`REPOSITORY_RULES.md`](REPOSITORY_RULES.md) and the shared
+[`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)),
+**design documents** ([`docs/design/`](docs/design/), [`docs/spec/`](docs/spec/)),
+and the **history of past development decisions** (work logs in
+[`docs/worklogs/`](docs/worklogs/) and review-decision records). This institutional
+memory is what keeps a fast, AI-assisted workflow coherent: rules and recorded
+decisions constrain new changes — including AI-generated ones — toward the
+established design.
+
 ## Contributing
 
 Bug-fix pull requests, feature requests, design discussions, documentation
