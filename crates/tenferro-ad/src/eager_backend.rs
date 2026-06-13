@@ -1,6 +1,8 @@
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CubeclBackend;
+use tenferro_gpu::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::WebGpuBackend;
 use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
@@ -13,7 +15,9 @@ use tenferro_tensor::{
 pub enum EagerBackend {
     Cpu(CpuBackend),
     #[cfg(feature = "cuda")]
-    Cuda(CubeclBackend),
+    Cuda(CudaBackend),
+    #[cfg(feature = "webgpu")]
+    WebGpu(WebGpuBackend),
 }
 
 impl EagerBackend {
@@ -22,8 +26,13 @@ impl EagerBackend {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn cuda(backend: CubeclBackend) -> Self {
+    pub(crate) fn cuda(backend: CudaBackend) -> Self {
         Self::Cuda(backend)
+    }
+
+    #[cfg(feature = "webgpu")]
+    pub(crate) fn webgpu(backend: WebGpuBackend) -> Self {
+        Self::WebGpu(backend)
     }
 
     pub(crate) fn synchronize(&mut self) -> TensorResult<()> {
@@ -31,6 +40,8 @@ impl EagerBackend {
             Self::Cpu(_) => Ok(()),
             #[cfg(feature = "cuda")]
             Self::Cuda(backend) => backend.runtime().synchronize(),
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(backend) => backend.synchronize(),
         }
     }
 }
@@ -41,6 +52,8 @@ macro_rules! dispatch {
             EagerBackend::Cpu(backend) => backend.$method($($arg),*),
             #[cfg(feature = "cuda")]
             EagerBackend::Cuda(backend) => backend.$method($($arg),*),
+            #[cfg(feature = "webgpu")]
+            EagerBackend::WebGpu(backend) => backend.$method($($arg),*),
         }
     };
 }

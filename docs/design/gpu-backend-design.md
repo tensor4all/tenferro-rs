@@ -1,11 +1,21 @@
 # GPU Backend Design
 
-This document is developer-facing. Public user docs describe the GPU surface as
-the CUDA backend exposed from `tenferro_gpu::{CubeclBackend,
-upload_tensor, download_tensor}`. The active implementation behind that public
-surface lives in `crates/tenferro-gpu/src/cubecl/`, gated by the `cuda` feature. It
-targets NVIDIA CUDA devices through CubeCL and CubeCL-CUDA, with CUDA library
-support for cuTENSOR, cuSOLVER, and cuBLAS.
+This document is developer-facing. Public user docs describe GPU providers as
+explicit backend choices. CUDA is exposed as `tenferro_gpu::CudaBackend`, with
+`CubeclBackend` retained as a backwards-compatible CUDA alias while downstream
+users migrate. WebGPU is exposed as `tenferro_gpu::WebGpuBackend`. Backend
+features are additive provider choices: `cuda` and `webgpu` are both explicit,
+neither is enabled by default as a GPU provider, and downstream crates may
+enable either or both. Eager and operation crates should propagate the same
+concrete feature names instead of introducing default GPU providers or a vague
+public `gpu` feature.
+
+The active CUDA implementation lives in `crates/tenferro-gpu/src/cubecl/`,
+gated by the `cuda` feature. It targets NVIDIA CUDA devices through CubeCL and
+CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS. The
+WebGPU implementation lives in a separate provider module, gated by the
+`webgpu` feature, and targets CubeCL-WGPU without depending on CUDA runtime or
+CUDA library bindings.
 
 CUDA GPU support is implemented through the feature-gated CubeCL backend across
 the concrete tensor, eager, and traced execution surfaces. Coverage includes
@@ -15,7 +25,13 @@ Performance optimization is still active work. The remaining unsupported CUDA
 cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
 `dynamic_update_slice`, integer numeric/linalg gaps, `Bool` kernel gaps beyond
 transfer and reshape, and selected complex analytic or ordering operations.
-HIP/ROCm is still a feature stub rather than a supported execution path.
+WebGPU is being introduced incrementally. The implemented path covers explicit
+transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
+implemented by decomposing complex contractions into real `F32` matmul
+operations on the same WebGPU provider. `F64`, `C64`, zero-contracting-size
+matmul, and non-matmul tensor ops remain explicit unsupported paths rather than
+CPU fallbacks. HIP/ROCm is still a reserved feature stub rather than a
+supported execution path.
 
 See also:
 
@@ -39,7 +55,7 @@ crates/tenferro-gpu/src/kernels/
     reduce/                reduction validation, launch helpers, and kernels
 
 crates/tenferro-gpu/src/cubecl/
-    mod.rs                 CubeclBackend and TensorBackend implementation
+    mod.rs                 CUDA backend and TensorBackend implementation
     runtime.rs             CubeCL/CUDA runtime initialization and synchronization
     memory.rs              upload_tensor, download_tensor, device pointer bridge
     dispatch.rs            private shared launch helpers and dtype dispatch
@@ -49,12 +65,22 @@ crates/tenferro-gpu/src/cubecl/
     linalg.rs              cuSOLVER/cuBLAS-backed linalg support
     ffi/                   runtime-loaded CUDA library bindings
     tests/                 ignored GPU tests
+
+crates/tenferro-gpu/src/webgpu/
+    mod.rs                 WebGpuBackend provider facade and shared buffer helpers
+    runtime.rs             CubeCL-WGPU runtime initialization and synchronization
+    memory.rs              upload_webgpu_tensor and download_webgpu_tensor
+    gemm.rs                CubeK-backed F32/C32 dot_general planner and launch support
+    kernels.rs             WebGPU-private pack, split, and compose kernels
 ```
 
-The public backend type is `tenferro_gpu::CubeclBackend`. There are no
-separate in-tree `CudaBackend` and `RocmBackend` implementations. CUDA is
-selected by enabling the `cuda` feature, which depends on the workspace-pinned
-CubeCL fork and the CubeCL CUDA runtime.
+The provider-specific public backend types are `tenferro_gpu::CudaBackend` and
+`tenferro_gpu::WebGpuBackend`. `CubeclBackend` remains a compatibility alias for
+`CudaBackend`; new code should use provider-specific names. CUDA is selected by
+enabling the `cuda` feature, which depends on the workspace-pinned CubeCL fork
+and the CubeCL CUDA runtime. WebGPU is selected by enabling the `webgpu`
+feature, which depends on CubeCL-WGPU and the CubeK matmul provider. Enabling
+both features must compile and must not merge the two runtime types.
 
 ## Kernel Ownership
 
@@ -70,11 +96,14 @@ concerns rather than reusable static kernels.
 
 ## Dependency Source
 
-The workspace intentionally depends on the `tensor4all/cubecl` fork:
+The workspace intentionally depends on the `tensor4all/cubecl` fork. CUDA and
+WebGPU runtime dependencies are feature-owned by `tenferro-gpu`; the workspace
+dependency declaration must not force CUDA for WebGPU-only builds:
 
 ```toml
-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", features = ["cuda"] }
+cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", default-features = false }
 cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 ```
 
@@ -82,21 +111,42 @@ Keep this fork dependency until upstream CubeCL has the required support and the
 workspace is deliberately migrated. Do not replace it with crates.io CubeCL as
 part of unrelated GPU or documentation work.
 
+CubeK matmul integration should branch from the CubeK release paired to CubeCL
+0.10.0: start from CubeK `v0.2.0` / `cubek-matmul 0.2.0`. If complex GEMM or
+WebGPU fixes require a tensor4all fork, publish tensor4all-owned CubeK crates
+from that branch rather than vendoring CubeK into this repository. Local
+development may use a sibling checkout, but committed tenferro manifests should
+use workspace dependencies or a deliberate crates.io/git dependency.
+
 ## Runtime And Library Loading
 
-`CubeclRuntime::new(device_ordinal)` initializes CUDA and creates the CubeCL
-CUDA client for one device. GPU kernels are JIT-compiled by CubeCL, so local
-CUDA toolkit configuration matters.
+`CudaRuntime::new(device_ordinal)` initializes CUDA and creates the CubeCL CUDA
+client for one device. `CubeclRuntime` remains a compatibility alias for
+`CudaRuntime`. GPU kernels are JIT-compiled by CubeCL, so local CUDA toolkit
+configuration matters.
 
-`CubeclRuntime::synchronize()` is the explicit host-side barrier for direct GPU
+`WebGpuRuntime::new(device_ordinal)` creates a CubeCL-WGPU client for a WebGPU
+adapter. WebGPU runtime initialization must not call CUDA driver/runtime APIs,
+load CUDA libraries, or require CUDA environment variables.
+
+Future ROCm support should follow the same explicit-provider model, but it must
+not require ROCm libraries to be present for a binary that merely includes the
+reserved `rocm` feature. The intended substrate is a CubeCL HIP fork or patch
+that runtime-loads HIP libraries with the same discipline as the CUDA FFI layer.
+Until that loader-backed substrate is implemented and tested on ROCm hardware,
+tenferro must keep ROCm unavailable as an execution backend and must not publish
+a ROCm quickstart.
+
+`CudaRuntime::synchronize()` is the explicit host-side barrier for direct CUDA
 backend code. It synchronizes the current CubeCL CUDA stream and does not
-download tensor data. Higher-level eager CUDA execution exposes the same barrier
-through `EagerRuntime::synchronize()`, with CPU eager runtimes treating the call
-as a no-op.
+download tensor data. `WebGpuRuntime::synchronize()` is the corresponding
+WebGPU queue/device barrier. Higher-level eager GPU execution exposes the same
+barrier through `EagerRuntime::synchronize()`, with CPU eager runtimes treating
+the call as a no-op.
 
-cuTENSOR, cuSOLVER, and cuBLAS are loaded lazily through the FFI layer. The
-backend first uses default soname/path candidates and allows explicit override
-with these variables:
+cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
+CUDA FFI layer. The CUDA backend first uses default soname/path candidates and
+allows explicit override with these variables:
 
 | Variable | Library |
 | --- | --- |
@@ -114,18 +164,42 @@ Local GPU test runs should also set:
 
 ## Runtime Cache Ownership
 
-`CubeclBackend` owns CUDA extension backend-state caches. Extension crates may
+`CudaBackend` owns CUDA extension backend-state caches. Extension crates may
 store type-indexed CUDA handles or plans through
-`CubeclBackend::cuda_extension_cache()`, but the backend remains the lifetime
+`CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
 and resource owner.
 
 The CUDA extension cache has a bounded default capacity of 16 type entries.
 Applications can configure it with
-`CubeclBackend::set_cuda_extension_cache_max_entries`, clear it with
-`CubeclBackend::clear_cuda_extension_cache`, and inspect retained entries and
-logical retained bytes with `CubeclBackend::cuda_extension_cache_stats`.
+`CudaBackend::set_cuda_extension_cache_max_entries`, clear it with
+`CudaBackend::clear_cuda_extension_cache`, and inspect retained entries and
+logical retained bytes with `CudaBackend::cuda_extension_cache_stats`.
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
+
+WebGPU provider caches must be owned by `WebGpuBackend` or a WebGPU runtime
+cache object with the same bounded-default, clear, configure, and stats
+requirements before they become long-lived.
+
+GPU scratch-buffer pools should eventually expose a provider-independent stats
+shape across CUDA, WebGPU, and future ROCm:
+
+| Field | Meaning |
+| --- | --- |
+| `retained_buffers` | Number of buffers currently retained by the pool |
+| `retained_bytes` | Logical bytes retained by the pool |
+| `acquire_calls` | Total acquire requests |
+| `release_calls` | Total release requests |
+| `reuse_hits` | Acquires served from retained buffers |
+| `allocation_misses` | Acquires requiring a new allocation |
+| `evictions` | Retained buffers dropped because of pool limits |
+| `high_water_retained_bytes` | Peak logical retained bytes |
+
+This common stats design is future direction only. It must not be introduced by
+rewriting existing CUDA contraction allocation behavior. CUDA `dot_general`
+continues to allocate cuTENSOR workspace through the existing runtime client
+path, and this WebGPU work does not alter CUDA buffer pools, CUDA scratch
+reuse, or CUDA library-call algorithms.
 
 ## Operation-Crate Interop Boundary
 
@@ -179,9 +253,14 @@ and no implicit global shape state.
   extents or strides.
 - `#[comptime]` is reserved for operation attributes and algorithm
   configuration. This includes attributes such as transpose `perm`,
-  broadcast/gather/scatter dimension-number mappings, static slice strides,
-  axis sets, reduce strategy, and kernel blueprints. Different attribute values
-  may compile as different CubeCL specializations.
+  broadcast/gather/scatter dimension-number mappings, static slice step
+  attributes, axis sets, reduce strategy, and kernel blueprints. Different
+  attribute values may compile as different CubeCL specializations.
+- Do not pass tensor shape extents, strides, buffer lengths, flattened products,
+  or other runtime tensor sizes as `#[comptime]` parameters. The WebGPU
+  `dot_general` pack kernels pass only axis-role lists and rank as compile-time
+  launch attributes; shape and stride values are read from `TensorBinding`
+  metadata inside the kernel.
 - Permute-like operations should canonicalize their launch attributes where the
   transformation is mathematically identical. In particular, adjacent axes that
   stay contiguous in column-major layout should be fused before choosing the
@@ -236,14 +315,14 @@ API boundaries. Callers upload tensors before GPU backend operations and
 download results explicitly when host access is needed.
 
 Same-placement canonicalization is allowed: host views may be copied into host
-compact tensors, and CUDA views may be copied into CUDA compact tensors. It is
-not a transfer mechanism.
+compact tensors, and GPU views may be copied into compact tensors on the same
+GPU provider. It is not a transfer mechanism.
 
 ```text
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
-let mut backend = CubeclBackend::new(0)?;
+let mut backend = CudaBackend::new(0)?;
 let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 
@@ -265,6 +344,7 @@ Error behavior:
 | GPU op receives a CPU tensor | `Error::BackendFailure` with an upload hint |
 | CPU op receives a GPU tensor | `Error::BackendFailure` with a download hint for `Result` APIs |
 | `TypedTensor::host_data()` on a GPU buffer | panic with a diagnostic |
+| CUDA op receives a WebGPU tensor, or WebGPU op receives a CUDA tensor | `Error::BackendFailure` naming the expected provider |
 
 ## Implemented Coverage
 
@@ -298,12 +378,22 @@ General eigendecomposition (`eig`, LAPACK `dgeev` style) is not provided by
 cuSOLVER. The CUDA backend returns `BackendFailure`; users must explicitly
 download to CPU and call the CPU backend.
 
+The WebGPU backend currently has narrower coverage:
+
+| Category | WebGPU status |
+| --- | --- |
+| Allocation/transfer | WebGPU allocation, upload, and download for `F64`, `F32`, `I32`, `I64`, `Bool`, `C64`, and `C32` tensors |
+| Real contraction | CubeK/CubeCL-backed `F32` `dot_general` through a BGEMM planner, including batched and same-device packed operand layouts covered by tests |
+| Complex contraction | `C32` `dot_general` through four real `F32` CubeK matmuls and WebGPU-local split/compose kernels |
+| Deferred contraction coverage | `F64`, `C64`, zero-contracting-size matmul, and broader planner stress coverage |
+| Other tensor ops | Explicit unsupported `BackendFailure`; no CPU fallback and no hidden provider transfer |
+
 ## Unsupported And Deferred Work
 
 The following are intentionally outside the current batch:
 
 - GPU benchmark work,
-- HIP/ROCm implementation,
+- HIP/ROCm execution backend implementation,
 - replacing the CubeCL fork,
 - selected complex analytic kernels and ordering operations,
 - CUDA implementations for `full_piv_lu`, `full_piv_lu_solve`, and
@@ -311,12 +401,14 @@ The following are intentionally outside the current batch:
 - integer numeric/linalg CUDA kernels beyond structural and reduction paths,
 - `Bool` CUDA kernels beyond allocation, upload/download, and metadata-only
   reshape,
-- changing the public placement contract.
+- changing the public placement contract,
+- WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit
+  transfer and CubeK-backed `F32`/`C32` contraction.
 
 ## Tests
 
-GPU tests are ignored so regular CPU-only test runs remain portable. Run them on
-a CUDA machine with:
+CUDA GPU tests are ignored so regular CPU-only test runs remain portable. Run
+them on a CUDA machine with:
 
 ```sh
 CUBECL_DEBUG_LOG=0 \
@@ -326,3 +418,8 @@ LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib/x86_64-linux-gnu/libcutensor
 ```
 
 These tests are correctness tests, not benchmarks.
+
+WebGPU provider tests should have two layers: portable source/feature contract
+tests that run in ordinary CI, and adapter-optional runtime tests that return
+early when no WebGPU adapter is available. Runtime tests must compare meaningful
+tensor values or residuals, not only shapes.

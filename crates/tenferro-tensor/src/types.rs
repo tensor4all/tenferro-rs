@@ -56,10 +56,13 @@ pub enum DeviceKind {
 /// use tenferro_tensor::GpuBackendKind;
 ///
 /// let kind = GpuBackendKind::Cuda;
+/// let webgpu = GpuBackendKind::WebGpu;
+/// assert_ne!(kind, webgpu);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GpuBackendKind {
     Cuda,
+    WebGpu,
     Rocm,
     Other(String),
 }

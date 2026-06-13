@@ -10,7 +10,9 @@ use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError}
 use computegraph::ValueKey;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CubeclBackend;
+use tenferro_gpu::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::WebGpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
@@ -247,14 +249,14 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CubeclBackend;
+    /// use tenferro_gpu::CudaBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let _ctor: fn(CubeclBackend) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend(backend: CubeclBackend) -> Arc<Self> {
+    pub fn with_cuda_backend(backend: CudaBackend) -> Arc<Self> {
         Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
     }
 
@@ -264,15 +266,50 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::CubeclBackend;
+    /// use tenferro_gpu::CudaBackend;
     ///
-    /// let _ctor: fn(CubeclBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend_and_ad_context(backend: CubeclBackend, ad: &AdContext) -> Arc<Self> {
+    pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
         Arc::new(Self::from_backend_with_extension_rules(
             EagerBackend::cuda(backend),
+            Some(ad.extension_rule_set()),
+        ))
+    }
+
+    /// Create a shared eager execution context from a configured WebGPU backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _ctor: fn(WebGpuBackend) -> std::sync::Arc<EagerRuntime> =
+    ///     EagerRuntime::with_webgpu_backend;
+    /// ```
+    #[cfg(feature = "webgpu")]
+    pub fn with_webgpu_backend(backend: WebGpuBackend) -> Arc<Self> {
+        Arc::new(Self::from_backend(EagerBackend::webgpu(backend)))
+    }
+
+    /// Create a shared WebGPU eager context with explicit AD extension rules.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{AdContext, EagerRuntime};
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _ctor: fn(WebGpuBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    ///     EagerRuntime::with_webgpu_backend_and_ad_context;
+    /// ```
+    #[cfg(feature = "webgpu")]
+    pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
+        Arc::new(Self::from_backend_with_extension_rules(
+            EagerBackend::webgpu(backend),
             Some(ad.extension_rule_set()),
         ))
     }
@@ -367,7 +404,8 @@ impl EagerRuntime {
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
-    /// CPU runtimes return immediately. CUDA runtimes synchronize the current backend stream.
+    /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
+    /// their current backend work queue.
     ///
     /// # Examples
     ///

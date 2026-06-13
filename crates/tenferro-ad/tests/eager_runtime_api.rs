@@ -1,5 +1,7 @@
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::WebGpuBackend;
 use tenferro_runtime::Tensor;
 
 #[test]
@@ -23,4 +25,11 @@ fn eager_runtime_synchronize_is_available_and_cpu_noop() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
 
     runtime.synchronize().unwrap();
+}
+
+#[cfg(feature = "webgpu")]
+#[test]
+fn eager_runtime_accepts_webgpu_backend_constructor() {
+    let _ctor: fn(WebGpuBackend) -> std::sync::Arc<EagerRuntime> =
+        EagerRuntime::with_webgpu_backend;
 }

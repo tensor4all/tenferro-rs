@@ -11,7 +11,7 @@ general-purpose tensor workflows.
 The project aims to provide a Rust-native tensor stack for typed tensor
 computation, immediate execution with optional `backward()`, traced graph
 execution, automatic differentiation, linear algebra, einsum, FFT, and explicit
-CPU/CUDA backend control.
+CPU, CUDA, and experimental WebGPU backend control.
 
 tenferro-rs is influenced by JAX and PyTorch in its split between immediate
 execution, traced graphs, and AD. It is also influenced by the Julia numerical
@@ -28,7 +28,8 @@ help.
 - Keep tensor types and operation crates modular, rather than building one
   all-in-one tensor type.
 - Let users choose the lowest API that solves their problem. Autodiff, traced
-  graphs, CUDA, linalg, einsum, and FFT are opt-in capabilities.
+  graphs, CUDA, experimental WebGPU, linalg, einsum, and FFT are opt-in
+  capabilities.
 - Stay aligned with established numerical computing conventions where they
   fit: Rust's crate ecosystem, column-major conventions from Fortran, Julia,
   MATLAB, and LAPACK-oriented workflows, and Rust numerics crates such as
@@ -100,7 +101,7 @@ tenferro-rs is for the projects that want this kind of stack natively in Rust.
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
 | Immediate execution in one runtime, optionally with `backward()` on scalar losses | `EagerTensor` and `EagerRuntime` |
 | `grad`, `vjp`, and `jvp` on traced graphs, graph reuse, or repeated compile/run execution | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
-| CUDA execution | The same tensor API plus explicit CUDA upload/download and supported CUDA backend features |
+| CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
 
 ## Crates
 
@@ -112,7 +113,7 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA backend support, ROCm feature stub, and explicit device transfers |
+| `tenferro-gpu` | CUDA backend support, experimental WebGPU support, future ROCm substrate, and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
 
