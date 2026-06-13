@@ -37,40 +37,54 @@ first.
 
 ## Bug fixes
 
-Bug-fix pull requests are welcome.
+Bug reports, minimal reproducers, and regression tests are welcome in issues.
 
-A bug-fix PR should fix behavior that is already intended by current docs,
-specs, or tests. It should not introduce a new public API, operation family,
-backend, dependency, feature flag, or architectural layer.
+Bug-fix pull requests from collaborators are welcome when they fix behavior
+that is already intended by current docs, specs, or tests. A bug-fix PR should
+not introduce a new public API, operation family, backend, dependency, feature
+flag, or architectural layer.
 
-Please include a minimal reproducer or regression test when practical.
+This repository restricts pull request creation to collaborators. If you are
+not a collaborator, please open an issue with the reproducer, proposed test,
+or prototype branch instead of opening an implementation PR.
 
-## New features
+## Feature requests, prototypes, and implementation ownership
 
-New features must start as a feature request issue. Please do not open a
-new-feature implementation PR before maintainers accept the issue and agree
-that implementation should start.
+New features, substantial behavior changes, new public APIs, new backends, new
+dependencies, and architectural changes must start as an issue before an
+implementation pull request is opened.
 
-If you already have prototype code, link to a fork branch, gist, or repository
-from the feature request issue. The issue remains the source of truth for the
-accepted API, dependency impact, backend behavior, AD behavior, tests, and
-roadmap decision.
+This boundary is intended to keep development fast and coherent in an
+agentic-coding workflow. The project preserves API consistency, internal
+architecture, test strategy, backend behavior, and long-term maintainability
+best when maintainers and active collaborators own the final implementation
+inside the repository.
 
-New-feature implementation PRs opened before an accepted issue may be closed
-with a request to continue in an issue.
+Requests, prototype code, exploratory branches, gists, external repositories,
+and focused unit tests are still useful contributions. Please link them from
+the issue and explain what behavior they demonstrate. The issue remains the
+source of truth for the accepted API, dependency impact, backend behavior, AD
+behavior, tests, implementation plan, and roadmap decision.
+
+Implementation PRs for new features or substantial changes that are opened
+before an accepted issue may be closed with a request to continue the
+discussion in an issue first.
 
 ## Prototype code and provenance
 
 By submitting code directly to this repository, you represent that you have the
 right to submit it under this repository's license, `MIT OR Apache-2.0`.
 
-If you link prototype code from a feature request issue, clearly state its
-license if it is not `MIT OR Apache-2.0` or if the project should not use it as
-an implementation reference.
+If you link prototype code from an issue, clearly state its license if it is
+not `MIT OR Apache-2.0` or if the project should not use it as an
+implementation reference.
 
-If maintainers implement a feature using your prototype code as a basis,
-including by rewriting it manually or with AI assistance, the resulting
-implementation may still be derived from the prototype. In that case, the
+When maintainers implement an accepted issue, they may rewrite the design from
+scratch, use the prototype only as a behavioral reference, or take over a
+prototype branch. If the project takes over a prototype branch, maintainers
+should preserve the contributor's original commits where practical and add new
+commits on top. If the final implementation is otherwise based on contributed
+prototype code, including by rewriting it manually or with AI assistance, the
 project will preserve appropriate copyright notices, license obligations,
 attribution, and links to the original prototype or issue discussion.
 
