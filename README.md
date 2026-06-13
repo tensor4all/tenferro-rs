@@ -63,34 +63,34 @@ core use case.
 
 ## Why Build On tenferro-rs
 
-tenferro-rs is a bet that scientific and numerical computing deserves a
-first-class, pure-Rust tensor stack — a native one you can build on, extend, and
-ship as a single binary, rather than a thin wrapper around a C++ or Python
-engine. What that gives you:
+tenferro-rs aims to be a pure-Rust tensor stack for scientific and numerical
+computing — one you can build on, extend, and ship as a single binary, rather
+than a wrapper around a C++ or Python engine. What that gives you:
 
 - **A complete stack, natively in Rust.** Typed tensors, eager execution with
   `backward()`, traced graphs with reuse, `grad`/`vjp`/`jvp`/HVP autodiff, linear
   algebra, einsum, and FFT — all carried by Rust's type system, ownership model,
-  and tooling, with no Python runtime in the loop.
-- **Extensibility as a superpower.** Operations and their AD rules live *outside*
-  the core tensor crates. An external crate can introduce a whole new operation
-  family — even a different algebra — register its `linearize`/`transpose_rule`,
-  and have it flow through the same eager and traced autodiff as the built-in
-  ops. The `ext/tropical` semiring extension is a worked example; see
+  and tooling, with no Python runtime.
+- **Extensible operations and AD rules.** Operations and their AD rules live
+  *outside* the core tensor crates. An external crate can introduce a new
+  operation family — even a different algebra — register its
+  `linearize`/`transpose_rule`, and have it flow through the same eager and
+  traced autodiff as the built-in ops. The `ext/tropical` semiring extension is a
+  worked example; see
   [`docs/guides/custom-operations.md`](docs/guides/custom-operations.md).
-- **At home in the numerical-computing world.** Column-major storage lines up
-  with Fortran, Julia, MATLAB, Eigen3, and LAPACK/BLAS, and strided views bridge
-  to row-major data without eager copies (see
+- **Fits the numerical-computing world.** Column-major storage lines up with
+  Fortran, Julia, MATLAB, Eigen3, and LAPACK/BLAS, and strided views bridge to
+  row-major data without eager copies (see
   [`docs/guides/memory-order.md`](docs/guides/memory-order.md)). tenferro-rs
-  stands on `faer` for dense linear algebra and on
-  [CubeCL](https://github.com/tracel-ai/cubecl) for GPU kernels — sharing and
-  contributing to the Rust ecosystem rather than reinventing it.
+  builds on `faer` for dense linear algebra and on
+  [CubeCL](https://github.com/tracel-ai/cubecl) for GPU kernels, contributing to
+  the Rust ecosystem rather than reinventing it.
 - **Built for shapes you only know at runtime.** A traced program is compiled
   once and reused while concrete sizes — ranks, truncation thresholds,
   data-dependent iteration counts — resolve at execution time.
 
-If your host language is Python, JAX and PyTorch are superb. tenferro-rs is here
-for everything that wants this kind of stack natively in Rust.
+If your host language is Python, JAX and PyTorch are the natural choice.
+tenferro-rs is for the projects that want this kind of stack natively in Rust.
 
 ## Which API Should I Use?
 
