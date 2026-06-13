@@ -183,8 +183,28 @@ fn webgpu_dot_general_is_cubek_backed() {
     );
     assert!(
         webgpu_mod.contains("cubek_matmul::launch::launch_ref")
-            || webgpu_gemm.contains("cubek_matmul::launch::launch_ref"),
+            || webgpu_gemm.contains("cubek_matmul") && webgpu_gemm.contains("launch_ref("),
         "WebGPU dot_general should route matmul through CubeK launch_ref"
+    );
+}
+
+#[test]
+fn webgpu_c32_dot_general_with_conj_uses_cubek_complex_api() {
+    let webgpu_gemm =
+        repo_file_if_exists("crates/tenferro-gpu/src/webgpu/gemm.rs").unwrap_or_default();
+    let webgpu_kernels =
+        repo_file_if_exists("crates/tenferro-gpu/src/webgpu/kernels.rs").unwrap_or_default();
+    assert!(
+        webgpu_gemm.contains("launch_c32_ref"),
+        "WebGPU C32 matmul must route through CubeK complex GEMM API"
+    );
+    assert!(
+        !webgpu_gemm.contains("compose_c32_from_products"),
+        "tenferro WebGPU must not own complex GEMM compose lowering"
+    );
+    assert!(
+        !webgpu_kernels.contains("compose_c32_parts_from_products"),
+        "complex GEMM split/compose kernels belong in CubeK"
     );
 }
 

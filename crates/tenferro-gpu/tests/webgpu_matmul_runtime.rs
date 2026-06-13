@@ -1,6 +1,7 @@
 #![cfg(feature = "webgpu")]
 
 use num_complex::{Complex32, Complex64};
+use tenferro_cpu::CpuBackend;
 use tenferro_gpu::{webgpu_available, WebGpuBackend};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDeviceTransfer, TensorDot};
 
@@ -22,16 +23,92 @@ fn matmul2_col_major(lhs: &[Complex32], rhs: &[Complex32]) -> [Complex32; 4] {
 }
 
 fn assert_complex_close(actual: &[Complex32], expected: &[Complex32]) {
-    for (actual, expected) in actual.iter().zip(expected) {
-        assert!(
-            (actual.re - expected.re).abs() <= 1e-4,
-            "real mismatch: actual={actual:?} expected={expected:?}"
-        );
-        assert!(
-            (actual.im - expected.im).abs() <= 1e-4,
-            "imag mismatch: actual={actual:?} expected={expected:?}"
-        );
+    assert_eq!(actual.len(), expected.len());
+    let max_error = actual
+        .iter()
+        .zip(expected)
+        .map(|(actual, expected)| {
+            (actual.re - expected.re)
+                .abs()
+                .max((actual.im - expected.im).abs())
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_error <= 1e-4,
+        "max complex mismatch {max_error} exceeds tolerance\nactual={actual:?}\nexpected={expected:?}"
+    );
+}
+
+fn assert_f32_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    let max_error = actual
+        .iter()
+        .zip(expected)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_error <= 1e-4,
+        "max f32 mismatch {max_error} exceeds tolerance\nactual={actual:?}\nexpected={expected:?}"
+    );
+}
+
+fn dot_general_config_for_shapes(lhs_shape: &[usize], rhs_shape: &[usize]) -> DotGeneralConfig {
+    if lhs_shape.len() == 3 && rhs_shape.len() == 3 {
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![2],
+            rhs_batch_dims: vec![2],
+        }
+    } else {
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        }
     }
+}
+
+fn c32_values(len: usize, seed: f32) -> Vec<Complex32> {
+    (0..len)
+        .map(|index| {
+            let x = seed + index as f32 * 0.375;
+            Complex32::new(x, 0.25 - 0.5 * x)
+        })
+        .collect()
+}
+
+fn assert_c32_dot_general_with_conj_matches_cpu(
+    backend: &mut WebGpuBackend,
+    lhs_conj: bool,
+    rhs_conj: bool,
+    lhs_shape: Vec<usize>,
+    rhs_shape: Vec<usize>,
+) {
+    let lhs_len = lhs_shape.iter().product();
+    let rhs_len = rhs_shape.iter().product();
+    let lhs = Tensor::from_vec_col_major(lhs_shape.clone(), c32_values(lhs_len, 0.25));
+    let rhs = Tensor::from_vec_col_major(rhs_shape.clone(), c32_values(rhs_len, -0.75));
+    let config = dot_general_config_for_shapes(&lhs_shape, &rhs_shape);
+
+    let mut cpu = CpuBackend::new();
+    let expected = cpu
+        .dot_general_with_conj(&lhs, &rhs, &config, lhs_conj, rhs_conj)
+        .unwrap();
+
+    let gpu_lhs = backend.upload_host_tensor(&lhs).unwrap();
+    let gpu_rhs = backend.upload_host_tensor(&rhs).unwrap();
+    let gpu_out = backend
+        .dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, lhs_conj, rhs_conj)
+        .unwrap();
+    let out = backend.download_to_host(&gpu_out).unwrap();
+
+    assert_eq!(out.shape(), expected.shape());
+    assert_complex_close(
+        out.as_slice::<Complex32>().unwrap(),
+        expected.as_slice::<Complex32>().unwrap(),
+    );
 }
 
 fn noncontiguous_lhs_free_axes_reference(lhs: &[f32], rhs: &[f32]) -> Vec<f32> {
@@ -70,6 +147,77 @@ fn batched_matmul_c32_reference(lhs: &[Complex32], rhs: &[Complex32]) -> Vec<Com
         }
     }
     out
+}
+
+#[test]
+fn webgpu_c32_dot_general_with_lhs_conj_matches_cpu_when_adapter_available() {
+    if !webgpu_available() {
+        return;
+    }
+
+    let mut backend = WebGpuBackend::new_default().unwrap();
+    assert_c32_dot_general_with_conj_matches_cpu(&mut backend, true, false, vec![2, 3], vec![3, 2]);
+}
+
+#[test]
+fn webgpu_c32_dot_general_with_rhs_conj_matches_cpu_when_adapter_available() {
+    if !webgpu_available() {
+        return;
+    }
+
+    let mut backend = WebGpuBackend::new_default().unwrap();
+    assert_c32_dot_general_with_conj_matches_cpu(&mut backend, false, true, vec![2, 3], vec![3, 2]);
+}
+
+#[test]
+fn webgpu_c32_batched_dot_general_with_both_conj_matches_cpu_when_adapter_available() {
+    if !webgpu_available() {
+        return;
+    }
+
+    let mut backend = WebGpuBackend::new_default().unwrap();
+    assert_c32_dot_general_with_conj_matches_cpu(
+        &mut backend,
+        true,
+        true,
+        vec![2, 3, 2],
+        vec![3, 2, 2],
+    );
+}
+
+#[test]
+fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
+    if !webgpu_available() {
+        return;
+    }
+
+    let mut backend = WebGpuBackend::new_default().unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let mut cpu = CpuBackend::new();
+    let expected = cpu
+        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .unwrap();
+
+    let gpu_lhs = backend.upload_host_tensor(&lhs).unwrap();
+    let gpu_rhs = backend.upload_host_tensor(&rhs).unwrap();
+    let gpu_out = backend
+        .dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, true, true)
+        .unwrap();
+    let out = backend.download_to_host(&gpu_out).unwrap();
+
+    assert_eq!(out.shape(), expected.shape());
+    assert_f32_close(
+        out.as_slice::<f32>().unwrap(),
+        expected.as_slice::<f32>().unwrap(),
+    );
 }
 
 #[test]

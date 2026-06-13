@@ -1,14 +1,16 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use cubecl_wgpu::WgpuRuntime;
-use cubek_matmul::{definition::MatmulElems, launch::Strategy};
+use cubek_matmul::{
+    definition::MatmulElems,
+    launch::{launch_c32_ref, launch_ref, ComplexMatmulOptions, Strategy},
+};
 use cubek_std::InputBinding;
 use num_complex::Complex32;
 use smallvec::SmallVec;
 
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, ensure_resident_on_runtime,
-    kernels, typed_tensor_array_arg, typed_tensor_array_arg_as, typed_tensor_binding_with_layout,
-    WebGpuBackend,
+    kernels, typed_tensor_binding_with_layout, WebGpuBackend,
 };
 use crate::{col_major_strides, DotGeneralConfig, Error, Tensor, TypedTensor};
 
@@ -430,7 +432,7 @@ fn dot_general_f32(
     )?;
     let mut dtypes = MatmulElems::from_single_dtype(f32::as_type_native_unchecked());
 
-    cubek_matmul::launch::launch_ref(
+    launch_ref(
         &Strategy::Naive,
         backend.runtime().client(),
         lhs_binding,
@@ -443,134 +445,69 @@ fn dot_general_f32(
     Ok(output)
 }
 
-fn extract_c32_part(
-    backend: &WebGpuBackend,
-    input: &TypedTensor<Complex32>,
-    real: bool,
-) -> crate::Result<TypedTensor<f32>> {
-    ensure_resident_on_runtime(backend.runtime(), input, DOT_GENERAL_OP)?;
-    let output = alloc_output::<f32>(backend.runtime(), input.shape(), DOT_GENERAL_OP)?;
-    let len = output.n_elements();
-    if len == 0 {
-        return Ok(output);
-    }
-
-    let output_arg = typed_tensor_array_arg(&output, DOT_GENERAL_OP)?;
-    let input_part_len = len.checked_mul(2).ok_or_else(|| {
-        Error::backend_failure(DOT_GENERAL_OP, "complex input part length overflow")
-    })?;
-    let input_arg =
-        typed_tensor_array_arg_as::<Complex32, f32>(input, input_part_len, DOT_GENERAL_OP)?;
-    if real {
-        unsafe {
-            // SAFETY: Both array args are validated against compact dense
-            // tensors. The input is reinterpreted as `2 * len` f32 parts, and
-            // the kernel guards writes with `ABSOLUTE_POS < out.len()`.
-            kernels::extract_c32_real::launch_unchecked::<WgpuRuntime>(
-                backend.runtime().client(),
-                cube_count_for_len(len),
-                cube_dim_1d(),
-                output_arg,
-                input_arg,
-            );
-        }
-    } else {
-        unsafe {
-            // SAFETY: Same invariant as the real-part launch above.
-            kernels::extract_c32_imag::launch_unchecked::<WgpuRuntime>(
-                backend.runtime().client(),
-                cube_count_for_len(len),
-                cube_dim_1d(),
-                output_arg,
-                input_arg,
-            );
-        }
-    }
-    Ok(output)
-}
-
-fn compose_c32_from_products(
-    backend: &WebGpuBackend,
-    real_pos: &TypedTensor<f32>,
-    real_neg: &TypedTensor<f32>,
-    imag_left: &TypedTensor<f32>,
-    imag_right: &TypedTensor<f32>,
-) -> crate::Result<TypedTensor<Complex32>> {
-    let shape = real_pos.shape();
-    if real_neg.shape() != shape || imag_left.shape() != shape || imag_right.shape() != shape {
-        return Err(Error::ShapeMismatch {
-            op: DOT_GENERAL_OP,
-            lhs: shape.to_vec(),
-            rhs: real_neg.shape().to_vec(),
-        });
-    }
-    ensure_resident_on_runtime(backend.runtime(), real_pos, DOT_GENERAL_OP)?;
-    ensure_resident_on_runtime(backend.runtime(), real_neg, DOT_GENERAL_OP)?;
-    ensure_resident_on_runtime(backend.runtime(), imag_left, DOT_GENERAL_OP)?;
-    ensure_resident_on_runtime(backend.runtime(), imag_right, DOT_GENERAL_OP)?;
-
-    let output = alloc_output::<Complex32>(backend.runtime(), shape, DOT_GENERAL_OP)?;
-    let len = output.n_elements();
-    if len == 0 {
-        return Ok(output);
-    }
-
-    let output_part_len = len.checked_mul(2).ok_or_else(|| {
-        Error::backend_failure(DOT_GENERAL_OP, "complex output part length overflow")
-    })?;
-    let output_arg =
-        typed_tensor_array_arg_as::<Complex32, f32>(&output, output_part_len, DOT_GENERAL_OP)?;
-    let real_pos_arg = typed_tensor_array_arg(real_pos, DOT_GENERAL_OP)?;
-    let real_neg_arg = typed_tensor_array_arg(real_neg, DOT_GENERAL_OP)?;
-    let imag_left_arg = typed_tensor_array_arg(imag_left, DOT_GENERAL_OP)?;
-    let imag_right_arg = typed_tensor_array_arg(imag_right, DOT_GENERAL_OP)?;
-
-    unsafe {
-        // SAFETY: All input products and the complex output are compact dense
-        // tensors with identical logical element counts. The compose kernel
-        // writes two scalar parts per output position and guards the launch
-        // domain with `ABSOLUTE_POS < real_pos.len()`.
-        kernels::compose_c32_parts_from_products::launch_unchecked::<WgpuRuntime>(
-            backend.runtime().client(),
-            cube_count_for_len(len),
-            cube_dim_1d(),
-            output_arg,
-            real_pos_arg,
-            real_neg_arg,
-            imag_left_arg,
-            imag_right_arg,
-        );
-    }
-
-    Ok(output)
-}
-
 fn dot_general_c32(
     backend: &WebGpuBackend,
     lhs: &TypedTensor<Complex32>,
     rhs: &TypedTensor<Complex32>,
     config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
 ) -> crate::Result<TypedTensor<Complex32>> {
-    build_dot_general_plan(lhs.shape(), rhs.shape(), config)?;
+    let plan = build_dot_general_plan(lhs.shape(), rhs.shape(), config)?;
+    ensure_resident_on_runtime(backend.runtime(), lhs, DOT_GENERAL_OP)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, DOT_GENERAL_OP)?;
 
-    let lhs_real = extract_c32_part(backend, lhs, true)?;
-    let lhs_imag = extract_c32_part(backend, lhs, false)?;
-    let rhs_real = extract_c32_part(backend, rhs, true)?;
-    let rhs_imag = extract_c32_part(backend, rhs, false)?;
+    let output = alloc_output::<Complex32>(backend.runtime(), &plan.output_shape, DOT_GENERAL_OP)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    if plan.k == 0 {
+        return Err(Error::backend_failure(
+            DOT_GENERAL_OP,
+            "WebGPU CubeK matmul does not support zero-sized contracting dimensions yet",
+        ));
+    }
+    let lhs = prepare_lhs_operand(backend, lhs, &plan)?;
+    let rhs = prepare_rhs_operand(backend, rhs, &plan)?;
 
-    let real_pos = dot_general_f32(backend, &lhs_real, &rhs_real, config)?;
-    let real_neg = dot_general_f32(backend, &lhs_imag, &rhs_imag, config)?;
-    let imag_left = dot_general_f32(backend, &lhs_real, &rhs_imag, config)?;
-    let imag_right = dot_general_f32(backend, &lhs_imag, &rhs_real, config)?;
+    let dtype = Complex32::as_type_native_unchecked().storage_type();
+    let lhs_binding = InputBinding::new(
+        typed_tensor_binding_with_layout(&lhs.tensor, &lhs.shape, &lhs.strides, DOT_GENERAL_OP)?,
+        dtype,
+    );
+    let rhs_binding = InputBinding::new(
+        typed_tensor_binding_with_layout(&rhs.tensor, &rhs.shape, &rhs.strides, DOT_GENERAL_OP)?,
+        dtype,
+    );
+    let output_binding = typed_tensor_binding_with_layout(
+        &output,
+        &plan.out_cubek_shape,
+        &plan.out_cubek_strides,
+        DOT_GENERAL_OP,
+    )?;
+    let mut dtypes = MatmulElems::from_single_dtype(Complex32::as_type_native_unchecked());
 
-    compose_c32_from_products(backend, &real_pos, &real_neg, &imag_left, &imag_right)
+    launch_c32_ref(
+        &Strategy::Naive,
+        backend.runtime().client(),
+        lhs_binding,
+        rhs_binding,
+        output_binding,
+        &mut dtypes,
+        ComplexMatmulOptions { lhs_conj, rhs_conj },
+    )
+    .map_err(|err| Error::backend_failure(DOT_GENERAL_OP, format!("{err:?}")))?;
+
+    Ok(output)
 }
 
-pub(super) fn dot_general(
+pub(super) fn dot_general_with_conj(
     backend: &WebGpuBackend,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
 ) -> crate::Result<Tensor> {
     match (lhs, rhs) {
         (Tensor::F32(lhs), Tensor::F32(rhs)) => {
@@ -581,7 +518,7 @@ pub(super) fn dot_general(
             "WebGPU CubeK matmul currently supports f32 real inputs; f64 is not available in the initial WebGPU path",
         )),
         (Tensor::C32(lhs), Tensor::C32(rhs)) => {
-            dot_general_c32(backend, lhs, rhs, config).map(Tensor::C32)
+            dot_general_c32(backend, lhs, rhs, config, lhs_conj, rhs_conj).map(Tensor::C32)
         }
         (Tensor::C64(_), Tensor::C64(_)) => Err(Error::backend_failure(
             DOT_GENERAL_OP,
@@ -589,4 +526,13 @@ pub(super) fn dot_general(
         )),
         _ => Err(dtype_mismatch(DOT_GENERAL_OP, lhs, rhs)),
     }
+}
+
+pub(super) fn dot_general(
+    backend: &WebGpuBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+) -> crate::Result<Tensor> {
+    dot_general_with_conj(backend, lhs, rhs, config, false, false)
 }

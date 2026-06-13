@@ -27,11 +27,11 @@ cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
 transfer and reshape, and selected complex analytic or ordering operations.
 WebGPU is being introduced incrementally. The implemented path covers explicit
 transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
-implemented by decomposing complex contractions into real `F32` matmul
-operations on the same WebGPU provider. `F64`, `C64`, zero-contracting-size
-matmul, and non-matmul tensor ops remain explicit unsupported paths rather than
-CPU fallbacks. HIP/ROCm is still a reserved feature stub rather than a
-supported execution path.
+implemented through a CubeK-owned complex GEMM launch API that lowers to real
+`F32` matmuls and handles conjugation flags. `F64`, `C64`,
+zero-contracting-size matmul, and non-matmul tensor ops remain explicit
+unsupported paths rather than CPU fallbacks. HIP/ROCm is still a reserved
+feature stub rather than a supported execution path.
 
 See also:
 
@@ -71,7 +71,7 @@ crates/tenferro-gpu/src/webgpu/
     runtime.rs             CubeCL-WGPU runtime initialization and synchronization
     memory.rs              upload_webgpu_tensor and download_webgpu_tensor
     gemm.rs                CubeK-backed F32/C32 dot_general planner and launch support
-    kernels.rs             WebGPU-private pack, split, and compose kernels
+    kernels.rs             WebGPU-private dot_general pack kernels
 ```
 
 The provider-specific public backend types are `tenferro_gpu::CudaBackend` and
@@ -384,7 +384,7 @@ The WebGPU backend currently has narrower coverage:
 | --- | --- |
 | Allocation/transfer | WebGPU allocation, upload, and download for `F64`, `F32`, `I32`, `I64`, `Bool`, `C64`, and `C32` tensors |
 | Real contraction | CubeK/CubeCL-backed `F32` `dot_general` through a BGEMM planner, including batched and same-device packed operand layouts covered by tests |
-| Complex contraction | `C32` `dot_general` through four real `F32` CubeK matmuls and WebGPU-local split/compose kernels |
+| Complex contraction | `C32` `dot_general` and `dot_general_with_conj` through a CubeK-owned complex GEMM API. tenferro normalizes `DotGeneralConfig` into CubeK-compatible batched matmul bindings; CubeK owns temporary real buffers, split/compose kernels, conjugation signs, and future native complex-kernel replacement |
 | Deferred contraction coverage | `F64`, `C64`, zero-contracting-size matmul, and broader planner stress coverage |
 | Other tensor ops | Explicit unsupported `BackendFailure`; no CPU fallback and no hidden provider transfer |
 

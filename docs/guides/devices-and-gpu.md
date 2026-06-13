@@ -164,7 +164,7 @@ rows return explicit errors and do not fall back to CPU.
 | Operation or family | WebGPU dtype support | Notes |
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/WebGPU transfer only |
-| `dot_general` | `F32`, `C32` | CubeK-backed BGEMM planner; supports rank-2, batched, and same-device packed operand layouts covered by tests |
+| `dot_general`, `dot_general_with_conj` | `F32`, `C32` | CubeK-backed BGEMM planner; `C32` conjugation is handled by the CubeK complex GEMM API. Supports rank-2, batched, and same-device packed operand layouts covered by tests |
 | Binary einsum lowering to `dot_general` | `F32`, `C32` | Eager `F32`/`C32` and traced `F32` paths are covered when inputs are explicitly uploaded to WebGPU |
 | `dot_general` with zero contracting size | No WebGPU implementation | Returns an error until CubeK behavior is validated |
 | `dot_general` for `F64`, `C64` | No WebGPU implementation | Returns an error; no CPU fallback |

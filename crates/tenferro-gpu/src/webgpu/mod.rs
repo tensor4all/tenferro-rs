@@ -1,8 +1,6 @@
 //! CubeCL WebGPU provider runtime and backend skeleton.
 
-use cubecl::prelude::{
-    ArrayArg, CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding,
-};
+use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
 use cubecl_wgpu::WgpuRuntime;
 use std::sync::Arc;
 
@@ -205,63 +203,6 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
     Ok(unsafe {
         TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
     })
-}
-
-fn typed_tensor_array_arg<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<WgpuRuntime>> {
-    let buffer = webgpu_buffer(tensor, op)?;
-    validate_webgpu_buffer_len(tensor, buffer, op)?;
-
-    // SAFETY: `validate_webgpu_buffer_len` proves the dense tensor shape
-    // matches the backing allocation length. Raw linear kernels using this
-    // helper guard their output domain with `ABSOLUTE_POS < out.len()`.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
-}
-
-fn typed_tensor_array_arg_as<T, U>(
-    tensor: &TypedTensor<T>,
-    len: usize,
-    op: &'static str,
-) -> crate::Result<ArrayArg<WgpuRuntime>>
-where
-    T: CubeElement + Clone,
-    U: CubeElement + Clone,
-{
-    let buffer = webgpu_buffer(tensor, op)?;
-    validate_webgpu_buffer_len(tensor, buffer, op)?;
-    let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
-        Error::backend_failure(
-            op,
-            format!("reinterpreted WebGPU array length overflow for len {len}"),
-        )
-    })?;
-    let available_bytes = buffer
-        .element_len()
-        .checked_mul(core::mem::size_of::<T>())
-        .ok_or_else(|| {
-            Error::backend_failure(
-                op,
-                format!(
-                    "WebGPU buffer byte length overflow for {} elements",
-                    buffer.element_len()
-                ),
-            )
-        })?;
-    if requested_bytes > available_bytes {
-        return Err(Error::backend_failure(
-            op,
-            format!(
-                "reinterpreted WebGPU array needs {requested_bytes} bytes, buffer has {available_bytes}"
-            ),
-        ));
-    }
-
-    // SAFETY: The tensor shape was validated against the backing allocation,
-    // and the byte-size check proves the requested scalar view remains within
-    // the same allocation.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), len) })
 }
 
 fn ensure_resident_on_runtime<T: 'static>(
@@ -630,6 +571,17 @@ impl TensorDot for WebGpuBackend {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         gemm::dot_general(self, lhs, rhs, config)
+    }
+
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 }
 

@@ -1,35 +1,6 @@
 use cubecl::prelude::*;
 
 #[cube(launch_unchecked)]
-pub fn extract_c32_real(out: &mut Array<f32>, input_parts: &Array<f32>) {
-    if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = input_parts[ABSOLUTE_POS * 2];
-    }
-}
-
-#[cube(launch_unchecked)]
-pub fn extract_c32_imag(out: &mut Array<f32>, input_parts: &Array<f32>) {
-    if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = input_parts[ABSOLUTE_POS * 2 + 1];
-    }
-}
-
-#[cube(launch_unchecked)]
-pub fn compose_c32_parts_from_products(
-    out_parts: &mut Array<f32>,
-    real_pos: &Array<f32>,
-    real_neg: &Array<f32>,
-    imag_left: &Array<f32>,
-    imag_right: &Array<f32>,
-) {
-    if ABSOLUTE_POS < real_pos.len() {
-        let out_pos = ABSOLUTE_POS * 2;
-        out_parts[out_pos] = real_pos[ABSOLUTE_POS] - real_neg[ABSOLUTE_POS];
-        out_parts[out_pos + 1] = imag_left[ABSOLUTE_POS] + imag_right[ABSOLUTE_POS];
-    }
-}
-
-#[cube(launch_unchecked)]
 pub fn pack_lhs_dot_general<E: CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
