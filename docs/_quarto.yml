@@ -37,6 +37,8 @@ website:
           - tutorials/typed-tensor-non-ad.md
           - tutorials/eager-autodiff-pytorch-style.md
           - tutorials/traced-autodiff-jax-style.md
+          - tutorials/einsum-subscripts-to-gradients.md
+          - tutorials/dynamic-shape-truncated-svd.md
       - section: "Guides"
         contents:
           - text: "Choosing a Tensor API"
