@@ -89,6 +89,15 @@ pub enum Error {
     )]
     ContextMismatch { lhs: ContextId, rhs: ContextId },
 
+    /// Traced graph construction rejected an invalid operation configuration.
+    #[error("{op}: invalid traced graph build: {message}")]
+    InvalidGraphBuild {
+        /// Public operation name.
+        op: &'static str,
+        /// Validation failure details.
+        message: String,
+    },
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),

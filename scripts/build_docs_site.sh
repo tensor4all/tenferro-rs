@@ -103,6 +103,7 @@ PY
 
 echo "[1/8] Checking user-facing snippets"
 python3 "$ROOT_DIR/scripts/check-doc-snippets.py" --root-dir "$ROOT_DIR" --check
+python3 "$ROOT_DIR/scripts/check-guide-dependency-snippets.py" --root-dir "$ROOT_DIR"
 
 echo "[2/8] Building rustdoc"
 rm -rf "$DOC_ROOT"

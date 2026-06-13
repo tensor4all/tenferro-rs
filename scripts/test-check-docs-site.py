@@ -47,6 +47,13 @@ def make_minimal_docs_root(root: pathlib.Path) -> None:
         """,
     )
     write(
+        root / "scripts/check-guide-dependency-snippets.py",
+        """
+        #!/usr/bin/env python3
+        raise SystemExit(0)
+        """,
+    )
+    write(
         root / "docs/_quarto.yml",
         """
         project:

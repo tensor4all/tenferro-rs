@@ -41,18 +41,20 @@ jobs:
       - name: Run tropical extension clippy
         run: cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings
 
-  # test-workspace:
-  #   name: cargo test (workspace)
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v5
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: Swatinem/rust-cache@v2
-  #     - uses: taiki-e/install-action@nextest
-  #     - name: Run unit and integration tests
-  #       run: cargo nextest run --workspace --release --no-fail-fast
-  #     - name: Run doc tests
-  #       run: cargo test --doc --workspace --release
+  # NOTE: The full workspace test suite is NOT skipped — it has been MOVED, not
+  # disabled. `cargo nextest run --workspace` + workspace doc tests run on every
+  # pull request via the dedicated `ci-pr-workspace-tests.yml` workflow (the
+  # `ci-fork` and `ci-maintainer` jobs, across the cpu-faer and cpu-blas
+  # backends), and the `ci-gate` job there is the branch-protection check that
+  # requires them.
+  #
+  # This `ci.yml` workflow runs on both push-to-main and PRs, and intentionally
+  # keeps only the fast, always-cheap checks (fmt, clippy, focused inject tests,
+  # coverage, dependency-boundary, docs). The heavy workspace test matrix lives
+  # in `ci-pr-workspace-tests.yml` so it runs once per PR rather than also on
+  # every push to `main` (where the merged PR already gated it). GPU tests run in
+  # `CI_gpu.yml`. Do not re-add a workspace test job here without removing it from
+  # `ci-pr-workspace-tests.yml` first — otherwise the suite runs twice per PR.
 
   test-inject-blas:
     name: cargo test (blas inject)
@@ -109,5 +111,6 @@ jobs:
         run: |
           python3 scripts/test-check-docs-site.py
           python3 scripts/test-doc-consistency.py
+          python3 scripts/check-guide-dependency-snippets.py
       - name: Build docs site
         run: bash scripts/build_docs_site.sh

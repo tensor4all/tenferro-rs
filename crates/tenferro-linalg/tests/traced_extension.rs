@@ -176,6 +176,14 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         tenferro_linalg::eigh(&complex_square).unwrap();
     assert_eq!(complex_eigh_values.dtype, DType::F64);
     assert_eq!(complex_eigh_vectors.dtype, DType::C64);
+
+    let (p, l, u, q, parity) = tenferro_linalg::full_piv_lu(&complex_square).unwrap();
+    assert_eq!(p.dtype, DType::C64);
+    assert_eq!(l.dtype, DType::C64);
+    assert_eq!(u.dtype, DType::C64);
+    assert_eq!(q.dtype, DType::C64);
+    assert_eq!(parity.dtype, DType::F64);
+    assert_eq!(parity.rank, 0);
 }
 
 #[test]

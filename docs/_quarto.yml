@@ -12,6 +12,7 @@ project:
     - architecture/**/*.md
     - spec/**/*.md
     - design/**/*.md
+    - oracle/**/*.md
 
 format:
   html:
@@ -37,6 +38,8 @@ website:
           - tutorials/typed-tensor-non-ad.md
           - tutorials/eager-autodiff-pytorch-style.md
           - tutorials/traced-autodiff-jax-style.md
+          - tutorials/einsum-subscripts-to-gradients.md
+          - tutorials/dynamic-shape-truncated-svd.md
       - section: "Guides"
         contents:
           - text: "Choosing a Tensor API"
@@ -106,3 +109,8 @@ website:
               - spec/extension-op.md
               - spec/optimizer-passes.md
               - spec/tensor-semantics.md
+          - section: "Oracle Validation"
+            contents:
+              - oracle/index.md
+              - text: "AD oracle support table"
+                href: oracle/tensor-ad-oracles-support.md

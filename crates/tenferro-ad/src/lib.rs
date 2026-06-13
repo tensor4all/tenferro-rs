@@ -5,6 +5,17 @@
 //! `tenferro-runtime`; tensor storage lives in `tenferro-tensor`, and CPU
 //! execution lives in `tenferro-cpu`.
 //!
+//! Use [`EagerRuntime`] and [`EagerTensor`] for PyTorch-style immediate
+//! execution where tracked variables accumulate gradients after `backward()`.
+//! Use [`TracedTensorAdExt`] or [`AdContext`] for JAX-style graph transforms
+//! such as `grad`, `vjp`, and `jvp` on [`tenferro_runtime::TracedTensor`]
+//! values. `AdContext` is the explicit place to add extension AD rule sets for
+//! operation-family crates such as `tenferro-linalg`.
+//!
+//! User-facing guides live at
+//! <https://tensor4all.org/tenferro-rs/guides/autodiff.html> and
+//! <https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html>.
+//!
 //! # Examples
 //!
 //! ```rust

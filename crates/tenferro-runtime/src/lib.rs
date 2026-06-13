@@ -5,6 +5,19 @@
 //! operations are lowered through the runtime's internal operation vocabulary;
 //! tensor storage and backend kernels live in `tenferro-tensor`.
 //!
+//! Use this crate directly when you want concrete tensor helpers or reusable
+//! traced graph execution without opting into autodiff. Start with
+//! [`TypedTensor`] when the scalar type is fixed in Rust, [`Tensor`] when dtype
+//! is selected at runtime, and [`TracedTensor`] plus [`GraphCompiler`] and
+//! [`GraphExecutor`] when the same expression should be compiled once and run
+//! repeatedly. Operation-family crates such as `tenferro-einsum`,
+//! `tenferro-linalg`, and `tenferro-fft` register extension runtimes with
+//! [`GraphExecutor`] when compiled execution reaches those operations.
+//!
+//! User-facing guides live at
+//! <https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html> and
+//! <https://tensor4all.org/tenferro-rs/guides/execution-models.html>.
+//!
 //! # Examples
 //!
 //! ```rust

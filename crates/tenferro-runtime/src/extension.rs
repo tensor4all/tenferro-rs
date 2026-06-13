@@ -3,16 +3,16 @@
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
 //! runtime crate. External crates implement
 //! [`tenferro_ops::ext_op::ExtensionOp`] and build traced graphs containing
-//! the extension via [`apply`].
+//! the extension via [`try_apply`] or the compatibility wrapper [`apply`].
 //!
 //! See `docs/spec/extension-op.md` for the normative contract.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_runtime::extension::{apply, ExtensionOpTrait};
+//! use tenferro_runtime::extension::{try_apply, ExtensionOpTrait};
 //!
-//! // Construct an `Arc<dyn ExtensionOpTrait>` and call `apply(op, &[input])`
+//! // Construct an `Arc<dyn ExtensionOpTrait>` and call `try_apply(op, &[input])`
 //! // to lower it into a `TracedTensor`.
 //! ```
 
@@ -117,14 +117,65 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// assert_eq!(outputs.len(), 1);
 /// ```
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTensor> {
-    assert_eq!(
-        inputs.len(),
-        op.input_count(),
-        "extension::apply: op family {:?} expects {} inputs, got {}",
-        op.family_id(),
-        op.input_count(),
-        inputs.len()
-    );
+    try_apply(op, inputs).expect("extension::apply validation failed")
+}
+
+/// Fallibly apply an extension op in the traced graph.
+///
+/// This is the non-panicking variant of [`apply`]. It returns
+/// [`Error::InvalidGraphBuild`] when the extension receives the wrong number of
+/// inputs or when [`ExtensionOp::infer_output_meta`] returns metadata whose
+/// count does not match [`ExtensionOp::output_count`].
+///
+/// # Examples
+///
+/// ```rust
+/// # use std::any::Any;
+/// use std::sync::Arc;
+/// use tenferro_runtime::extension::{try_apply, ExtensionOpTrait};
+/// use tenferro_runtime::{DType, SymDim, Tensor, TracedTensor};
+///
+/// # #[derive(Clone, Debug)]
+/// # struct IdentityExt;
+/// # impl ExtensionOpTrait for IdentityExt {
+/// #     fn family_id(&self) -> &'static str { "example.identity.v1" }
+/// #     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+/// #     fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+/// #         other.as_any().downcast_ref::<IdentityExt>().is_some()
+/// #     }
+/// #     fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> { Arc::new(self.clone()) }
+/// #     fn as_any(&self) -> &dyn Any { self }
+/// #     fn input_count(&self) -> usize { 1 }
+/// #     fn output_count(&self) -> usize { 1 }
+/// #     fn infer_output_meta(
+/// #         &self,
+/// #         dtypes: &[DType],
+/// #         shapes: &[&[SymDim]],
+/// #     ) -> Vec<(DType, Vec<SymDim>)> {
+/// #         vec![(dtypes[0], shapes[0].to_vec())]
+/// #     }
+/// #     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+/// #         Ok(vec![inputs[0].clone()])
+/// #     }
+/// # }
+/// let op: Arc<dyn ExtensionOpTrait> = Arc::new(IdentityExt);
+/// let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let outputs = try_apply(op, &[&a])?;
+/// assert_eq!(outputs.len(), 1);
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+pub fn try_apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
+    if inputs.len() != op.input_count() {
+        return Err(Error::InvalidGraphBuild {
+            op: "extension::apply",
+            message: format!(
+                "op family {:?} expects {} inputs, got {}",
+                op.family_id(),
+                op.input_count(),
+                inputs.len()
+            ),
+        });
+    }
 
     // Build the per-input dtype / shape slices the extension's
     // `infer_output_meta` wants. Symbolic-shape inputs (shape_hint =
@@ -147,15 +198,17 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     let input_shape_refs: Vec<&[SymDim]> = input_shape_storage.iter().map(Vec::as_slice).collect();
 
     let output_metas = op.infer_output_meta(&input_dtypes, &input_shape_refs);
-    assert_eq!(
-        output_metas.len(),
-        op.output_count(),
-        "extension::apply: op family {:?} declared {} outputs but \
-         infer_output_meta returned {}",
-        op.family_id(),
-        op.output_count(),
-        output_metas.len()
-    );
+    if output_metas.len() != op.output_count() {
+        return Err(Error::InvalidGraphBuild {
+            op: "extension::apply",
+            message: format!(
+                "op family {:?} declared {} outputs but infer_output_meta returned {}",
+                op.family_id(),
+                op.output_count(),
+                output_metas.len()
+            ),
+        });
+    }
 
     // Build the graph that carries the Extension op.
     let mut builder = GraphBuilder::<StdTensorOp>::new();
@@ -170,7 +223,12 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     let outputs = builder.add_operation(carrier, op_inputs, OperationRole::Primary);
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
-    traced_outputs_from_graph(inputs, graph, &outputs, output_metas)
+    Ok(traced_outputs_from_graph(
+        inputs,
+        graph,
+        &outputs,
+        output_metas,
+    ))
 }
 
 /// Apply an extension-provided lowering as ordinary traced graph operations.

@@ -1,6 +1,7 @@
+use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
@@ -53,6 +54,31 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(parity.shape(), &[] as &[usize]);
     assert_close(f64_data(&paqt), f64_data(&lu));
+}
+
+#[test]
+fn full_piv_lu_complex_parity_uses_real_counterpart_dtype() {
+    let a = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(3.0, 0.0),
+        ],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let outputs = backend.full_piv_lu(&a).unwrap();
+
+    assert_eq!(outputs[0].dtype(), DType::C64);
+    assert_eq!(outputs[1].dtype(), DType::C64);
+    assert_eq!(outputs[2].dtype(), DType::C64);
+    assert_eq!(outputs[3].dtype(), DType::C64);
+    assert_eq!(outputs[4].dtype(), DType::F64);
+    assert_eq!(outputs[4].shape(), &[] as &[usize]);
+    let parity = outputs[4].as_slice::<f64>().unwrap()[0];
+    assert!(parity == 1.0 || parity == -1.0);
 }
 
 #[test]

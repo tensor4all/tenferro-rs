@@ -3,6 +3,92 @@ use tenferro_tensor::DType;
 
 use super::*;
 
+#[derive(Clone, Debug)]
+struct TestExtension {
+    input_count: usize,
+    output_count: usize,
+    inferred_outputs: usize,
+}
+
+impl ExtensionOpTrait for TestExtension {
+    fn family_id(&self) -> &'static str {
+        "test.extension"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        self.input_count
+    }
+
+    fn output_count(&self) -> usize {
+        self.output_count
+    }
+
+    fn infer_output_meta(
+        &self,
+        dtypes: &[DType],
+        shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        (0..self.inferred_outputs)
+            .map(|_| (dtypes[0], shapes[0].to_vec()))
+            .collect()
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[test]
+fn try_apply_returns_error_for_input_count_mismatch() {
+    let op = Arc::new(TestExtension {
+        input_count: 2,
+        output_count: 1,
+        inferred_outputs: 1,
+    });
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+
+    let Err(err) = try_apply(op, &[&x]) else {
+        panic!("input count mismatch should be an error");
+    };
+
+    let message = err.to_string();
+    assert!(message.contains("test.extension"), "{message}");
+    assert!(message.contains("expects 2 inputs, got 1"), "{message}");
+}
+
+#[test]
+fn try_apply_returns_error_for_output_metadata_count_mismatch() {
+    let op = Arc::new(TestExtension {
+        input_count: 1,
+        output_count: 2,
+        inferred_outputs: 1,
+    });
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+
+    let Err(err) = try_apply(op, &[&x]) else {
+        panic!("output metadata mismatch should be an error");
+    };
+
+    let message = err.to_string();
+    assert!(message.contains("test.extension"), "{message}");
+    assert!(message.contains("declared 2 outputs"), "{message}");
+    assert!(message.contains("returned 1"), "{message}");
+}
+
 #[test]
 fn apply_expanded_graph_builds_standard_op_without_extension() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
