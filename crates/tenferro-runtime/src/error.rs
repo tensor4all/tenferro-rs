@@ -98,6 +98,13 @@ pub enum Error {
         message: String,
     },
 
+    /// Lowering rejected an inconsistent compiled graph.
+    #[error("invalid compiled graph: {message}")]
+    InvalidCompiledGraph {
+        /// Validation failure details.
+        message: String,
+    },
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),

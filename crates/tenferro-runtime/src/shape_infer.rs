@@ -10,6 +10,8 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
 
+use crate::{Error, Result};
+
 /// Promote two dtypes to the narrowest common dtype that avoids silent
 /// precision loss, following the policy defined in [#811].
 ///
@@ -169,16 +171,19 @@ fn real_dtype_for_abs(dtype: DType) -> DType {
 /// Returns a vector of shapes (one per output slot). For single-output ops,
 /// the vector has length 1. Multi-output extension ops return one entry per
 /// output.
-pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec<Vec<DimExpr>> {
-    match op {
+pub fn infer_output_shapes(
+    op: &StdTensorOp,
+    input_shapes: &[&[DimExpr]],
+) -> Result<Vec<Vec<DimExpr>>> {
+    let shapes = match op {
         StdTensorOp::Add => vec![same_or_scalar_broadcast_shape(
-            require_input(op, input_shapes, 0),
-            require_input(op, input_shapes, 1),
-        )],
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
+        )?],
         StdTensorOp::Mul => vec![same_or_scalar_broadcast_shape(
-            require_input(op, input_shapes, 0),
-            require_input(op, input_shapes, 1),
-        )],
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
+        )?],
         StdTensorOp::Neg
         | StdTensorOp::Conj
         | StdTensorOp::Div
@@ -204,10 +209,10 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         | StdTensorOp::Triu { .. }
         | StdTensorOp::Reverse { .. }
         | StdTensorOp::Scatter(_) => {
-            vec![require_input(op, input_shapes, 0).to_vec()]
+            vec![require_input(op, input_shapes, 0)?.to_vec()]
         }
         StdTensorOp::Transpose { perm } => {
-            vec![permute_shape(require_input(op, input_shapes, 0), perm)]
+            vec![permute_shape(require_input(op, input_shapes, 0)?, perm)]
         }
         StdTensorOp::Reshape { to_shape, .. } => vec![to_shape.clone()],
         StdTensorOp::BroadcastInDim { shape, .. } => vec![shape.clone()],
@@ -216,25 +221,25 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         | StdTensorOp::ReduceProd { axes, .. }
         | StdTensorOp::ReduceMax { axes, .. }
         | StdTensorOp::ReduceMin { axes, .. } => {
-            vec![reduced_shape(require_input(op, input_shapes, 0), axes)]
+            vec![reduced_shape(require_input(op, input_shapes, 0)?, axes)]
         }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             vec![extract_diag_shape(
-                require_input(op, input_shapes, 0),
+                require_input(op, input_shapes, 0)?,
                 *axis_a,
                 *axis_b,
             )]
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             vec![embed_diag_shape(
-                require_input(op, input_shapes, 0),
+                require_input(op, input_shapes, 0)?,
                 *axis_a,
                 *axis_b,
             )]
         }
         StdTensorOp::Gather(config) => vec![gather_shape(
-            require_input(op, input_shapes, 0),
-            require_input(op, input_shapes, 1),
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
             config,
         )],
         StdTensorOp::GatherDynamicSliceSizes {
@@ -249,46 +254,50 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
                 .map(|dim| resolve_dim_expr_from_shapes(dim, input_shapes))
                 .collect();
             vec![gather_shape_from_slice_sizes(
-                require_input(op, input_shapes, 0),
-                require_input(op, input_shapes, 1),
+                require_input(op, input_shapes, 0)?,
+                require_input(op, input_shapes, 1)?,
                 offset_dims,
                 collapsed_slice_dims,
                 *index_vector_dim,
                 &resolved_slice_sizes,
             )]
         }
-        StdTensorOp::Slice(config) => vec![slice_shape(require_input(op, input_shapes, 0), config)],
+        StdTensorOp::Slice(config) => {
+            vec![slice_shape(require_input(op, input_shapes, 0)?, config)]
+        }
         StdTensorOp::DynamicSlice { slice_sizes } => {
             vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
         }
-        StdTensorOp::DynamicUpdateSlice => vec![require_input(op, input_shapes, 0).to_vec()],
-        StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0), config)],
+        StdTensorOp::DynamicUpdateSlice => vec![require_input(op, input_shapes, 0)?.to_vec()],
+        StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0)?, config)],
         StdTensorOp::DotGeneral { config, .. } => vec![dot_general_shape(
-            require_input(op, input_shapes, 0),
-            require_input(op, input_shapes, 1),
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
             config,
         )],
         StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)],
         StdTensorOp::ShapeOf { .. } => vec![Vec::new()],
         StdTensorOp::DynamicTruncate { axis } => {
-            let shape = require_input(op, input_shapes, 0).to_vec();
-            assert!(
-                *axis < shape.len(),
-                "DynamicTruncate axis {axis} out of bounds for rank {}",
-                shape.len()
-            );
+            let shape = require_input(op, input_shapes, 0)?.to_vec();
+            if *axis >= shape.len() {
+                return Err(shape_infer_error(format!(
+                    "DynamicTruncate axis {axis} out of bounds for rank {}",
+                    shape.len()
+                )));
+            }
             vec![shape]
         }
         StdTensorOp::PadToMatch { axis } => vec![pad_to_match_shape(
-            require_input(op, input_shapes, 0),
-            require_input(op, input_shapes, 1),
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
             *axis,
         )],
         StdTensorOp::Extension(ext) => {
-            let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes);
+            let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes)?;
             metas.into_iter().map(|(_dtype, shape)| shape).collect()
         }
-    }
+    };
+    Ok(shapes)
 }
 
 /// Infer output shape extents for a single instruction.
@@ -300,23 +309,24 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
 pub fn infer_output_extents(
     op: &StdTensorOp,
     input_shapes: &[&[DimExpr]],
-) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+) -> Result<Vec<Vec<ShapeExtent<DimExpr>>>> {
     match op {
         StdTensorOp::DynamicTruncate { axis } => {
-            let shape = require_input(op, input_shapes, 0);
-            assert!(
-                *axis < shape.len(),
-                "DynamicTruncate axis {axis} out of bounds for rank {}",
-                shape.len()
-            );
+            let shape = require_input(op, input_shapes, 0)?;
+            if *axis >= shape.len() {
+                return Err(shape_infer_error(format!(
+                    "DynamicTruncate axis {axis} out of bounds for rank {}",
+                    shape.len()
+                )));
+            }
             let mut extents: Vec<_> = shape.iter().cloned().map(ShapeExtent::exact).collect();
             extents[*axis] = ShapeExtent::upper_bound(shape[*axis].clone());
-            vec![extents]
+            Ok(vec![extents])
         }
-        _ => infer_output_shapes(op, input_shapes)
+        _ => Ok(infer_output_shapes(op, input_shapes)?
             .into_iter()
             .map(|shape| shape.into_iter().map(ShapeExtent::exact).collect())
-            .collect(),
+            .collect()),
     }
 }
 
@@ -334,7 +344,7 @@ pub fn infer_extension_output_meta(
     op: &dyn ExtensionOp,
     input_dtypes: &[DType],
     input_shapes: &[&[DimExpr]],
-) -> Vec<(DType, Vec<DimExpr>)> {
+) -> Result<Vec<(DType, Vec<DimExpr>)>> {
     // Build per-input SymDim representations using the input index as the
     // synthetic tensor id. This preserves DimExpr::InputDim ↔ SymDim::TensorAxis
     // round-trips; the tensor_id namespace is local to this call.
@@ -363,16 +373,16 @@ pub fn infer_extension_output_meta(
             let dim_exprs: Vec<DimExpr> = shape
                 .iter()
                 .map(|dim| {
-                    dim.to_dim_expr(&tensor_map).unwrap_or_else(|err| {
-                        panic!(
-                            "ExtensionOp::infer_output_meta for family {:?} \
-                             returned a SymDim that cannot be converted to DimExpr: {err}",
-                            op.family_id(),
-                        )
+                    dim.to_dim_expr(&tensor_map).map_err(|err| {
+                        shape_infer_error(format!(
+                            "ExtensionOp::infer_output_meta for family {:?} returned a SymDim \
+                             that cannot be converted to DimExpr: {err}",
+                            op.family_id()
+                        ))
                     })
                 })
-                .collect();
-            (dtype, dim_exprs)
+                .collect::<Result<_>>()?;
+            Ok((dtype, dim_exprs))
         })
         .collect()
 }
@@ -414,12 +424,12 @@ fn require_input<'a>(
     op: &StdTensorOp,
     input_shapes: &'a [&[DimExpr]],
     idx: usize,
-) -> &'a [DimExpr] {
-    input_shapes.get(idx).copied().unwrap_or_else(|| {
-        panic!(
+) -> Result<&'a [DimExpr]> {
+    input_shapes.get(idx).copied().ok_or_else(|| {
+        shape_infer_error(format!(
             "{op:?} expects input index {idx}, got {} input shapes",
             input_shapes.len()
-        )
+        ))
     })
 }
 
@@ -483,15 +493,18 @@ fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Vec<DimExpr> {
         .collect()
 }
 
-fn same_or_scalar_broadcast_shape(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr]) -> Vec<DimExpr> {
+fn same_or_scalar_broadcast_shape(
+    lhs_shape: &[DimExpr],
+    rhs_shape: &[DimExpr],
+) -> Result<Vec<DimExpr>> {
     let rank = lhs_shape.len().max(rhs_shape.len());
     let mut out = Vec::with_capacity(rank);
     for axis in 0..rank {
         let lhs_dim = broadcast_aligned_dim(lhs_shape, rank, axis);
         let rhs_dim = broadcast_aligned_dim(rhs_shape, rank, axis);
-        out.push(broadcast_dim(lhs_dim, rhs_dim));
+        out.push(broadcast_dim(lhs_dim, rhs_dim)?);
     }
-    out
+    Ok(out)
 }
 
 fn broadcast_aligned_dim(shape: &[DimExpr], output_rank: usize, output_axis: usize) -> DimExpr {
@@ -502,17 +515,23 @@ fn broadcast_aligned_dim(shape: &[DimExpr], output_rank: usize, output_axis: usi
     }
 }
 
-fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
+fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     if lhs == rhs {
-        return lhs;
+        return Ok(lhs);
     }
     match (&lhs, &rhs) {
-        (DimExpr::Const(1), _) => rhs,
-        (_, DimExpr::Const(1)) => lhs,
-        (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => {
-            panic!("incompatible Add/Mul broadcast dimensions: {lhs_value} and {rhs_value}")
-        }
-        _ => dim_max(lhs, rhs),
+        (DimExpr::Const(1), _) => Ok(rhs),
+        (_, DimExpr::Const(1)) => Ok(lhs),
+        (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => Err(shape_infer_error(format!(
+            "incompatible Add/Mul broadcast dimensions: {lhs_value} and {rhs_value}"
+        ))),
+        _ => Ok(dim_max(lhs, rhs)),
+    }
+}
+
+fn shape_infer_error(message: impl Into<String>) -> Error {
+    Error::InvalidCompiledGraph {
+        message: message.into(),
     }
 }
 

@@ -4,7 +4,7 @@ use super::{
     layout_chain_transpose_folding, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
-use crate::GraphExecutor;
+use crate::{Error, GraphExecutor};
 use computegraph::compile::{CompiledProgram, Instruction};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -107,12 +107,54 @@ fn compile_default_options_match_default_entrypoint() {
 
     let dtypes = [DType::F64, DType::F64];
     let shapes = [dim_shape(&[2, 3]), dim_shape(&[3, 4])];
-    let default = compile_std_to_exec(&program, &dtypes, &shapes);
+    let default = compile_std_to_exec(&program, &dtypes, &shapes).unwrap();
     let explicit =
-        compile_std_to_exec_with_options(&program, &dtypes, &shapes, CompilerOptions::default());
+        compile_std_to_exec_with_options(&program, &dtypes, &shapes, CompilerOptions::default())
+            .unwrap();
 
     assert_eq!(default.instructions.len(), explicit.instructions.len());
     assert_eq!(default.n_slots, explicit.n_slots);
+}
+
+#[test]
+fn compile_reports_missing_slot_metadata_as_error() {
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(StdTensorOp::Neg, vec![1], vec![2])],
+        input_slots: vec![0],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let err = compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("missing dtype for slot 1")
+    ));
+}
+
+#[test]
+fn compile_reports_incompatible_broadcast_as_error() {
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(StdTensorOp::Add, vec![0, 1], vec![2])],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let err = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[dim_shape(&[2]), dim_shape(&[3])],
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("incompatible Add/Mul broadcast dimensions: 2 and 3")
+    ));
 }
 
 #[test]
@@ -264,7 +306,7 @@ fn dot_decomposer_is_disabled_by_default_and_opt_in() {
     let dtypes = [DType::F64, DType::F64];
     let shapes = [dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])];
 
-    let default_exec = compile_std_to_exec(&program, &dtypes, &shapes);
+    let default_exec = compile_std_to_exec(&program, &dtypes, &shapes).unwrap();
     assert_eq!(
         default_exec
             .instructions
@@ -288,7 +330,8 @@ fn dot_decomposer_is_disabled_by_default_and_opt_in() {
                 ..OptimizerConfig::default()
             },
         },
-    );
+    )
+    .unwrap();
     assert!(decomposed
         .instructions
         .iter()
@@ -481,7 +524,7 @@ fn test_conj_sinking_pushes_through_transpose() {
     );
     let mut program = make_exec_program(vec![transpose, conj], vec![0], vec![2], 3);
 
-    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2, 3])]);
+    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2, 3])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 2);
@@ -518,7 +561,7 @@ fn test_conj_sinking_cancels_double_conj() {
     );
     let mut program = make_exec_program(vec![conj_a, conj_b], vec![0], vec![2], 3);
 
-    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2])]);
+    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.output_slots, vec![0]);
@@ -543,7 +586,7 @@ fn test_conj_sinking_does_not_push_convert_onto_i64() {
     );
     let mut program = make_exec_program(vec![convert_i64_to_f64, conj], vec![0], vec![2], 3);
 
-    conj_sinking(&mut program, &[DType::I64], &[dim_shape(&[2])]);
+    conj_sinking(&mut program, &[DType::I64], &[dim_shape(&[2])]).unwrap();
 
     assert_eq!(program.instructions.len(), 2);
     assert!(matches!(
@@ -572,7 +615,7 @@ fn test_conj_sinking_does_not_push_convert_to_i64() {
     );
     let mut program = make_exec_program(vec![convert_f64_to_i64, conj], vec![0], vec![2], 3);
 
-    conj_sinking(&mut program, &[DType::F64], &[dim_shape(&[2])]);
+    conj_sinking(&mut program, &[DType::F64], &[dim_shape(&[2])]).unwrap();
 
     assert_eq!(program.instructions.len(), 2);
     assert!(matches!(
@@ -618,7 +661,8 @@ fn test_conj_sinking_preserves_transpose_folding_path_to_dot_conj() {
         &mut program,
         &[DType::C64, DType::C64],
         &[dim_shape(&[2, 3]), dim_shape(&[3, 4])],
-    );
+    )
+    .unwrap();
     transpose_folding(&mut program);
     dot_conj_folding(&mut program);
     eliminate_dead_code(&mut program);
@@ -713,7 +757,8 @@ fn test_full_pipeline_matmul() {
         &program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[2, 3]), dim_shape(&[3, 4])],
-    );
+    )
+    .unwrap();
 
     assert_eq!(exec.instructions.len(), 1);
     match &exec.instructions[0].op {
@@ -760,7 +805,8 @@ fn test_full_pipeline_transpose_matmul() {
         &program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[3, 2]), dim_shape(&[3, 4])],
-    );
+    )
+    .unwrap();
 
     // `transpose_folding` absorbs the Transpose into DotGeneral dim-numbers.
     // The compiled pipeline leaves the non-canonical DotGeneral for the backend
@@ -815,7 +861,8 @@ fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
         &program,
         &[DType::C64, DType::C64],
         &[dim_shape(&[2, 3]), dim_shape(&[3, 4, 5])],
-    );
+    )
+    .unwrap();
 
     assert!(
         exec.instructions
@@ -902,7 +949,8 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
         &program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])],
-    );
+    )
+    .unwrap();
 
     // Build concrete inputs: LHS = sequential 0..24, reshaped as [2, 3, 4];
     //                       RHS = sequential 0..20, reshaped as [4, 5].

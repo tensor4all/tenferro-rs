@@ -8,6 +8,7 @@ use tenferro_tensor::{DType, DotGeneralConfig};
 use crate::shape_infer::{
     infer_extension_output_meta, infer_output_dtype, infer_output_extents, infer_output_shapes,
 };
+use crate::{Error, Result};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
@@ -20,7 +21,7 @@ pub fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
-) -> ExecProgram {
+) -> Result<ExecProgram> {
     compile_std_to_exec_with_options(prog, input_dtypes, input_shapes, CompilerOptions::default())
 }
 
@@ -29,17 +30,21 @@ pub fn compile_std_to_exec_with_options(
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
     options: CompilerOptions,
-) -> ExecProgram {
-    assert_eq!(
-        prog.input_slots.len(),
-        input_dtypes.len(),
-        "compile_std_to_exec: input dtype count must match input slot count"
-    );
-    assert_eq!(
-        prog.input_slots.len(),
-        input_shapes.len(),
-        "compile_std_to_exec: input shape count must match input slot count"
-    );
+) -> Result<ExecProgram> {
+    if prog.input_slots.len() != input_dtypes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "input dtype count {} must match input slot count {}",
+            input_dtypes.len(),
+            prog.input_slots.len()
+        )));
+    }
+    if prog.input_slots.len() != input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "input shape count {} must match input slot count {}",
+            input_shapes.len(),
+            prog.input_slots.len()
+        )));
+    }
 
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
@@ -59,29 +64,32 @@ pub fn compile_std_to_exec_with_options(
                 .inputs
                 .iter()
                 .map(|&slot| {
-                    slot_dtypes[slot].unwrap_or_else(|| {
-                        panic!("compile_std_to_exec: missing dtype for slot {slot}")
-                    })
+                    slot_dtypes
+                        .get(slot)
+                        .and_then(|dtype| *dtype)
+                        .ok_or_else(|| missing_slot_meta("dtype", slot))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let input_shapes_refs: Vec<&[DimExpr]> = instr
                 .inputs
                 .iter()
                 .map(|&slot| {
-                    slot_shapes[slot].as_deref().unwrap_or_else(|| {
-                        panic!("compile_std_to_exec: missing shape for slot {slot}")
-                    })
+                    slot_shapes
+                        .get(slot)
+                        .and_then(|shape| shape.as_deref())
+                        .ok_or_else(|| missing_slot_meta("shape", slot))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let input_extents_refs: Vec<&[ShapeExtent<DimExpr>]> = instr
                 .inputs
                 .iter()
                 .map(|&slot| {
-                    slot_extents[slot].as_deref().unwrap_or_else(|| {
-                        panic!("compile_std_to_exec: missing extents for slot {slot}")
-                    })
+                    slot_extents
+                        .get(slot)
+                        .and_then(|extents| extents.as_deref())
+                        .ok_or_else(|| missing_slot_meta("extents", slot))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
 
             let (output_dtypes, output_shapes, output_extents) =
                 if let StdTensorOp::Extension(ext) = &instr.operation {
@@ -89,16 +97,15 @@ pub fn compile_std_to_exec_with_options(
                         ext.as_ref(),
                         &input_dtypes,
                         &input_shapes_refs,
-                    );
-                    assert_eq!(
-                        metas.len(),
-                        instr.outputs.len(),
-                        "compile_std_to_exec: extension family_id={:?} \
-                         inferred {} output metas for {} output slots",
-                        ext.family_id(),
-                        metas.len(),
-                        instr.outputs.len()
-                    );
+                    )?;
+                    if metas.len() != instr.outputs.len() {
+                        return Err(invalid_compiled_graph(format!(
+                            "extension family_id={:?} inferred {} output metas for {} output slots",
+                            ext.family_id(),
+                            metas.len(),
+                            instr.outputs.len()
+                        )));
+                    }
                     let dtypes: Vec<DType> = metas.iter().map(|(dtype, _)| *dtype).collect();
                     let shapes: Vec<Vec<DimExpr>> =
                         metas.into_iter().map(|(_dtype, shape)| shape).collect();
@@ -106,33 +113,33 @@ pub fn compile_std_to_exec_with_options(
                     (dtypes, shapes, extents)
                 } else {
                     let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
-                    let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs);
-                    let extents = infer_output_extents(&instr.operation, &input_shapes_refs);
-                    assert_eq!(
-                        shapes.len(),
-                        instr.outputs.len(),
-                        "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                        instr.operation,
-                        shapes.len(),
-                        instr.outputs.len()
-                    );
-                    assert_eq!(
-                        extents.len(),
-                        instr.outputs.len(),
-                        "compile_std_to_exec: {:?} inferred {} output extents for {} output slots",
-                        instr.operation,
-                        extents.len(),
-                        instr.outputs.len()
-                    );
+                    let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs)?;
+                    let extents = infer_output_extents(&instr.operation, &input_shapes_refs)?;
+                    if shapes.len() != instr.outputs.len() {
+                        return Err(invalid_compiled_graph(format!(
+                            "{:?} inferred {} output shapes for {} output slots",
+                            instr.operation,
+                            shapes.len(),
+                            instr.outputs.len()
+                        )));
+                    }
+                    if extents.len() != instr.outputs.len() {
+                        return Err(invalid_compiled_graph(format!(
+                            "{:?} inferred {} output extents for {} output slots",
+                            instr.operation,
+                            extents.len(),
+                            instr.outputs.len()
+                        )));
+                    }
                     let resolved_extents =
-                        resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs);
+                        resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs)?;
                     (vec![dtype; instr.outputs.len()], shapes, resolved_extents)
                 };
 
             let instruction_dtype = output_dtypes
                 .first()
                 .copied()
-                .unwrap_or_else(|| panic!("compile_std_to_exec: instruction has no outputs"));
+                .ok_or_else(|| invalid_compiled_graph("instruction has no outputs"))?;
             for (((slot, dtype), shape), extents) in instr
                 .outputs
                 .iter()
@@ -140,12 +147,18 @@ pub fn compile_std_to_exec_with_options(
                 .zip(output_shapes.iter())
                 .zip(output_extents.iter())
             {
-                slot_dtypes[*slot] = Some(*dtype);
+                let Some(slot_dtype) = slot_dtypes.get_mut(*slot) else {
+                    return Err(invalid_compiled_graph(format!(
+                        "output slot {} is outside slot table of length {}",
+                        slot, prog.n_slots
+                    )));
+                };
+                *slot_dtype = Some(*dtype);
                 slot_shapes[*slot] = Some(shape.clone());
                 slot_extents[*slot] = Some(extents.clone());
             }
 
-            ExecInstruction {
+            Ok(ExecInstruction {
                 op: ExecOp::from_std_tensor_op(&instr.operation),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
@@ -153,9 +166,9 @@ pub fn compile_std_to_exec_with_options(
                 output_shapes: output_shapes.into(),
                 output_extents: output_extents.into(),
                 last_use: Vec::new(),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut program = ExecProgram {
         instructions,
@@ -163,8 +176,18 @@ pub fn compile_std_to_exec_with_options(
         output_slots: prog.output_slots.clone(),
         n_slots: prog.n_slots,
     };
-    optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer);
-    program
+    optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer)?;
+    Ok(program)
+}
+
+fn invalid_compiled_graph(message: impl Into<String>) -> Error {
+    Error::InvalidCompiledGraph {
+        message: message.into(),
+    }
+}
+
+fn missing_slot_meta(kind: &'static str, slot: usize) -> Error {
+    invalid_compiled_graph(format!("missing {kind} for slot {slot}"))
 }
 
 pub(super) fn exact_extents_from_shape(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
@@ -182,7 +205,7 @@ fn resolve_output_extents(
     extents: Vec<Vec<ShapeExtent<DimExpr>>>,
     input_shapes: &[&[DimExpr]],
     input_extents: &[&[ShapeExtent<DimExpr>]],
-) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+) -> Result<Vec<Vec<ShapeExtent<DimExpr>>>> {
     extents
         .into_iter()
         .map(|shape_extents| {
@@ -198,64 +221,65 @@ fn resolve_extent(
     extent: ShapeExtent<DimExpr>,
     input_shapes: &[&[DimExpr]],
     input_extents: &[&[ShapeExtent<DimExpr>]],
-) -> ShapeExtent<DimExpr> {
+) -> Result<ShapeExtent<DimExpr>> {
     match extent {
         ShapeExtent::Exact(dim) => match dim_expr_extent_kind(&dim, input_extents) {
-            ExtentKind::Exact => ShapeExtent::exact(resolve_dim_expr(&dim, input_shapes)),
-            ExtentKind::UpperBound => {
-                ShapeExtent::upper_bound(resolve_dim_expr(&dim, input_shapes))
-            }
-            ExtentKind::Unknown => ShapeExtent::unknown(),
+            ExtentKind::Exact => Ok(ShapeExtent::exact(resolve_dim_expr(&dim, input_shapes)?)),
+            ExtentKind::UpperBound => Ok(ShapeExtent::upper_bound(resolve_dim_expr(
+                &dim,
+                input_shapes,
+            )?)),
+            ExtentKind::Unknown => Ok(ShapeExtent::unknown()),
         },
         ShapeExtent::UpperBound(dim) => match dim_expr_extent_kind(&dim, input_extents) {
-            ExtentKind::Unknown => ShapeExtent::unknown(),
-            ExtentKind::Exact | ExtentKind::UpperBound => {
-                ShapeExtent::upper_bound(resolve_dim_expr(&dim, input_shapes))
-            }
+            ExtentKind::Unknown => Ok(ShapeExtent::unknown()),
+            ExtentKind::Exact | ExtentKind::UpperBound => Ok(ShapeExtent::upper_bound(
+                resolve_dim_expr(&dim, input_shapes)?,
+            )),
         },
-        ShapeExtent::Unknown => ShapeExtent::unknown(),
+        ShapeExtent::Unknown => Ok(ShapeExtent::unknown()),
     }
 }
 
-fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> DimExpr {
+fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> Result<DimExpr> {
     match expr {
-        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
         DimExpr::InputDim { input_idx, axis } => input_shapes
             .get(*input_idx)
             .and_then(|shape| shape.get(*axis))
             .cloned()
-            .unwrap_or_else(|| {
-                panic!(
-                    "compile_std_to_exec: InputDim({}, {}) cannot be resolved from {} input shapes",
+            .ok_or_else(|| {
+                invalid_compiled_graph(format!(
+                    "InputDim({}, {}) cannot be resolved from {} input shapes",
                     input_idx,
                     axis,
                     input_shapes.len()
-                )
+                ))
             }),
-        DimExpr::Add(a, b) => DimExpr::add(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
-        DimExpr::Sub(a, b) => DimExpr::sub(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
-        DimExpr::Mul(a, b) => DimExpr::mul(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
-        DimExpr::FloorDiv(a, b) => DimExpr::floor_div(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
-        DimExpr::Min(a, b) => DimExpr::min(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
-        DimExpr::Max(a, b) => DimExpr::max(
-            resolve_dim_expr(a, input_shapes),
-            resolve_dim_expr(b, input_shapes),
-        ),
+        DimExpr::Add(a, b) => Ok(DimExpr::add(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Sub(a, b) => Ok(DimExpr::sub(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Mul(a, b) => Ok(DimExpr::mul(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::FloorDiv(a, b) => Ok(DimExpr::floor_div(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Min(a, b) => Ok(DimExpr::min(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Max(a, b) => Ok(DimExpr::max(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
     }
 }
 
@@ -348,31 +372,36 @@ pub(crate) fn conj_sinking(
     program: &mut ExecProgram,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
-) {
-    assert_eq!(
-        program.input_slots.len(),
-        input_dtypes.len(),
-        "conj_sinking: input dtype count must match input slot count"
-    );
-    assert_eq!(
-        program.input_slots.len(),
-        input_shapes.len(),
-        "conj_sinking: input shape count must match input slot count"
-    );
+) -> Result<()> {
+    if program.input_slots.len() != input_dtypes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "conj_sinking input dtype count {} must match input slot count {}",
+            input_dtypes.len(),
+            program.input_slots.len()
+        )));
+    }
+    if program.input_slots.len() != input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "conj_sinking input shape count {} must match input slot count {}",
+            input_shapes.len(),
+            program.input_slots.len()
+        )));
+    }
 
     loop {
-        if !conj_sinking_one_pass(program, input_dtypes, input_shapes) {
+        if !conj_sinking_one_pass(program, input_dtypes, input_shapes)? {
             break;
         }
     }
+    Ok(())
 }
 
 fn conj_sinking_one_pass(
     program: &mut ExecProgram,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
-) -> bool {
-    let mut slot_meta = collect_slot_meta(program, input_dtypes, input_shapes);
+) -> Result<bool> {
+    let mut slot_meta = collect_slot_meta(program, input_dtypes, input_shapes)?;
     let mut redirect: Vec<usize> = (0..program.n_slots).collect();
     let mut producer_by_slot: ProducerMap = vec![None; program.n_slots];
     let mut conj_cache: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
@@ -411,7 +440,7 @@ fn conj_sinking_one_pass(
                             n_slots: &mut program.n_slots,
                             redirect: &mut redirect,
                         }
-                        .ensure_conj_slot(input_slot);
+                        .ensure_conj_slot(input_slot)?;
                     }
                     instr.op = producer.op;
                     instr.input_slots = input_slots;
@@ -428,24 +457,30 @@ fn conj_sinking_one_pass(
         *slot = resolve_slot_redirect(*slot, &redirect);
     }
     program.instructions = new_instructions;
-    changed
+    Ok(changed)
 }
 
 fn collect_slot_meta(
     program: &ExecProgram,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
-) -> Vec<Option<SlotMeta>> {
+) -> Result<Vec<Option<SlotMeta>>> {
     let mut slot_meta = vec![None; program.n_slots];
     for (index, &slot) in program.input_slots.iter().enumerate() {
-        slot_meta[slot] = Some(SlotMeta {
+        let Some(meta_slot) = slot_meta.get_mut(slot) else {
+            return Err(invalid_compiled_graph(format!(
+                "input slot {} is outside slot table of length {}",
+                slot, program.n_slots
+            )));
+        };
+        *meta_slot = Some(SlotMeta {
             dtype: input_dtypes[index],
             shape: input_shapes[index].clone(),
             extents: exact_extents_from_shape(&input_shapes[index]),
         });
     }
     for instr in &program.instructions {
-        let output_dtypes = instruction_output_dtypes(instr, &slot_meta);
+        let output_dtypes = instruction_output_dtypes(instr, &slot_meta)?;
         for (((&slot, dtype), shape), extents) in instr
             .output_slots
             .iter()
@@ -453,55 +488,62 @@ fn collect_slot_meta(
             .zip(instr.output_shapes.iter())
             .zip(instr.output_extents.iter())
         {
-            slot_meta[slot] = Some(SlotMeta {
+            let Some(meta_slot) = slot_meta.get_mut(slot) else {
+                return Err(invalid_compiled_graph(format!(
+                    "output slot {} is outside slot table of length {}",
+                    slot, program.n_slots
+                )));
+            };
+            *meta_slot = Some(SlotMeta {
                 dtype: *dtype,
                 shape: shape.clone(),
                 extents: extents.clone(),
             });
         }
     }
-    slot_meta
+    Ok(slot_meta)
 }
 
 fn instruction_output_dtypes(
     instr: &ExecInstruction,
     slot_meta: &[Option<SlotMeta>],
-) -> Vec<DType> {
+) -> Result<Vec<DType>> {
     let ExecOp::Extension(ext) = &instr.op else {
-        return vec![instr.dtype; instr.output_slots.len()];
+        return Ok(vec![instr.dtype; instr.output_slots.len()]);
     };
     let input_dtypes: Vec<DType> = instr
         .input_slots
         .iter()
         .map(|&slot| {
-            slot_meta[slot]
-                .as_ref()
-                .unwrap_or_else(|| panic!("collect_slot_meta: missing dtype for slot {slot}"))
-                .dtype
+            slot_meta
+                .get(slot)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| missing_slot_meta("dtype", slot))
+                .map(|meta| meta.dtype)
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let input_shapes: Vec<Vec<DimExpr>> = instr
         .input_slots
         .iter()
         .map(|&slot| {
-            slot_meta[slot]
-                .as_ref()
-                .unwrap_or_else(|| panic!("collect_slot_meta: missing shape for slot {slot}"))
-                .shape
-                .clone()
+            slot_meta
+                .get(slot)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| missing_slot_meta("shape", slot))
+                .map(|meta| meta.shape.clone())
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let input_shape_refs: Vec<&[DimExpr]> = input_shapes.iter().map(Vec::as_slice).collect();
-    let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs);
-    assert_eq!(
-        metas.len(),
-        instr.output_slots.len(),
-        "collect_slot_meta: extension family_id={:?} inferred {} output metas for {} output slots",
-        ext.family_id(),
-        metas.len(),
-        instr.output_slots.len()
-    );
-    metas.into_iter().map(|(dtype, _shape)| dtype).collect()
+    let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs)?;
+    if metas.len() != instr.output_slots.len() {
+        return Err(invalid_compiled_graph(format!(
+            "extension family_id={:?} inferred {} output metas for {} output slots",
+            ext.family_id(),
+            metas.len(),
+            instr.output_slots.len()
+        )));
+    }
+    Ok(metas.into_iter().map(|(dtype, _shape)| dtype).collect())
 }
 
 struct ConjSinkingState<'a> {
@@ -514,20 +556,26 @@ struct ConjSinkingState<'a> {
 }
 
 impl ConjSinkingState<'_> {
-    fn ensure_conj_slot(&mut self, slot: usize) -> usize {
+    fn ensure_conj_slot(&mut self, slot: usize) -> Result<usize> {
         let slot = resolve_slot_redirect(slot, self.redirect);
         if let Some(producer) = producer_for_slot(self.producer_by_slot, slot) {
             if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
-                return resolve_slot_redirect(producer.input_slots[0], self.redirect);
+                return Ok(resolve_slot_redirect(
+                    producer.input_slots[0],
+                    self.redirect,
+                ));
             }
         }
         if let Some(&conj_slot) = self.conj_cache.get(&slot) {
-            return conj_slot;
+            return Ok(conj_slot);
         }
 
-        let meta = self.slot_meta[slot]
-            .clone()
-            .unwrap_or_else(|| panic!("conj_sinking: missing metadata for slot {slot}"));
+        let meta = self
+            .slot_meta
+            .get(slot)
+            .and_then(Option::as_ref)
+            .cloned()
+            .ok_or_else(|| missing_slot_meta("metadata", slot))?;
         let output_slot = *self.n_slots;
         *self.n_slots += 1;
         self.redirect.push(output_slot);
@@ -545,7 +593,7 @@ impl ConjSinkingState<'_> {
         record_producer(self.producer_by_slot, &instr);
         self.new_instructions.push(instr);
         self.conj_cache.insert(slot, output_slot);
-        output_slot
+        Ok(output_slot)
     }
 }
 

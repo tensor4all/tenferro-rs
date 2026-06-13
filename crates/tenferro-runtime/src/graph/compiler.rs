@@ -408,7 +408,7 @@ impl GraphCompiler {
             &input_dtypes,
             &input_shapes,
             self.compiler_options,
-        );
+        )?;
         let exec = self.get_or_compile(exec);
         Ok(GraphProgram::new(exec, descriptors))
     }
