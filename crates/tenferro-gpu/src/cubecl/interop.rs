@@ -6,6 +6,7 @@
 //! representation on `CubeclRuntime` or `CubeclBuffer` themselves.
 
 use std::ffi::c_void;
+use std::fmt;
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
@@ -19,6 +20,15 @@ use super::{dispatch, CubeclRuntime};
 pub struct DeviceByteBuffer {
     handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,
+}
+
+impl fmt::Debug for DeviceByteBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceByteBuffer")
+            .field("is_empty", &self.is_empty())
+            .field("ptr", &self.ptr)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeviceByteBuffer {

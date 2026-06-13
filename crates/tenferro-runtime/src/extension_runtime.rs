@@ -6,7 +6,7 @@
 //! tensor backend implementation.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -28,6 +28,15 @@ pub enum ExtensionRuntimeRegistryError {
 pub struct ExtensionExecutionContext<'a, B: TensorBackend> {
     backend: &'a mut B,
     caches: &'a mut ExtensionCacheStore,
+}
+
+impl<B: TensorBackend> fmt::Debug for ExtensionExecutionContext<'_, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionExecutionContext")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("caches", &self.caches)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
@@ -202,6 +211,18 @@ pub struct ExtensionRegistry<B: TensorBackend + 'static> {
     executors: HashMap<&'static str, Arc<dyn ExtensionRuntime<B>>>,
 }
 
+impl<B: TensorBackend + 'static> fmt::Debug for ExtensionRegistry<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut families = self.executors.keys().copied().collect::<Vec<_>>();
+        families.sort_unstable();
+        f.debug_struct("ExtensionRegistry")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("len", &self.executors.len())
+            .field("families", &families)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<B: TensorBackend + 'static> ExtensionRegistry<B> {
     /// Create an empty extension runtime registry.
     ///
@@ -272,6 +293,16 @@ pub struct ExtensionExecutor<B: TensorBackend + 'static> {
     registry: ExtensionRegistry<B>,
     caches: ExtensionCacheStore,
     _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for ExtensionExecutor<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionExecutor")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("registry", &self.registry)
+            .field("caches", &self.caches)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<B: TensorBackend + 'static> ExtensionExecutor<B> {

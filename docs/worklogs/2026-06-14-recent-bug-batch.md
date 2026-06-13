@@ -27,6 +27,10 @@ affected layers.
 - Added compact hand-written `Debug` implementations for `EagerTensor` and
   `TracedTensor`, and recorded the public-type `Debug` rule in
   `REPOSITORY_RULES.md`.
+- Extended the same `Debug` rule across public runtime/backend/cache/FFI wrapper
+  types in this PR. Types with cheap structural state use derived `Debug`; types
+  owning graphs, tensors, runtime handles, caches, or backend state use compact
+  summaries.
 - Propagated `InvalidCompiledGraph` through graph compilation and shape
   inference for missing slot metadata and incompatible broadcast dimensions.
 - Validated `DotGeneral` AD transpose dimensions at the rule boundary and
@@ -39,9 +43,6 @@ affected layers.
 
 ## Deferred
 
-- A full repository-wide audit of public types missing `Debug` is intentionally
-  deferred to a follow-up issue. This PR only adds `Debug` where needed by the
-  current fallible API work.
 - Existing shape-inference config assertions for gather/slice/pad are outside
   this batch's issue scope and remain unchanged.
 
@@ -54,6 +55,9 @@ affected layers.
 - `cargo check -p tenferro-ad -p tenferro-fft --features tenferro-fft/autodiff --tests`
 - `cargo check -p tenferro-tutorial-code --bins`
 - `cargo check --workspace --all-targets`
+- `cargo check -p tenferro-gpu --features cuda,webgpu --all-targets`
+- `cargo check -p tenferro-ad --features cuda,webgpu --all-targets`
+- `cargo check -p tenferro-linalg --features cuda --all-targets`
 - `cargo test --workspace --release`
 
 Coverage, clippy parity, generated docs, and docs-site checks were not run in

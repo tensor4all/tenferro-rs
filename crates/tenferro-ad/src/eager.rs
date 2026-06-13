@@ -180,6 +180,38 @@ pub struct EagerRuntime {
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
 }
 
+impl fmt::Debug for EagerRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("EagerRuntime");
+        match self.backend.try_lock() {
+            Ok(backend) => {
+                debug.field("backend", &*backend);
+            }
+            Err(_) => {
+                debug.field("backend", &"<locked>");
+            }
+        }
+        match self.extension_executor.try_lock() {
+            Ok(executor) => {
+                debug.field("extension_executor", &*executor);
+            }
+            Err(_) => {
+                debug.field("extension_executor", &"<locked>");
+            }
+        }
+        debug.field("has_extension_rules", &self.extension_rules.is_some());
+        match self.grad_slots.try_lock() {
+            Ok(slots) => {
+                debug.field("grad_slots_len", &slots.len());
+            }
+            Err(_) => {
+                debug.field("grad_slots_len", &"<locked>");
+            }
+        }
+        debug.finish_non_exhaustive()
+    }
+}
+
 impl EagerRuntime {
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_rules(backend, None)

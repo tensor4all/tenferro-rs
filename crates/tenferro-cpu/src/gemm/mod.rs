@@ -1,5 +1,6 @@
 use num_traits::{One, Zero};
 use smallvec::{Array, SmallVec};
+use std::fmt;
 use std::mem::size_of;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -198,6 +199,15 @@ impl GemmAnalysisCacheSlot {
 pub struct GemmAnalysisCache {
     slots: Vec<GemmAnalysisCacheSlot>,
     max_slots: usize,
+}
+
+impl fmt::Debug for GemmAnalysisCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GemmAnalysisCache")
+            .field("slots_len", &self.slots.len())
+            .field("max_slots", &self.max_slots)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GemmAnalysisCache {

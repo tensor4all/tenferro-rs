@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::mem;
 use std::sync::Arc;
 
@@ -40,6 +41,16 @@ pub struct GraphExecutor<B: TensorBackend + 'static> {
     backend_cache: B::RuntimeCache,
     extension_executor: ExtensionExecutor<B>,
     slot_workspace: Vec<Option<ExecSlot<'static>>>,
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for GraphExecutor<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GraphExecutor")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("cache_stats", &self.cache_stats())
+            .field("slot_workspace_len", &self.slot_workspace.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<B: TensorBackend + 'static> GraphExecutor<B> {

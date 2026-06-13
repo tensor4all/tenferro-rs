@@ -20,6 +20,18 @@ pub enum EagerBackend {
     WebGpu(WebGpuBackend),
 }
 
+impl std::fmt::Debug for EagerBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cpu(backend) => f.debug_tuple("Cpu").field(backend).finish(),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(backend) => f.debug_tuple("Cuda").field(backend).finish(),
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(backend) => f.debug_tuple("WebGpu").field(backend).finish(),
+        }
+    }
+}
+
 impl EagerBackend {
     pub(crate) fn cpu(backend: CpuBackend) -> Self {
         Self::Cpu(backend)

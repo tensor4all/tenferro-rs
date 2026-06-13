@@ -79,6 +79,7 @@
 use std::any::{Any, TypeId};
 use std::cell::OnceCell;
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -234,10 +235,29 @@ pub struct CubeclBackend {
     rt: CubeclRuntime,
 }
 
+impl fmt::Debug for CubeclBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CubeclBackend")
+            .field("runtime", &self.rt)
+            .field("cuda_extension_cache", &self.extension_cache)
+            .field("cutensor_initialized", &self.cutensor.get().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Type-indexed cache for CUDA extension-owned backend state.
 #[doc(hidden)]
 pub struct CudaExtensionCache {
     inner: Mutex<CudaExtensionCacheInner>,
+}
+
+impl fmt::Debug for CudaExtensionCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaExtensionCache")
+            .field("max_entries", &self.max_entries())
+            .field("stats", &self.stats())
+            .finish_non_exhaustive()
+    }
 }
 
 const DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES: usize = 16;
@@ -419,6 +439,21 @@ pub struct CudaExtensionCacheGuard<'a, T> {
     inner: MutexGuard<'a, CudaExtensionCacheInner>,
     type_id: TypeId,
     _marker: std::marker::PhantomData<&'a T>,
+}
+
+impl<T: 'static> fmt::Debug for CudaExtensionCacheGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let retained_bytes = self
+            .inner
+            .entries
+            .get(&self.type_id)
+            .map(|entry| entry.retained_bytes)
+            .unwrap_or(0);
+        f.debug_struct("CudaExtensionCacheGuard")
+            .field("value_type", &std::any::type_name::<T>())
+            .field("retained_bytes", &retained_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {

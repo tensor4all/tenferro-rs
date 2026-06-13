@@ -2,6 +2,7 @@
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
 use cubecl_wgpu::WgpuRuntime;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{
@@ -316,6 +317,14 @@ fn webgpu_placement(device_ordinal: usize) -> Placement {
 /// ```
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
+}
+
+impl fmt::Debug for WebGpuBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebGpuBackend")
+            .field("runtime", &self.runtime)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WebGpuBackend {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -50,6 +51,17 @@ pub struct GraphCompiler {
     compile_cache: LruCache<CacheKey, ExecProgram>,
     extension_cache: ExtensionCacheStore,
     compiler_options: CompilerOptions,
+}
+
+impl fmt::Debug for GraphCompiler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GraphCompiler")
+            .field("cache_stats", &self.cache_stats())
+            .field("compile_cache_capacity", &self.compile_cache_capacity())
+            .field("compiler_options", &self.compiler_options)
+            .field("extension_cache", &self.extension_cache)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GraphCompiler {
