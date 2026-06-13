@@ -107,6 +107,7 @@ website:
               - spec/extension-op.md
               - spec/optimizer-passes.md
               - spec/tensor-semantics.md
+              - spec/operation-categories.md
           - section: "Oracle Validation"
             contents:
               - oracle/index.md
