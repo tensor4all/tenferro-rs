@@ -48,7 +48,8 @@ impl DimExpr {
     ///
     /// Panics if an `InputDim` node references an `input_idx` that is
     /// out of bounds for `input_shapes`, an `axis` that is out of bounds
-    /// for the corresponding shape slice, or a subtraction would underflow.
+    /// for the corresponding shape slice, a subtraction would underflow,
+    /// or a floor-division divisor evaluates to zero.
     ///
     /// # Examples
     ///
@@ -77,7 +78,14 @@ impl DimExpr {
                 })
             }
             Self::Mul(a, b) => a.eval(input_shapes) * b.eval(input_shapes),
-            Self::FloorDiv(a, b) => a.eval(input_shapes) / b.eval(input_shapes),
+            Self::FloorDiv(a, b) => {
+                let lhs = a.eval(input_shapes);
+                let rhs = b.eval(input_shapes);
+                if rhs == 0 {
+                    panic!("DimExpr::FloorDiv divide by zero: left operand {lhs}, divisor {rhs}");
+                }
+                lhs / rhs
+            }
             Self::Min(a, b) => a.eval(input_shapes).min(b.eval(input_shapes)),
             Self::Max(a, b) => a.eval(input_shapes).max(b.eval(input_shapes)),
         }

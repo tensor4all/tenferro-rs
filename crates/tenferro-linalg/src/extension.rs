@@ -426,7 +426,7 @@ fn full_piv_lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)>
         (dtype, matrix_shape(n.clone(), n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
-        (dtype, batch.to_vec()),
+        (singular_values_dtype(dtype), batch.to_vec()),
     ]
 }
 

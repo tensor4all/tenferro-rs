@@ -24,7 +24,11 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>", "GiggleLiu <cacate0129@gmail.com>"]
+authors = [
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "GiggleLiu <cacate0129@gmail.com>",
+    "Satoshi Terasaki <https://github.com/terasakisatoshi>",
+]
 publish = true
 readme = "README.md"
 repository = "https://github.com/tensor4all/tenferro-rs"

@@ -105,6 +105,11 @@ pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, Eag
 
 /// Complete-pivot LU factorization for eager tensors.
 ///
+/// Returns `(P, L, U, Q, parity)` with reconstruction convention
+/// `A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. `parity` is a
+/// scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs and
+/// `F64` for `F64`/`C64` inputs.
+///
 /// # Examples
 ///
 /// ```rust

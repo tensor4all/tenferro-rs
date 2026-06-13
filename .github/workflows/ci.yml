@@ -111,5 +111,6 @@ jobs:
         run: |
           python3 scripts/test-check-docs-site.py
           python3 scripts/test-doc-consistency.py
+          python3 scripts/check-guide-dependency-snippets.py
       - name: Build docs site
         run: bash scripts/build_docs_site.sh

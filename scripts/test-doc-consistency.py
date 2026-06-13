@@ -41,6 +41,7 @@ def test_docs_ci_runs_docs_script_tests() -> None:
 
     assert "python3 scripts/test-check-docs-site.py" in text
     assert "python3 scripts/test-doc-consistency.py" in text
+    assert "python3 scripts/check-guide-dependency-snippets.py" in text
 
 
 def test_documentation_policy_matches_rendered_internals() -> None:

@@ -42,6 +42,25 @@ fn test_sub_underflow_panics_instead_of_wrapping() {
 }
 
 #[test]
+#[should_panic(expected = "DimExpr::FloorDiv divide by zero")]
+fn floor_div_zero_const_divisor_panics_with_clear_message() {
+    let expr = DimExpr::floor_div(DimExpr::Const(8), DimExpr::Const(0));
+    let _ = expr.eval(&[]);
+}
+
+#[test]
+#[should_panic(expected = "DimExpr::FloorDiv divide by zero")]
+fn floor_div_zero_shape_derived_divisor_panics_with_clear_message() {
+    let axis = DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    };
+    let zero = DimExpr::sub(axis.clone(), axis);
+    let expr = DimExpr::floor_div(DimExpr::Const(8), zero);
+    let _ = expr.eval(&[&[4]]);
+}
+
+#[test]
 fn test_min_max() {
     let shapes: &[&[usize]] = &[&[3, 7]];
     let e_min = DimExpr::min(

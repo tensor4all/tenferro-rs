@@ -45,8 +45,10 @@ pub trait LinalgBackend: TensorBackend {
 
     /// Compute complete-pivot LU outputs `(P, L, U, Q, parity)`.
     ///
-    /// The reconstruction convention is `A = P * L * U * Q`. `parity` is a
-    /// rank-0 `F64` tensor containing `1.0` or `-1.0`.
+    /// The reconstruction convention is `A = P^T * L * U * Q`, equivalently
+    /// `P * A * Q^T = L * U`. `parity` is a scalar real tensor containing
+    /// `+1` or `-1`: `F32` for `F32`/`C32` inputs and `F64` for `F64`/`C64`
+    /// inputs.
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Solve a linear system through the complete-pivot LU path.

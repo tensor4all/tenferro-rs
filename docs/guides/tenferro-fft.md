@@ -16,8 +16,11 @@ extension machinery directly.
 num-complex = "0.4"
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
-tenferro-fft = { path = "../crates/tenferro-fft" }
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
+
+Graph-only users can omit `tenferro-ad` and the `autodiff` feature.
 
 ## Current API
 
@@ -118,14 +121,6 @@ FFT is linear, so the extension can support AD through registered extension
 rules. The current package registers JVP/VJP rules for complex-to-complex
 `fft` and `ifft`: the tangent or cotangent is transformed with the same
 extension op and normalization.
-
-AD examples require `tenferro-ad` and the `tenferro-fft` `autodiff` feature.
-Add `tenferro-ad` and replace the basic `tenferro-fft` line with:
-
-```toml
-tenferro-ad = { path = "../crates/tenferro-ad" }
-tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
-```
 
 Use `AdContext` for explicit extension-rule ownership, or import
 `tenferro_ad::TracedTensorAdExt` for the compact traced AD method syntax.
