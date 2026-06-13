@@ -23,6 +23,14 @@ conventions rather than replacing them with project-specific rules. It uses
 Rust's type system, ownership model, and crate boundaries where those choices
 help.
 
+We also see Rust's package system — fine-grained crates, feature flags, and
+semver-aware dependency composition — as a strong place for **cross-ecosystem
+collaboration**. tenferro-rs prefers to build on and contribute back to existing
+crates (GPU kernels, linear algebra, autodiff, contraction ordering) rather than
+reinvent them, and to bridge cleanly to the Fortran/LAPACK, Julia, and JAX/PyTorch
+worlds. The modular crate layout is meant to make tenferro components reusable as
+shared infrastructure, not just as an internal stack.
+
 ## Design Principles
 
 - Keep tensor types and operation crates modular, rather than building one
