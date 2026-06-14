@@ -199,9 +199,32 @@ or legacy ops, including:
 - `torch_index_select`
 - `tuple`
 
+## IV. tenferro XLA Subset
+
+The experimental `tenferro-xla` crate does not attempt to cover this full
+StableHLO inventory. Its initial static-shaped subset lowers these `ExecOp`
+variants:
+
+- `Constant`
+- `Add`
+- `Multiply`
+- `Negate`
+- `Convert`
+- `Reshape`
+- `BroadcastInDim`
+- `Transpose`
+- `ReduceSum`
+- `DotGeneral`
+
+The subset currently accepts `F32` and `F64` only. It rejects dynamic or
+upper-bound extents before calling PJRT. `ReduceSum` lowers to StableHLO
+`reduce` with an add combiner, and batched `DotGeneral` emits an additional
+`transpose` because StableHLO uses batch-first logical result order while
+tenferro's `DotGeneralConfig` uses batch-trailing result order.
+
 ---
 
-## IV. Alphabetical Appendix
+## V. Alphabetical Appendix
 
 ```text
 abs

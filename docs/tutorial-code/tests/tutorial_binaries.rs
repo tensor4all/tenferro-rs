@@ -28,6 +28,10 @@ fn tutorial_binaries_run_successfully() {
         env!("CARGO_BIN_EXE_traced_autodiff_jax_style"),
     );
     run_tutorial(
+        "xla_einsum_backend",
+        env!("CARGO_BIN_EXE_xla_einsum_backend"),
+    );
+    run_tutorial(
         "complex_ad_convention",
         env!("CARGO_BIN_EXE_complex_ad_convention"),
     );

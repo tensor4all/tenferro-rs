@@ -12,6 +12,10 @@ CUDA support targets NVIDIA CUDA. WebGPU support is experimental and currently
 focused on explicit transfer plus limited `dot_general`/einsum coverage.
 AMD/ROCm is not a supported execution path yet.
 
+The optional XLA/PJRT path is separate from these tensor backends. It lowers
+static-shaped traced programs to StableHLO in `tenferro-xla` and loads PJRT
+plugins at runtime. See [XLA and PJRT](xla.md).
+
 ## Provider Matrix
 
 | Provider | Status | Feature | Notes |
@@ -99,11 +103,36 @@ Run it on a configured CUDA machine:
 
 ```bash
 CUDA_PATH=/usr/local/cuda-12.8 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH \
+LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
   cargo run -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+
+Use the installed CUDA root on your machine. If several roots exist, inspect
+them first:
+
+```bash
+ls -d /usr/local/cuda*
+```
+
+If CUDA libraries or cuTENSOR are outside the standard dynamic-linker paths,
+set:
+
+```bash
+export CUDA_PATH=/usr/local/cuda-12.8
+export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH
+export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2
+export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12
+export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
+export CUBECL_DEBUG_LOG=0
+```
+
+For XLA/PJRT GPU verification, add the PJRT plugin path separately:
+
+```bash
+export TENFERRO_PJRT_GPU_PLUGIN=/path/to/pjrt_c_api_gpu_plugin.so
+```
 
 ## CUDA Across Tensor Layers
 

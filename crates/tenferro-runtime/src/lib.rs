@@ -64,8 +64,9 @@ pub use extension_runtime::{
     ExtensionRuntimeRegistryError,
 };
 pub use graph::{
-    GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats, GraphProgram,
-    GraphProgramInput,
+    GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
+    GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
+    GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::{

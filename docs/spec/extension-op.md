@@ -179,6 +179,23 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)>;
 
+    /// Optionally expand this extension into standard tensor graph operations.
+    ///
+    /// This is a provided method. Return `Ok(Some(outputs))` after adding only
+    /// standard `StdTensorOp` operations to `builder`. Return `Ok(None)` when
+    /// this payload cannot be represented as standard ops for the supplied
+    /// metadata. Strict peer lowerers treat `Ok(None)` as an explicit
+    /// unsupported-extension error.
+    fn lower_to_standard_ops(
+        &self,
+        builder: &mut GraphBuilder<StdTensorOp>,
+        inputs: &[ValueRef<StdTensorOp>],
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> ExtensionLoweringResult {
+        Ok(None)
+    }
+
     // ----- Forward execution dispatch (Section 8) -----
 
     /// Eager forward execution.
@@ -629,12 +646,33 @@ The compiled path runs through
    Extensions MUST NOT participate in elementwise fusion planning
    because their fusion semantics are implementer-defined.
 
+### Standard-op lowering hook
+
+`ExtensionOp::lower_to_standard_ops` is an optional owner-provided hook for
+peer lowerers that cannot execute extension runtimes, such as StableHLO/XLA
+lowering. The hook receives fixed input metadata and `ValueRef` handles in a
+fresh `GraphBuilder<StdTensorOp>`. If the extension can express the payload as
+standard tensor ops for those inputs, it adds those ops and returns their
+outputs.
+
+The hook MUST NOT call backend kernels, inspect tensor values, or fall back to
+`ExtensionOp::eager_execute`. It is a graph rewrite hook, not an execution
+hook. Returning `Ok(None)` means "this extension cannot lower to standard ops
+for this metadata"; strict lowerers MUST report that as an error instead of
+silently switching to the native extension runtime. Returning
+`ExtensionLoweringError` is reserved for malformed payloads or invalid metadata
+detected while constructing the standard graph.
+
 ### Responsibility split (normative)
 
 - **`compile_std_to_exec`** is responsible for: lowering the
   `StdTensorOp::Extension` variant to `ExecOp::Extension`, calling
   `infer_output_meta` for metadata population, and assigning
   `last_use` markers. It does not invoke backend kernels.
+- **Peer lowerers** are responsible for: calling
+  `ExtensionOp::lower_to_standard_ops` only when they require a standard-op
+  program and have fixed metadata. If the hook returns `Ok(None)`, lowering is
+  an explicit unsupported-extension error.
 - **`eager_exec` / `eager_builder`** are responsible for: resolving
   inputs from the builder's tensor cache and calling the runtime-owned
   extension executor for extension ops. If no extension executor is available,

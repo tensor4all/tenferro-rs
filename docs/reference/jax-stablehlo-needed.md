@@ -66,6 +66,14 @@ What actually has to run at the backend layer is a StableHLO-level vocabulary.
 For the target feature set (`einsum`, `lu`, `solve`, `qr`, `svd`), the
 recommended phase-1 StableHLO target set is:
 
+The implemented `tenferro-xla` issue #984 subset is narrower than the broader
+target set below. It currently covers static `F32`/`F64` lowering for
+`constant`, `convert`, `add`, `multiply`, `negate`, `broadcast_in_dim`,
+`reshape`, `transpose`, `reduce` for sum, and `dot_general`. This narrow subset
+exists to prove the `GraphProgram lowering view -> StableHLO -> OpenXLA`
+boundary before expanding to linalg, indexing, dynamic shape, or complex
+operations.
+
 ### Direct StableHLO tensor ops
 
 - elementwise / scalar:

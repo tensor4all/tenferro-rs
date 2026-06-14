@@ -5,6 +5,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{DType, Tensor};
 
 use crate::exec::ExecProgram;
+use crate::graph::lowering_view::GraphProgramLoweringView;
 
 /// A compiled traced graph, independent of any execution backend.
 ///
@@ -81,6 +82,26 @@ impl GraphProgram {
     #[inline(never)]
     pub fn input_specs(&self) -> &[GraphProgramInput] {
         &self.inputs
+    }
+
+    /// Return a read-only lowering view for peer executor integrations.
+    ///
+    /// The view exposes only immutable, lowering-oriented program metadata.
+    /// Native execution and mutation remain owned by [`GraphExecutor`](super::GraphExecutor).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// assert_eq!(program.lowering_view().output_slots().len(), 1);
+    /// ```
+    #[inline(never)]
+    pub fn lowering_view(&self) -> GraphProgramLoweringView<'_> {
+        GraphProgramLoweringView::new(&self.exec)
     }
 }
 
