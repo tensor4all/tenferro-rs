@@ -717,3 +717,6 @@ fn format_float(value: f64) -> String {
         "0x7ff0000000000000".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests;

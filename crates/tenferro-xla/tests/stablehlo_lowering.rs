@@ -162,3 +162,55 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
     assert!(text.contains("dims = [1, 2, 0]"));
     assert!(text.contains("-> tensor<2x4x5xf64>"));
 }
+
+#[test]
+fn lowers_multi_output_program_and_special_scalar_constants() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let scaled_nan = x.scale_real(f64::NAN);
+    let scaled_neg_inf = x.scale_real(f64::NEG_INFINITY);
+    let scaled_pos_inf = x.scale_real(f64::INFINITY);
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_many(&[&scaled_nan, &scaled_neg_inf, &scaled_pos_inf])
+        .unwrap();
+
+    let module = lower_to_stablehlo(&program).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains(
+        "func.func @main(%arg0: tensor<2xf64>) -> (tensor<2xf64>, tensor<2xf64>, tensor<2xf64>)"
+    ));
+    assert!(text.contains("stablehlo.constant dense<0x7ff8000000000000> : tensor<f64>"));
+    assert!(text.contains("stablehlo.constant dense<-0x7ff0000000000000> : tensor<f64>"));
+    assert!(text.contains("stablehlo.constant dense<0x7ff0000000000000> : tensor<f64>"));
+    assert_eq!(text.matches("stablehlo.multiply").count(), 3);
+    assert!(text.contains("return %"));
+    assert!(text.contains(": tensor<2xf64>, tensor<2xf64>, tensor<2xf64>"));
+}
+
+#[test]
+fn lowers_f32_scalar_constant() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
+    let scaled = x.scale_real(2.5);
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&scaled).unwrap();
+
+    let module = lower_to_stablehlo(&program).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains("stablehlo.constant dense<2.50000000e0> : tensor<f32>"));
+    assert!(text.contains("stablehlo.multiply"));
+}
+
+#[test]
+fn lowers_empty_output_program_to_unit_return() {
+    let mut compiler = GraphCompiler::new();
+    let outputs: [&TracedTensor; 0] = [];
+    let program = compiler.compile_many(&outputs).unwrap();
+
+    let module = lower_to_stablehlo(&program).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains("func.func @main() -> ()"));
+    assert!(text.contains("    return\n"));
+}

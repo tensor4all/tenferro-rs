@@ -495,3 +495,6 @@ fn exec_op_name(op: &ExecOp) -> &'static str {
         ExecOp::Extension(_) => "Extension",
     }
 }
+
+#[cfg(test)]
+mod tests;
