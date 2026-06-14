@@ -109,3 +109,6 @@ external/
 
 # Plan files
 plan
+
+# .env
+.env
