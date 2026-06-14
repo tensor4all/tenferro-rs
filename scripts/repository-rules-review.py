@@ -762,12 +762,8 @@ def deterministic_checks(
     added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    ad_touched = any(
-        "ad/" in path or "linearize" in path or "transpose_rule" in path
-        for path in files
-    )
     runtime_touched = any(path.startswith("crates/tenferro-runtime/") for path in files)
-    if ad_touched and runtime_touched:
+    if runtime_touched:
         violations = runtime_ad_boundary_violations(
             ref=head,
             worktree=worktree,

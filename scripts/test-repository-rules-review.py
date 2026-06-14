@@ -288,7 +288,6 @@ def test_deterministic_checks_passes_added_lines_to_runtime_scan() -> None:
         mod.runtime_ad_boundary_violations = fake_runtime_ad_boundary_violations
         mod.deterministic_checks(
             [
-                "crates/tenferro-internal-ops/src/ad/rules/foo.rs",
                 "crates/tenferro-runtime/src/lib.rs",
             ],
             head="HEAD",
