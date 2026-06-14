@@ -10,7 +10,8 @@
       "coverage",
       "docs-site",
       "CI gate (PR workspace tests)",
-      "CI GPU gate"
+      "CI GPU gate",
+      "repository rules review"
     ]
   },
   "pages": {

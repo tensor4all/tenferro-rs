@@ -41,7 +41,23 @@ def test_docs_ci_runs_docs_script_tests() -> None:
 
     assert "python3 scripts/test-check-docs-site.py" in text
     assert "python3 scripts/test-doc-consistency.py" in text
+    assert "python3 scripts/test-repository-rules-review.py" in text
     assert "python3 scripts/check-guide-dependency-snippets.py" in text
+
+
+def test_review_bot_workflow_exists() -> None:
+    text = read(".github/workflows/review_bot.yml")
+
+    assert "name: review bot" in text
+    assert "repository rules review" in text
+    assert "DEEPSEEK_API_KEY" in text
+    assert "rules-review:waive" in text
+
+
+def test_repo_settings_requires_repository_rules_review() -> None:
+    text = read("ai/repo-settings.json")
+
+    assert '"repository rules review"' in text
 
 
 def test_documentation_policy_matches_rendered_internals() -> None:
@@ -58,6 +74,8 @@ def main() -> int:
         test_architecture_svg_lists_cpu_crate_and_background,
         test_agents_layer_diagram_lists_cpu_crate,
         test_docs_ci_runs_docs_script_tests,
+        test_review_bot_workflow_exists,
+        test_repo_settings_requires_repository_rules_review,
         test_documentation_policy_matches_rendered_internals,
     ]:
         test()
