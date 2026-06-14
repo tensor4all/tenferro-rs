@@ -83,6 +83,30 @@ def test_filter_findings_drops_line_finding_without_added_lines() -> None:
     assert kept == []
 
 
+def test_filter_findings_drops_file_level_block_finding() -> None:
+    mod = load_module()
+    block = mod.Finding(
+        id="x",
+        severity="block",
+        rule_section="Public Surface Discipline",
+        file="foo.rs",
+        line=None,
+        summary="test",
+        detail="detail",
+    )
+    warn = mod.Finding(
+        id="w",
+        severity="warn",
+        rule_section="Public Surface Discipline",
+        file="foo.rs",
+        line=None,
+        summary="test",
+        detail="detail",
+    )
+    kept = mod.filter_findings([block, warn], ["foo.rs"], {"foo.rs": {1}})
+    assert kept == [warn]
+
+
 def test_filter_findings_drops_global_llm_finding_when_disallowed() -> None:
     mod = load_module()
     finding = mod.Finding(
@@ -162,6 +186,38 @@ def test_split_large_file_diff_preserves_file_header() -> None:
     assert all(chunk.startswith("diff --git a/foo.rs b/foo.rs") for chunk in chunks)
     assert all("--- a/foo.rs" in chunk and "+++ b/foo.rs" in chunk for chunk in chunks)
     assert "@@ -20,2 +21,3 @@" in chunks[1]
+
+
+def test_split_large_file_diff_splits_oversized_single_hunk() -> None:
+    mod = load_module()
+    original_limit = mod.MAX_FILE_DIFF_CHARS
+    try:
+        mod.MAX_FILE_DIFF_CHARS = 115
+        diff = "\n".join(
+            [
+                "diff --git a/foo.rs b/foo.rs",
+                "index abc..def 100644",
+                "--- a/foo.rs",
+                "+++ b/foo.rs",
+                "@@ -1,1 +1,8 @@",
+                "+aaaaaaaaaa",
+                "+bbbbbbbbbb",
+                "+cccccccccc",
+                "+dddddddddd",
+                "+eeeeeeeeee",
+                "+ffffffffff",
+                "+gggggggggg",
+                "+hhhhhhhhhh",
+            ]
+        )
+        chunks = mod.split_diff_chunks({"foo.rs": diff})
+    finally:
+        mod.MAX_FILE_DIFF_CHARS = original_limit
+
+    assert len(chunks) > 1
+    assert all(chunk.startswith("diff --git a/foo.rs b/foo.rs") for chunk in chunks)
+    assert all("@@ -1,1 +1,8 @@" in chunk for chunk in chunks)
+    assert all(len(chunk) <= 115 for chunk in chunks)
 
 
 def test_scan_runtime_boundary_text_reports_forbidden_symbol() -> None:
@@ -283,12 +339,14 @@ def main() -> int:
         test_filter_findings_drops_unchanged_files,
         test_filter_findings_keeps_added_line,
         test_filter_findings_drops_line_finding_without_added_lines,
+        test_filter_findings_drops_file_level_block_finding,
         test_filter_findings_drops_global_llm_finding_when_disallowed,
         test_reconcile_verdict_only_blocks_fail,
         test_select_rule_sections_includes_ad_for_ad_paths,
         test_extract_json_payload_strips_fence,
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
+        test_split_large_file_diff_splits_oversized_single_hunk,
         test_scan_runtime_boundary_text_reports_forbidden_symbol,
         test_scan_runtime_boundary_text_can_limit_to_changed_lines,
         test_deterministic_checks_passes_added_lines_to_runtime_scan,

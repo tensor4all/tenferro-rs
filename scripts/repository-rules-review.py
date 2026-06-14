@@ -314,6 +314,36 @@ def split_diff_chunks(file_diffs: dict[str, str]) -> list[str]:
     return chunks
 
 
+def joined_line_len(lines: list[str]) -> int:
+    return len("\n".join(lines))
+
+
+def split_oversized_hunk(header: list[str], hunk: list[str]) -> list[str]:
+    """Split one oversized hunk while repeating file and hunk headers."""
+    if not hunk:
+        return []
+
+    hunk_header = hunk[0]
+    body = hunk[1:]
+    prefix = [*header, hunk_header]
+    chunks: list[str] = []
+    current = list(prefix)
+
+    for line in body:
+        candidate = [*current, line]
+        if current != prefix and joined_line_len(candidate) > MAX_FILE_DIFF_CHARS:
+            chunks.append("\n".join(current))
+            current = [*prefix, line]
+        else:
+            current = candidate
+
+    if current != prefix:
+        chunks.append("\n".join(current))
+    else:
+        chunks.append("\n".join(prefix))
+    return chunks
+
+
 def split_large_file_diff(diff_text: str) -> list[str]:
     """Split one file diff while preserving file headers in every chunk."""
     lines = diff_text.splitlines()
@@ -341,11 +371,19 @@ def split_large_file_diff(diff_text: str) -> list[str]:
 
     chunks: list[str] = []
     current_lines = list(header)
-    current_len = len("\n".join(current_lines))
+    current_len = joined_line_len(current_lines)
 
     for hunk in hunks:
-        hunk_len = len("\n".join(hunk))
+        hunk_len = joined_line_len(hunk)
         separator_len = 1 if current_lines else 0
+        if joined_line_len([*header, *hunk]) > MAX_FILE_DIFF_CHARS:
+            if current_lines != header:
+                chunks.append("\n".join(current_lines))
+                current_lines = list(header)
+                current_len = joined_line_len(current_lines)
+            chunks.extend(split_oversized_hunk(header, hunk))
+            continue
+
         if (
             current_lines != header
             and current_len + separator_len + hunk_len > MAX_FILE_DIFF_CHARS
@@ -479,6 +517,8 @@ def filter_findings(
                 kept.append(finding)
             continue
         if finding.file and finding.file not in allowed_files:
+            continue
+        if finding.line is None and finding.severity == "block":
             continue
         if finding.line is not None:
             if finding.line not in added_lines.get(finding.file, set()):
