@@ -69,7 +69,7 @@ ALWAYS_SECTIONS = frozenset(
 
 SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (
-        re.compile(r"(^|/)ad/|linearize|transpose_rule|autodiff"),
+        re.compile(r"(^|/)ad/|tenferro-ad/|linearize|transpose_rule|autodiff"),
         frozenset(
             {
                 "Rule Source Of Truth",
@@ -79,7 +79,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         ),
     ),
     (
-        re.compile(r"tenferro-cpu/|/kernel/|strided"),
+        re.compile(r"tenferro-cpu/|tenferro-tensor(?:-core)?/|/kernel/|strided"),
         frozenset({"Performance And Layout Rules", "Unsafe Code Boundary"}),
     ),
     (
@@ -706,16 +706,42 @@ def runtime_boundary_text(path: str, *, ref: str | None, worktree: bool) -> str:
     return run_git(["show", f"{ref}:{path}"])
 
 
+def strip_code_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
+    result: list[str] = []
+    index = 0
+    while index < len(line):
+        if in_block_comment:
+            end = line.find("*/", index)
+            if end == -1:
+                return "".join(result), True
+            index = end + 2
+            in_block_comment = False
+            continue
+        if line.startswith("/*", index):
+            in_block_comment = True
+            index += 2
+            continue
+        if line.startswith("//", index):
+            break
+        result.append(line[index])
+        index += 1
+    return "".join(result), in_block_comment
+
+
 def scan_runtime_boundary_text(
     path: str,
     text: str,
     line_numbers: set[int] | None = None,
 ) -> list[str]:
     violations: list[str] = []
+    in_block_comment = False
     for line_no, line in enumerate(text.splitlines(), start=1):
+        code_line, in_block_comment = strip_code_comments(line, in_block_comment)
         if line_numbers is not None and line_no not in line_numbers:
             continue
-        if RUNTIME_AD_FORBIDDEN.search(line):
+        if path.endswith("Cargo.toml") and code_line.lstrip().startswith("#"):
+            code_line = ""
+        if RUNTIME_AD_FORBIDDEN.search(code_line):
             violations.append(f"{path}:{line_no}: {line}")
     return violations
 

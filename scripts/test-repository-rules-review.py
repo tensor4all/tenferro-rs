@@ -142,6 +142,26 @@ def test_select_rule_sections_includes_ad_for_ad_paths() -> None:
     assert "Public Surface Discipline" in sections
 
 
+def test_select_rule_sections_includes_ad_for_tenferro_ad_crate() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-ad/src/lib.rs"])
+    assert "AD Rule Coverage" in sections
+    assert "Rule Source Of Truth" in sections
+    assert "Oracle Gate" in sections
+
+
+def test_select_rule_sections_includes_performance_for_tensor_crates() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(
+        [
+            "crates/tenferro-tensor-core/src/layout.rs",
+            "crates/tenferro-tensor/src/view.rs",
+        ]
+    )
+    assert "Performance And Layout Rules" in sections
+    assert "Unsafe Code Boundary" in sections
+
+
 def test_extract_json_payload_strips_fence() -> None:
     mod = load_module()
     parsed = mod.extract_json_payload(
@@ -268,6 +288,35 @@ def test_scan_runtime_boundary_text_can_limit_to_changed_lines() -> None:
     ]
 
 
+def test_scan_runtime_boundary_text_ignores_comments() -> None:
+    mod = load_module()
+    violations = mod.scan_runtime_boundary_text(
+        "crates/tenferro-runtime/src/lib.rs",
+        "\n".join(
+            [
+                "//! use tenferro-ad for autodiff",
+                "// must not depend on tidu",
+                "/* EagerTensor */",
+                "pub struct Safe;",
+                "pub struct EagerTensor;",
+            ]
+        ),
+    )
+    assert violations == [
+        "crates/tenferro-runtime/src/lib.rs:5: pub struct EagerTensor;"
+    ]
+
+
+def test_scan_runtime_boundary_text_tracks_block_comments_across_context() -> None:
+    mod = load_module()
+    violations = mod.scan_runtime_boundary_text(
+        "crates/tenferro-runtime/src/lib.rs",
+        "/*\nEagerTensor\n*/\npub struct Safe;\n",
+        {2},
+    )
+    assert violations == []
+
+
 def test_deterministic_checks_passes_added_lines_to_runtime_scan() -> None:
     mod = load_module()
     captured: dict[str, object] = {}
@@ -367,6 +416,8 @@ def main() -> int:
         test_filter_findings_drops_global_llm_finding_when_disallowed,
         test_reconcile_verdict_only_blocks_fail,
         test_select_rule_sections_includes_ad_for_ad_paths,
+        test_select_rule_sections_includes_ad_for_tenferro_ad_crate,
+        test_select_rule_sections_includes_performance_for_tensor_crates,
         test_extract_json_payload_strips_fence,
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
@@ -374,6 +425,8 @@ def main() -> int:
         test_split_large_file_diff_splits_single_overlong_diff_line,
         test_scan_runtime_boundary_text_reports_forbidden_symbol,
         test_scan_runtime_boundary_text_can_limit_to_changed_lines,
+        test_scan_runtime_boundary_text_ignores_comments,
+        test_scan_runtime_boundary_text_tracks_block_comments_across_context,
         test_deterministic_checks_passes_added_lines_to_runtime_scan,
         test_redact_sensitive_text_masks_common_secret_forms,
         test_sensitive_diff_finding_checks_added_lines_only,
