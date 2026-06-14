@@ -349,11 +349,8 @@ fn lower_extension_instruction(
         .iter()
         .map(|value| value.ty.shape.as_slice())
         .collect::<Vec<_>>();
-    for (output_idx, (&parent_slot, value)) in inst
-        .output_slots()
-        .iter()
-        .zip(sub_outputs.into_iter())
-        .enumerate()
+    for (output_idx, (&parent_slot, value)) in
+        inst.output_slots().iter().zip(sub_outputs).enumerate()
     {
         let expected_shape = static_output_shape(inst, output_idx, &parent_input_shapes)?;
         if value.ty.shape != expected_shape {
