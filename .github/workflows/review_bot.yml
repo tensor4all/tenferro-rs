@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: review-bot-${{ github.event.pull_request.number }}
@@ -32,6 +34,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Checkout trusted base revision
         uses: actions/checkout@v5
@@ -72,6 +75,7 @@ jobs:
 
       - name: Post PR summary comment
         if: always() && steps.review.outcome != 'skipped'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -146,6 +150,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Verify label actor can skip LLM
         uses: actions/github-script@v7
@@ -244,6 +249,7 @@ jobs:
             | tee review-report.txt
       - name: Post PR summary comment
         if: always()
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -311,6 +317,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       - name: Verify label actor can waive review
         uses: actions/github-script@v7
@@ -409,6 +416,7 @@ jobs:
             | tee review-report.txt
       - name: Post PR summary comment
         if: always()
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
