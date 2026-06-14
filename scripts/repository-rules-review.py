@@ -381,8 +381,16 @@ def contains_sensitive_text(text: str) -> bool:
     )
 
 
+def added_diff_text(diff_text: str) -> str:
+    return "\n".join(
+        line[1:]
+        for line in diff_text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+
+
 def sensitive_diff_finding(diff_text: str) -> Finding | None:
-    if not contains_sensitive_text(diff_text):
+    if not contains_sensitive_text(added_diff_text(diff_text)):
         return None
     return Finding(
         id="sensitive-diff",
@@ -472,8 +480,8 @@ def filter_findings(
             continue
         if finding.file and finding.file not in allowed_files:
             continue
-        if finding.line is not None and finding.file in added_lines:
-            if finding.line not in added_lines[finding.file]:
+        if finding.line is not None:
+            if finding.line not in added_lines.get(finding.file, set()):
                 continue
         kept.append(finding)
     return kept

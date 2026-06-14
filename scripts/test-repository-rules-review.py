@@ -68,6 +68,21 @@ def test_filter_findings_keeps_added_line() -> None:
     assert len(kept) == 1
 
 
+def test_filter_findings_drops_line_finding_without_added_lines() -> None:
+    mod = load_module()
+    finding = mod.Finding(
+        id="x",
+        severity="block",
+        rule_section="Public Surface Discipline",
+        file="deleted.rs",
+        line=4,
+        summary="test",
+        detail="detail",
+    )
+    kept = mod.filter_findings([finding], ["deleted.rs"], {})
+    assert kept == []
+
+
 def test_filter_findings_drops_global_llm_finding_when_disallowed() -> None:
     mod = load_module()
     finding = mod.Finding(
@@ -228,6 +243,29 @@ def test_redact_sensitive_text_masks_common_secret_forms() -> None:
     assert redacted.count("[REDACTED_SECRET]") == 3
 
 
+def test_sensitive_diff_finding_checks_added_lines_only() -> None:
+    mod = load_module()
+    old_secret = "sk-" + "old-secret-abcdefghijklmnopqrstuvwxyz"
+    added_secret = "sk-" + "new-secret-abcdefghijklmnopqrstuvwxyz"
+    unchanged_secret = "sk-" + "dummy-secret-abcdefghijklmnopqrstuvwxyz"
+
+    removed_or_context_only = "\n".join(
+        [
+            "diff --git a/secrets.txt b/secrets.txt",
+            "--- a/secrets.txt",
+            "+++ b/secrets.txt",
+            "@@ -1,3 +1,3 @@",
+            f" unchanged = {unchanged_secret}",
+            f"-removed = {old_secret}",
+            "+replacement = safe-placeholder",
+        ]
+    )
+    assert mod.sensitive_diff_finding(removed_or_context_only) is None
+
+    added = removed_or_context_only + f"\n+added = {added_secret}"
+    assert mod.sensitive_diff_finding(added) is not None
+
+
 def test_contains_sensitive_text_ignores_env_lookup_code() -> None:
     mod = load_module()
     text = "\n".join(
@@ -244,6 +282,7 @@ def main() -> int:
         test_added_lines_by_file,
         test_filter_findings_drops_unchanged_files,
         test_filter_findings_keeps_added_line,
+        test_filter_findings_drops_line_finding_without_added_lines,
         test_filter_findings_drops_global_llm_finding_when_disallowed,
         test_reconcile_verdict_only_blocks_fail,
         test_select_rule_sections_includes_ad_for_ad_paths,
@@ -254,6 +293,7 @@ def main() -> int:
         test_scan_runtime_boundary_text_can_limit_to_changed_lines,
         test_deterministic_checks_passes_added_lines_to_runtime_scan,
         test_redact_sensitive_text_masks_common_secret_forms,
+        test_sensitive_diff_finding_checks_added_lines_only,
         test_contains_sensitive_text_ignores_env_lookup_code,
     ]:
         test()
