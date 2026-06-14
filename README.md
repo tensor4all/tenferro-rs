@@ -204,24 +204,28 @@ related tensor4all projects.
 If you build against `main`, pin commits and expect breaking changes. For
 non-trivial upgrades, AI-assisted migration is recommended.
 
-## Development And Trust Model
+## AI-Assisted Development
 
-AI agents are accepted development and review tools in this repository. Their
-output is not trusted by itself. Changes are trusted only after explicit
-repository rules, CI, oracle-based validation, reproducible benchmarks,
+tenferro-rs assumes AI-assisted and agentic coding for development, migration,
+and review. AI output is not accepted as authority by itself: changes are
+validated against repository rules, source-of-truth code and doc comments, CI,
+oracle-based numerical checks, reproducible benchmarks when relevant,
 provenance checks, and maintainer review.
 
 ## Contributing
 
-Bug-fix pull requests, feature requests, design discussions, documentation
-improvements, and benchmark reports are welcome. New feature ideas are welcome
-too; implementation PRs for new features must start from accepted feature
-request issues so API, backend, AD, dependency, and testing implications can be
-reviewed first.
+Bug reports, minimal reproducers, proposed regression tests, feature requests,
+design discussions, documentation improvements, benchmark reports, and
+prototype branches are welcome in issues. Pull request creation is currently
+restricted to collaborators.
+
+Collaborator implementation PRs for new features must start from accepted
+feature request issues so API, backend, AD, dependency, and testing
+implications can be reviewed first.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy and
-the supported AI-assisted issue-intake and bug-fix PR workflows across Codex
-CLI, Claude Code, and OpenCode.
+the supported AI-assisted issue-intake and collaborator bug-fix PR workflows
+across Codex CLI, Claude Code, and OpenCode.
 
 See [GOVERNANCE.md](GOVERNANCE.md) for maintainer roles, merge authority, and
 the project-direction decision model. Maintainers are listed in
