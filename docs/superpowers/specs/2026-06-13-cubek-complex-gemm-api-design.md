@@ -13,8 +13,8 @@ should own complex GEMM semantics, including optional conjugation, temporary
 real buffers, and the real-GEMM lowering used before native complex kernels
 exist.
 
-This design supersedes the tenferro-local complex decomposition direction in
-`docs/superpowers/plans/2026-06-13-webgpu-complex-gemm.md` for new work.
+This design supersedes the earlier tenferro-local complex decomposition
+direction for new work.
 
 ## Goals
 

@@ -12,7 +12,6 @@ new CubeK API. CUDA contraction code is intentionally unchanged.
 - `REPOSITORY_RULES.md`
 - `docs/design/gpu-backend-design.md`
 - `docs/guides/devices-and-gpu.md`
-- `docs/superpowers/plans/2026-06-13-cubek-complex-gemm-api.md`
 - CubeK `cubek-matmul` launch API and complex GEMM tests
 - tenferro WebGPU dot-general planner and runtime tests
 
