@@ -39,6 +39,7 @@ website:
           - tutorials/eager-autodiff-pytorch-style.md
           - tutorials/traced-autodiff-jax-style.md
           - tutorials/einsum-subscripts-to-gradients.md
+          - tutorials/xla-einsum-backend.md
           - tutorials/dynamic-shape-truncated-svd.md
       - section: "Guides"
         contents:
@@ -55,6 +56,7 @@ website:
           - guides/autodiff.md
           - guides/complex-ad.md
           - guides/devices-and-gpu.md
+          - guides/xla.md
           - guides/memory-order.md
           - text: "Parallelism and Caching"
             href: guides/parallelism-and-caching.md
@@ -92,6 +94,7 @@ website:
               - design/dynamic-symbolic-shapes.md
               - design/exec-session.md
               - design/gpu-backend-design.md
+              - design/xla-backend.md
               - design/inplace-indexing.md
               - design/linalg.md
               - design/linalg-prims.md

@@ -24,6 +24,9 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use computegraph::graph::GraphBuilder;
+#[cfg(not(feature = "autodiff"))]
+use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{DType, Tensor};
@@ -34,13 +37,50 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 use crate::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
 use crate::ad::PrimitiveRuleBuilder;
-#[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 #[cfg(feature = "autodiff")]
 use std::collections::HashMap;
 #[cfg(feature = "autodiff")]
 use std::sync::{OnceLock, RwLock};
+
+/// Error returned when an extension cannot expand itself into standard ops.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ext_op::ExtensionLoweringError;
+///
+/// let err = ExtensionLoweringError::new("example extension cannot lower");
+/// assert!(err.to_string().contains("cannot lower"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct ExtensionLoweringError {
+    message: String,
+}
+
+impl ExtensionLoweringError {
+    /// Create a lowering error with a human-readable diagnostic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    ///
+    /// let err = ExtensionLoweringError::new("shape must be static");
+    /// assert_eq!(err.to_string(), "shape must be static");
+    /// ```
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Result returned by [`ExtensionOp::lower_to_standard_ops`].
+pub type ExtensionLoweringResult =
+    std::result::Result<Option<Vec<ValueRef<StdTensorOp>>>, ExtensionLoweringError>;
 
 /// The contract every out-of-tree extension primitive must satisfy.
 ///
@@ -55,6 +95,9 @@ use std::sync::{OnceLock, RwLock};
 /// - host/reference forward execution via [`eager_execute`][Self::eager_execute];
 ///   runtime-owned eager and compiled paths dispatch through registered
 ///   extension runtimes instead of falling back to this method;
+/// - optional fixed-shape standard-op expansion via
+///   [`lower_to_standard_ops`][Self::lower_to_standard_ops] for peer lowerers
+///   such as XLA that cannot execute extension runtimes;
 /// - AD via a separately registered [`ExtensionAdRule`].
 ///
 /// # Downcast convention
@@ -176,6 +219,29 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// tensors MUST have shapes matching [`Self::infer_output_meta`] and MUST
     /// be placed on a device the caller can consume.
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
+
+    /// Optionally expand this extension into standard tensor graph operations.
+    ///
+    /// Peer lowerers call this when all input metadata is known and extension
+    /// runtime dispatch is not available. Return `Ok(Some(outputs))` after
+    /// adding only standard [`StdTensorOp`] operations to `builder`. Return
+    /// `Ok(None)` when this extension family has no standard-op lowering for
+    /// the supplied metadata; strict lowerers should surface that as an
+    /// explicit unsupported-extension error. Return [`ExtensionLoweringError`]
+    /// when the payload is malformed or the lowering detects invalid metadata.
+    ///
+    /// The default implementation returns `Ok(None)` so existing extension
+    /// runtimes keep their native dispatch behavior until their owning crate
+    /// deliberately implements this hook.
+    fn lower_to_standard_ops(
+        &self,
+        _builder: &mut GraphBuilder<StdTensorOp>,
+        _inputs: &[ValueRef<StdTensorOp>],
+        _input_dtypes: &[DType],
+        _input_shapes: &[&[SymDim]],
+    ) -> ExtensionLoweringResult {
+        Ok(None)
+    }
 
     // AD rules are registered separately; see [`ExtensionAdRule`].
 }

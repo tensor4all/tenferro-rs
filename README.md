@@ -55,10 +55,10 @@ It also fits small-to-medium batched linear algebra with autodiff,
 `grad`/`vjp`/`jvp`/HVP workflows in Rust, Rust-native tensor applications, and
 extension points for custom algebra or operation families.
 
-The planned optional XLA backend in
-[#984](https://github.com/tensor4all/tenferro-rs/issues/984) is intended for
-static-shape traced graphs. Dynamic-shape graphs remain the native runtime's
-core use case.
+The experimental `tenferro-xla` crate lowers static-shaped traced graph
+programs to StableHLO and can load PJRT plugins at runtime through environment
+variables. Dynamic-shape graphs remain the native runtime's core use case. See
+the [XLA and PJRT guide](https://tensor4all.org/tenferro-rs/guides/xla.html).
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
@@ -102,6 +102,7 @@ tenferro-rs is for the projects that want this kind of stack natively in Rust.
 | Immediate execution in one runtime, optionally with `backward()` on scalar losses | `EagerTensor` and `EagerRuntime` |
 | `grad`, `vjp`, and `jvp` on traced graphs, graph reuse, or repeated compile/run execution | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
 | CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
+| Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
 ## Crates
 
@@ -116,6 +117,7 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | `tenferro-gpu` | CUDA backend support, experimental WebGPU support, future ROCm substrate, and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
+| `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced graphs |
 
 ### Standard Operation Extensions
 
@@ -166,6 +168,12 @@ Getting Started if you are using tenferro-rs for the first time.
 - [Design: dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
   explains how tenferro represents runtime-dependent dimensions in traced
   programs.
+- [XLA and PJRT](https://tensor4all.org/tenferro-rs/guides/xla.html)
+  documents the experimental StableHLO lowering path and the CUDA, cuTENSOR,
+  and PJRT environment variables used for local verification.
+- [XLA backend: einsum to StableHLO](https://tensor4all.org/tenferro-rs/tutorials/xla-einsum-backend.html)
+  shows a runnable fixed-shape N-ary einsum lowering path through
+  `tenferro-xla`.
 - [Oracle-based AD validation](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
   documents how AD rules are validated against finite-difference and Torch
   reference oracles, and which operation/output gradients are covered. The

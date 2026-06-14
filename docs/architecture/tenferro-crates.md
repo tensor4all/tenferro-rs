@@ -21,10 +21,15 @@ The design goal is to keep these concerns separate:
 - CPU/GPU backend implementations
 - traced graph construction and execution
 - eager and traced AD APIs
+- experimental XLA/PJRT lowering for static traced programs
 - first-class operation families such as einsum, linalg, and FFT
 - internal graph operation vocabulary and primitive metadata
 
 ![tenferro-rs architecture overview](../assets/tenferro-architecture.svg)
+
+The overview diagram focuses on the native CPU/GPU runtime and extension
+stack. `tenferro-xla` is a peer executor over compiled static programs, not a
+`TensorBackend` inside that stack.
 
 ## II. Current Workspace Crates
 
@@ -35,6 +40,7 @@ The design goal is to keep these concerns separate:
 | `tenferro-cpu` | CPU backend, CPU execution sessions, CPU kernels, buffer pools, and CPU provider selection |
 | `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, extension runtime registration, and extension cache storage |
+| `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced programs |
 | `tenferro-ad` | Eager runtime, eager tensors, and traced AD extension traits |
 | `tenferro-einsum` | Subscripts, contraction planning, traced/eager einsum APIs, extension runtime, and AD rule |
 | `tenferro-linalg` | Linear algebra traced APIs, eager helpers, extension runtime, and optional linalg AD rules |
@@ -45,7 +51,7 @@ The design goal is to keep these concerns separate:
 
 The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
 `tenferro-cpu`, `tenferro-gpu`, `tenferro-runtime`, `tenferro-ad`,
-`tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. Crates with
+`tenferro-xla`, `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. Crates with
 `internal` in their name are
 implementation crates and should not be presented as user-facing API surfaces.
 
@@ -58,6 +64,9 @@ Layer 4: tenferro-ad
 Layer 3: tenferro-runtime
          concrete tensor helpers, traced tensors, graph compilation/execution,
          extension runtime registration, extension cache storage
+
+         tenferro-xla
+         experimental StableHLO/PJRT peer executor for static programs
 
          tenferro-einsum / tenferro-linalg / tenferro-fft
          first-class operation-family crates
@@ -99,6 +108,8 @@ tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-extension-macros
 tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-ops
+tenferro-xla              -> tenferro-runtime, tenferro-internal-ops,
+                              tenferro-tensor
 tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu
 
@@ -116,6 +127,9 @@ Additional internal dependencies:
   `tenferro-internal-ops` use `tenferro-core-ops` for primitive metadata.
 - `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft` depend on
   `tenferro-runtime` for extension application and runtime registration.
+- `tenferro-xla` depends on `tenferro-runtime` to read compiled programs and
+  owns its own runtime-loaded PJRT boundary. It must not make XLA/PJRT a
+  compile-time dependency of `tenferro-runtime`.
 - Operation-family AD support depends on `tenferro-ad` only when the crate's
   `autodiff` feature is enabled.
 - CUDA support flows through explicit `cuda` features and `tenferro-gpu`.
@@ -133,6 +147,8 @@ Rules:
 - `tenferro-gpu` owns GPU backend implementation and transfer helpers.
 - `tenferro-runtime` owns graph construction, compilation, execution, extension
   runtime registration, and extension cache ownership.
+- `tenferro-xla` owns StableHLO lowering, explicit host-layout conversion at
+  the XLA boundary, and runtime PJRT plugin loading.
 - `tenferro-ad` owns eager AD surfaces and traced AD helper APIs. Primitive AD
   rule implementations remain in `tenferro-internal-ops/src/ad/`.
 - Device, placement, and error concepts are owned by the crate that uses them:

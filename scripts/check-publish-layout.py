@@ -20,6 +20,7 @@ USER_CRATE_ORDER = [
     "tenferro-gpu",
     "tenferro-runtime",
     "tenferro-ad",
+    "tenferro-xla",
 ]
 EXTENSION_CRATE_ORDER = [
     "tenferro-linalg",
@@ -72,6 +73,18 @@ def section(text: str, heading: str) -> str:
         return ""
     rest = text[start + len(marker) :]
     next_section = rest.find("\n[")
+    if next_section >= 0:
+        return rest[:next_section]
+    return rest
+
+
+def markdown_section(text: str, heading: str) -> str:
+    marker = f"## {heading}"
+    start = text.find(marker)
+    if start < 0:
+        return ""
+    rest = text[start + len(marker) :]
+    next_section = rest.find("\n## ")
     if next_section >= 0:
         return rest[:next_section]
     return rest
@@ -180,11 +193,16 @@ def check_readme(errors: list[str]) -> None:
         if fragment not in readme:
             errors.append(f"README.md missing fragment: {fragment!r}")
 
+    crates_section = markdown_section(readme, "Crates")
+    if not crates_section:
+        errors.append("README.md missing ## Crates section")
+        crates_section = readme
+
     ordered = USER_CRATE_ORDER + EXTENSION_CRATE_ORDER + IMPLEMENTATION_CRATE_ORDER
     positions = []
     for crate in ordered:
         marker = f"`{crate}`"
-        pos = readme.find(marker)
+        pos = crates_section.find(marker)
         if pos < 0:
             errors.append(f"README.md missing crate entry {marker}")
         positions.append(pos)

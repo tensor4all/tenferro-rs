@@ -6,6 +6,7 @@ members = [
     "crates/tenferro-cpu",
     "crates/tenferro-gpu",
     "crates/tenferro-runtime",
+    "crates/tenferro-xla",
     "crates/tenferro-ad",
     "crates/tenferro-internal-extension-macros",
     "crates/tenferro-core-ops",
