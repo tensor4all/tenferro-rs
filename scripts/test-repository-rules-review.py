@@ -220,6 +220,31 @@ def test_split_large_file_diff_splits_oversized_single_hunk() -> None:
     assert all(len(chunk) <= 115 for chunk in chunks)
 
 
+def test_split_large_file_diff_splits_single_overlong_diff_line() -> None:
+    mod = load_module()
+    original_limit = mod.MAX_FILE_DIFF_CHARS
+    try:
+        mod.MAX_FILE_DIFF_CHARS = 130
+        diff = "\n".join(
+            [
+                "diff --git a/minified.js b/minified.js",
+                "index abc..def 100644",
+                "--- a/minified.js",
+                "+++ b/minified.js",
+                "@@ -0,0 +1 @@",
+                "+" + ("x" * 220),
+            ]
+        )
+        chunks = mod.split_diff_chunks({"minified.js": diff})
+    finally:
+        mod.MAX_FILE_DIFF_CHARS = original_limit
+
+    assert len(chunks) > 1
+    assert all(chunk.startswith("diff --git a/minified.js b/minified.js") for chunk in chunks)
+    assert all("@@ -0,0 +1 @@" in chunk for chunk in chunks)
+    assert all(len(chunk) <= 130 for chunk in chunks)
+
+
 def test_scan_runtime_boundary_text_reports_forbidden_symbol() -> None:
     mod = load_module()
     violations = mod.scan_runtime_boundary_text(
@@ -347,6 +372,7 @@ def main() -> int:
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
         test_split_large_file_diff_splits_oversized_single_hunk,
+        test_split_large_file_diff_splits_single_overlong_diff_line,
         test_scan_runtime_boundary_text_reports_forbidden_symbol,
         test_scan_runtime_boundary_text_can_limit_to_changed_lines,
         test_deterministic_checks_passes_added_lines_to_runtime_scan,

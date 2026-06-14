@@ -318,6 +318,22 @@ def joined_line_len(lines: list[str]) -> int:
     return len("\n".join(lines))
 
 
+def split_overlong_diff_line(prefix: list[str], line: str) -> list[str]:
+    prefix_len = joined_line_len(prefix)
+    line_budget = MAX_FILE_DIFF_CHARS - prefix_len - 1
+    if line_budget <= 0:
+        return ["\n".join([*prefix, line])]
+
+    marker = line[:1] if line[:1] in {"+", "-", " "} else ""
+    payload = line[1:] if marker else line
+    payload_budget = max(1, line_budget - len(marker))
+    chunks: list[str] = []
+    for start in range(0, len(payload), payload_budget):
+        piece = f"{marker}{payload[start : start + payload_budget]}"
+        chunks.append("\n".join([*prefix, piece]))
+    return chunks
+
+
 def split_oversized_hunk(header: list[str], hunk: list[str]) -> list[str]:
     """Split one oversized hunk while repeating file and hunk headers."""
     if not hunk:
@@ -330,6 +346,13 @@ def split_oversized_hunk(header: list[str], hunk: list[str]) -> list[str]:
     current = list(prefix)
 
     for line in body:
+        if joined_line_len([*prefix, line]) > MAX_FILE_DIFF_CHARS:
+            if current != prefix:
+                chunks.append("\n".join(current))
+                current = list(prefix)
+            chunks.extend(split_overlong_diff_line(prefix, line))
+            continue
+
         candidate = [*current, line]
         if current != prefix and joined_line_len(candidate) > MAX_FILE_DIFF_CHARS:
             chunks.append("\n".join(current))
