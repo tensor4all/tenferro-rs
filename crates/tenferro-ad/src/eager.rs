@@ -5,7 +5,7 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use crate::extension_cache::ExtensionCacheLimits;
+use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheStore};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
 use computegraph::ValueKey;
 use tenferro_cpu::CpuBackend;
@@ -363,6 +363,33 @@ impl EagerRuntime {
             .lock()
             .unwrap()
             .set_cache_limits(limits);
+    }
+
+    /// Mutably borrow generic extension runtime cache storage.
+    ///
+    /// This hook is for standard extension crates that need cache entries
+    /// owned by an eager runtime while preserving eager value semantics outside
+    /// a registered extension execution boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::ExtensionCacheKey;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let key = ExtensionCacheKey::new("example.cache.v1", "plans", 1);
+    ///
+    /// ctx.with_extension_caches_mut(|caches| {
+    ///     caches.put(key, 7_usize, std::mem::size_of::<usize>());
+    /// });
+    ///
+    /// assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    /// ```
+    pub fn with_extension_caches_mut<R>(&self, f: impl FnOnce(&mut ExtensionCacheStore) -> R) -> R {
+        let mut executor = self.extension_executor.lock().unwrap();
+        f(executor.caches_mut())
     }
 
     /// Block the current thread until backend work submitted by this eager runtime completes.

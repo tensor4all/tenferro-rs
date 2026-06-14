@@ -24,7 +24,7 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
 }
 
 #[test]
-fn nary_eager_einsum_expands_to_standard_ops_without_extension_cache() {
+fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
@@ -43,7 +43,81 @@ fn nary_eager_einsum_expands_to_standard_ops_without_extension_cache() {
 
     assert_eq!(out.data().shape(), &[2, 5]);
     assert_eq!(out.data().as_slice::<f64>().unwrap(), &[12.0_f64; 10]);
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+}
+
+#[test]
+fn nary_eager_einsum_expanded_standard_ops_reuse_runtime_cache() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]),
+        ctx.clone(),
+    );
+    let c = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]),
+        ctx.clone(),
+    );
+
+    let first = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+
+    assert_eq!(first.data().shape(), &[2, 5]);
+    let after_first = ctx.cache_stats().extensions;
+    assert_eq!(after_first.entries, 1);
+    assert!(after_first.retained_bytes > 0);
+
+    let second = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+
+    assert_eq!(second.data().shape(), &[2, 5]);
+    let after_second = ctx.cache_stats().extensions;
+    assert_eq!(after_second.entries, 1);
+    assert_eq!(after_second.retained_bytes, after_first.retained_bytes);
+
+    ctx.clear_extension_caches();
     assert_eq!(ctx.cache_stats().extensions.entries, 0);
+}
+
+#[test]
+fn expanded_eager_einsum_cache_hit_preserves_lazy_view_output() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let k = 2;
+    let j = 3;
+    let o = 4;
+    let t = 5;
+    let lhs_data: Vec<f64> = (0..k * j * t).map(|idx| idx as f64 + 1.0).collect();
+    let rhs_data: Vec<f64> = (0..o * t).map(|idx| idx as f64 + 101.0).collect();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![k, j, t], lhs_data),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![o, t], rhs_data),
+        ctx.clone(),
+    );
+
+    let first = einsum(&[&lhs, &rhs], "kjt,ot->jkot").unwrap();
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    assert!(matches!(
+        first.tensor_read(),
+        TensorRead::View(TensorView::F64(_))
+    ));
+
+    let second = einsum(&[&lhs, &rhs], "kjt,ot->jkot").unwrap();
+
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    match second.tensor_read() {
+        TensorRead::View(TensorView::F64(view)) => {
+            assert_eq!(view.shape(), &[j, k, o, t]);
+            assert_eq!(
+                view.strides(),
+                &[k as isize, 1, (k * j) as isize, (k * j * o) as isize]
+            );
+        }
+        other => panic!("expected lazy f64 view from cached expansion, got {other:?}"),
+    }
 }
 
 #[test]
