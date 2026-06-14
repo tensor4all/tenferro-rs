@@ -160,6 +160,55 @@ def test_scan_runtime_boundary_text_reports_forbidden_symbol() -> None:
     ]
 
 
+def test_scan_runtime_boundary_text_can_limit_to_changed_lines() -> None:
+    mod = load_module()
+    violations = mod.scan_runtime_boundary_text(
+        "crates/tenferro-runtime/src/lib.rs",
+        "pub struct Safe;\n//! autodiff docs\npub struct EagerTensor;\n",
+        {3},
+    )
+    assert violations == [
+        "crates/tenferro-runtime/src/lib.rs:3: pub struct EagerTensor;"
+    ]
+
+
+def test_deterministic_checks_passes_added_lines_to_runtime_scan() -> None:
+    mod = load_module()
+    captured: dict[str, object] = {}
+    original = mod.runtime_ad_boundary_violations
+
+    def fake_runtime_ad_boundary_violations(
+        *,
+        ref: str | None,
+        worktree: bool,
+        changed_lines: dict[str, set[int]] | None = None,
+    ) -> list[str]:
+        captured["ref"] = ref
+        captured["worktree"] = worktree
+        captured["changed_lines"] = changed_lines
+        return []
+
+    try:
+        mod.runtime_ad_boundary_violations = fake_runtime_ad_boundary_violations
+        mod.deterministic_checks(
+            [
+                "crates/tenferro-internal-ops/src/ad/rules/foo.rs",
+                "crates/tenferro-runtime/src/lib.rs",
+            ],
+            head="HEAD",
+            worktree=False,
+            added_lines={"crates/tenferro-runtime/src/lib.rs": {9}},
+        )
+    finally:
+        mod.runtime_ad_boundary_violations = original
+
+    assert captured == {
+        "ref": "HEAD",
+        "worktree": False,
+        "changed_lines": {"crates/tenferro-runtime/src/lib.rs": {9}},
+    }
+
+
 def test_redact_sensitive_text_masks_common_secret_forms() -> None:
     mod = load_module()
     api_value = "sk-" + "live-secret-abcdefghijklmnopqrstuvwxyz"
@@ -202,6 +251,8 @@ def main() -> int:
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
         test_scan_runtime_boundary_text_reports_forbidden_symbol,
+        test_scan_runtime_boundary_text_can_limit_to_changed_lines,
+        test_deterministic_checks_passes_added_lines_to_runtime_scan,
         test_redact_sensitive_text_masks_common_secret_forms,
         test_contains_sensitive_text_ignores_env_lookup_code,
     ]:

@@ -635,25 +635,51 @@ def runtime_boundary_text(path: str, *, ref: str | None, worktree: bool) -> str:
     return run_git(["show", f"{ref}:{path}"])
 
 
-def scan_runtime_boundary_text(path: str, text: str) -> list[str]:
+def scan_runtime_boundary_text(
+    path: str,
+    text: str,
+    line_numbers: set[int] | None = None,
+) -> list[str]:
     violations: list[str] = []
     for line_no, line in enumerate(text.splitlines(), start=1):
+        if line_numbers is not None and line_no not in line_numbers:
+            continue
         if RUNTIME_AD_FORBIDDEN.search(line):
             violations.append(f"{path}:{line_no}: {line}")
     return violations
 
 
-def runtime_ad_boundary_violations(*, ref: str | None, worktree: bool) -> list[str]:
+def runtime_ad_boundary_violations(
+    *,
+    ref: str | None,
+    worktree: bool,
+    changed_lines: dict[str, set[int]] | None = None,
+) -> list[str]:
     resolved_ref = ref or "HEAD"
-    paths = (
-        runtime_boundary_files_in_worktree()
-        if worktree
-        else runtime_boundary_files_at_ref(resolved_ref)
-    )
+    if changed_lines is None:
+        paths = (
+            runtime_boundary_files_in_worktree()
+            if worktree
+            else runtime_boundary_files_at_ref(resolved_ref)
+        )
+    else:
+        paths = sorted(
+            path
+            for path, lines in changed_lines.items()
+            if lines
+            and (
+                path == "crates/tenferro-runtime/Cargo.toml"
+                or (
+                    path.startswith("crates/tenferro-runtime/src/")
+                    and path.endswith(".rs")
+                )
+            )
+        )
     violations: list[str] = []
     for path in paths:
         text = runtime_boundary_text(path, ref=resolved_ref, worktree=worktree)
-        violations.extend(scan_runtime_boundary_text(path, text))
+        line_numbers = changed_lines.get(path) if changed_lines is not None else None
+        violations.extend(scan_runtime_boundary_text(path, text, line_numbers))
     return violations
 
 
@@ -662,6 +688,7 @@ def deterministic_checks(
     *,
     head: str | None = None,
     worktree: bool = False,
+    added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     ad_touched = any(
@@ -670,7 +697,11 @@ def deterministic_checks(
     )
     runtime_touched = any(path.startswith("crates/tenferro-runtime/") for path in files)
     if ad_touched and runtime_touched:
-        violations = runtime_ad_boundary_violations(ref=head, worktree=worktree)
+        violations = runtime_ad_boundary_violations(
+            ref=head,
+            worktree=worktree,
+            changed_lines=added_lines,
+        )
         if violations:
             findings.append(
                 Finding(
@@ -763,7 +794,12 @@ def main(argv: list[str] | None = None) -> int:
     rules_text = build_rules_payload(section_names)
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-    findings = deterministic_checks(files, head=args.head, worktree=args.worktree)
+    findings = deterministic_checks(
+        files,
+        head=args.head,
+        worktree=args.worktree,
+        added_lines=added_lines,
+    )
     sensitive_finding = sensitive_diff_finding(diff_text)
     if sensitive_finding:
         findings.append(sensitive_finding)
