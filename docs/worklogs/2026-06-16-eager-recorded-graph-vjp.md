@@ -4,9 +4,10 @@
 
 Implemented the tenferro side of the eager recorded-graph VJP design for issues
 #1060 and #1061. The dependency PR in `tidu-rs` adds graph-invocation eager
-recording; tenferro now routes primitive eager recording through one-op
-`RecordedGraph`s and routes tracked n-ary eager einsum through one composite
-`StdTensorOp` graph node.
+recording and is consumed at merged rev
+`36af0974014a12c681977105c5564257dd38441e`; tenferro now routes primitive
+eager recording through one-op `RecordedGraph`s and routes tracked n-ary eager
+einsum through one composite `StdTensorOp` graph node.
 
 ## Context Read
 
