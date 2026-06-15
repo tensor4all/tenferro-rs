@@ -335,12 +335,15 @@ This is a breaking tidu eager API change.
 3. Move backward linearization to `RecordedGraph::linearize`.
 4. Delete `try_build_single_op_linear`.
 5. Delete `Recorder::record`.
-6. Update tidu eager tests, examples, and docs to build one-op graphs explicitly.
-7. Update `tenferro-ad` to record primitive eager ops via one-op recorded graphs.
-8. Add the tenferro graph-recording helper for composite eager ops.
-9. Wire tracked eager einsum to whole-program forward plus one-node graph
+6. Update tidu eager tests and examples to build one-op graphs explicitly.
+7. Update tidu user-facing docs, including the published docs at
+   `http://tensor4all.org/tidu-rs/docs/`, so the eager reverse-mode guide no
+   longer teaches primitive recording as the eager tape abstraction.
+8. Update `tenferro-ad` to record primitive eager ops via one-op recorded graphs.
+9. Add the tenferro graph-recording helper for composite eager ops.
+10. Wire tracked eager einsum to whole-program forward plus one-node graph
    recording.
-10. Move tenferro eager backward transpose execution to transposed graph
+11. Move tenferro eager backward transpose execution to transposed graph
     execution for graph nodes.
 
 ## Testing
@@ -370,6 +373,8 @@ Repository checks:
 
 - `rg "try_build_single_op_linear"` returns no matches.
 - `rg "Recorder::record"` returns no production call sites.
+- The tidu docs update is included in the tidu change set and is reflected in
+  the published documentation target at `http://tensor4all.org/tidu-rs/docs/`.
 - `cargo fmt --all --check`
 - `cargo test --workspace --release`
 
