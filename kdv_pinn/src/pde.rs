@@ -1,3 +1,9 @@
+//! KdV residual and differentiation helpers.
+//!
+//! This module builds the PDE residual terms for the Korteweg–de Vries equation
+//! and provides small wrappers around the traced-graph automatic-differentiation
+//! APIs so the PINN code can request spatial and temporal derivatives concisely.
+
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_runtime::{Result, TracedTensor};
 
@@ -6,18 +12,10 @@ use tenferro_runtime::{Result, TracedTensor};
 /// This is a thin helper over [`TracedTensorAdExt::grad`] so that PDE residual
 /// code can request derivatives without importing the AD extension trait
 /// directly.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_runtime::{DType, TracedTensor};
-///
-/// let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1]);
-/// let y = x.mul(&x).mul(&x).sum(&[0, 1]); // x^3
-/// let dy_dx = kdv_pinn::pde::grad(&y, &x).unwrap();
-/// assert_eq!(dy_dx.shape(), &[3, 1]);
-/// ```
-pub fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
+#[allow(dead_code)]
+// Temporary scaffolding: `grad` is used by the third-derivative PoC test today
+// and will be consumed by `kdv_residual` in Task 5.
+pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
     output.grad(input)
 }
 
