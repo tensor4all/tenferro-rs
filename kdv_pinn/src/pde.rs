@@ -23,8 +23,6 @@ pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<Traced
 /// `u`, `x`, and `t` must have concrete shapes. `x` and `t` are the
 /// independent-variable placeholders with respect to which derivatives are
 /// taken. The returned tensor has the same shape as `u`.
-// TODO(kdv-pinn): remove #[allow(dead_code)] once the PINN training loop consumes this function.
-#[allow(dead_code)]
 pub(crate) fn kdv_residual(
     u: &TracedTensor,
     x: &TracedTensor,
@@ -41,8 +39,6 @@ pub(crate) fn kdv_residual(
 }
 
 /// Return a constant tensor of ones with the same shape and dtype as `tensor`.
-// TODO(kdv-pinn): remove #[allow(dead_code)] once the PINN training loop consumes this helper.
-#[allow(dead_code)]
 fn ones_like(tensor: &TracedTensor) -> Result<TracedTensor> {
     let shape = tensor
         .try_concrete_shape()

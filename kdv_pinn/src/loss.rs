@@ -16,8 +16,6 @@ pub(crate) fn mean_square(pred: &TracedTensor, target: &TracedTensor, n: usize) 
 /// Mean squared error of a single tensor against zero, scaled by `1 / n`.
 ///
 /// The tensor is expected to have shape `[n, 1]`. The result is a scalar.
-// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
-#[allow(dead_code)]
 pub(crate) fn mean_square_single(tensor: &TracedTensor, n: usize) -> TracedTensor {
     assert!(n > 0, "mean_square_single count must be positive");
     let sq = tensor.mul(tensor);
@@ -29,8 +27,6 @@ pub(crate) fn mean_square_single(tensor: &TracedTensor, n: usize) -> TracedTenso
 ///
 /// Combines the PDE residual loss with initial- and boundary-condition losses
 /// using scalar weights `lambda_ic` and `lambda_bc`.
-// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn total_loss(
     residual: &TracedTensor,

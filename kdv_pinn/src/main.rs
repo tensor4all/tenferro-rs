@@ -13,7 +13,11 @@ use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_tensor::Tensor;
 
 const N_IC: usize = 32;
-const LR: f64 = 0.01;
+const N_COL: usize = 256;
+const N_BC: usize = 32;
+const LAMBDA_IC: f64 = 100.0;
+const LAMBDA_BC: f64 = 10.0;
+const LR: f64 = 0.001;
 const EPOCHS: usize = 500;
 
 fn main() {
@@ -29,35 +33,63 @@ fn main() {
         .expect("stacking x_ic and t_zero must succeed")
         .reshape(&[N_IC, 2]);
     let u_ic = net.forward(&xt_ic);
-    let loss = loss::mean_square(&u_ic, &u_ic_true, N_IC);
+
+    let x_col = TracedTensor::input_concrete_shape(DType::F64, &[N_COL, 1]);
+    let t_col = TracedTensor::input_concrete_shape(DType::F64, &[N_COL, 1]);
+    let xt_col = TracedTensor::stack(
+        &[&x_col.reshape(&[N_COL, 1]), &t_col.reshape(&[N_COL, 1])],
+        1,
+    )
+    .expect("stack x_col and t_col must succeed")
+    .reshape(&[N_COL, 2]);
+    let u_col = net.forward(&xt_col);
+
+    let x_bc = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1]);
+    let t_bc = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1]);
+    let u_bc_true = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1]);
+    let xt_bc = TracedTensor::stack(&[&x_bc.reshape(&[N_BC, 1]), &t_bc.reshape(&[N_BC, 1])], 1)
+        .expect("stack x_bc and t_bc must succeed")
+        .reshape(&[N_BC, 2]);
+    let u_bc = net.forward(&xt_bc);
+
+    let residual = pde::kdv_residual(&u_col, &x_col, &t_col).expect("kdv_residual failed");
+    let total_loss = loss::total_loss(
+        &residual, &u_ic, &u_ic_true, &u_bc, &u_bc_true, N_COL, N_IC, N_BC, LAMBDA_IC, LAMBDA_BC,
+    );
 
     let param_grads: Vec<TracedTensor> = net
         .parameters()
         .iter()
-        .map(|p| loss.grad(p).expect("grad computation failed"))
+        .map(|p| total_loss.grad(p).expect("grad computation failed"))
         .collect();
 
     let mut compiler = GraphCompiler::new();
     let param_specs = net.input_specs();
-    let ic_x_spec: &[usize] = &[N_IC, 1];
-    let ic_u_spec: &[usize] = &[N_IC, 1];
+    let col_spec: &[usize] = &[N_COL, 1];
+    let ic_spec: &[usize] = &[N_IC, 1];
+    let bc_spec: &[usize] = &[N_BC, 1];
     let specs: Vec<(&TracedTensor, DType, &[usize])> = param_specs
         .iter()
         .map(|(p, dtype, shape)| (*p, *dtype, shape.as_slice()))
         .chain([
-            (&x_ic, DType::F64, ic_x_spec),
-            (&u_ic_true, DType::F64, ic_u_spec),
+            (&x_col, DType::F64, col_spec),
+            (&t_col, DType::F64, col_spec),
+            (&x_ic, DType::F64, ic_spec),
+            (&u_ic_true, DType::F64, ic_spec),
+            (&x_bc, DType::F64, bc_spec),
+            (&t_bc, DType::F64, bc_spec),
+            (&u_bc_true, DType::F64, bc_spec),
         ])
         .collect();
     let loss_program = compiler
-        .compile_with_input_specs(&loss, &specs)
-        .expect("loss compilation failed");
+        .compile_with_input_specs(&total_loss, &specs)
+        .expect("compile total_loss failed");
     let grad_programs: Vec<_> = param_grads
         .iter()
         .map(|g| {
             compiler
                 .compile_with_input_specs(g, &specs)
-                .expect("gradient compilation failed")
+                .expect("compile grad failed")
         })
         .collect();
 
@@ -66,27 +98,38 @@ fn main() {
     let mut opt = Sgd::new(LR);
 
     for epoch in 0..EPOCHS {
+        let xt_col_tensor = sampler.collocation(N_COL, &mut rng);
+        let xt_data = xt_col_tensor.as_slice::<f64>().expect("collocation data");
+        let (x_col_data, t_col_data) = xt_data.split_at(N_COL);
+        let x_col_tensor = Tensor::from_vec_col_major(vec![N_COL, 1], x_col_data.to_vec());
+        let t_col_tensor = Tensor::from_vec_col_major(vec![N_COL, 1], t_col_data.to_vec());
+
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
+        let (x_bc_tensor, t_bc_tensor, u_bc_tensor) = sampler.boundary(N_BC, &mut rng);
+
         let mut bindings: Vec<(&TracedTensor, &Tensor)> = Vec::new();
         for (p, t) in net.parameters().iter().zip(params.iter()) {
             bindings.push((*p, t));
         }
+        bindings.push((&x_col, &x_col_tensor));
+        bindings.push((&t_col, &t_col_tensor));
         bindings.push((&x_ic, &x_ic_tensor));
         bindings.push((&u_ic_true, &u_ic_tensor));
+        bindings.push((&x_bc, &x_bc_tensor));
+        bindings.push((&t_bc, &t_bc_tensor));
+        bindings.push((&u_bc_true, &u_bc_tensor));
 
         let loss_tensor = executor
             .run_with_inputs(&loss_program, &bindings)
-            .expect("loss execution failed");
-        let loss_value = loss_tensor
-            .as_slice::<f64>()
-            .expect("loss tensor must be f64")[0];
+            .expect("evaluate loss failed");
+        let loss_value = loss_tensor.as_slice::<f64>().expect("loss data")[0];
 
         let mut grads = Vec::new();
         for program in &grad_programs {
             grads.push(
                 executor
                     .run_with_inputs(program, &bindings)
-                    .expect("gradient execution failed"),
+                    .expect("evaluate grad failed"),
             );
         }
 
