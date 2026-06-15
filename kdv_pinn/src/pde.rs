@@ -7,7 +7,10 @@
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_runtime::{Error, Result, TracedTensor};
 
-/// Compute the KdV residual `u_t + u * u_x + u_xxx`.
+/// Compute the KdV residual `u_t + 6 * u * u_x + u_xxx`.
+///
+/// This is the standard Korteweg–de Vries equation whose single-soliton
+/// solution is `u(x, t) = 2 * sech^2(x - 4t)`.
 ///
 /// `u`, `x`, and `t` must have concrete shapes. `x` and `t` are the
 /// independent-variable placeholders with respect to which derivatives are
@@ -23,7 +26,7 @@ pub(crate) fn kdv_residual(
     let u_x = u.jvp(x, &ones_x)?;
     let u_xx = u_x.jvp(x, &ones_x)?;
     let u_xxx = u_xx.jvp(x, &ones_x)?;
-    let nonlinear = u.mul(&u_x);
+    let nonlinear = u.mul(&u_x).scale_real(6.0);
     Ok(u_t.add(&nonlinear).add(&u_xxx))
 }
 

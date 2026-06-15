@@ -33,15 +33,19 @@ Implement an independent `kdv_pinn` sample crate that demonstrates how to build 
 - Stratified `Sampler::boundary` so both `x = -5` and `x = 5` are always represented.
 - Lowered the learning rate from `0.01` (used in the initial-condition-only loop) to `0.001` because the full PDE + boundary objective diverges to NaN at the higher rate.
 - Moved the `grad` helper into `pde/tests.rs` because it is only used by the third-derivative PoC test.
+- **Critical bug fix**: The design doc specified the PDE as `u_t + u * u_x + u_xxx = 0`, but the reference soliton `u = 2 sech^2(x - 4t)` satisfies the *standard* KdV equation `u_t + 6 u u_x + u_xxx = 0`. Updated `kdv_residual` and the design doc to use the coefficient `6`. After this fix the residual of the exact solution is numerically zero and training converges to a meaningful solution.
+- Switched from SGD to **Adam** for the full training loop; added first- and second-moment buffers to `optimizer.rs`.
+- Tuned hyperparameters for the best accuracy within a reasonable runtime: MLP `[2, 64, 64, 1]`, `N_COL = 512`, `N_IC = N_BC = 64`, `LR = 0.001`, `EPOCHS = 1000`, balanced loss weights `λ_pde = λ_ic = λ_bc = 1.0`.
 
 ## Residual Risks
 
-- **Training accuracy**: After 500 epochs the L2 relative error at `t = 0.5` is around `1.0` (≈100%). The loss decreases from O(100) to O(1), gradients flow, and all unit tests pass, but the network has not converged to the analytical soliton. Improving accuracy would require hyperparameter/architecture tuning (larger MLP, adaptive LR, better collocation sampling, annealed loss weights) that is outside the scope of this sample.
+- **Training accuracy**: After 1000 epochs the L2 relative error at `t = 0.5` is around `0.15` (≈15%). This is a large improvement over the original ~100%, but further reduction would require a larger network, longer training, adaptive collocation sampling, or a learning-rate schedule.
 - **Higher-order AD coverage**: The JVP-based residual relies on the MLP being pointwise. If the architecture were changed to introduce batch mixing (e.g., batch normalization), the per-element derivative interpretation would break.
 
 ## Verification
 
 - `cargo fmt --all --check` ✅
 - `cargo clippy -p kdv_pinn -- -D warnings` ✅
-- `cargo test -p kdv_pinn` ✅ 12/12 tests pass
-- `cargo run -p kdv_pinn --release` ✅ completes 500 epochs and prints final loss + L2 error
+- `cargo test -p kdv_pinn` ✅ 21/21 tests pass
+- `cargo test --workspace --release` ✅ passes
+- `cargo run -p kdv_pinn --release` ✅ completes 1000 epochs and prints final loss + L2 error

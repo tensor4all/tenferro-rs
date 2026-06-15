@@ -13,7 +13,7 @@ Implement a Physics-Informed Neural Network (PINN) for the Korteweg-de Vries (Kd
 ### Target PDE
 
 ```
-u_t + u * u_x + u_xxx = 0
+u_t + 6 * u * u_x + u_xxx = 0
 ```
 
 where `x` is 1D space and `t` is time. The network learns a scalar field `u(x, t)`.
@@ -112,7 +112,7 @@ let u_xxx = grad(&u_xx, &x)?;
 `kdv_residual(u, x, t)` computes:
 
 ```
-r = u_t + u * u_x + u_xxx
+r = u_t + 6 * u * u_x + u_xxx
 ```
 
 where `u` is the network output, and `x`, `t` are input placeholders.
@@ -128,8 +128,8 @@ Mean is implemented as `reduce_sum(...) * (1.0 / n)`.
 
 ### 5.5 Optimizer (`optimizer.rs`)
 
-- Start with `Sgd { lr: f64 }`.
-- Optionally add `Adam { lr, beta1, beta2, eps, m, v }`.
+- `Sgd { lr: f64 }` for basic gradient descent.
+- `Adam { lr, beta1, beta2, eps, m, v }` with first- and second-moment buffers; used in the full training loop.
 - `step(&mut self, params: &mut [Tensor], grads: &[Tensor])` updates parameters in-place using `Tensor::as_slice_mut::<f64>()` and `Tensor::as_slice::<f64>()`.
 
 ### 5.6 Sampler (`sampler.rs`)

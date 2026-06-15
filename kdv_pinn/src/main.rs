@@ -19,24 +19,25 @@ mod pde;
 mod sampler;
 
 use network::Mlp;
-use optimizer::Sgd;
+use optimizer::Adam;
 use sampler::Sampler;
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_tensor::Tensor;
 
-const N_IC: usize = 32;
-const N_COL: usize = 256;
-const N_BC: usize = 32;
+const N_IC: usize = 64;
+const N_COL: usize = 512;
+const N_BC: usize = 64;
 const N_EVAL: usize = 100;
-const LAMBDA_IC: f64 = 100.0;
-const LAMBDA_BC: f64 = 10.0;
+const LAMBDA_PDE: f64 = 1.0;
+const LAMBDA_IC: f64 = 1.0;
+const LAMBDA_BC: f64 = 1.0;
 const LR: f64 = 0.001;
-const EPOCHS: usize = 500;
+const EPOCHS: usize = 1000;
 
 fn main() {
-    let net = Mlp::new(&[2, 16, 16, 1]);
+    let net = Mlp::new(&[2, 64, 64, 1]);
     let mut rng = rand::thread_rng();
     let mut params = net.init_tensors(&mut rng);
 
@@ -67,7 +68,9 @@ fn main() {
         .reshape(&[N_BC, 2]);
     let u_bc = net.forward(&xt_bc);
 
-    let residual = pde::kdv_residual(&u_col, &x_col, &t_col).expect("kdv_residual failed");
+    let residual = pde::kdv_residual(&u_col, &x_col, &t_col)
+        .expect("kdv_residual failed")
+        .scale_real(LAMBDA_PDE);
     let total_loss = loss::total_loss(
         &residual, &u_ic, &u_ic_true, &u_bc, &u_bc_true, N_COL, N_IC, N_BC, LAMBDA_IC, LAMBDA_BC,
     );
@@ -110,12 +113,11 @@ fn main() {
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-    let mut opt = Sgd::new(LR);
+    let mut opt = Adam::new(LR);
 
     let mut final_loss = f64::INFINITY;
     for epoch in 0..EPOCHS {
         let (x_col_tensor, t_col_tensor) = sampler.collocation(N_COL, &mut rng);
-
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
         let (x_bc_tensor, t_bc_tensor, u_bc_tensor) = sampler.boundary(N_BC, &mut rng);
 
