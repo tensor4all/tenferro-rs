@@ -16,6 +16,7 @@ mod loss;
 mod network;
 mod optimizer;
 mod pde;
+mod plot;
 mod sampler;
 
 use network::Mlp;
@@ -25,6 +26,16 @@ use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_tensor::Tensor;
+
+fn gif_path_from_args() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    for window in args.windows(2) {
+        if window[0] == "--gif" {
+            return Some(window[1].clone());
+        }
+    }
+    None
+}
 
 const N_IC: usize = 64;
 const N_COL: usize = 512;
@@ -184,7 +195,7 @@ fn main() {
         x_eval_data.push(x);
         u_true_data.push(2.0 * (1.0 / ((x - 4.0 * t).cosh())).powi(2));
     }
-    let x_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], x_eval_data);
+    let x_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], x_eval_data.clone());
     let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![0.5_f64; N_EVAL]);
     let u_true_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], u_true_data);
 
@@ -210,4 +221,39 @@ fn main() {
         .sqrt()
         / truth.iter().map(|t| t.powi(2)).sum::<f64>().sqrt();
     println!("L2 relative error at t=0.5: {:.6e}", l2_error);
+
+    if let Some(gif_path) = gif_path_from_args() {
+        const N_FRAMES: usize = 50;
+        let mut frames = Vec::with_capacity(N_FRAMES);
+        for frame in 0..N_FRAMES {
+            let t = frame as f64 / (N_FRAMES as f64 - 1.0);
+            let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![t; N_EVAL]);
+            let mut frame_bindings: Vec<(&TracedTensor, &Tensor)> = net
+                .parameters()
+                .iter()
+                .zip(params.iter())
+                .map(|(p, t)| (*p, t))
+                .collect();
+            frame_bindings.push((&x_eval, &x_eval_tensor));
+            frame_bindings.push((&t_eval, &t_eval_tensor));
+
+            let u_pred = executor
+                .run_with_inputs(&eval_program, &frame_bindings)
+                .expect("evaluate eval program for animation frame failed");
+            let pred = u_pred.as_slice::<f64>().expect("predicted frame data");
+
+            let truth: Vec<f64> = x_eval_data
+                .iter()
+                .map(|&x| 2.0 * (1.0 / ((x - 4.0 * t).cosh())).powi(2))
+                .collect();
+
+            let img = plot::draw_comparison_frame(&x_eval_data, &truth, pred);
+            frames.push(img);
+            if frame % 10 == 0 {
+                println!("rendered frame {} / {}", frame, N_FRAMES - 1);
+            }
+        }
+        plot::encode_gif(&gif_path, &frames, 10).expect("encode gif failed");
+        println!("saved animation to {}", gif_path);
+    }
 }

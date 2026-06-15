@@ -18,6 +18,17 @@ u_t + 6 * u * u_x + u_xxx = 0
 
 where `x` is 1D space and `t` is time. The network learns a scalar field `u(x, t)`.
 
+### Running the sample
+
+```bash
+# Train and print final loss + L2 error at t = 0.5
+cargo run -p kdv_pinn --release
+
+# Additionally generate an animated GIF comparing predicted (red) and
+# analytic (blue) solution curves over t ∈ [0, 1]
+cargo run -p kdv_pinn --release -- --gif kdv_pinn.gif
+```
+
 ### Reference Solution
 
 Use the single-soliton solution

@@ -36,6 +36,8 @@ Implement an independent `kdv_pinn` sample crate that demonstrates how to build 
 - **Critical bug fix**: The design doc specified the PDE as `u_t + u * u_x + u_xxx = 0`, but the reference soliton `u = 2 sech^2(x - 4t)` satisfies the *standard* KdV equation `u_t + 6 u u_x + u_xxx = 0`. Updated `kdv_residual` and the design doc to use the coefficient `6`. After this fix the residual of the exact solution is numerically zero and training converges to a meaningful solution.
 - Switched from SGD to **Adam** for the full training loop; added first- and second-moment buffers to `optimizer.rs`.
 - Tuned hyperparameters for the best accuracy within a reasonable runtime: MLP `[2, 64, 64, 1]`, `N_COL = 512`, `N_IC = N_BC = 64`, `LR = 0.001`, `EPOCHS = 1000`, balanced loss weights `λ_pde = λ_ic = λ_bc = 1.0`.
+- Added an optional `--gif <path>` CLI flag that renders 50 frames comparing the predicted (red) and analytic (blue) solution curves over `t ∈ [0, 1]` and encodes them as an animated GIF using the `image` crate.
+- Added `kdv_pinn/.gitignore` to exclude generated `*.gif` files.
 
 ## Residual Risks
 
