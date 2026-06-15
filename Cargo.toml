@@ -15,6 +15,7 @@ members = [
     "crates/tenferro-linalg",
     "crates/tenferro-fft",
     "docs/tutorial-code",
+    "kdv_pinn",
 ]
 default-members = [
     "crates/tenferro-tensor",

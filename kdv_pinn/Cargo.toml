@@ -1,0 +1,11 @@
+[package]
+name = "kdv_pinn"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+rand = "0.8"
