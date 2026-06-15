@@ -1,4 +1,5 @@
 use tenferro_runtime::{DType, DotGeneralConfig, TracedTensor};
+use tenferro_tensor::Tensor;
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.
 #[allow(dead_code)]
@@ -78,6 +79,30 @@ impl Mlp {
             params.push(&layer.bias);
         }
         params
+    }
+
+    /// Initialize concrete `Tensor` buffers for every layer weight and bias.
+    ///
+    /// Weights use Xavier-style uniform initialization; biases are zeros.
+    pub(crate) fn init_tensors(&self, rng: &mut impl rand::Rng) -> Vec<Tensor> {
+        use rand::distributions::{Distribution, Uniform};
+        let mut tensors = Vec::new();
+        for layer in &self.layers {
+            let shape = layer.weight.try_concrete_shape().unwrap();
+            let fan_in = shape[0];
+            let fan_out = shape[1];
+            let scale = (6.0 / (fan_in + fan_out) as f64).sqrt();
+            let dist = Uniform::new(-scale, scale);
+            let w_data: Vec<f64> = (0..shape.iter().product::<usize>())
+                .map(|_| dist.sample(rng))
+                .collect();
+            tensors.push(Tensor::from_vec_col_major(shape.clone(), w_data));
+
+            let b_shape = layer.bias.try_concrete_shape().unwrap();
+            let b_data = vec![0.0_f64; b_shape.iter().product::<usize>()];
+            tensors.push(Tensor::from_vec_col_major(b_shape.clone(), b_data));
+        }
+        tensors
     }
 
     /// Return `(placeholder, dtype, shape)` tuples for every parameter.
