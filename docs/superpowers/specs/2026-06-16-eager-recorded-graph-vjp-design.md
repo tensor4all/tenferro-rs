@@ -110,8 +110,9 @@ the recording API must stay:
 - Do not keep a legacy primitive recording API.
 - Do not special-case einsum inside tidu.
 - Do not build a checkpoint/rematerialization policy, a FLOPs cost model, or
-  contraction segmentation in this slice. The default is minimal residual (per-op
-  `saved_forward_values` union); going below O(N) memory is deferred.
+  contraction segmentation in this slice. The default is a conservative O(N)
+  residual based on the current per-op `saved_forward_values` union; rule-specific
+  residual tightening and going below O(N) memory are deferred.
 - Do not add an intra-op nested checkpoint planner. When checkpointing arrives it
   should be expressed as segment-sized `RecordedGraph` nodes, not as recompute
   logic hidden inside one opaque node.
@@ -151,9 +152,10 @@ where
 ```
 
 `retained_values` contains forward values from inside the recorded graph that
-may be needed during backward. `record_graph` also records graph inputs and graph
-outputs from `inputs` and `outputs`, so callers do not have to duplicate those
-entries.
+may be needed during backward. `record_graph` also records graph inputs from
+`inputs`, so callers do not have to duplicate those entries. It does not
+automatically retain graph outputs merely because they are outputs; a graph
+output is retained only when it appears in `retained_values`.
 
 For ordinary eager primitives, the downstream frontend builds a one-op
 `RecordedGraph` and passes it to `record_graph`. That one-op conversion is a
@@ -249,21 +251,28 @@ once by the backend.
 ## Residual Retention
 
 The recorded graph forward path must retain the primal values backward reads.
-The default is **minimal residual**, not save-all: retain only the primal values
-referenced by the per-primitive transpose rules.
+For this slice the default is a **conservative O(N) residual**, not a
+rule-minimal residual and not a checkpointing policy.
 
-- Reuse the existing per-op residual logic (`saved_forward_values`) and take the
-  union over the recorded graph's ops. This is computable at record time without
-  building `linearize(G)` first, and matches what PyTorch `save_for_backward` and
-  JAX partial-eval residuals retain.
-- Do not retain graph external outputs or values no op's backward reads
-  (save-all wastes memory with no benefit).
-- For a contraction chain this is still O(N) (the left environments are each the
-  sibling operand of a downstream input gradient), which is correct and the
-  intended cost for this slice.
+- Reuse the current eager per-op residual behavior (`saved_forward_values`) and
+  take the union over the recorded graph's reachable ops. Today that per-op
+  behavior saves the op inputs and outputs, so this deliberately preserves
+  existing eager AD correctness without adding new residual metadata to every
+  primitive rule.
+- `record_graph` does not automatically retain graph outputs. Outputs are normal
+  eager result values; they enter `retained_values` only if the chosen residual
+  policy includes them, as the current `saved_forward_values` union often will
+  for produced op outputs.
+- For a contraction chain this union is O(N), which is the intended retained
+  activation cost for this slice and matches the O(N) backward compute target.
 
-Going below O(N) is **checkpointing/rematerialization** and is deferred. Note
-the tradeoff is compute-and-memory, not memory alone: backward replays primal
+This is conservative: it may retain values that a specific transpose rule does
+not read. Tightening that constant factor requires rule-specific residual
+metadata, or deriving needed external values from `linearize(G)` /
+`transpose(linearize(G))`; both are deferred.
+
+Going below O(N) is **checkpointing/rematerialization** and is also deferred.
+The tradeoff is compute-and-memory, not memory alone: backward replays primal
 values through `execute_forward`, so dropping a retained value forces its
 recomputation (a full GEMM for a contraction intermediate). A later policy must
 be cost-aware (retain large/expensive intermediates, recompute cheap unary/view
