@@ -1,3 +1,17 @@
+//! Physics-informed neural network (PINN) example for the Korteweg–de Vries (KdV)
+//! equation.
+//!
+//! This example trains a small multi-layer perceptron to approximate the KdV
+//! single-soliton solution on the spatial domain `x ∈ [-5, 5]` and time domain
+//! `t ∈ [0, 1]`. The loss combines the PDE residual in the interior, the initial
+//! condition at `t = 0`, and periodic boundary data at `x = ±5`.
+//!
+//! Run the example with:
+//!
+//! ```bash
+//! cargo run -p kdv_pinn --release
+//! ```
+
 mod loss;
 mod network;
 mod optimizer;
@@ -100,11 +114,7 @@ fn main() {
 
     let mut final_loss = f64::INFINITY;
     for epoch in 0..EPOCHS {
-        let xt_col_tensor = sampler.collocation(N_COL, &mut rng);
-        let xt_data = xt_col_tensor.as_slice::<f64>().expect("collocation data");
-        let (x_col_data, t_col_data) = xt_data.split_at(N_COL);
-        let x_col_tensor = Tensor::from_vec_col_major(vec![N_COL, 1], x_col_data.to_vec());
-        let t_col_tensor = Tensor::from_vec_col_major(vec![N_COL, 1], t_col_data.to_vec());
+        let (x_col_tensor, t_col_tensor) = sampler.collocation(N_COL, &mut rng);
 
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
         let (x_bc_tensor, t_bc_tensor, u_bc_tensor) = sampler.boundary(N_BC, &mut rng);

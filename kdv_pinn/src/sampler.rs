@@ -2,7 +2,7 @@ use rand::distributions::{Distribution, Uniform};
 use rand::Rng;
 use tenferro_tensor::Tensor;
 
-pub struct Sampler {
+pub(crate) struct Sampler {
     x_min: f64,
     x_max: f64,
     t_min: f64,
@@ -10,7 +10,7 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn new(x_min: f64, x_max: f64, t_min: f64, t_max: f64) -> Self {
+    pub(crate) fn new(x_min: f64, x_max: f64, t_min: f64, t_max: f64) -> Self {
         Self {
             x_min,
             x_max,
@@ -19,18 +19,26 @@ impl Sampler {
         }
     }
 
-    pub fn collocation<R: Rng>(&self, n: usize, rng: &mut R) -> Tensor {
+    /// Sample `n` collocation points in the interior of the space-time domain.
+    ///
+    /// Returns two tensors of shape `[n, 1]`: the sampled `x` column and the
+    /// sampled `t` column. Both columns are built from the same random draws.
+    pub(crate) fn collocation<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor) {
         let x_dist = Uniform::new(self.x_min, self.x_max);
         let t_dist = Uniform::new(self.t_min, self.t_max);
-        let mut data = Vec::with_capacity(n * 2);
+        let mut x = Vec::with_capacity(n);
+        let mut t = Vec::with_capacity(n);
         for _ in 0..n {
-            data.push(x_dist.sample(rng));
-            data.push(t_dist.sample(rng));
+            x.push(x_dist.sample(rng));
+            t.push(t_dist.sample(rng));
         }
-        Tensor::from_vec_row_major(vec![n, 2], data)
+        (
+            Tensor::from_vec_col_major(vec![n, 1], x),
+            Tensor::from_vec_col_major(vec![n, 1], t),
+        )
     }
 
-    pub fn initial<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor) {
+    pub(crate) fn initial<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor) {
         let x_dist = Uniform::new(self.x_min, self.x_max);
         let mut x = Vec::with_capacity(n);
         let mut u = Vec::with_capacity(n);
@@ -45,18 +53,20 @@ impl Sampler {
         )
     }
 
-    pub fn boundary<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor, Tensor) {
+    /// Sample `n` boundary points on `x = x_min` and `x = x_max`.
+    ///
+    /// Exactly half of the samples use `x_min` and the other half use `x_max`
+    /// (the first `n/2` points are at `x_min`, the remainder at `x_max`). Times
+    /// are sampled uniformly in `[t_min, t_max]` independently for each point.
+    pub(crate) fn boundary<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor, Tensor) {
         let t_dist = Uniform::new(self.t_min, self.t_max);
         let mut x = Vec::with_capacity(n);
         let mut t = Vec::with_capacity(n);
         let mut u = Vec::with_capacity(n);
-        for _ in 0..n {
+        let n_min = n / 2;
+        for i in 0..n {
             let ti = t_dist.sample(rng);
-            let xi = if rng.gen_bool(0.5) {
-                self.x_min
-            } else {
-                self.x_max
-            };
+            let xi = if i < n_min { self.x_min } else { self.x_max };
             x.push(xi);
             t.push(ti);
             u.push(2.0 * (1.0 / ((xi - 4.0 * ti).cosh())).powi(2));
@@ -70,46 +80,4 @@ impl Sampler {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn collocation_has_correct_shape() {
-        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-        let mut rng = rand::thread_rng();
-        let xt = sampler.collocation(32, &mut rng);
-        assert_eq!(xt.shape(), &[32, 2]);
-    }
-
-    #[test]
-    fn collocation_columns_are_x_and_t() {
-        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-        let mut rng = rand::thread_rng();
-        let xt = sampler.collocation(32, &mut rng);
-        let data = xt.as_slice::<f64>().unwrap();
-        let n = 32;
-        assert!(data[..n].iter().all(|&v| v >= -5.0 && v <= 5.0));
-        assert!(data[n..].iter().all(|&v| v >= 0.0 && v <= 1.0));
-    }
-
-    #[test]
-    fn initial_has_correct_shape_and_x_range() {
-        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-        let mut rng = rand::thread_rng();
-        let (x, u) = sampler.initial(16, &mut rng);
-        assert_eq!(x.shape(), &[16, 1]);
-        assert_eq!(u.shape(), &[16, 1]);
-        let x_vals = x.as_slice::<f64>().unwrap();
-        assert!(x_vals.iter().all(|&v| v >= -5.0 && v <= 5.0));
-    }
-
-    #[test]
-    fn boundary_has_correct_shape() {
-        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
-        let mut rng = rand::thread_rng();
-        let (x, t, u) = sampler.boundary(8, &mut rng);
-        assert_eq!(x.shape(), &[8, 1]);
-        assert_eq!(t.shape(), &[8, 1]);
-        assert_eq!(u.shape(), &[8, 1]);
-    }
-}
+mod tests;

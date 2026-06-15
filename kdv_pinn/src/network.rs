@@ -3,20 +3,20 @@ use tenferro_tensor::Tensor;
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.
 pub(crate) struct Linear {
-    pub weight: TracedTensor,
-    pub bias: TracedTensor,
+    pub(crate) weight: TracedTensor,
+    pub(crate) bias: TracedTensor,
 }
 
 impl Linear {
     /// Create a new `Linear` layer with the given input/output feature sizes.
-    pub fn new(in_features: usize, out_features: usize) -> Self {
+    pub(crate) fn new(in_features: usize, out_features: usize) -> Self {
         let weight = TracedTensor::input_concrete_shape(DType::F64, &[in_features, out_features]);
         let bias = TracedTensor::input_concrete_shape(DType::F64, &[out_features]);
         Self { weight, bias }
     }
 
     /// Apply the layer to an input tensor.
-    pub fn forward(&self, x: &TracedTensor) -> TracedTensor {
+    pub(crate) fn forward(&self, x: &TracedTensor) -> TracedTensor {
         let y = x.dot_general(
             &self.weight,
             DotGeneralConfig {
@@ -38,12 +38,12 @@ impl Linear {
 
 /// A multi-layer perceptron built from `Linear` layers with `tanh` activations.
 pub(crate) struct Mlp {
-    layers: Vec<Linear>,
+    pub(crate) layers: Vec<Linear>,
 }
 
 impl Mlp {
     /// Create a new `Mlp` from a slice of layer sizes.
-    pub fn new(layer_sizes: &[usize]) -> Self {
+    pub(crate) fn new(layer_sizes: &[usize]) -> Self {
         assert!(
             layer_sizes.len() >= 2,
             "Mlp needs at least input and output sizes"
@@ -56,7 +56,7 @@ impl Mlp {
     }
 
     /// Run a forward pass through the network.
-    pub fn forward(&self, x: &TracedTensor) -> TracedTensor {
+    pub(crate) fn forward(&self, x: &TracedTensor) -> TracedTensor {
         let mut y = x.clone();
         for (i, layer) in self.layers.iter().enumerate() {
             y = layer.forward(&y);
@@ -68,7 +68,7 @@ impl Mlp {
     }
 
     /// Return references to all parameter placeholders.
-    pub fn parameters(&self) -> Vec<&TracedTensor> {
+    pub(crate) fn parameters(&self) -> Vec<&TracedTensor> {
         let mut params = Vec::new();
         for layer in &self.layers {
             params.push(&layer.weight);
@@ -108,7 +108,7 @@ impl Mlp {
     }
 
     /// Return `(placeholder, dtype, shape)` tuples for every parameter.
-    pub fn input_specs(&self) -> Vec<(&TracedTensor, DType, Vec<usize>)> {
+    pub(crate) fn input_specs(&self) -> Vec<(&TracedTensor, DType, Vec<usize>)> {
         self.parameters()
             .iter()
             .map(|p| {
