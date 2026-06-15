@@ -98,6 +98,7 @@ fn main() {
     let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
     let mut opt = Sgd::new(LR);
 
+    let mut final_loss = f64::INFINITY;
     for epoch in 0..EPOCHS {
         let xt_col_tensor = sampler.collocation(N_COL, &mut rng);
         let xt_data = xt_col_tensor.as_slice::<f64>().expect("collocation data");
@@ -123,7 +124,7 @@ fn main() {
         let loss_tensor = executor
             .run_with_inputs(&loss_program, &bindings)
             .expect("evaluate loss failed");
-        let loss_value = loss_tensor.as_slice::<f64>().expect("loss data")[0];
+        final_loss = loss_tensor.as_slice::<f64>().expect("loss data")[0];
 
         let mut grads = Vec::new();
         for program in &grad_programs {
@@ -137,16 +138,20 @@ fn main() {
         opt.step(&mut params, &grads);
 
         if epoch % 50 == 0 {
-            println!("epoch {}: loss={:.6e}", epoch, loss_value);
+            println!("epoch {}: loss={:.6e}", epoch, final_loss);
         }
     }
+    println!("final loss after {} epochs: {:.6e}", EPOCHS, final_loss);
 
     // Evaluation grid at t = 0.5.
     let x_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1]);
-    let t_eval_const = TracedTensor::from_vec_col_major(vec![N_EVAL, 1], vec![0.5_f64; N_EVAL]);
-    let xt_eval = TracedTensor::stack(&[&x_eval.reshape(&[N_EVAL, 1]), &t_eval_const], 1)
-        .expect("stack eval inputs must succeed")
-        .reshape(&[N_EVAL, 2]);
+    let t_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1]);
+    let xt_eval = TracedTensor::stack(
+        &[&x_eval.reshape(&[N_EVAL, 1]), &t_eval.reshape(&[N_EVAL, 1])],
+        1,
+    )
+    .expect("stack eval inputs must succeed")
+    .reshape(&[N_EVAL, 2]);
     let u_eval = net.forward(&xt_eval);
 
     let mut eval_specs: Vec<(&TracedTensor, DType, &[usize])> = param_specs
@@ -154,6 +159,7 @@ fn main() {
         .map(|(p, dtype, shape)| (*p, *dtype, shape.as_slice()))
         .collect();
     eval_specs.push((&x_eval, DType::F64, &[N_EVAL, 1]));
+    eval_specs.push((&t_eval, DType::F64, &[N_EVAL, 1]));
     let eval_program = compiler
         .compile_with_input_specs(&u_eval, &eval_specs)
         .expect("compile eval program failed");
@@ -167,6 +173,7 @@ fn main() {
         u_true_data.push(2.0 * (1.0 / ((x - 4.0 * t).cosh())).powi(2));
     }
     let x_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], x_eval_data);
+    let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![0.5_f64; N_EVAL]);
     let u_true_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], u_true_data);
 
     let mut eval_bindings: Vec<(&TracedTensor, &Tensor)> = net
@@ -176,6 +183,7 @@ fn main() {
         .map(|(p, t)| (*p, t))
         .collect();
     eval_bindings.push((&x_eval, &x_eval_tensor));
+    eval_bindings.push((&t_eval, &t_eval_tensor));
 
     let u_pred = executor
         .run_with_inputs(&eval_program, &eval_bindings)
