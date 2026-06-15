@@ -1,5 +1,6 @@
 mod loss;
 mod network;
+mod optimizer;
 mod pde;
 mod sampler;
 
