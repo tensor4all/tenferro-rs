@@ -1,3 +1,9 @@
+//! Placeholder-based multi-layer perceptron for the KdV PINN.
+//!
+//! The network is built from `TracedTensor` placeholders so that the same
+//! computational graph can be compiled once and executed many times with
+//! different concrete parameter bindings.
+
 use tenferro_runtime::{DType, DotGeneralConfig, TracedTensor};
 use tenferro_tensor::Tensor;
 

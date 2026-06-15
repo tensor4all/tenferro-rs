@@ -1,7 +1,13 @@
+//! Sampling utilities for collocation, initial-condition, and boundary points.
+//!
+//! All samplers produce column-major `Tensor`s with shape `[n, 1]` so they can
+//! be stacked directly into `[n, 2]` space-time inputs for the network.
+
 use rand::distributions::{Distribution, Uniform};
 use rand::Rng;
 use tenferro_tensor::Tensor;
 
+/// Space-time domain sampler for the KdV PINN.
 pub(crate) struct Sampler {
     x_min: f64,
     x_max: f64,
@@ -38,6 +44,10 @@ impl Sampler {
         )
     }
 
+    /// Sample `n` initial-condition points at `t = 0`.
+    ///
+    /// Returns `(x, u)` tensors of shape `[n, 1]` where `u` is the exact KdV
+    /// single-soliton profile at `t = 0`.
     pub(crate) fn initial<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor) {
         let x_dist = Uniform::new(self.x_min, self.x_max);
         let mut x = Vec::with_capacity(n);

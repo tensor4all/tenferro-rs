@@ -4,7 +4,7 @@
 //! This example trains a small multi-layer perceptron to approximate the KdV
 //! single-soliton solution on the spatial domain `x ∈ [-5, 5]` and time domain
 //! `t ∈ [0, 1]`. The loss combines the PDE residual in the interior, the initial
-//! condition at `t = 0`, and periodic boundary data at `x = ±5`.
+//! condition at `t = 0`, and exact-solution Dirichlet boundary data at `x = ±5`.
 //!
 //! Run the example with:
 //!
