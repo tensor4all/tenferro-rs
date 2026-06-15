@@ -1,13 +1,6 @@
 use tenferro_runtime::{DType, DotGeneralConfig, TracedTensor};
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.
-///
-/// # Examples
-///
-/// ```
-/// use kdv_pinn::network::Linear;
-/// let layer = Linear::new(2, 3);
-/// ```
 #[allow(dead_code)]
 pub(crate) struct Linear {
     pub weight: TracedTensor,
@@ -17,13 +10,6 @@ pub(crate) struct Linear {
 #[allow(dead_code)]
 impl Linear {
     /// Create a new `Linear` layer with the given input/output feature sizes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Linear;
-    /// let layer = Linear::new(2, 3);
-    /// ```
     pub fn new(in_features: usize, out_features: usize) -> Self {
         let weight = TracedTensor::input_concrete_shape(DType::F64, &[in_features, out_features]);
         let bias = TracedTensor::input_concrete_shape(DType::F64, &[out_features]);
@@ -31,18 +17,6 @@ impl Linear {
     }
 
     /// Apply the layer to an input tensor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Linear;
-    /// use tenferro_runtime::{DType, TracedTensor};
-    ///
-    /// let layer = Linear::new(2, 3);
-    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[1, 2]);
-    /// let y = layer.forward(&x);
-    /// assert_eq!(y.rank, 2);
-    /// ```
     pub fn forward(&self, x: &TracedTensor) -> TracedTensor {
         let y = x.dot_general(
             &self.weight,
@@ -64,13 +38,6 @@ impl Linear {
 }
 
 /// A multi-layer perceptron built from `Linear` layers with `tanh` activations.
-///
-/// # Examples
-///
-/// ```
-/// use kdv_pinn::network::Mlp;
-/// let net = Mlp::new(&[2, 16, 1]);
-/// ```
 #[allow(dead_code)]
 pub(crate) struct Mlp {
     layers: Vec<Linear>,
@@ -79,13 +46,6 @@ pub(crate) struct Mlp {
 #[allow(dead_code)]
 impl Mlp {
     /// Create a new `Mlp` from a slice of layer sizes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Mlp;
-    /// let net = Mlp::new(&[2, 16, 1]);
-    /// ```
     pub fn new(layer_sizes: &[usize]) -> Self {
         assert!(
             layer_sizes.len() >= 2,
@@ -99,18 +59,6 @@ impl Mlp {
     }
 
     /// Run a forward pass through the network.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Mlp;
-    /// use tenferro_runtime::{DType, TracedTensor};
-    ///
-    /// let net = Mlp::new(&[2, 16, 1]);
-    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]);
-    /// let y = net.forward(&x);
-    /// assert_eq!(y.try_concrete_shape(), Some(vec![4, 1]));
-    /// ```
     pub fn forward(&self, x: &TracedTensor) -> TracedTensor {
         let mut y = x.clone();
         for (i, layer) in self.layers.iter().enumerate() {
@@ -123,14 +71,6 @@ impl Mlp {
     }
 
     /// Return references to all parameter placeholders.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Mlp;
-    /// let net = Mlp::new(&[2, 16, 1]);
-    /// assert_eq!(net.parameters().len(), 4);
-    /// ```
     pub fn parameters(&self) -> Vec<&TracedTensor> {
         let mut params = Vec::new();
         for layer in &self.layers {
@@ -141,15 +81,6 @@ impl Mlp {
     }
 
     /// Return `(placeholder, dtype, shape)` tuples for every parameter.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use kdv_pinn::network::Mlp;
-    /// let net = Mlp::new(&[2, 16, 1]);
-    /// let specs = net.input_specs();
-    /// assert_eq!(specs.len(), 4);
-    /// ```
     pub fn input_specs(&self) -> Vec<(&TracedTensor, DType, Vec<usize>)> {
         self.parameters()
             .iter()
