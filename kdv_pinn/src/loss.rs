@@ -5,8 +5,6 @@ use tenferro_runtime::TracedTensor;
 /// Mean squared error between `pred` and `target`, scaled by `1 / n`.
 ///
 /// Both tensors are expected to have shape `[n, 1]`. The result is a scalar.
-// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
-#[allow(dead_code)]
 pub(crate) fn mean_square(pred: &TracedTensor, target: &TracedTensor, n: usize) -> TracedTensor {
     assert!(n > 0, "mean_square count must be positive");
     let diff = pred.add(&target.neg());

@@ -2,8 +2,6 @@
 
 use tenferro_tensor::Tensor;
 
-// TODO(kdv-pinn): remove #[allow(dead_code)] once training loop wires this helper.
-#[allow(dead_code)]
 /// Stochastic gradient descent with a fixed learning rate.
 ///
 /// Updates each parameter tensor in place: `param -= lr * grad`.
@@ -11,8 +9,6 @@ pub(crate) struct Sgd {
     lr: f64,
 }
 
-// TODO(kdv-pinn): remove #[allow(dead_code)] once training loop wires this helper.
-#[allow(dead_code)]
 impl Sgd {
     /// Create a new SGD optimizer with learning rate `lr`.
     pub(crate) fn new(lr: f64) -> Self {

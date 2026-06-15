@@ -26,7 +26,7 @@ fn main() {
 
     let t_zero = TracedTensor::from_vec_col_major(vec![N_IC, 1], vec![0.0_f64; N_IC]);
     let xt_ic = TracedTensor::stack(&[&x_ic, &t_zero], 1)
-        .unwrap()
+        .expect("stacking x_ic and t_zero must succeed")
         .reshape(&[N_IC, 2]);
     let u_ic = net.forward(&xt_ic);
     let loss = loss::mean_square(&u_ic, &u_ic_true, N_IC);
@@ -49,10 +49,16 @@ fn main() {
             (&u_ic_true, DType::F64, ic_u_spec),
         ])
         .collect();
-    let loss_program = compiler.compile_with_input_specs(&loss, &specs).unwrap();
+    let loss_program = compiler
+        .compile_with_input_specs(&loss, &specs)
+        .expect("loss compilation failed");
     let grad_programs: Vec<_> = param_grads
         .iter()
-        .map(|g| compiler.compile_with_input_specs(g, &specs).unwrap())
+        .map(|g| {
+            compiler
+                .compile_with_input_specs(g, &specs)
+                .expect("gradient compilation failed")
+        })
         .collect();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -68,12 +74,20 @@ fn main() {
         bindings.push((&x_ic, &x_ic_tensor));
         bindings.push((&u_ic_true, &u_ic_tensor));
 
-        let loss_tensor = executor.run_with_inputs(&loss_program, &bindings).unwrap();
-        let loss_value = loss_tensor.as_slice::<f64>().unwrap()[0];
+        let loss_tensor = executor
+            .run_with_inputs(&loss_program, &bindings)
+            .expect("loss execution failed");
+        let loss_value = loss_tensor
+            .as_slice::<f64>()
+            .expect("loss tensor must be f64")[0];
 
         let mut grads = Vec::new();
         for program in &grad_programs {
-            grads.push(executor.run_with_inputs(program, &bindings).unwrap());
+            grads.push(
+                executor
+                    .run_with_inputs(program, &bindings)
+                    .expect("gradient execution failed"),
+            );
         }
 
         opt.step(&mut params, &grads);
