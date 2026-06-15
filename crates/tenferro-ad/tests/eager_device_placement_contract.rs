@@ -55,7 +55,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         read_path,
         &[
             "execute_generated_host_output_on_backend_reads(op, inputs, backend)?",
-            "backend.with_backend_session",
+            ".with_backend_session",
         ],
     );
 
@@ -69,7 +69,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         tensor_path,
         &[
             "execute_generated_host_output_on_backend_tensors(op, inputs, backend)?",
-            "backend.with_backend_session",
+            ".with_backend_session",
         ],
     );
 }

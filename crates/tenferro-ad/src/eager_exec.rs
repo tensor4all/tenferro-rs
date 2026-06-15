@@ -308,246 +308,254 @@ fn exec_standard_op_on_tensor_reads<B: TensorBackend>(
         return Ok(vec![output]);
     }
 
-    backend.with_backend_session(|exec| {
-        let result = match op {
-            StdTensorOp::Add => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.add_read(a.tensor_read(), b.tensor_read())?]
+    backend
+        .with_backend_session(|exec| exec_standard_op_on_tensor_reads_in_session(op, inputs, exec))
+}
+
+pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
+    op: &StdTensorOp,
+    inputs: &[TensorRead<'_>],
+    exec: &mut dyn BackendSession,
+) -> Result<Vec<Tensor>> {
+    let result = match op {
+        StdTensorOp::Add => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.add_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Mul => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.mul_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Neg => vec![exec.neg_read(inputs[0].clone())?],
+        StdTensorOp::Div => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.div_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Exp => vec![exec.exp_read(inputs[0].clone())?],
+        StdTensorOp::Log => vec![exec.log_read(inputs[0].clone())?],
+        StdTensorOp::Sin => vec![exec.sin_read(inputs[0].clone())?],
+        StdTensorOp::Cos => vec![exec.cos_read(inputs[0].clone())?],
+        StdTensorOp::Tanh => vec![exec.tanh_read(inputs[0].clone())?],
+        StdTensorOp::Sqrt => vec![exec.sqrt_read(inputs[0].clone())?],
+        StdTensorOp::Rsqrt => vec![exec.rsqrt_read(inputs[0].clone())?],
+        StdTensorOp::Pow => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.pow_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Abs => vec![exec.abs_read(inputs[0].clone())?],
+        StdTensorOp::Sign => vec![exec.sign_read(inputs[0].clone())?],
+        StdTensorOp::Conj => vec![exec.conj_read(inputs[0].clone())?],
+        StdTensorOp::Maximum => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.maximum_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Minimum => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.minimum_read(a.tensor_read(), b.tensor_read())?]
+        }
+        StdTensorOp::Compare(dir) => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.compare_read(a.tensor_read(), b.tensor_read(), dir)?]
+        }
+        StdTensorOp::Transpose { perm } => vec![exec.transpose_read(inputs[0].clone(), perm)?],
+        StdTensorOp::ReduceSum { axes, .. } => {
+            vec![exec.reduce_sum_read(inputs[0].clone(), axes)?]
+        }
+        StdTensorOp::DotGeneral { config, .. } => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
+        }
+        StdTensorOp::Reshape { to_shape, .. } => {
+            let shape = resolve_tensor_read_shape_exprs(inputs, to_shape);
+            vec![exec.reshape_read(inputs[0].clone(), &shape)?]
+        }
+        StdTensorOp::BroadcastInDim { shape, dims } => {
+            let shape = resolve_tensor_read_shape_exprs(inputs, shape);
+            vec![exec.broadcast_in_dim_read(inputs[0].clone(), &shape, dims)?]
+        }
+        StdTensorOp::ExtractDiag { axis_a, axis_b } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.extract_diagonal(input.tensor(), *axis_a, *axis_b)?]
+        }
+        StdTensorOp::EmbedDiag { axis_a, axis_b } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.embed_diagonal(input.tensor(), *axis_a, *axis_b)?]
+        }
+        StdTensorOp::Tril { k } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.tril(input.tensor(), *k)?]
+        }
+        StdTensorOp::Triu { k } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.triu(input.tensor(), *k)?]
+        }
+        StdTensorOp::Slice(config) => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.slice(input.tensor(), config)?]
+        }
+        StdTensorOp::Pad(config) => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.pad(input.tensor(), config)?]
+        }
+        StdTensorOp::Reverse { axes } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.reverse(input.tensor(), axes)?]
+        }
+        StdTensorOp::ReduceProd { axes, .. } => {
+            vec![exec.reduce_prod_read(inputs[0].clone(), axes)?]
+        }
+        StdTensorOp::ReduceMax { axes, .. } => {
+            vec![exec.reduce_max_read(inputs[0].clone(), axes)?]
+        }
+        StdTensorOp::ReduceMin { axes, .. } => {
+            vec![exec.reduce_min_read(inputs[0].clone(), axes)?]
+        }
+        StdTensorOp::Expm1 => vec![exec.expm1_read(inputs[0].clone())?],
+        StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
+        StdTensorOp::Convert { to, .. } => {
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.convert(input.tensor(), *to)?]
+        }
+        StdTensorOp::Constant { .. } => {
+            return Err(Error::Internal(
+                    "standard graph eager execution does not support Constant inside an existing backend session"
+                        .into(),
+                ));
+        }
+        StdTensorOp::Select => {
+            let value_dtype =
+                crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
+            let b = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
+            let c = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
+            vec![exec.select_read(inputs[0].clone(), b.tensor_read(), c.tensor_read())?]
+        }
+        StdTensorOp::Clamp => {
+            let value_dtype = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
+            let input = promote_read_to_dtype(exec, inputs[0].clone(), value_dtype)?;
+            let lower = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
+            let upper = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
+            vec![exec.clamp_read(
+                input.tensor_read(),
+                lower.tensor_read(),
+                upper.tensor_read(),
+            )?]
+        }
+        StdTensorOp::Concatenate { axis, .. } => {
+            let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
+            let mut tensors = Vec::with_capacity(inputs.len());
+            for input in inputs {
+                tensors.push(concrete_promoted_read_to_dtype(
+                    exec,
+                    input.clone(),
+                    promoted,
+                )?);
             }
-            StdTensorOp::Mul => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.mul_read(a.tensor_read(), b.tensor_read())?]
-            }
-            StdTensorOp::Neg => vec![exec.neg_read(inputs[0].clone())?],
-            StdTensorOp::Div => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.div_read(a.tensor_read(), b.tensor_read())?]
-            }
-            StdTensorOp::Exp => vec![exec.exp_read(inputs[0].clone())?],
-            StdTensorOp::Log => vec![exec.log_read(inputs[0].clone())?],
-            StdTensorOp::Sin => vec![exec.sin_read(inputs[0].clone())?],
-            StdTensorOp::Cos => vec![exec.cos_read(inputs[0].clone())?],
-            StdTensorOp::Tanh => vec![exec.tanh_read(inputs[0].clone())?],
-            StdTensorOp::Sqrt => vec![exec.sqrt_read(inputs[0].clone())?],
-            StdTensorOp::Rsqrt => vec![exec.rsqrt_read(inputs[0].clone())?],
-            StdTensorOp::Pow => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.pow_read(a.tensor_read(), b.tensor_read())?]
-            }
-            StdTensorOp::Abs => vec![exec.abs_read(inputs[0].clone())?],
-            StdTensorOp::Sign => vec![exec.sign_read(inputs[0].clone())?],
-            StdTensorOp::Conj => vec![exec.conj_read(inputs[0].clone())?],
-            StdTensorOp::Maximum => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.maximum_read(a.tensor_read(), b.tensor_read())?]
-            }
-            StdTensorOp::Minimum => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.minimum_read(a.tensor_read(), b.tensor_read())?]
-            }
-            StdTensorOp::Compare(dir) => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.compare_read(a.tensor_read(), b.tensor_read(), dir)?]
-            }
-            StdTensorOp::Transpose { perm } => vec![exec.transpose_read(inputs[0].clone(), perm)?],
-            StdTensorOp::ReduceSum { axes, .. } => {
-                vec![exec.reduce_sum_read(inputs[0].clone(), axes)?]
-            }
-            StdTensorOp::DotGeneral { config, .. } => {
-                let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
-                vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
-            }
-            StdTensorOp::Reshape { to_shape, .. } => {
-                let shape = resolve_tensor_read_shape_exprs(inputs, to_shape);
-                vec![exec.reshape_read(inputs[0].clone(), &shape)?]
-            }
-            StdTensorOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_tensor_read_shape_exprs(inputs, shape);
-                vec![exec.broadcast_in_dim_read(inputs[0].clone(), &shape, dims)?]
-            }
-            StdTensorOp::ExtractDiag { axis_a, axis_b } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.extract_diagonal(input.tensor(), *axis_a, *axis_b)?]
-            }
-            StdTensorOp::EmbedDiag { axis_a, axis_b } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.embed_diagonal(input.tensor(), *axis_a, *axis_b)?]
-            }
-            StdTensorOp::Tril { k } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.tril(input.tensor(), *k)?]
-            }
-            StdTensorOp::Triu { k } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.triu(input.tensor(), *k)?]
-            }
-            StdTensorOp::Slice(config) => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.slice(input.tensor(), config)?]
-            }
-            StdTensorOp::Pad(config) => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.pad(input.tensor(), config)?]
-            }
-            StdTensorOp::Reverse { axes } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.reverse(input.tensor(), axes)?]
-            }
-            StdTensorOp::ReduceProd { axes, .. } => {
-                vec![exec.reduce_prod_read(inputs[0].clone(), axes)?]
-            }
-            StdTensorOp::ReduceMax { axes, .. } => {
-                vec![exec.reduce_max_read(inputs[0].clone(), axes)?]
-            }
-            StdTensorOp::ReduceMin { axes, .. } => {
-                vec![exec.reduce_min_read(inputs[0].clone(), axes)?]
-            }
-            StdTensorOp::Expm1 => vec![exec.expm1_read(inputs[0].clone())?],
-            StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
-            StdTensorOp::Convert { to, .. } => {
-                let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.convert(input.tensor(), *to)?]
-            }
-            StdTensorOp::Constant { .. } => unreachable!("handled before backend session"),
-            StdTensorOp::Select => {
-                let value_dtype =
-                    crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
-                let b = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
-                let c = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
-                vec![exec.select_read(inputs[0].clone(), b.tensor_read(), c.tensor_read())?]
-            }
-            StdTensorOp::Clamp => {
-                let value_dtype =
-                    crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
-                let input = promote_read_to_dtype(exec, inputs[0].clone(), value_dtype)?;
-                let lower = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
-                let upper = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
-                vec![exec.clamp_read(
-                    input.tensor_read(),
-                    lower.tensor_read(),
-                    upper.tensor_read(),
-                )?]
-            }
-            StdTensorOp::Concatenate { axis, .. } => {
-                let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
-                let mut tensors = Vec::with_capacity(inputs.len());
-                for input in inputs {
-                    tensors.push(concrete_promoted_read_to_dtype(
-                        exec,
-                        input.clone(),
-                        promoted,
-                    )?);
-                }
-                let refs: Vec<&Tensor> = tensors.iter().map(ConcreteTensorRead::tensor).collect();
-                vec![exec.concatenate(&refs, *axis)?]
-            }
-            StdTensorOp::Gather(config) => {
-                let tensors = concrete_tensor_reads(inputs);
-                vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), config)?]
-            }
-            StdTensorOp::GatherDynamicSliceSizes {
-                offset_dims,
-                collapsed_slice_dims,
-                start_index_map,
-                index_vector_dim,
+            let refs: Vec<&Tensor> = tensors.iter().map(ConcreteTensorRead::tensor).collect();
+            vec![exec.concatenate(&refs, *axis)?]
+        }
+        StdTensorOp::Gather(config) => {
+            let tensors = concrete_tensor_reads(inputs);
+            vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), config)?]
+        }
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => {
+            let slice_sizes = resolve_tensor_read_shape_exprs(inputs, slice_sizes);
+            let config = tenferro_tensor::GatherConfig {
+                offset_dims: offset_dims.clone(),
+                collapsed_slice_dims: collapsed_slice_dims.clone(),
+                start_index_map: start_index_map.clone(),
+                index_vector_dim: *index_vector_dim,
                 slice_sizes,
-            } => {
-                let slice_sizes = resolve_tensor_read_shape_exprs(inputs, slice_sizes);
-                let config = tenferro_tensor::GatherConfig {
-                    offset_dims: offset_dims.clone(),
-                    collapsed_slice_dims: collapsed_slice_dims.clone(),
-                    start_index_map: start_index_map.clone(),
-                    index_vector_dim: *index_vector_dim,
-                    slice_sizes,
-                };
-                let tensors = concrete_tensor_reads(inputs);
-                vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
+            };
+            let tensors = concrete_tensor_reads(inputs);
+            vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
+        }
+        StdTensorOp::Scatter(config) => {
+            let operand_dtype =
+                crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[2].dtype());
+            let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
+            let updates = concrete_promoted_read_to_dtype(exec, inputs[2].clone(), operand_dtype)?;
+            let indices = concrete_tensor_read(inputs[1].clone());
+            vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
+        }
+        StdTensorOp::DynamicSlice { slice_sizes } => {
+            let tensors = concrete_tensor_reads(inputs);
+            vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
+        }
+        StdTensorOp::DynamicUpdateSlice => {
+            let operand_dtype =
+                crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[1].dtype());
+            let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
+            let update = concrete_promoted_read_to_dtype(exec, inputs[1].clone(), operand_dtype)?;
+            let starts = concrete_tensor_read(inputs[2].clone());
+            vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), starts.tensor())?]
+        }
+        StdTensorOp::ShapeOf { .. } => {
+            return Err(Error::Internal(
+                    "standard graph eager execution does not support ShapeOf inside an existing backend session"
+                        .into(),
+                ));
+        }
+        StdTensorOp::DynamicTruncate { axis } => {
+            let input = &inputs[0];
+            if *axis >= input.shape().len() {
+                return Err(Error::Internal(format!(
+                    "DynamicTruncate: axis {} out of bounds for rank {}",
+                    axis,
+                    input.shape().len()
+                )));
             }
-            StdTensorOp::Scatter(config) => {
-                let operand_dtype =
-                    crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[2].dtype());
-                let operand =
-                    concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
-                let updates =
-                    concrete_promoted_read_to_dtype(exec, inputs[2].clone(), operand_dtype)?;
-                let indices = concrete_tensor_read(inputs[1].clone());
-                vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
+            let size_tensor = concrete_tensor_read(inputs[1].clone());
+            let axis_extent = input.shape()[*axis];
+            let size = dynamic_truncate_size(size_tensor.tensor(), axis_extent)?;
+            let rank = input.shape().len();
+            let mut limits = input.shape().to_vec();
+            limits[*axis] = size;
+            let config = SliceConfig {
+                starts: vec![0; rank],
+                limits,
+                strides: vec![1; rank],
+            };
+            let input = concrete_tensor_read(inputs[0].clone());
+            vec![exec.slice(input.tensor(), &config)?]
+        }
+        StdTensorOp::PadToMatch { axis } => {
+            let input = &inputs[0];
+            let reference = &inputs[1];
+            if *axis >= input.shape().len() {
+                return Err(Error::Internal(format!(
+                    "PadToMatch: axis {} out of bounds for rank {}",
+                    axis,
+                    input.shape().len()
+                )));
             }
-            StdTensorOp::DynamicSlice { slice_sizes } => {
-                let tensors = concrete_tensor_reads(inputs);
-                vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
-            }
-            StdTensorOp::DynamicUpdateSlice => {
-                let operand_dtype =
-                    crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[1].dtype());
-                let operand =
-                    concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
-                let update =
-                    concrete_promoted_read_to_dtype(exec, inputs[1].clone(), operand_dtype)?;
-                let starts = concrete_tensor_read(inputs[2].clone());
-                vec![exec.dynamic_update_slice(
-                    operand.tensor(),
-                    update.tensor(),
-                    starts.tensor(),
-                )?]
-            }
-            StdTensorOp::ShapeOf { .. } => unreachable!("handled before backend session"),
-            StdTensorOp::DynamicTruncate { axis } => {
-                let input = &inputs[0];
-                if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "DynamicTruncate: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
-                }
-                let size_tensor = concrete_tensor_read(inputs[1].clone());
-                let axis_extent = input.shape()[*axis];
-                let size = dynamic_truncate_size(size_tensor.tensor(), axis_extent)?;
+            let target_size = reference.shape()[*axis];
+            let current_size = input.shape()[*axis];
+            if current_size >= target_size {
+                vec![materialize_tensor_read(inputs[0].clone())]
+            } else {
                 let rank = input.shape().len();
-                let mut limits = input.shape().to_vec();
-                limits[*axis] = size;
-                let config = SliceConfig {
-                    starts: vec![0; rank],
-                    limits,
-                    strides: vec![1; rank],
+                let mut high = vec![0i64; rank];
+                high[*axis] = (target_size - current_size) as i64;
+                let config = PadConfig {
+                    edge_padding_low: vec![0i64; rank],
+                    edge_padding_high: high,
+                    interior_padding: vec![0i64; rank],
                 };
                 let input = concrete_tensor_read(inputs[0].clone());
-                vec![exec.slice(input.tensor(), &config)?]
+                vec![exec.pad(input.tensor(), &config)?]
             }
-            StdTensorOp::PadToMatch { axis } => {
-                let input = &inputs[0];
-                let reference = &inputs[1];
-                if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "PadToMatch: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
-                }
-                let target_size = reference.shape()[*axis];
-                let current_size = input.shape()[*axis];
-                if current_size >= target_size {
-                    vec![materialize_tensor_read(inputs[0].clone())]
-                } else {
-                    let rank = input.shape().len();
-                    let mut high = vec![0i64; rank];
-                    high[*axis] = (target_size - current_size) as i64;
-                    let config = PadConfig {
-                        edge_padding_low: vec![0i64; rank],
-                        edge_padding_high: high,
-                        interior_padding: vec![0i64; rank],
-                    };
-                    let input = concrete_tensor_read(inputs[0].clone());
-                    vec![exec.pad(input.tensor(), &config)?]
-                }
-            }
-            StdTensorOp::Extension(_) => {
-                unreachable!("Extension is handled before opening an exec session")
-            }
-        };
-        Ok(result)
-    })
+        }
+        StdTensorOp::Extension(ext) => {
+            return Err(missing_extension_executor_error(ext.as_ref()));
+        }
+    };
+    Ok(result)
 }
 
 fn exec_standard_op_on_tensors<B: TensorBackend>(

@@ -263,6 +263,12 @@ fn try_expand_eager_einsum(
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
     let subs = Subscripts::from(subscripts);
     let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
+    if inputs.iter().any(|tensor| tensor.tracks_grad()) {
+        let tree = resolve_plan_spec(&plan_spec, &subs, &shape_refs)
+            .map_err(|err| Error::ContractionError(err.to_string()))?;
+        return execute_tracked_eager_einsum_graph(inputs, &tree, &shapes).map(Some);
+    }
+
     let program = cached_expanded_eager_program(
         inputs[0].runtime(),
         subscripts,
@@ -272,6 +278,34 @@ fn try_expand_eager_einsum(
         &shapes,
     )?;
     execute_eager_einsum_program(inputs, &program)
+}
+
+fn execute_tracked_eager_einsum_graph(
+    inputs: &[&EagerTensor],
+    tree: &crate::ContractionTree,
+    shapes: &[Vec<usize>],
+) -> Result<EagerTensor> {
+    let mut outputs =
+        tenferro_ad::eager_tensor::apply_standard_graph(inputs, |graph_input_keys| {
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let input_vals = graph_input_keys
+                .iter()
+                .cloned()
+                .map(|key| ValueRef::Local(builder.add_input(key)))
+                .collect::<Vec<_>>();
+            let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
+                .map_err(|err| Error::ContractionError(err.to_string()))?;
+            let ValueRef::Local(result_local) = result_ref else {
+                return Err(Error::Internal(
+                    "tracked eager einsum graph returned an external value".into(),
+                ));
+            };
+            builder.set_outputs(vec![result_local]);
+            Ok(Arc::new(builder.build()))
+        })?;
+    outputs
+        .pop()
+        .ok_or_else(|| Error::Internal("tracked eager einsum graph produced no output".into()))
 }
 
 struct ExpandedEagerProgram {

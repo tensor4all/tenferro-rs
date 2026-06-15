@@ -198,6 +198,37 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
 }
 
 #[test]
+fn tracked_whole_program_einsum_records_one_graph_residual() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]),
+        ctx.clone(),
+    );
+    let c = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]),
+        ctx,
+    );
+
+    let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    assert_eq!(out.data().shape(), &[2, 5]);
+    assert!(
+        out.debug_trace_saved_value_count().unwrap_or_default() >= 5,
+        "tracked n-ary einsum should save one composite graph residual"
+    );
+
+    let loss = out.reduce_sum(&[0, 1]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_eq!(a.grad().unwrap().as_slice::<f64>().unwrap(), &[20.0; 6]);
+    assert_eq!(b.grad().unwrap().as_slice::<f64>().unwrap(), &[10.0; 12]);
+    assert_eq!(c.grad().unwrap().as_slice::<f64>().unwrap(), &[6.0; 20]);
+}
+
+#[test]
 fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::from_tensor_in(

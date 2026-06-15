@@ -775,6 +775,7 @@ fn eager_einsum_exec_values<'a>(
 /// Unlike [`eager_einsum_subscripts`], the caller supplies the contraction
 /// `tree`, so a known-good external path (e.g. cotengra `opt_flops`) can be
 /// executed whole-program without re-planning.
+#[cfg(feature = "autodiff")]
 pub(crate) fn eager_einsum_with_tree(
     ctx: &mut impl TensorBackend,
     inputs: &[&Tensor],

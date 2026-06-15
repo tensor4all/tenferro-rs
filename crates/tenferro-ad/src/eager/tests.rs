@@ -4,7 +4,9 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::Duration;
 
+use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::ValueKey;
+use computegraph::{OperationRole, ValueRef};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
@@ -26,6 +28,29 @@ use super::{
     eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
 };
+
+fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>> {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let lhs = builder.add_input(keys[0].clone());
+    let rhs = builder.add_input(keys[1].clone());
+    let sum = builder.add_operation(
+        StdTensorOp::Add,
+        vec![ValueRef::Local(lhs), ValueRef::Local(rhs)],
+        OperationRole::Primary,
+    )[0];
+    let product = builder.add_operation(
+        StdTensorOp::Mul,
+        vec![ValueRef::Local(sum), ValueRef::Local(rhs)],
+        OperationRole::Primary,
+    )[0];
+    let loss = builder.add_operation(
+        StdTensorOp::ReduceSum { axes: vec![0] },
+        vec![ValueRef::Local(product)],
+        OperationRole::Primary,
+    )[0];
+    builder.set_outputs(vec![loss]);
+    Arc::new(builder.build())
+}
 
 struct EagerOpProfileOverrideGuard;
 
@@ -206,6 +231,81 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
     let mut backend = CpuBackend::new();
     let tangent = eager_forward_value(&mut all_values, &tangent_key, &initial_data, &mut backend);
     assert_eq!(tangent.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+}
+
+#[test]
+fn standard_graph_op_executes_untracked_outputs_without_trace() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        ctx.clone(),
+    );
+    let rhs =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+
+    let outputs =
+        EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
+            .expect("standard graph op");
+
+    assert_eq!(outputs.len(), 1);
+    assert!(!outputs[0].tracks_grad());
+    assert_eq!(outputs[0].debug_trace_saved_value_count(), None);
+    assert_eq!(outputs[0].data().shape(), &[] as &[usize]);
+    assert_eq!(outputs[0].data().as_slice::<f64>().unwrap(), &[36.0]);
+}
+
+#[test]
+fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        ctx.clone(),
+    );
+    let rhs =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+
+    let mut outputs =
+        EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
+            .expect("standard graph op");
+    let loss = outputs.pop().expect("one output");
+
+    assert!(loss.tracks_grad());
+    assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[36.0]);
+    assert_eq!(loss.debug_trace_saved_value_count(), Some(5));
+
+    loss.backward().expect("backward through recorded graph");
+    assert_eq!(lhs.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    assert_eq!(rhs.grad().unwrap().as_slice::<f64>().unwrap(), &[7.0, 10.0]);
+}
+
+#[test]
+fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
+    let err = match EagerTensor::standard_graph_op(&[], |_| {
+        panic!("empty inputs should fail before graph construction")
+    }) {
+        Ok(_) => panic!("empty graph op must be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string()
+            .contains("requires at least one input tensor"),
+        "{err}"
+    );
+
+    let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
+    let rhs =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
+
+    let err = match EagerTensor::standard_graph_op(&[&lhs, &rhs], |_| {
+        panic!("cross-context inputs should fail before graph construction")
+    }) {
+        Ok(_) => panic!("cross-context graph op must be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, crate::error::Error::ContextMismatch { .. }));
 }
 
 #[test]
