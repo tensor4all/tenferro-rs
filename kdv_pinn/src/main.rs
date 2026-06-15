@@ -1,3 +1,4 @@
+mod loss;
 mod network;
 mod pde;
 mod sampler;
