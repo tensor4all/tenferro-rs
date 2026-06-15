@@ -3,6 +3,8 @@
 tenferro-rs is a modular Rust tensor stack for scientific computing and
 general-purpose tensor workflows.
 
+![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
+
 ## Why tenferro-rs Exists
 
 `tenferro` means tensor computation with an iron/Rust flavor: `tensor` +
@@ -59,8 +61,6 @@ The experimental `tenferro-xla` crate lowers static-shaped traced graph
 programs to StableHLO and can load PJRT plugins at runtime through environment
 variables. Dynamic-shape graphs remain the native runtime's core use case. See
 the [XLA and PJRT guide](https://tensor4all.org/tenferro-rs/guides/xla.html).
-
-![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
 ## Why Build On tenferro-rs
 
