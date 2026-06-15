@@ -1,3 +1,4 @@
+// TODO: remove once Sampler is wired into the training loop / main.
 #![allow(dead_code)]
 
 use rand::distributions::{Distribution, Uniform};
@@ -29,7 +30,7 @@ impl Sampler {
             data.push(x_dist.sample(rng));
             data.push(t_dist.sample(rng));
         }
-        Tensor::from_vec_col_major(vec![n, 2], data)
+        Tensor::from_vec_row_major(vec![n, 2], data)
     }
 
     pub fn initial<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor) {
@@ -49,13 +50,12 @@ impl Sampler {
 
     pub fn boundary<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor, Tensor) {
         let t_dist = Uniform::new(self.t_min, self.t_max);
-        let side_dist = Uniform::new(0.0, 1.0);
         let mut x = Vec::with_capacity(n);
         let mut t = Vec::with_capacity(n);
         let mut u = Vec::with_capacity(n);
         for _ in 0..n {
             let ti = t_dist.sample(rng);
-            let xi = if side_dist.sample(rng) < 0.5 {
+            let xi = if rng.gen_bool(0.5) {
                 self.x_min
             } else {
                 self.x_max
@@ -85,13 +85,34 @@ mod tests {
     }
 
     #[test]
-    fn initial_has_correct_shape_and_zero_time() {
+    fn collocation_columns_are_x_and_t() {
+        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
+        let mut rng = rand::thread_rng();
+        let xt = sampler.collocation(32, &mut rng);
+        let data = xt.as_slice::<f64>().unwrap();
+        let n = 32;
+        assert!(data[..n].iter().all(|&v| v >= -5.0 && v <= 5.0));
+        assert!(data[n..].iter().all(|&v| v >= 0.0 && v <= 1.0));
+    }
+
+    #[test]
+    fn initial_has_correct_shape_and_x_range() {
         let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
         let mut rng = rand::thread_rng();
         let (x, u) = sampler.initial(16, &mut rng);
         assert_eq!(x.shape(), &[16, 1]);
         assert_eq!(u.shape(), &[16, 1]);
-        let t = x.as_slice::<f64>().unwrap();
-        assert!(t.iter().all(|&v| v >= -5.0 && v <= 5.0));
+        let x_vals = x.as_slice::<f64>().unwrap();
+        assert!(x_vals.iter().all(|&v| v >= -5.0 && v <= 5.0));
+    }
+
+    #[test]
+    fn boundary_has_correct_shape() {
+        let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
+        let mut rng = rand::thread_rng();
+        let (x, t, u) = sampler.boundary(8, &mut rng);
+        assert_eq!(x.shape(), &[8, 1]);
+        assert_eq!(t.shape(), &[8, 1]);
+        assert_eq!(u.shape(), &[8, 1]);
     }
 }
