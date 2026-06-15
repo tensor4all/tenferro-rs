@@ -5,8 +5,10 @@ use tenferro_runtime::TracedTensor;
 /// Mean squared error between `pred` and `target`, scaled by `1 / n`.
 ///
 /// Both tensors are expected to have shape `[n, 1]`. The result is a scalar.
-#[allow(dead_code)] // temporary scaffolding until the training loop uses these helpers
+// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
+#[allow(dead_code)]
 pub(crate) fn mean_square(pred: &TracedTensor, target: &TracedTensor, n: usize) -> TracedTensor {
+    assert!(n > 0, "mean_square count must be positive");
     let diff = pred.add(&target.neg());
     let sq = diff.mul(&diff);
     let sum = sq.reduce_sum(&[0, 1]);
@@ -16,8 +18,10 @@ pub(crate) fn mean_square(pred: &TracedTensor, target: &TracedTensor, n: usize) 
 /// Mean squared error of a single tensor against zero, scaled by `1 / n`.
 ///
 /// The tensor is expected to have shape `[n, 1]`. The result is a scalar.
-#[allow(dead_code)] // temporary scaffolding until the training loop uses these helpers
+// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
+#[allow(dead_code)]
 pub(crate) fn mean_square_single(tensor: &TracedTensor, n: usize) -> TracedTensor {
+    assert!(n > 0, "mean_square_single count must be positive");
     let sq = tensor.mul(tensor);
     let sum = sq.reduce_sum(&[0, 1]);
     sum.scale_real(1.0 / n as f64)
@@ -27,7 +31,8 @@ pub(crate) fn mean_square_single(tensor: &TracedTensor, n: usize) -> TracedTenso
 ///
 /// Combines the PDE residual loss with initial- and boundary-condition losses
 /// using scalar weights `lambda_ic` and `lambda_bc`.
-#[allow(dead_code)] // temporary scaffolding until the training loop uses these helpers
+// TODO(kdv-pinn): remove `#[allow(dead_code)]` once training loop wires these helpers.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn total_loss(
     residual: &TracedTensor,
