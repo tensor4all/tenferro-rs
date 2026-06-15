@@ -13,10 +13,41 @@ use tenferro_runtime::{Result, TracedTensor};
 /// code can request derivatives without importing the AD extension trait
 /// directly.
 #[allow(dead_code)]
-// Temporary scaffolding: `grad` is used by the third-derivative PoC test today
-// and will be consumed by `kdv_residual` in Task 5.
+// `grad` is used by the third-derivative PoC test. It may be used later for
+// scalar loss gradients; `kdv_residual` uses `jvp` instead because `u` is not a
+// scalar.
 pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
     output.grad(input)
+}
+
+/// Compute the KdV residual `u_t + u * u_x + u_xxx`.
+///
+/// `u`, `x`, and `t` must have concrete shapes. `x` and `t` are the
+/// independent-variable placeholders with respect to which derivatives are
+/// taken. The returned tensor has the same shape as `u`.
+#[allow(dead_code)]
+pub(crate) fn kdv_residual(
+    u: &TracedTensor,
+    x: &TracedTensor,
+    t: &TracedTensor,
+) -> Result<TracedTensor> {
+    let ones_x = ones_like(x);
+    let ones_t = ones_like(t);
+    let u_t = u.jvp(t, &ones_t)?;
+    let u_x = u.jvp(x, &ones_x)?;
+    let u_xx = u_x.jvp(x, &ones_x)?;
+    let u_xxx = u_xx.jvp(x, &ones_x)?;
+    let nonlinear = u.mul(&u_x);
+    Ok(u_t.add(&nonlinear).add(&u_xxx))
+}
+
+#[allow(dead_code)]
+fn ones_like(tensor: &TracedTensor) -> TracedTensor {
+    let shape = tensor
+        .try_concrete_shape()
+        .expect("placeholder shape is concrete");
+    let len = shape.iter().product::<usize>();
+    TracedTensor::from_vec_col_major(shape.clone(), vec![1.0_f64; len])
 }
 
 #[cfg(test)]
@@ -35,6 +66,33 @@ mod tests {
         let program = compiler.compile_with_input_specs(tensor, &specs).unwrap();
         let mut executor = GraphExecutor::new(CpuBackend::new());
         executor.run_with_inputs(&program, bindings).unwrap()
+    }
+
+    #[test]
+    fn kdv_residual_of_zero_solution_is_zero() {
+        use tenferro_cpu::CpuBackend;
+        use tenferro_runtime::{DType, GraphCompiler, GraphExecutor};
+
+        let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 1]);
+        let t = TracedTensor::input_concrete_shape(DType::F64, &[2, 1]);
+        // Build a connected function that is identically zero but has non-trivial
+        // graph dependencies on both x and t so that repeated JVPs stay active.
+        let zero = TracedTensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2]);
+        let u = x.mul(&x).mul(&x).mul(&t).mul(&zero);
+        let r = kdv_residual(&u, &x, &t).unwrap();
+
+        let specs: Vec<(&TracedTensor, DType, &[usize])> =
+            vec![(&x, DType::F64, &[2, 1]), (&t, DType::F64, &[2, 1])];
+        let mut compiler = GraphCompiler::new();
+        let program = compiler.compile_with_input_specs(&r, &specs).unwrap();
+        let mut executor = GraphExecutor::new(CpuBackend::new());
+
+        let x_tensor = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2]);
+        let t_tensor = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2]);
+        let out = executor
+            .run_with_inputs(&program, &[(&x, &x_tensor), (&t, &t_tensor)])
+            .unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
     }
 
     #[test]
