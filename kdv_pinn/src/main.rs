@@ -1,4 +1,5 @@
 mod network;
+mod pde;
 mod sampler;
 
 fn main() {
