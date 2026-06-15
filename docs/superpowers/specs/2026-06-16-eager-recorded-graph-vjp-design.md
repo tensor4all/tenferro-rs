@@ -54,6 +54,40 @@ backward:
   return cotangents for G's external inputs
 ```
 
+## Scope (decided)
+
+This slice implements the **minimal** version of Option C: collapse a tracked
+n-ary einsum into one `RecordedGraph` eager node so backward shares intermediate
+cotangents through a single transposed DAG. The objective is the complexity fix
+only.
+
+Backward of a length-N contraction:
+
+| approach | retained activations | backward compute |
+|---|---|---|
+| current fused einsum VJP (`transpose_rule` per active input) | O(1) | **O(N^2)** |
+| this slice (one recorded graph, shared transpose) | O(N) | **O(N)** |
+| future segment/checkpoint policy | O(sqrt(N)) | O(N) |
+
+The current fused VJP emits one independent adjoint contraction per input, so it
+recomputes shared environments and is O(N^2); it stores nothing, so its memory is
+O(1). Recording the whole binary-contraction graph as one node and transposing it
+once makes the shared intermediate cotangents (e.g. the MPS right-environment
+sweep) single nodes in the transposed DAG, evaluated once: O(N) compute, O(N)
+retained values.
+
+**Out of this slice:** checkpointing, rematerialization policy, FLOPs-based
+segment selection, and any further compute/memory tuning. They are deferred, but
+the recording API must stay:
+
+- **checkpoint-ready:** `retained_values` is explicit and backward supplies
+  primal values through `execute_forward` replay, so a later policy can retain
+  fewer values and recompute the rest;
+- **granularity-ready:** a `RecordedGraph` may later hold a *segment* of the
+  contraction instead of the whole thing, so sqrt(N) checkpointing can be
+  expressed as segment boundaries (each segment = one recorded node) rather than
+  an intra-op nested checkpoint planner.
+
 ## Goals
 
 - Make tidu eager tape record graph invocations, not primitive operations.
@@ -75,9 +109,12 @@ backward:
 - Do not derive or maintain an einsum-specific VJP rule.
 - Do not keep a legacy primitive recording API.
 - Do not special-case einsum inside tidu.
-- Do not require optimal residual liveness in the first implementation. Saving
-  too many forward values is acceptable initially if the API allows tightening
-  later.
+- Do not build a checkpoint/rematerialization policy, a FLOPs cost model, or
+  contraction segmentation in this slice. The default is minimal residual (per-op
+  `saved_forward_values` union); going below O(N) memory is deferred.
+- Do not add an intra-op nested checkpoint planner. When checkpointing arrives it
+  should be expressed as segment-sized `RecordedGraph` nodes, not as recompute
+  logic hidden inside one opaque node.
 
 ## Tidu API
 
@@ -211,18 +248,28 @@ once by the backend.
 
 ## Residual Retention
 
-The recorded graph forward path must retain enough primal values for backward.
-The initial implementation should be conservative:
+The recorded graph forward path must retain the primal values backward reads.
+The default is **minimal residual**, not save-all: retain only the primal values
+referenced by the per-primitive transpose rules.
 
-- Save graph external inputs.
-- Save graph external outputs.
-- Save all forward values produced by the recorded graph execution, or at least
-  all live values exposed by the executor.
+- Reuse the existing per-op residual logic (`saved_forward_values`) and take the
+  union over the recorded graph's ops. This is computable at record time without
+  building `linearize(G)` first, and matches what PyTorch `save_for_backward` and
+  JAX partial-eval residuals retain.
+- Do not retain graph external outputs or values no op's backward reads
+  (save-all wastes memory with no benefit).
+- For a contraction chain this is still O(N) (the left environments are each the
+  sibling operand of a downstream input gradient), which is correct and the
+  intended cost for this slice.
 
-After correctness and graph-level execution are in place, retention can be
-tightened by computing the values required by `linearize(G)` and
-`transpose(linearize(G))`. The public API should already separate retained
-values from outputs so this optimization does not change recording semantics.
+Going below O(N) is **checkpointing/rematerialization** and is deferred. Note
+the tradeoff is compute-and-memory, not memory alone: backward replays primal
+values through `execute_forward`, so dropping a retained value forces its
+recomputation (a full GEMM for a contraction intermediate). A later policy must
+be cost-aware (retain large/expensive intermediates, recompute cheap unary/view
+steps), ideally realized as segment boundaries (see Scope). The API separates
+`retained_values` from outputs precisely so this lands as a policy, not a
+recording-semantics change.
 
 ## Tenferro Integration
 
@@ -321,7 +368,17 @@ Repository checks:
 
 The main correctness risk is key confusion between graph-internal keys and eager
 tape keys. The design avoids this by keeping `RecordedGraph::output_keys` and
-`TraceNode::primal_out_keys` separate and documenting their roles.
+`TraceNode::primal_out_keys` separate and documenting their roles. The critical
+invariant is **slot alignment**: `output_keys[i]` and `primal_out_keys[i]` must
+denote the same logical eager output, since `active_output_slots` indexes both
+domains. Construction should guarantee this and assert it.
+
+Sharing of common subexpressions (e.g. the MPS right-environment sweep) comes
+from transposing the whole recorded graph as one DAG, not from whole-program
+execution: even node-by-node execution of the transposed graph evaluates each
+shared cotangent node once. Whole-program (single backend session) backward is a
+separate dispatch-overhead optimization and is not required for the O(N)
+complexity win.
 
 The main performance risk is adding graph construction overhead to small eager
 primitive ops. This is preferable to preserving a second AD path. If it becomes
