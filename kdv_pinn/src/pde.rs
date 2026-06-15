@@ -12,10 +12,8 @@ use tenferro_runtime::{Error, Result, TracedTensor};
 /// This is a thin helper over [`TracedTensorAdExt::grad`] so that PDE residual
 /// code can request derivatives without importing the AD extension trait
 /// directly.
+// TODO(kdv-pinn): remove #[allow(dead_code)] once training loop or loss code wires this helper.
 #[allow(dead_code)]
-// `grad` is used by the third-derivative PoC test. It may be used later for
-// scalar loss gradients; `kdv_residual` uses `jvp` instead because `u` is not a
-// scalar.
 pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
     output.grad(input)
 }
@@ -25,8 +23,7 @@ pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<Traced
 /// `u`, `x`, and `t` must have concrete shapes. `x` and `t` are the
 /// independent-variable placeholders with respect to which derivatives are
 /// taken. The returned tensor has the same shape as `u`.
-// Temporary scaffolding: `kdv_residual` will be consumed by the PINN training
-// loop in Tasks 8–10.
+// TODO(kdv-pinn): remove #[allow(dead_code)] once the PINN training loop consumes this function.
 #[allow(dead_code)]
 pub(crate) fn kdv_residual(
     u: &TracedTensor,
@@ -44,8 +41,7 @@ pub(crate) fn kdv_residual(
 }
 
 /// Return a constant tensor of ones with the same shape and dtype as `tensor`.
-// Temporary scaffolding: `ones_like` will be consumed by the PINN training loop
-// in Tasks 8–10.
+// TODO(kdv-pinn): remove #[allow(dead_code)] once the PINN training loop consumes this helper.
 #[allow(dead_code)]
 fn ones_like(tensor: &TracedTensor) -> Result<TracedTensor> {
     let shape = tensor
