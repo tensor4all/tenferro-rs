@@ -770,6 +770,19 @@ fn eager_einsum_exec_values<'a>(
     Ok(reordered.tensor.into_tensor())
 }
 
+/// Run a whole einsum contraction tree in one backend session.
+///
+/// Unlike [`eager_einsum_subscripts`], the caller supplies the contraction
+/// `tree`, so a known-good external path (e.g. cotengra `opt_flops`) can be
+/// executed whole-program without re-planning.
+pub(crate) fn eager_einsum_with_tree(
+    ctx: &mut impl TensorBackend,
+    inputs: &[&Tensor],
+    tree: &ContractionTree,
+) -> Result<Tensor> {
+    ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, tree))
+}
+
 pub(crate) fn eager_einsum_exec(
     exec: &mut dyn BackendSession,
     inputs: &[&Tensor],

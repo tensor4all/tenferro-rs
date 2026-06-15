@@ -2,7 +2,8 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
-use super::einsum;
+use super::{einsum, einsum_whole_program_untracked};
+use crate::{ContractionTree, Subscripts};
 
 #[test]
 fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
@@ -21,6 +22,57 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
     assert_eq!(out.data().shape(), &[4, 3]);
     assert_eq!(out.data().as_slice::<f64>().unwrap(), &[2.0_f64; 12]);
     assert_eq!(ctx.cache_stats().extensions.entries, 0);
+}
+
+#[test]
+fn whole_program_untracked_matches_per_op_nary_result() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let a_data: Vec<f64> = (0..6).map(|i| i as f64 + 1.0).collect();
+    let b_data: Vec<f64> = (0..12).map(|i| i as f64 * 0.5 - 2.0).collect();
+    let c_data: Vec<f64> = (0..20).map(|i| (i as f64).sin()).collect();
+    let a =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], a_data), ctx.clone());
+    let b =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], b_data), ctx.clone());
+    let c =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![4, 5], c_data), ctx.clone());
+
+    // Reference: default per-op N-ary path.
+    let reference = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+
+    // Whole-program path on an explicit contraction tree (same logical result).
+    let subs = Subscripts::parse("ij,jk,kl->il").unwrap();
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4], &[4, 5]], &[(0, 1), (2, 3)])
+        .unwrap();
+    let whole = einsum_whole_program_untracked(&[&a, &b, &c], &tree).unwrap();
+
+    assert_eq!(whole.data().shape(), reference.data().shape());
+    let got = whole.data().as_slice::<f64>().unwrap();
+    let want = reference.data().as_slice::<f64>().unwrap();
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(want.iter()) {
+        assert!(
+            (g - w).abs() < 1e-10,
+            "whole-program result {g} != per-op {w}"
+        );
+    }
+}
+
+#[test]
+fn whole_program_untracked_rejects_tracked_inputs() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]),
+        ctx.clone(),
+    );
+
+    let subs = Subscripts::parse("ij,jk->ik").unwrap();
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2]], &[(0, 1)]).unwrap();
+    assert!(einsum_whole_program_untracked(&[&a, &b], &tree).is_err());
 }
 
 #[test]

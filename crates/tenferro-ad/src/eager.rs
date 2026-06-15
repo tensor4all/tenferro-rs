@@ -392,6 +392,29 @@ impl EagerRuntime {
         f(executor.caches_mut())
     }
 
+    /// Mutably borrow this runtime's backend.
+    ///
+    /// This hook lets standard extension crates run a whole contraction program
+    /// in a single backend session (instead of one eager op per step) while
+    /// preserving eager value semantics for untracked tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// // The closure receives `&mut EagerBackend`; standard extension crates
+    /// // use it to open one backend session for a whole contraction program.
+    /// let answer = ctx.with_backend_mut(|_backend| 42);
+    /// assert_eq!(answer, 42);
+    /// ```
+    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> R {
+        let mut backend = self.backend.lock().unwrap();
+        f(&mut backend)
+    }
+
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
     /// CPU runtimes return immediately. CUDA runtimes synchronize the current backend stream.
