@@ -1,7 +1,13 @@
 use super::*;
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::Tensor;
+
+/// Test helper: compute the gradient of `output` with respect to `input`.
+fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
+    output.grad(input)
+}
 
 fn eval(tensor: &TracedTensor, bindings: &[(&TracedTensor, &Tensor)]) -> Tensor {
     let mut compiler = GraphCompiler::new();

@@ -7,17 +7,6 @@
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_runtime::{Error, Result, TracedTensor};
 
-/// Compute the gradient of `output` with respect to `input` on a traced graph.
-///
-/// This is a thin helper over [`TracedTensorAdExt::grad`] so that PDE residual
-/// code can request derivatives without importing the AD extension trait
-/// directly.
-// TODO(kdv-pinn): remove #[allow(dead_code)] once training loop or loss code wires this helper.
-#[allow(dead_code)]
-pub(crate) fn grad(output: &TracedTensor, input: &TracedTensor) -> Result<TracedTensor> {
-    output.grad(input)
-}
-
 /// Compute the KdV residual `u_t + u * u_x + u_xxx`.
 ///
 /// `u`, `x`, and `t` must have concrete shapes. `x` and `t` are the
