@@ -5,10 +5,7 @@ use tenferro_tensor::Tensor;
 pub struct Sampler {
     x_min: f64,
     x_max: f64,
-    // TODO(kdv-pinn): remove #[allow(dead_code)] once Tasks 9-10 wire t_min/t_max.
-    #[allow(dead_code)]
     t_min: f64,
-    #[allow(dead_code)]
     t_max: f64,
 }
 
@@ -22,8 +19,6 @@ impl Sampler {
         }
     }
 
-    // TODO(kdv-pinn): remove #[allow(dead_code)] once Tasks 9-10 wire collocation.
-    #[allow(dead_code)]
     pub fn collocation<R: Rng>(&self, n: usize, rng: &mut R) -> Tensor {
         let x_dist = Uniform::new(self.x_min, self.x_max);
         let t_dist = Uniform::new(self.t_min, self.t_max);
@@ -50,8 +45,6 @@ impl Sampler {
         )
     }
 
-    // TODO(kdv-pinn): remove #[allow(dead_code)] once Tasks 9-10 wire boundary.
-    #[allow(dead_code)]
     pub fn boundary<R: Rng>(&self, n: usize, rng: &mut R) -> (Tensor, Tensor, Tensor) {
         let t_dist = Uniform::new(self.t_min, self.t_max);
         let mut x = Vec::with_capacity(n);

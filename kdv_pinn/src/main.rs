@@ -15,6 +15,7 @@ use tenferro_tensor::Tensor;
 const N_IC: usize = 32;
 const N_COL: usize = 256;
 const N_BC: usize = 32;
+const N_EVAL: usize = 100;
 const LAMBDA_IC: f64 = 100.0;
 const LAMBDA_BC: f64 = 10.0;
 const LR: f64 = 0.001;
@@ -139,4 +140,54 @@ fn main() {
             println!("epoch {}: loss={:.6e}", epoch, loss_value);
         }
     }
+
+    // Evaluation grid at t = 0.5.
+    let x_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1]);
+    let t_eval_const = TracedTensor::from_vec_col_major(vec![N_EVAL, 1], vec![0.5_f64; N_EVAL]);
+    let xt_eval = TracedTensor::stack(&[&x_eval.reshape(&[N_EVAL, 1]), &t_eval_const], 1)
+        .expect("stack eval inputs must succeed")
+        .reshape(&[N_EVAL, 2]);
+    let u_eval = net.forward(&xt_eval);
+
+    let mut eval_specs: Vec<(&TracedTensor, DType, &[usize])> = param_specs
+        .iter()
+        .map(|(p, dtype, shape)| (*p, *dtype, shape.as_slice()))
+        .collect();
+    eval_specs.push((&x_eval, DType::F64, &[N_EVAL, 1]));
+    let eval_program = compiler
+        .compile_with_input_specs(&u_eval, &eval_specs)
+        .expect("compile eval program failed");
+
+    let mut x_eval_data = Vec::with_capacity(N_EVAL);
+    let mut u_true_data = Vec::with_capacity(N_EVAL);
+    for i in 0..N_EVAL {
+        let x = -5.0 + 10.0 * (i as f64) / (N_EVAL as f64 - 1.0);
+        let t = 0.5;
+        x_eval_data.push(x);
+        u_true_data.push(2.0 * (1.0 / ((x - 4.0 * t).cosh())).powi(2));
+    }
+    let x_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], x_eval_data);
+    let u_true_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], u_true_data);
+
+    let mut eval_bindings: Vec<(&TracedTensor, &Tensor)> = net
+        .parameters()
+        .iter()
+        .zip(params.iter())
+        .map(|(p, t)| (*p, t))
+        .collect();
+    eval_bindings.push((&x_eval, &x_eval_tensor));
+
+    let u_pred = executor
+        .run_with_inputs(&eval_program, &eval_bindings)
+        .expect("evaluate eval program failed");
+    let pred = u_pred.as_slice::<f64>().expect("predicted solution data");
+    let truth = u_true_tensor.as_slice::<f64>().expect("true solution data");
+    let l2_error = pred
+        .iter()
+        .zip(truth.iter())
+        .map(|(p, t)| (p - t).powi(2))
+        .sum::<f64>()
+        .sqrt()
+        / truth.iter().map(|t| t.powi(2)).sum::<f64>().sqrt();
+    println!("L2 relative error at t=0.5: {:.6e}", l2_error);
 }
