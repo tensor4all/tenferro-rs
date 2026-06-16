@@ -13,6 +13,7 @@ use tenferro_tensor::DType;
 use tenferro_tensor::Tensor;
 
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
+use crate::{Error, Result};
 
 pub type MetadataScope = GlobalMetadataScope;
 
@@ -59,7 +60,16 @@ pub fn register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded))
+    try_register_scoped_graph_metadata(graph, seeded).unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub(crate) fn try_register_scoped_graph_metadata(
+    graph: &Graph<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+) -> Result<MetadataScope> {
+    Ok(register_scoped_global_metadata_batch(
+        graph_metadata_registrations(graph, None, seeded)?,
+    ))
 }
 
 pub fn register_scoped_live_graph_metadata(
@@ -67,10 +77,17 @@ pub fn register_scoped_live_graph_metadata(
     live_values: &HashSet<LocalValueId>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(graph_metadata_registrations(
-        graph,
-        Some(live_values),
-        seeded,
+    try_register_scoped_live_graph_metadata(graph, live_values, seeded)
+        .unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub(crate) fn try_register_scoped_live_graph_metadata(
+    graph: &Graph<StdTensorOp>,
+    live_values: &HashSet<LocalValueId>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+) -> Result<MetadataScope> {
+    Ok(register_scoped_global_metadata_batch(
+        graph_metadata_registrations(graph, Some(live_values), seeded)?,
     ))
 }
 
@@ -129,7 +146,7 @@ fn graph_metadata_registrations(
     graph: &Graph<StdTensorOp>,
     live_values: Option<&HashSet<LocalValueId>>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> Vec<(ValueKey<StdTensorOp>, TensorMeta)> {
+) -> Result<Vec<(ValueKey<StdTensorOp>, TensorMeta)>> {
     let seeded: Vec<_> = seeded.into_iter().collect();
     // Start from just the seeded inputs. External keys not in `seeded` are
     // resolved on demand via a single-key lookup against the global
@@ -163,16 +180,11 @@ fn graph_metadata_registrations(
                     .get(key)
                     .cloned()
                     .or_else(|| lookup_global_metadata(key))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "metadata registration: missing input metadata for {:?}",
-                            key
-                        )
-                    })
+                    .ok_or_else(|| metadata_error(format!("missing input metadata for {:?}", key)))
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
-        let output_metas = infer_output_metas(&op_node.operation, &input_metas);
+        let output_metas = infer_output_metas(&op_node.operation, &input_metas)?;
         for (&output_id, meta) in op_node.outputs.iter().zip(output_metas) {
             let key = graph.values()[output_id].key.clone();
             known.insert(key.clone(), meta.clone());
@@ -180,10 +192,10 @@ fn graph_metadata_registrations(
         }
     }
 
-    registrations
+    Ok(registrations)
 }
 
-fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<TensorMeta> {
+fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Vec<TensorMeta>> {
     let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
         .iter()
         .enumerate()
@@ -193,12 +205,12 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<Tenso
     let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
 
     if let StdTensorOp::Extension(ext) = op {
-        let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs);
+        let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs)?;
         let resolved_inputs: Vec<&[SymDim]> = input_metas
             .iter()
             .map(|meta| meta.shape.as_slice())
             .collect();
-        return metas
+        return Ok(metas
             .into_iter()
             .map(|(dtype, shape)| {
                 tensor_meta(
@@ -209,11 +221,11 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<Tenso
                         .collect(),
                 )
             })
-            .collect();
+            .collect());
     }
 
     let output_dtype = infer_output_dtype(op, &input_dtypes);
-    infer_output_extents(op, &input_shape_refs)
+    Ok(infer_output_extents(op, &input_shape_refs)?
         .into_iter()
         .map(|extents| {
             let resolved_inputs: Vec<&[SymDim]> = input_metas
@@ -226,5 +238,11 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<Tenso
                 .collect();
             TensorMeta::with_extents(output_dtype, resolved_extents)
         })
-        .collect()
+        .collect())
+}
+
+fn metadata_error(message: impl Into<String>) -> Error {
+    Error::InvalidCompiledGraph {
+        message: format!("metadata registration: {}", message.into()),
+    }
 }

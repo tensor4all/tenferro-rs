@@ -1,5 +1,7 @@
 //! CubeCL CUDA runtime initialization and synchronization.
 
+use std::fmt;
+
 use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
@@ -34,6 +36,14 @@ pub struct CubeclRuntime {
     device_ordinal: usize,
     cuda_device: CUdevice,
     cuda_context: CUcontext,
+}
+
+impl fmt::Debug for CubeclRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CubeclRuntime")
+            .field("device_ordinal", &self.device_ordinal)
+            .finish_non_exhaustive()
+    }
 }
 
 // CUDA primary contexts and CubeCL clients are owned handles. Backend methods

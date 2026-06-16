@@ -312,9 +312,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::faer::full_piv_lu(ctx.as_ref(), buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::faer::full_piv_lu(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                            .and_then(full_piv_lu_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::faer::full_piv_lu(ctx.as_ref(), buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                            .and_then(full_piv_lu_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
                     })
                 }
@@ -332,9 +332,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::blas::full_piv_lu(buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::blas::full_piv_lu(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                            .and_then(full_piv_lu_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::blas::full_piv_lu(buffers, t)
-                            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                            .and_then(full_piv_lu_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
                     })
                 }
@@ -1028,6 +1028,58 @@ fn complex64_real_part_tensor(values: TypedTensor<Complex64>) -> TypedTensor<f64
 
 fn svd_output_count_error(count: usize) -> Error {
     Error::backend_failure("svd", format!("expected 3 outputs, got {count}"))
+}
+
+fn full_piv_lu_output_count_error(count: usize) -> Error {
+    Error::backend_failure("full_piv_lu", format!("expected 5 outputs, got {count}"))
+}
+
+fn full_piv_lu_c32_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex32>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => Ok(vec![
+            Tensor::C32(p),
+            Tensor::C32(l),
+            Tensor::C32(u),
+            Tensor::C32(q),
+            Tensor::F32(complex32_real_part_tensor(parity)),
+        ]),
+        _ => Err(full_piv_lu_output_count_error(count)),
+    }
+}
+
+fn full_piv_lu_c64_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex64>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => Ok(vec![
+            Tensor::C64(p),
+            Tensor::C64(l),
+            Tensor::C64(u),
+            Tensor::C64(q),
+            Tensor::F64(complex64_real_part_tensor(parity)),
+        ]),
+        _ => Err(full_piv_lu_output_count_error(count)),
+    }
 }
 
 fn svd_c32_outputs_to_public_tensors(

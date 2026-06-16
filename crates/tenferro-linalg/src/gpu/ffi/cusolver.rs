@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::fmt;
 use std::os::raw::c_char;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ const CUSOLVER_STATUS_SUCCESS: CusolverStatus = 0;
 const CUBLAS_STATUS_SUCCESS: CublasStatus = 0;
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CudaDataType {
     F32,
     F64,
@@ -43,28 +44,28 @@ pub enum CudaDataType {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CublasFillMode {
     Lower = 0,
     Upper = 1,
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CublasDiagType {
     NonUnit = 0,
     Unit = 1,
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CublasSideMode {
     Left = 0,
     Right = 1,
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CublasOperation {
     N = 0,
     T = 1,
@@ -72,7 +73,7 @@ pub enum CublasOperation {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum CusolverEigMode {
     NoVector = 0,
     Vector = 1,
@@ -1145,11 +1146,28 @@ pub struct CusolverDnHandle {
     raw: CusolverDnHandleRaw,
 }
 
+impl fmt::Debug for CusolverDnHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CusolverDnHandle")
+            .field("loaded", &true)
+            .finish_non_exhaustive()
+    }
+}
+
 unsafe impl Send for CusolverDnHandle {}
 
 pub struct GesvdjInfo<'a> {
     handle: &'a CusolverDnHandle,
     raw: GesvdjInfoRaw,
+}
+
+impl fmt::Debug for GesvdjInfo<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GesvdjInfo")
+            .field("handle", &self.handle)
+            .field("initialized", &true)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> GesvdjInfo<'a> {
@@ -2059,6 +2077,14 @@ pub struct CublasHandle {
     raw: CublasHandleRaw,
 }
 
+impl fmt::Debug for CublasHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CublasHandle")
+            .field("loaded", &true)
+            .finish_non_exhaustive()
+    }
+}
+
 unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {
@@ -2244,6 +2270,15 @@ impl Drop for CublasHandle {
 pub struct CudaLinalgHandles {
     cusolver: CusolverDnHandle,
     cublas: CublasHandle,
+}
+
+impl fmt::Debug for CudaLinalgHandles {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaLinalgHandles")
+            .field("cusolver", &self.cusolver)
+            .field("cublas", &self.cublas)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CudaLinalgHandles {

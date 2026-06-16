@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fmt;
 use std::mem::size_of;
 
 use num_complex::{Complex32, Complex64};
@@ -73,6 +74,18 @@ pub struct BufferPool {
     c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
     retained_capacity_bytes: usize,
     max_retained_capacity_bytes: usize,
+}
+
+impl fmt::Debug for BufferPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferPool")
+            .field("stats", &self.stats())
+            .field(
+                "max_retained_capacity_bytes",
+                &self.max_retained_capacity_bytes,
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 /// Scalar types supported by [`BufferPool`].

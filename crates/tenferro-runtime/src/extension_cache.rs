@@ -5,6 +5,7 @@
 //! explicit bounded cache ownership.
 
 use std::any::Any;
+use std::fmt;
 use std::num::NonZeroUsize;
 
 use lru::LruCache;
@@ -187,6 +188,15 @@ struct ExtensionCacheEntry {
 pub struct ExtensionCacheStore {
     limits: ExtensionCacheLimits,
     entries: LruCache<ExtensionCacheKey, ExtensionCacheEntry>,
+}
+
+impl fmt::Debug for ExtensionCacheStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionCacheStore")
+            .field("limits", &self.limits)
+            .field("stats", &self.stats(ExtensionCacheSelector::All))
+            .finish_non_exhaustive()
+    }
 }
 
 impl ExtensionCacheStore {

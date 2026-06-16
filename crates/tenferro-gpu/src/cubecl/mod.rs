@@ -79,6 +79,7 @@
 use std::any::{Any, TypeId};
 use std::cell::OnceCell;
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -234,10 +235,29 @@ pub struct CubeclBackend {
     rt: CubeclRuntime,
 }
 
+impl fmt::Debug for CubeclBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CubeclBackend")
+            .field("runtime", &self.rt)
+            .field("cuda_extension_cache", &self.extension_cache)
+            .field("cutensor_initialized", &self.cutensor.get().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Type-indexed cache for CUDA extension-owned backend state.
 #[doc(hidden)]
 pub struct CudaExtensionCache {
     inner: Mutex<CudaExtensionCacheInner>,
+}
+
+impl fmt::Debug for CudaExtensionCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaExtensionCache")
+            .field("max_entries", &self.max_entries())
+            .field("stats", &self.stats())
+            .finish_non_exhaustive()
+    }
 }
 
 const DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES: usize = 16;
@@ -419,6 +439,21 @@ pub struct CudaExtensionCacheGuard<'a, T> {
     inner: MutexGuard<'a, CudaExtensionCacheInner>,
     type_id: TypeId,
     _marker: std::marker::PhantomData<&'a T>,
+}
+
+impl<T: 'static> fmt::Debug for CudaExtensionCacheGuard<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let retained_bytes = self
+            .inner
+            .entries
+            .get(&self.type_id)
+            .map(|entry| entry.retained_bytes)
+            .unwrap_or(0);
+        f.debug_struct("CudaExtensionCacheGuard")
+            .field("value_type", &std::any::type_name::<T>())
+            .field("retained_bytes", &retained_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
@@ -647,7 +682,7 @@ impl CubeclBackend {
             // domain covers every logical output element exactly once.
             structural::view_to_contiguous_kernel::launch_unchecked::<T, CudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(len),
+                cube_count_for_len(len)?,
                 cube_dim_1d(),
                 output_arg.into_tensor_arg(),
                 input_arg,
@@ -697,7 +732,7 @@ impl CubeclBackend {
             // and destination logical coordinate exactly once.
             structural::contiguous_to_view_kernel::launch_unchecked::<T, CudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(len),
+                cube_count_for_len(len)?,
                 cube_dim_1d(),
                 dst_arg,
                 src_arg.into_tensor_arg(),
@@ -742,12 +777,13 @@ impl CubeclBackend {
                 // positions and guards with `ABSOLUTE_POS < input.len()`.
                 structural::convert_f32_to_c32_raw::launch_unchecked::<CudaRuntime>(
                     client,
-                    cube_count_for_len(n),
+                    cube_count_for_len(n)?,
                     cube_dim_1d(),
                     out,
                     input,
                 );
             }
+            Ok(())
         })
     }
 
@@ -763,12 +799,13 @@ impl CubeclBackend {
                 // positions and guards with `ABSOLUTE_POS < input.len()`.
                 structural::convert_f32_to_c64_raw::launch_unchecked::<CudaRuntime>(
                     client,
-                    cube_count_for_len(n),
+                    cube_count_for_len(n)?,
                     cube_dim_1d(),
                     out,
                     input,
                 );
             }
+            Ok(())
         })
     }
 
@@ -784,12 +821,13 @@ impl CubeclBackend {
                 // positions and guards with `ABSOLUTE_POS < input.len()`.
                 structural::convert_f64_to_c32_raw::launch_unchecked::<CudaRuntime>(
                     client,
-                    cube_count_for_len(n),
+                    cube_count_for_len(n)?,
                     cube_dim_1d(),
                     out,
                     input,
                 );
             }
+            Ok(())
         })
     }
 
@@ -805,12 +843,13 @@ impl CubeclBackend {
                 // positions and guards with `ABSOLUTE_POS < input.len()`.
                 structural::convert_f64_to_c64_raw::launch_unchecked::<CudaRuntime>(
                     client,
-                    cube_count_for_len(n),
+                    cube_count_for_len(n)?,
                     cube_dim_1d(),
                     out,
                     input,
                 );
             }
+            Ok(())
         })
     }
 
@@ -826,7 +865,7 @@ impl CubeclBackend {
             ArrayArg<CudaRuntime>,
             ArrayArg<CudaRuntime>,
             usize,
-        ),
+        ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
         InFloat: CubeElement + Clone,
@@ -847,7 +886,7 @@ impl CubeclBackend {
         // SAFETY: The checked raw-array helpers prove that `input_arg` covers
         // exactly the dense input shape and `output_parts` covers the complete
         // real/imaginary scalar representation of the output allocation.
-        launch(self.runtime().client(), output_parts, input_arg, n);
+        launch(self.runtime().client(), output_parts, input_arg, n)?;
         Ok(output)
     }
 
@@ -988,7 +1027,7 @@ impl CubeclBackend {
             self.runtime(),
             &output,
             "embed_diagonal",
-            cube_count_for_len(output.n_elements()),
+            cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
                 structural::fill_zero_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -1001,7 +1040,7 @@ impl CubeclBackend {
             &output,
             input,
             "embed_diagonal",
-            cube_count_for_len(input.n_elements()),
+            cube_count_for_len(input.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::embed_diagonal_copy_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -1431,7 +1470,7 @@ impl CubeclBackend {
                 &output,
                 input,
                 "concatenate",
-                cube_count_for_len(input.n_elements()),
+                cube_count_for_len(input.n_elements())?,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
                     structural::concatenate_copy_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -1516,7 +1555,7 @@ impl CubeclBackend {
             &output,
             operand,
             "scatter",
-            cube_count_for_len(output.n_elements()),
+            cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
                 indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -1547,7 +1586,7 @@ impl CubeclBackend {
             // update through the validated metadata before indexing.
             indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
                 client,
-                cube_count_for_len(update_len),
+                cube_count_for_len(update_len)?,
                 cube_dim_1d(),
                 output_arg.into_tensor_arg(),
                 operand_arg.into_tensor_arg(),
@@ -1593,7 +1632,7 @@ impl CubeclBackend {
             &output,
             operand,
             "scatter",
-            cube_count_for_len(output.n_elements()),
+            cube_count_for_len(output.n_elements())?,
             cube_dim_1d(),
             |client, count, dim, out_arg, operand_arg| unsafe {
                 indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -1635,7 +1674,7 @@ impl CubeclBackend {
             // validated metadata.
             indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CudaRuntime>(
                 client,
-                cube_count_for_len(update_len),
+                cube_count_for_len(update_len)?,
                 cube_dim_1d(),
                 output_parts,
                 operand_arg.into_tensor_arg(),

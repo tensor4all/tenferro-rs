@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::mem::{size_of, size_of_val};
 
 use omeco::{
@@ -101,6 +102,19 @@ pub struct ContractionTree {
     pub(crate) operand_subs: Vec<Vec<u32>>,
     /// Pre-compiled step plans (cached to avoid recomputation per execute call).
     pub(crate) step_plans: Vec<StepPlan>,
+}
+
+impl fmt::Debug for ContractionTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContractionTree")
+            .field("input_count", &self.subscripts.inputs.len())
+            .field("output_rank", &self.subscripts.output.len())
+            .field("steps_len", &self.steps.len())
+            .field("size_dict_len", &self.size_dict.len())
+            .field("operand_subs_len", &self.operand_subs.len())
+            .field("step_plans_len", &self.step_plans.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ContractionTree {

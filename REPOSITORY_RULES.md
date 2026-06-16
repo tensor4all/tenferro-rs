@@ -19,6 +19,11 @@ rules from `tensor4all-agent-rules`.
 - Keep the public API intentionally small. Prefer `pub(crate)` for types,
   functions, traits, modules, fields, and helper constructors unless external
   users are expected to call them directly.
+- Public types should implement `Debug`. Prefer `derive(Debug)` when the output
+  is cheap, useful, and does not expose unstable internals. Use a hand-written
+  summary for graph, runtime, cache, tensor, backend, or FFI wrapper types when
+  derived output would materialize data, dump large buffers, leak internal
+  representation details, or make future implementation changes harder.
 - Do not make implementation details public just because another module needs
   them. First consider whether the code belongs in the same crate/module, or
   whether a narrower crate-private helper is the right abstraction.
@@ -82,8 +87,11 @@ rules from `tensor4all-agent-rules`.
 
 ## External Contribution Intake
 
-- Bug-fix PRs may be reviewed as merge candidates when they fix behavior that
-  is already intended by current docs, specs, or tests.
+- Pull request creation is currently restricted to collaborators. External
+  requests, reproducers, proposed regression tests, benchmark reports, and
+  prototype branches should be collected in issues first.
+- Bug-fix PRs from collaborators may be reviewed as merge candidates when they
+  fix behavior that is already intended by current docs, specs, or tests.
 - New features must start as feature request issues. Do not treat a
   new-feature implementation PR as the source of truth unless maintainers
   already accepted the linked issue and agreed that implementation should
@@ -94,9 +102,11 @@ rules from `tensor4all-agent-rules`.
 - Accepted feature issues, specs, and repository rules are the source of truth
   for implementation. External prototype code may inform implementation only
   when its license and provenance are compatible with this repository.
-- When maintainer or AI-assisted implementation is based on external prototype
-  code, preserve appropriate copyright notices, license obligations,
-  attribution, and links to the original prototype or issue discussion.
+- When maintainers take over a prototype branch, preserve the contributor's
+  original commits where practical and add new commits on top. When maintainer
+  or AI-assisted implementation is otherwise based on external prototype code,
+  preserve appropriate copyright notices, license obligations, attribution, and
+  links to the original prototype or issue discussion.
 
 ## Standard Extension Boundary
 

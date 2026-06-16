@@ -182,6 +182,18 @@ def main() -> int:
     )
     if snippet_check.returncode != 0:
         return snippet_check.returncode
+    guide_dependency_check = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "check-guide-dependency-snippets.py"),
+            "--root-dir",
+            str(root),
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL if args.quiet else None,
+    )
+    if guide_dependency_check.returncode != 0:
+        return guide_dependency_check.returncode
 
     doc_root = pathlib.Path(args.doc_root) if args.doc_root else root / "target" / "doc"
     api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api" / "index.md"

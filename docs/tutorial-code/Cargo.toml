@@ -14,7 +14,10 @@ cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas"]
 num-complex.workspace = true
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
+tenferro-einsum = { path = "../../crates/tenferro-einsum", default-features = false, features = ["autodiff"] }
+tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
+tenferro-xla = { path = "../../crates/tenferro-xla", default-features = false }
 
 [[bin]]
 name = "typed_tensor_non_ad"
@@ -27,6 +30,18 @@ path = "src/bin/eager_autodiff_pytorch_style.rs"
 [[bin]]
 name = "traced_autodiff_jax_style"
 path = "src/bin/traced_autodiff_jax_style.rs"
+
+[[bin]]
+name = "einsum_subscripts_to_gradients"
+path = "src/bin/einsum_subscripts_to_gradients.rs"
+
+[[bin]]
+name = "xla_einsum_backend"
+path = "src/bin/xla_einsum_backend.rs"
+
+[[bin]]
+name = "dynamic_shape_truncated_svd"
+path = "src/bin/dynamic_shape_truncated_svd.rs"
 
 [[bin]]
 name = "complex_ad_convention"

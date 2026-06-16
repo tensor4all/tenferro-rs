@@ -258,6 +258,21 @@ fn device_model_has_typed_hashable_device_ids() {
 }
 
 #[test]
+fn device_model_has_first_class_webgpu_backend_kind() {
+    let cuda = DeviceId {
+        kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+        ordinal: 0,
+    };
+    let webgpu = DeviceId {
+        kind: DeviceKind::Gpu(GpuBackendKind::WebGpu),
+        ordinal: 0,
+    };
+
+    assert_ne!(webgpu, cuda);
+    assert_eq!(format!("{:?}", webgpu.kind), "Gpu(WebGpu)");
+}
+
+#[test]
 fn default_placement_is_unpinned_host_without_device() {
     let tensor = TypedTensor::<f64>::zeros(vec![2]);
 

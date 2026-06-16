@@ -379,7 +379,7 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
     );
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
-    let dy = y.jvp(&x, &dx);
+    let dy = y.jvp(&x, &dx).unwrap();
     let out = run(&dy);
 
     assert_c64_close(
@@ -412,7 +412,7 @@ fn fft_c64_jvp_matches_finite_diff() {
     let dx = TracedTensor::from_vec_col_major(vec![4], tangent_data.clone());
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
-    let dy = y.jvp(&x, &dx);
+    let dy = y.jvp(&x, &dx).unwrap();
     let out = run(&dy);
 
     let expected = finite_diff_c64_directional(
@@ -451,7 +451,7 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
     );
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
-    let dx = y.vjp(&x, &cotangent);
+    let dx = y.vjp(&x, &cotangent).unwrap();
     let out = run(&dx);
 
     assert_c64_close(
@@ -488,7 +488,7 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
     );
 
     let y = ifft(&x, None, -1, FftNorm::Backward).unwrap();
-    let dx = y.vjp(&x, &cotangent);
+    let dx = y.vjp(&x, &cotangent).unwrap();
     let out = run(&dx);
 
     assert_c64_close(

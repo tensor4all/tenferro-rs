@@ -1,6 +1,7 @@
 //! Internal support surface used by `tenferro-ad`.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use computegraph::graph::Graph;
@@ -32,6 +33,22 @@ pub struct TracedTensorParts {
     pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub metadata_scopes: Vec<Arc<RuntimeMetadataScope>>,
+}
+
+impl fmt::Debug for TracedTensorParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TracedTensorParts")
+            .field("rank", &self.rank)
+            .field("dtype", &self.dtype)
+            .field("val", &self.val)
+            .field("has_data", &self.data.is_some())
+            .field("shape_hint", &self.shape_hint)
+            .field("inputs_len", &self.inputs_map.len())
+            .field("extra_roots_len", &self.extra_roots.len())
+            .field("has_checkpoint_chain", &self.checkpoint_chain.is_some())
+            .field("metadata_scopes_len", &self.metadata_scopes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Builds a traced tensor from validated AD transform output.
@@ -154,3 +171,6 @@ pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
     }
 }
+
+#[cfg(test)]
+mod tests;

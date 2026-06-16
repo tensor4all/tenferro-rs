@@ -739,9 +739,7 @@ fn linearize_dot_general(
     let StdTensorOp::DotGeneral { config } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(contraction::linearize_dot_general(
-        builder, primal_in, tangent_in, config, ctx,
-    ))
+    contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
 }
 
 fn transpose_dot_general(
@@ -755,14 +753,7 @@ fn transpose_dot_general(
     let StdTensorOp::DotGeneral { config } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(contraction::transpose_dot_general(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_reduce_sum(

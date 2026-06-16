@@ -5,11 +5,11 @@
 //! ```rust
 //! #[cfg(feature = "cuda")]
 //! {
-//!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+//!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 //!     use tenferro_tensor::{Tensor, TensorElementwise};
 //!
 //!     if gpu_available() {
-//!         let mut backend = CubeclBackend::new(0).unwrap();
+//!         let mut backend = CudaBackend::new(0).unwrap();
 //!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 //!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 //!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
@@ -28,14 +28,22 @@ use std::any::Any;
 mod cubecl;
 #[cfg(feature = "cuda")]
 mod kernels;
+#[cfg(feature = "webgpu")]
+mod webgpu;
 
 #[cfg(feature = "cuda")]
 pub use cubecl::{
     device_ptr, download_tensor, gpu_available, upload_tensor, CubeclBackend, CubeclRuntime,
 };
 #[cfg(feature = "cuda")]
+pub use cubecl::{CubeclBackend as CudaBackend, CubeclRuntime as CudaRuntime};
+#[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+#[cfg(feature = "webgpu")]
+pub use webgpu::{
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, WebGpuBackend, WebGpuRuntime,
+};
 
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
@@ -44,7 +52,7 @@ pub mod cuda_interop {
     pub use crate::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 use tenferro_tensor::*;
 
 #[cfg(feature = "cuda")]

@@ -28,6 +28,20 @@ macro_rules! gpu_test {
     };
 }
 
+#[test]
+fn cube_count_for_len_rejects_u32_overflow() {
+    let len = (u32::MAX as usize + 1) * super::super::dispatch::DEFAULT_CUBE_DIM_X as usize;
+    let err = super::super::dispatch::cube_count_for_len(len).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "cube_count_for_len",
+            ref message,
+        } if message.contains("exceeds u32::MAX")
+    ));
+}
+
 gpu_test!(test_runtime_init, {
     let rt = CubeclRuntime::new(0);
     assert!(rt.is_ok(), "CubeCL runtime should init on device 0");

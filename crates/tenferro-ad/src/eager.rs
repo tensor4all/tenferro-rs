@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
+use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,9 @@ use computegraph::graph::Graph;
 use computegraph::{ValueKey, ValueRef};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CubeclBackend;
+use tenferro_gpu::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::WebGpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
@@ -173,7 +176,7 @@ pub(crate) struct EagerGraphExecution {
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx.clone());
 /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), ctx);
-/// let z = &x + &y;
+/// let z = x.add(&y).unwrap();
 ///
 /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
@@ -182,6 +185,38 @@ pub struct EagerRuntime {
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
     extension_rules: Option<ExtensionRuleSet>,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
+}
+
+impl fmt::Debug for EagerRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("EagerRuntime");
+        match self.backend.try_lock() {
+            Ok(backend) => {
+                debug.field("backend", &*backend);
+            }
+            Err(_) => {
+                debug.field("backend", &"<locked>");
+            }
+        }
+        match self.extension_executor.try_lock() {
+            Ok(executor) => {
+                debug.field("extension_executor", &*executor);
+            }
+            Err(_) => {
+                debug.field("extension_executor", &"<locked>");
+            }
+        }
+        debug.field("has_extension_rules", &self.extension_rules.is_some());
+        match self.grad_slots.try_lock() {
+            Ok(slots) => {
+                debug.field("grad_slots_len", &slots.len());
+            }
+            Err(_) => {
+                debug.field("grad_slots_len", &"<locked>");
+            }
+        }
+        debug.finish_non_exhaustive()
+    }
 }
 
 impl EagerRuntime {
@@ -254,14 +289,14 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CubeclBackend;
+    /// use tenferro_gpu::CudaBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let _ctor: fn(CubeclBackend) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend(backend: CubeclBackend) -> Arc<Self> {
+    pub fn with_cuda_backend(backend: CudaBackend) -> Arc<Self> {
         Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
     }
 
@@ -271,15 +306,50 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::CubeclBackend;
+    /// use tenferro_gpu::CudaBackend;
     ///
-    /// let _ctor: fn(CubeclBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend_and_ad_context(backend: CubeclBackend, ad: &AdContext) -> Arc<Self> {
+    pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
         Arc::new(Self::from_backend_with_extension_rules(
             EagerBackend::cuda(backend),
+            Some(ad.extension_rule_set()),
+        ))
+    }
+
+    /// Create a shared eager execution context from a configured WebGPU backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _ctor: fn(WebGpuBackend) -> std::sync::Arc<EagerRuntime> =
+    ///     EagerRuntime::with_webgpu_backend;
+    /// ```
+    #[cfg(feature = "webgpu")]
+    pub fn with_webgpu_backend(backend: WebGpuBackend) -> Arc<Self> {
+        Arc::new(Self::from_backend(EagerBackend::webgpu(backend)))
+    }
+
+    /// Create a shared WebGPU eager context with explicit AD extension rules.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{AdContext, EagerRuntime};
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _ctor: fn(WebGpuBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    ///     EagerRuntime::with_webgpu_backend_and_ad_context;
+    /// ```
+    #[cfg(feature = "webgpu")]
+    pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
+        Arc::new(Self::from_backend_with_extension_rules(
+            EagerBackend::webgpu(backend),
             Some(ad.extension_rule_set()),
         ))
     }
@@ -424,7 +494,8 @@ impl EagerRuntime {
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
-    /// CPU runtimes return immediately. CUDA runtimes synchronize the current backend stream.
+    /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
+    /// their current backend work queue.
     ///
     /// # Examples
     ///
@@ -579,7 +650,7 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
-    /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
     /// ctx.clear_grads();
@@ -700,9 +771,9 @@ impl EagerRuntime {
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
-/// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+/// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
-/// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+/// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 ///
 /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
@@ -722,27 +793,16 @@ pub struct EagerTensor {
     pub(crate) ctx: Arc<EagerRuntime>,
 }
 
-impl std::ops::Add for &EagerTensor {
-    type Output = EagerTensor;
-
-    fn add(self, rhs: &EagerTensor) -> Self::Output {
-        EagerTensor::add(self, rhs).unwrap_or_else(|err| panic!("eager add failed: {}", err))
-    }
-}
-
-impl std::ops::Mul for &EagerTensor {
-    type Output = EagerTensor;
-
-    fn mul(self, rhs: &EagerTensor) -> Self::Output {
-        EagerTensor::mul(self, rhs).unwrap_or_else(|err| panic!("eager mul failed: {}", err))
-    }
-}
-
-impl std::ops::Neg for &EagerTensor {
-    type Output = EagerTensor;
-
-    fn neg(self) -> Self::Output {
-        EagerTensor::neg(self).unwrap_or_else(|err| panic!("eager neg failed: {}", err))
+impl fmt::Debug for EagerTensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EagerTensor")
+            .field("dtype", &self.dtype())
+            .field("shape", &self.shape())
+            .field("key", &self.key)
+            .field("requires_grad", &self.requires_grad)
+            .field("has_trace", &self.trace.is_some())
+            .field("ctx_id", &self.ctx_id())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1040,7 +1100,7 @@ impl EagerTensor {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
-    /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
     /// x.clear_grad();
@@ -1241,9 +1301,9 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
-    /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
+    /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
-    /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
+    /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);

@@ -12,17 +12,12 @@ compile/run workflow.
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
-tenferro-linalg = { path = "../crates/tenferro-linalg" }
-```
-
-Eager linalg helpers and linalg AD rules also require `tenferro-ad` and the
-`tenferro-linalg` `autodiff` feature. Add `tenferro-ad` and replace the basic
-`tenferro-linalg` line with:
-
-```toml
 tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-linalg = { path = "../crates/tenferro-linalg", features = ["autodiff"] }
 ```
+
+Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
+when they do not need eager linalg helpers or linalg AD rules.
 
 ## Layer Coverage
 
@@ -284,9 +279,10 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ## Complete-Pivot LU Solve
 
 `full_piv_lu` returns `(P, L, U, Q, parity)` with the reconstruction convention
-`A = P * L * U * Q`. The `parity` output is a rank-0 `F64` tensor containing
-`1.0` or `-1.0`. `full_piv_lu_solve(..., false)` solves `A * x = b`; passing
-`true` solves `A^T * x = b`.
+`A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
+is a scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs
+and `F64` for `F64`/`C64` inputs. `full_piv_lu_solve(..., false)` solves
+`A * x = b`; passing `true` solves `A^T * x = b`.
 
 ```rust
 use tenferro_linalg::LinalgBackend;
@@ -320,9 +316,10 @@ let l = &outputs[1];
 let u = &outputs[2];
 let q = &outputs[3];
 let parity = &outputs[4];
-let pl = tensor::matmul(p, l, &mut backend).unwrap();
-let plu = tensor::matmul(&pl, u, &mut backend).unwrap();
-let reconstructed = tensor::matmul(&plu, q, &mut backend).unwrap();
+let pt = tensor::transpose(p, &[1, 0], &mut backend).unwrap();
+let pt_l = tensor::matmul(&pt, l, &mut backend).unwrap();
+let pt_lu = tensor::matmul(&pt_l, u, &mut backend).unwrap();
+let reconstructed = tensor::matmul(&pt_lu, q, &mut backend).unwrap();
 let x = LinalgBackend::full_piv_lu_solve(&mut backend, &a, &b, false).unwrap();
 
 assert_eq!(p.shape(), &[4, 4]);

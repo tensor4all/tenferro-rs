@@ -226,18 +226,18 @@ let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
 
-let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
-let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
 x.clear_grad();
 assert!(x.grad().is_none());
 
-let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
@@ -265,7 +265,7 @@ let x = EagerTensor::requires_grad_in(
 let y = a.matmul(&x).unwrap();
 assert_eq!(y.data().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
-let loss = (&y * &y).reduce_sum(&[0, 1]).unwrap();
+let loss = y.mul(&y).unwrap().reduce_sum(&[0, 1]).unwrap();
 assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[1685.0]);
 
 loss.backward().unwrap();

@@ -24,7 +24,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::ExtensionAdRule;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
@@ -269,6 +269,50 @@ impl ExtensionOp for EinsumExtensionOp {
         crate::eager::eager_einsum_subscripts(&mut backend, inputs, &subscripts)
             .map(|output| vec![output])
     }
+
+    fn lower_to_standard_ops(
+        &self,
+        builder: &mut GraphBuilder<StdTensorOp>,
+        inputs: &[ValueRef<StdTensorOp>],
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> ExtensionLoweringResult {
+        if inputs.len() != self.input_count()
+            || input_dtypes.len() != self.input_count()
+            || input_shapes.len() != self.input_count()
+        {
+            return Err(ExtensionLoweringError::new(format!(
+                "einsum extension expects {} inputs, got values={}, dtypes={}, shapes={}",
+                self.input_count(),
+                inputs.len(),
+                input_dtypes.len(),
+                input_shapes.len()
+            )));
+        }
+
+        let Some(shapes) = concrete_sym_shape_slices(input_shapes) else {
+            return Ok(None);
+        };
+        let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+        let subs = Subscripts::from(&self.subscripts);
+        let tree = resolve_plan_spec(self.plan_spec(), &subs, &shape_refs)
+            .map_err(|err| ExtensionLoweringError::new(err.to_string()))?;
+        let output = build_einsum_graph(builder, &tree, inputs, &shapes)
+            .map_err(|err| ExtensionLoweringError::new(err.to_string()))?;
+        Ok(Some(vec![output]))
+    }
+}
+
+fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize>>> {
+    input_shapes
+        .iter()
+        .map(|shape| {
+            shape
+                .iter()
+                .map(SymDim::constant_value)
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect()
 }
 
 #[cfg(feature = "autodiff")]
@@ -1107,7 +1151,8 @@ fn build_runtime_exec_program<B: TensorBackend>(
         &input_dtypes,
         &input_shapes,
         compiler_options,
-    );
+    )
+    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
     Ok(CachedRuntimeExecProgram {
         program,
         input_indices,

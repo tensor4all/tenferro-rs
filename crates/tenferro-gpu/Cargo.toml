@@ -8,7 +8,7 @@ publish.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "CubeCL/CUDA backend and GPU transfer helpers for tenferro tensors."
+description = "CubeCL-backed CUDA and WebGPU provider backends for tenferro tensors."
 
 [lib]
 name = "tenferro_gpu"
@@ -21,7 +21,26 @@ blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
 cpu-reference = []
-cuda = ["dep:cubecl", "dep:cubecl-cuda", "dep:cubecl-runtime", "dep:cudarc"]
+cuda = [
+    "dep:cubecl",
+    "cubecl/std",
+    "cubecl/stdlib",
+    "cubecl/cuda",
+    "dep:cubecl-cuda",
+    "dep:cubecl-runtime",
+    "dep:cudarc",
+]
+webgpu = [
+    "dep:cubecl",
+    "cubecl/std",
+    "cubecl/stdlib",
+    "cubecl/wgpu",
+    "dep:cubecl-common",
+    "dep:cubecl-runtime",
+    "dep:cubecl-wgpu",
+    "dep:cubek-matmul",
+    "dep:cubek-std",
+]
 rocm = []
 
 [dependencies]
@@ -29,11 +48,16 @@ tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
+cubecl-common = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
+cubecl-wgpu = { workspace = true, optional = true }
+cubek-matmul = { workspace = true, optional = true }
+cubek-std = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 libloading.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
+smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

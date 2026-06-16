@@ -1,0 +1,31 @@
+[package]
+name = "tenferro-xla"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Experimental StableHLO lowering and runtime PJRT plugin loading for tenferro static graph programs."
+
+[lib]
+name = "tenferro_xla"
+
+[features]
+default = []
+pjrt = ["dep:libloading"]
+
+[dependencies]
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.1.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
+computegraph.workspace = true
+libloading = { workspace = true, optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.1.0", default-features = false, features = ["cpu-faer"] }
+tenferro-einsum = { path = "../tenferro-einsum", version = "0.1.0", default-features = false }

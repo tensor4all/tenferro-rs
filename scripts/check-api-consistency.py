@@ -53,6 +53,16 @@ USER_DOC_JARGON = (
     "StableHLO",
 )
 
+STABLEHLO_USER_DOCS = {
+    pathlib.Path("README.md"),
+    pathlib.Path("docs/index.md"),
+    pathlib.Path("docs/api/index.md"),
+    pathlib.Path("docs/guides/devices-and-gpu.md"),
+    pathlib.Path("docs/guides/xla.md"),
+    pathlib.Path("docs/tutorials/index.md"),
+    pathlib.Path("docs/tutorials/xla-einsum-backend.md"),
+}
+
 MATRIX_EXCLUDED_CRATES = {
     "tenferro-core-ops",
     "tenferro-internal-extension-macros",
@@ -270,6 +280,12 @@ def check_user_docs(root: pathlib.Path) -> list[Finding]:
                 )
             for token in USER_DOC_JARGON:
                 if token in line:
+                    if token == "StableHLO" and doc.relative_to(root) in STABLEHLO_USER_DOCS:
+                        # StableHLO is the public interchange format of the
+                        # experimental XLA boundary. Keep this exception
+                        # path-scoped so implementation-only IR names such as
+                        # ExecOp and ValueRef remain banned in user docs.
+                        continue
                     findings.append(
                         Finding(
                             "internal_jargon_in_user_docs",

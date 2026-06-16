@@ -112,8 +112,8 @@ fn test_gpu_matmul_vjp() {
     let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone());
     let mut cpu_engine = GraphExecutor::new(CpuBackend::new());
     let y_cpu = matmul(&a_cpu, &b_cpu);
-    let mut grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu);
-    let mut grad_b_cpu = y_cpu.vjp(&b_cpu, &cotangent_cpu);
+    let mut grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
+    let mut grad_b_cpu = y_cpu.vjp(&b_cpu, &cotangent_cpu).unwrap();
     let cpu_grad_a = eval_cpu_tensor(&mut cpu_engine, &mut grad_a_cpu);
     let cpu_grad_b = eval_cpu_tensor(&mut cpu_engine, &mut grad_b_cpu);
 
@@ -123,8 +123,8 @@ fn test_gpu_matmul_vjp() {
     let cotangent_gpu = upload_traced(&gpu_backend, &cotangent_host);
     let mut gpu_engine = GraphExecutor::new(gpu_backend);
     let y_gpu = matmul(&a_gpu, &b_gpu);
-    let mut grad_a_gpu = y_gpu.vjp(&a_gpu, &cotangent_gpu);
-    let mut grad_b_gpu = y_gpu.vjp(&b_gpu, &cotangent_gpu);
+    let mut grad_a_gpu = y_gpu.vjp(&a_gpu, &cotangent_gpu).unwrap();
+    let mut grad_b_gpu = y_gpu.vjp(&b_gpu, &cotangent_gpu).unwrap();
     let gpu_grad_a = eval_gpu_tensor(&mut gpu_engine, &mut grad_a_gpu);
     let gpu_grad_b = eval_gpu_tensor(&mut gpu_engine, &mut grad_b_gpu);
 

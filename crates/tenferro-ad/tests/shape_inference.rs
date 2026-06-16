@@ -1,11 +1,25 @@
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
-use tenferro_runtime::extension::{infer_output_extents, infer_output_shapes};
+use tenferro_runtime::extension::{
+    infer_output_extents as try_infer_output_extents,
+    infer_output_shapes as try_infer_output_shapes,
+};
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn cst(n: usize) -> DimExpr {
     DimExpr::Const(n)
+}
+
+fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec<Vec<DimExpr>> {
+    try_infer_output_shapes(op, input_shapes).unwrap()
+}
+
+fn infer_output_extents(
+    op: &StdTensorOp,
+    input_shapes: &[&[DimExpr]],
+) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    try_infer_output_extents(op, input_shapes).unwrap()
 }
 
 #[test]

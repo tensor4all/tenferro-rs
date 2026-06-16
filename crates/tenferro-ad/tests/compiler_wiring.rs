@@ -66,7 +66,8 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         &program,
         &[DType::F64, DType::F64, DType::F64],
         &[dim_shape(&[2, 2]), dim_shape(&[2, 2]), dim_shape(&[2, 2])],
-    );
+    )
+    .unwrap();
 
     assert!(matches!(
         exec.instructions[0].op,
@@ -147,7 +148,8 @@ fn compile_std_to_exec_wires_indexing_ops() {
         &program,
         &[DType::F64, DType::F64, DType::F64],
         &[dim_shape(&[4, 3]), dim_shape(&[2, 1]), dim_shape(&[3])],
-    );
+    )
+    .unwrap();
 
     assert!(matches!(
         exec.instructions[0].op,
@@ -200,7 +202,8 @@ fn compile_std_to_exec_does_not_treat_dynamic_truncate_bound_as_exact() {
         &program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[5]), Vec::new()],
-    );
+    )
+    .unwrap();
 
     assert_eq!(exec.instructions.len(), 1);
     assert_eq!(exec.output_slots, vec![2]);
@@ -230,7 +233,7 @@ fn compile_std_to_exec_marks_unresolvable_extent_unknown() {
         n_slots: 2,
     };
 
-    let exec = compile_std_to_exec(&program, &[DType::F64], &[Vec::new()]);
+    let exec = compile_std_to_exec(&program, &[DType::F64], &[Vec::new()]).unwrap();
 
     assert_eq!(
         exec.instructions[0].output_extents[0][0],
@@ -263,7 +266,7 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
         n_slots: 4,
     };
 
-    let exec = compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]);
+    let exec = compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]).unwrap();
 
     assert!(matches!(
         exec.instructions[0].op,

@@ -83,7 +83,7 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
         .unwrap()
         .reduce_sum(&[0])
         .unwrap();
-    let loss = &max_loss + &min_loss;
+    let loss = max_loss.add(&min_loss).unwrap();
     let _ = loss.backward().unwrap();
 
     let grad_x = x.grad().unwrap();

@@ -6,6 +6,7 @@ members = [
     "crates/tenferro-cpu",
     "crates/tenferro-gpu",
     "crates/tenferro-runtime",
+    "crates/tenferro-xla",
     "crates/tenferro-ad",
     "crates/tenferro-internal-extension-macros",
     "crates/tenferro-core-ops",
@@ -24,7 +25,11 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>", "GiggleLiu <cacate0129@gmail.com>"]
+authors = [
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "GiggleLiu <cacate0129@gmail.com>",
+    "Satoshi Terasaki <https://github.com/terasakisatoshi>",
+]
 publish = true
 readme = "README.md"
 repository = "https://github.com/tensor4all/tenferro-rs"
@@ -60,9 +65,17 @@ lapack-inject = "0.1.2"
 # Match CubeCL's CUDA API floor. CUDA 12.8 is the oldest cudarc binding set
 # that exposes the driver symbols used by the current cubecl-cuda revision.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", features = ["cuda"] }
+cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", default-features = false }
 cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubek-matmul = { git = "https://github.com/tensor4all/cubek.git", rev = "7a42081f3f18578014a8b2656ea6a6c79c7fa9be", default-features = false }
+cubek-std = { git = "https://github.com/tensor4all/cubek.git", rev = "7a42081f3f18578014a8b2656ea6a6c79c7fa9be", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }
+
+[patch.crates-io]
+cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }

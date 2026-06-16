@@ -40,6 +40,7 @@ use crate::{
 ///
 /// assert_eq!(out.try_concrete_shape(), Some(vec![2, 2]));
 /// ```
+#[derive(Debug)]
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),

@@ -12,6 +12,8 @@ use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 
 #[cfg(feature = "autodiff")]
+mod contraction_tests;
+#[cfg(feature = "autodiff")]
 mod elementwise_tests;
 #[cfg(feature = "autodiff")]
 mod indexing_tests;

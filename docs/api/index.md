@@ -18,6 +18,8 @@ For contributors, internal crate APIs are also available in the
   and extension cache storage
 - [tenferro-ad](./tenferro_ad/index.html): eager runtime, eager tensors, and
   traced AD extension traits
+- [tenferro-xla](./tenferro_xla/index.html): experimental StableHLO lowering
+  and runtime-loaded PJRT plugin support for static-shaped traced programs
 - [tenferro-tensor](./tenferro_tensor/index.html): dense runtime tensors,
   typed views, backend traits, and backend-independent contracts
 - [tenferro-cpu](./tenferro_cpu/index.html): CPU backend, CPU execution

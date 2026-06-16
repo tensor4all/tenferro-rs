@@ -1,6 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
+use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -223,6 +224,17 @@ pub struct CpuBackend {
     pub(crate) ctx: Arc<CpuContext>,
     pub(crate) buffers: BufferPool,
     kind: CpuBackendKind,
+}
+
+impl fmt::Debug for CpuBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CpuBackend")
+            .field("kind", &self.kind)
+            .field("num_threads", &self.num_threads())
+            .field("buffer_pool_cache_stats", &self.buffer_pool_cache_stats())
+            .field("buffer_pool_limit_bytes", &self.buffer_pool_limit_bytes())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CpuBackend {

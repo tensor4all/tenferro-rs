@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -50,6 +51,19 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
+}
+
+impl fmt::Debug for TracedTensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TracedTensor")
+            .field("id", &self.id)
+            .field("rank", &self.rank)
+            .field("dtype", &self.dtype)
+            .field("val", &self.val)
+            .field("shape_hint", &self.shape_hint)
+            .field("has_data", &self.data.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
@@ -917,9 +931,44 @@ impl TracedTensor {
     /// let y = a.dot_general(&b, config);
     /// ```
     pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
+        self.try_dot_general(other, config)
+            .expect("DotGeneral config dimension validation failed")
+    }
+
+    /// Fallible generalized tensor contraction.
+    ///
+    /// This returns a typed runtime error when the dimension-numbering
+    /// configuration is invalid for the two operand ranks. [`Self::dot_general`]
+    /// is retained as a compatibility wrapper that panics on the same
+    /// validation failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::{DotGeneralConfig, TracedTensor};
+    /// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    /// # let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    /// let config = DotGeneralConfig {
+    ///     lhs_contracting_dims: vec![1],
+    ///     rhs_contracting_dims: vec![0],
+    ///     lhs_batch_dims: vec![],
+    ///     rhs_batch_dims: vec![],
+    /// };
+    /// let y = a.try_dot_general(&b, config)?;
+    /// assert_eq!(y.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    pub fn try_dot_general(
+        &self,
+        other: &TracedTensor,
+        config: DotGeneralConfig,
+    ) -> Result<TracedTensor> {
         config
             .validate_dims_with_ranks(self.rank, other.rank)
-            .expect("DotGeneral config dimension validation failed");
+            .map_err(|message| Error::InvalidGraphBuild {
+                op: "dot_general",
+                message,
+            })?;
         let lhs_free: Vec<usize> = (0..self.rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
@@ -948,13 +997,13 @@ impl TracedTensor {
             _ => None,
         };
 
-        apply_binary(
+        Ok(apply_binary(
             StdTensorOp::DotGeneral { config },
             self,
             other,
             out_rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Sum over the given axes.
@@ -1951,3 +2000,6 @@ impl TracedTensor {
         roots
     }
 }
+
+#[cfg(test)]
+mod tests;

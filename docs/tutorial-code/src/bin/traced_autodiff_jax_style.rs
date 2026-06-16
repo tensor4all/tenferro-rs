@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
     let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0]);
-    let directional = y.jvp(&x, &tangent);
+    let directional = y.jvp(&x, &tangent)?;
     let directional_value = run(&directional)?;
     assert_eq!(directional_value.shape(), &[]);
     assert_close(directional_value.as_slice::<f64>().unwrap(), &[-7.8]);

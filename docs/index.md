@@ -2,12 +2,12 @@
 
 tenferro is a dense tensor computation stack for Rust users who want typed
 tensor computation, PyTorch-like immediate execution with `backward()`,
-JAX-like traced graphs, einsum, linear algebra, and explicit CPU/CUDA backend
-control.
+JAX-like traced graphs, einsum, linear algebra, and explicit CPU, CUDA, and
+experimental WebGPU backend control.
 
 The project covers both ordinary tensor computation and autodiff workflows.
 Start with the smallest API that solves your problem, then add autodiff, graph
-compilation, or CUDA only when the workflow needs them.
+compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 
 ![tenferro-rs architecture overview](assets/tenferro-architecture.svg)
 
@@ -21,7 +21,8 @@ compilation, or CUDA only when the workflow needs them.
 | Choosing between `TypedTensor`, `Tensor`, `EagerTensor`, and `TracedTensor` | [Choosing a Tensor API](guides/choosing-an-api.md) |
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
-| CPU and CUDA backend behavior | [Devices and GPU](guides/devices-and-gpu.md) |
+| CPU, CUDA, and experimental WebGPU backend behavior | [Devices and GPU](guides/devices-and-gpu.md) |
+| Static-shaped StableHLO and PJRT plugin loading | [XLA and PJRT](guides/xla.md) |
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |
 
@@ -50,14 +51,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Mental Model
 
-tenferro has three independent choices. CUDA, eager execution, and traced
-graphs are not competing APIs; they answer different questions.
+tenferro has three independent choices. GPU providers, eager execution, and
+traced graphs are not competing APIs; they answer different questions.
 
 | Choice | Question | Options |
 | --- | --- | --- |
 | Tensor API | What kind of value do I pass around? | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution timing | When does computation run? | Direct backend call, immediate eager execution, traced compile/run |
-| Backend/device | Where does computation run? | CPU backend or CUDA backend, with explicit transfer |
+| Backend/device | Where does computation run? | CPU, CUDA, or experimental WebGPU backend, with explicit transfer |
 
 Most code without autodiff starts with `TypedTensor<T>` when the scalar type is
 known at compile time, or `Tensor` when dtype must be selected at runtime.

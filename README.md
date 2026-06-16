@@ -3,6 +3,8 @@
 tenferro-rs is a modular Rust tensor stack for scientific computing and
 general-purpose tensor workflows.
 
+![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
+
 ## Why tenferro-rs Exists
 
 `tenferro` means tensor computation with an iron/Rust flavor: `tensor` +
@@ -11,7 +13,7 @@ general-purpose tensor workflows.
 The project aims to provide a Rust-native tensor stack for typed tensor
 computation, immediate execution with optional `backward()`, traced graph
 execution, automatic differentiation, linear algebra, einsum, FFT, and explicit
-CPU/CUDA backend control.
+CPU, CUDA, and experimental WebGPU backend control.
 
 tenferro-rs is influenced by JAX and PyTorch in its split between immediate
 execution, traced graphs, and AD. It is also influenced by the Julia numerical
@@ -36,7 +38,8 @@ shared infrastructure, not just as an internal stack.
 - Keep tensor types and operation crates modular, rather than building one
   all-in-one tensor type.
 - Let users choose the lowest API that solves their problem. Autodiff, traced
-  graphs, CUDA, linalg, einsum, and FFT are opt-in capabilities.
+  graphs, CUDA, experimental WebGPU, linalg, einsum, and FFT are opt-in
+  capabilities.
 - Stay aligned with established numerical computing conventions where they
   fit: Rust's crate ecosystem, column-major conventions from Fortran, Julia,
   MATLAB, and LAPACK-oriented workflows, and Rust numerics crates such as
@@ -66,12 +69,10 @@ It also fits small-to-medium batched linear algebra with autodiff,
 `grad`/`vjp`/`jvp`/HVP workflows in Rust, Rust-native tensor applications, and
 extension points for custom algebra or operation families.
 
-The planned optional XLA backend in
-[#984](https://github.com/tensor4all/tenferro-rs/issues/984) is intended for
-static-shape traced graphs. Dynamic-shape graphs remain the native runtime's
-core use case.
-
-![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
+The experimental `tenferro-xla` crate lowers static-shaped traced graph
+programs to StableHLO and can load PJRT plugins at runtime through environment
+variables. Dynamic-shape graphs remain the native runtime's core use case. See
+the [XLA and PJRT guide](https://tensor4all.org/tenferro-rs/guides/xla.html).
 
 ## Why Build On tenferro-rs
 
@@ -112,7 +113,8 @@ tenferro-rs is for the projects that want this kind of stack natively in Rust.
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
 | Immediate execution in one runtime, optionally with `backward()` on scalar losses | `EagerTensor` and `EagerRuntime` |
 | `grad`, `vjp`, and `jvp` on traced graphs, graph reuse, or repeated compile/run execution | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
-| CUDA execution | The same tensor API plus explicit CUDA upload/download and supported CUDA backend features |
+| CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
+| Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
 ## Crates
 
@@ -124,9 +126,10 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA backend support, ROCm feature stub, and explicit device transfers |
+| `tenferro-gpu` | CUDA backend support, experimental WebGPU support, future ROCm substrate, and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
+| `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced graphs |
 
 ### Standard Operation Extensions
 
@@ -177,6 +180,12 @@ Getting Started if you are using tenferro-rs for the first time.
 - [Design: dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)
   explains how tenferro represents runtime-dependent dimensions in traced
   programs.
+- [XLA and PJRT](https://tensor4all.org/tenferro-rs/guides/xla.html)
+  documents the experimental StableHLO lowering path and the CUDA, cuTENSOR,
+  and PJRT environment variables used for local verification.
+- [XLA backend: einsum to StableHLO](https://tensor4all.org/tenferro-rs/tutorials/xla-einsum-backend.html)
+  shows a runnable fixed-shape N-ary einsum lowering path through
+  `tenferro-xla`.
 - [Oracle-based AD validation](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)
   documents how AD rules are validated against finite-difference and Torch
   reference oracles, and which operation/output gradients are covered. The
@@ -257,11 +266,12 @@ stack is dogfooded in
 [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and related tensor4all
 projects.
 
-## Development And Trust Model
+## AI-Assisted Development
 
-AI agents are accepted development and review tools in this repository. Their
-output is not trusted by itself. Changes are trusted only after explicit
-repository rules, CI, oracle-based validation, reproducible benchmarks,
+tenferro-rs assumes AI-assisted and agentic coding for development, migration,
+and review. AI output is not accepted as authority by itself: changes are
+validated against repository rules, source-of-truth code and doc comments, CI,
+oracle-based numerical checks, reproducible benchmarks when relevant,
 provenance checks, and maintainer review.
 
 Correctness and consistency are also kept by a retained knowledge base that the
@@ -283,15 +293,18 @@ the code is treated as a correctness concern, not an afterthought.
 
 ## Contributing
 
-Bug-fix pull requests, feature requests, design discussions, documentation
-improvements, and benchmark reports are welcome. New feature ideas are welcome
-too; implementation PRs for new features must start from accepted feature
-request issues so API, backend, AD, dependency, and testing implications can be
-reviewed first.
+Bug reports, minimal reproducers, proposed regression tests, feature requests,
+design discussions, documentation improvements, benchmark reports, and
+prototype branches are welcome in issues. Pull request creation is currently
+restricted to collaborators.
+
+Collaborator implementation PRs for new features must start from accepted
+feature request issues so API, backend, AD, dependency, and testing
+implications can be reviewed first.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy and
-the supported AI-assisted issue-intake and bug-fix PR workflows across Codex
-CLI, Claude Code, and OpenCode.
+the supported AI-assisted issue-intake and collaborator bug-fix PR workflows
+across Codex CLI, Claude Code, and OpenCode.
 
 See [GOVERNANCE.md](GOVERNANCE.md) for maintainer roles, merge authority, and
 the project-direction decision model. Maintainers are listed in
