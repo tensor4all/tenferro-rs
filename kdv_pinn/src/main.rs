@@ -223,8 +223,8 @@ fn main() {
     println!("L2 relative error at t=0.5: {:.6e}", l2_error);
 
     if let Some(gif_path) = gif_path_from_args() {
-        const N_FRAMES: usize = 50;
-        let mut frames = Vec::with_capacity(N_FRAMES);
+        const N_FRAMES: usize = 30;
+        let mut frames: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(N_FRAMES);
         for frame in 0..N_FRAMES {
             let t = frame as f64 / (N_FRAMES as f64 - 1.0);
             let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![t; N_EVAL]);
@@ -240,20 +240,23 @@ fn main() {
             let u_pred = executor
                 .run_with_inputs(&eval_program, &frame_bindings)
                 .expect("evaluate eval program for animation frame failed");
-            let pred = u_pred.as_slice::<f64>().expect("predicted frame data");
+            let pred = u_pred
+                .as_slice::<f64>()
+                .expect("predicted frame data")
+                .to_vec();
 
-            let truth: Vec<f64> = x_eval_data
+            let analytic: Vec<f64> = x_eval_data
                 .iter()
                 .map(|&x| 2.0 * (1.0 / ((x - 4.0 * t).cosh())).powi(2))
                 .collect();
 
-            let img = plot::draw_comparison_frame(&x_eval_data, &truth, pred);
-            frames.push(img);
+            frames.push((t, analytic, pred));
             if frame % 10 == 0 {
                 println!("rendered frame {} / {}", frame, N_FRAMES - 1);
             }
         }
-        plot::encode_gif(&gif_path, &frames, 10).expect("encode gif failed");
+        plot::write_comparison_gif(&gif_path, &x_eval_data, &frames)
+            .expect("write comparison gif failed");
         println!("saved animation to {}", gif_path);
     }
 }

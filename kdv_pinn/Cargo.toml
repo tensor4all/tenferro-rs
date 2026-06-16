@@ -10,5 +10,5 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
 tenferro-tensor = { path = "../crates/tenferro-tensor" }
-image = "0.25"
+plotters = "0.3"
 rand.workspace = true
