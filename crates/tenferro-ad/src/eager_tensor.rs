@@ -3,7 +3,11 @@
 //! Core eager tensor types are re-exported here. Extension crates provide
 //! operation-specific helpers outside this runtime crate.
 
+use std::sync::Arc;
+
+use computegraph::graph::Graph;
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
+use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::TensorFusion;
 
@@ -223,6 +227,19 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<Eag
         ));
     }
     EagerTensor::nary_op(inputs, op)
+}
+
+/// Apply a standard `StdTensorOp` graph eagerly and record it as one AD node.
+///
+/// This is a low-level extension hook for composite eager operations. The
+/// callback receives graph-local input keys, must build a graph whose inputs
+/// use those keys in order, and must set the graph outputs.
+#[doc(hidden)]
+pub fn apply_standard_graph(
+    inputs: &[&EagerTensor],
+    build_graph: impl FnOnce(&[TensorInputKey]) -> Result<Arc<Graph<StdTensorOp>>>,
+) -> Result<Vec<EagerTensor>> {
+    EagerTensor::standard_graph_op(inputs, build_graph)
 }
 
 /// Try a backend fused broadcast-multiply for untracked eager tensors.

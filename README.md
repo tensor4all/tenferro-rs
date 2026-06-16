@@ -25,6 +25,14 @@ conventions rather than replacing them with project-specific rules. It uses
 Rust's type system, ownership model, and crate boundaries where those choices
 help.
 
+We also see Rust's package system — fine-grained crates, feature flags, and
+semver-aware dependency composition — as a strong place for **cross-ecosystem
+collaboration**. tenferro-rs prefers to build on and contribute back to existing
+crates (GPU kernels, linear algebra, autodiff, contraction ordering) rather than
+reinvent them, and to bridge cleanly to the Fortran/LAPACK, Julia, and JAX/PyTorch
+worlds. The modular crate layout is meant to make tenferro components reusable as
+shared infrastructure, not just as an internal stack.
+
 ## Design Principles
 
 - Keep tensor types and operation crates modular, rather than building one
@@ -42,8 +50,12 @@ help.
   runtime.
 - Treat extension operations and AD rules as part of the design, so external
   crates can add operations without growing the core tensor crates.
-- Validate numerical behavior with tests, oracle data, invariants, residual
-  checks, provenance checks, and reproducible benchmarks.
+- Manage engineering quality through three pillars — reference **oracles**
+  (finite-difference and Torch reference data), a comprehensive **unit-test**
+  suite with enforced per-file coverage thresholds, and a reproducible
+  **benchmark suite** — backed by invariants, residual checks, and provenance
+  checks. This engineering discipline is what lets the project iterate quickly
+  (see [Stability Policy](#stability-policy)) without sacrificing correctness.
 
 ## When tenferro Is a Good Fit
 
@@ -202,15 +214,57 @@ The broader tensor4all community uses the
 announcements and [Matrix](https://tensor4all.org/matrix.html) for real-time
 chat. The community entry point is <https://tensor4all.org/>.
 
-## Project Status
+## Acknowledgments
 
-tenferro-rs is pre-1.0. Public APIs, crate boundaries, backend contracts,
-feature flags, and internal architecture are still evolving. The stack is
-dogfooded in [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and
-related tensor4all projects.
+tenferro-rs stands on excellent work across several ecosystems, and aims to
+integrate with and contribute back to them rather than wall itself off — even as
+it iterates quickly.
 
-If you build against `main`, pin commits and expect breaking changes. For
-non-trivial upgrades, AI-assisted migration is recommended.
+- **GPU.** The GPU backend is built on
+  [CubeCL](https://github.com/tracel-ai/cubecl) by the
+  [tracel-ai](https://github.com/tracel-ai) team (also the foundation of the
+  [Burn](https://github.com/tracel-ai/burn) deep learning framework); we use it
+  for portable GPU kernels and aim to contribute improvements upstream rather
+  than fork the ecosystem.
+- **CPU / numerics.** Dense CPU linear algebra builds on
+  [`faer`](https://github.com/sarah-quinones/faer-rs), with numeric foundations
+  from [`num-traits`](https://github.com/rust-num/num-traits) and
+  [`num-complex`](https://github.com/rust-num/num-complex).
+- **Contraction ordering.** Einsum contraction-order optimization uses
+  [`omeco`](https://crates.io/crates/omeco), carrying over ideas from the Julia
+  tensor-network ecosystem (OMEinsum/contraction-order tooling).
+- **Design heritage.** The modular structure — operation semantics and AD rules
+  living *outside* an all-in-one tensor type — is influenced by the **Julia
+  numerical-computing community** (e.g. the ChainRules and OMEinsum/tensor-network
+  ecosystems), and by JAX/PyTorch for the eager/traced/AD split.
+- **Generic autodiff.** Autodiff is built on `tidu`, a tensor4all crate providing
+  `Primitive`-generic graph transforms (`linearize` / `linear_transpose`) that are
+  **not tied to tensors** and can drive autodiff for other domains; alongside the
+  `strided` and `computegraph` foundation crates.
+
+Thanks to these projects, communities, and their maintainers.
+
+## Stability Policy
+
+tenferro-rs is a **pre-1.0 experimental research platform**. Before v1.0, public
+APIs may change substantially, including across 0.1.x releases: at this stage we
+prioritize rapid iteration, backend exploration, and AI-assisted development over
+API stability.
+
+This does **not** mean correctness or engineering discipline is relaxed. We keep
+tests, runnable examples, documentation, and migration notes for major changes up
+to date, and changes are accepted only after the checks described in
+[Development And Trust Model](#development-and-trust-model) — repository rules, CI,
+oracle-based validation, reproducible benchmarks, provenance checks, and maintainer
+review. The detailed, current API documentation is the primary reference for
+following the library as it evolves; we write migration notes for major breaking
+changes rather than maintaining exhaustive compatibility tables.
+
+For downstream projects, **pin exact versions or commits**, and when upgrading use
+AI-assisted refactoring against the current docs to follow breaking changes. The
+stack is dogfooded in
+[tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) and related tensor4all
+projects.
 
 ## AI-Assisted Development
 
@@ -219,6 +273,23 @@ and review. AI output is not accepted as authority by itself: changes are
 validated against repository rules, source-of-truth code and doc comments, CI,
 oracle-based numerical checks, reproducible benchmarks when relevant,
 provenance checks, and maintainer review.
+
+Correctness and consistency are also kept by a retained knowledge base that the
+project builds on rather than rediscovers each time: durable **repository and
+engineering rules** ([`REPOSITORY_RULES.md`](REPOSITORY_RULES.md) and the shared
+[`tensor4all-agent-rules`](https://github.com/tensor4all/tensor4all-agent-rules)),
+**design documents** ([`docs/design/`](docs/design/), [`docs/spec/`](docs/spec/)),
+and the **history of past development decisions** (work logs in
+[`docs/worklogs/`](docs/worklogs/) and review-decision records). This institutional
+memory is what keeps a fast, AI-assisted workflow coherent: rules and recorded
+decisions constrain new changes — including AI-generated ones — toward the
+established design.
+
+Documentation–implementation consistency is itself audited regularly by agents,
+on top of the automated doc-snippet and docs-site checks in CI (every doc example
+must compile and run). Because the current API documentation is the primary
+reference for following the library as it evolves, keeping the docs aligned with
+the code is treated as a correctness concern, not an afterthought.
 
 ## Contributing
 

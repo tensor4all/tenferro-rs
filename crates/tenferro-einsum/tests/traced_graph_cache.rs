@@ -166,24 +166,25 @@ fn extension_compile_cache_limits_bound_static_einsum_entries() {
 }
 
 #[test]
-fn eager_einsum_expansion_does_not_populate_extension_runtime_caches() {
+fn eager_einsum_expansion_reuses_runtime_owned_expanded_program_cache() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 
     let out = run_eager_extension_matmul(&ctx, 2, 4, 3);
     assert_eq!(out.shape(), &[2, 4]);
-    assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    let entries_after_first = ctx.cache_stats().extensions.entries;
+    assert_eq!(entries_after_first, 1);
 
     let _ = run_eager_extension_matmul(&ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    assert_eq!(ctx.cache_stats().extensions.entries, entries_after_first);
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let _ = run_eager_extension_matmul(&other_ctx, 2, 4, 3);
-    assert_eq!(ctx.cache_stats().extensions.entries, 0);
-    assert_eq!(other_ctx.cache_stats().extensions.entries, 0);
+    assert_eq!(ctx.cache_stats().extensions.entries, entries_after_first);
+    assert_eq!(other_ctx.cache_stats().extensions.entries, 1);
 }
 
 #[test]
-fn eager_einsum_expansion_respects_cache_limits_without_extension_entries() {
+fn eager_einsum_expansion_respects_runtime_cache_limits() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     ctx.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(3).unwrap()));
 
@@ -192,8 +193,8 @@ fn eager_einsum_expansion_respects_cache_limits_without_extension_entries() {
     }
 
     let stats = ctx.cache_stats();
-    assert_eq!(stats.extensions.entries, 0);
-    assert_eq!(stats.extensions.retained_bytes, 0);
+    assert_eq!(stats.extensions.entries, 3);
+    assert!(stats.extensions.retained_bytes > 0);
     assert_eq!(
         ctx.extension_cache_limits().max_entries(),
         NonZeroUsize::new(3).unwrap()

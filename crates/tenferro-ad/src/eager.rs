@@ -6,9 +6,10 @@ use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use crate::extension_cache::ExtensionCacheLimits;
+use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheStore};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
-use computegraph::ValueKey;
+use computegraph::graph::Graph;
+use computegraph::{ValueKey, ValueRef};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
@@ -19,20 +20,21 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{
-    CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
-    TypedTensor,
+    BackendSessionHost, CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead,
+    TensorValue, TypedTensor,
 };
-use tidu::eager::{self, EagerInput, EagerOutput, KeySource, Recorder, Trace};
+use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recorder, Trace};
 
 use self::backward::TenferroBackwardCallbacks;
 use crate::eager_backend::EagerBackend;
 use crate::eager_exec::{
     exec_op_on_tensor_reads_with_extension_executor, exec_op_on_tensors_with_extension_executor,
+    exec_standard_op_on_tensor_reads_in_session,
 };
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
-    metadata_scopes_for_scope, register_scoped_metadata_batch, register_scoped_value_metadata,
-    tensor_meta_from_tensor, MetadataScope,
+    metadata_scopes_for_scope, push_metadata_scope, register_scoped_metadata_batch,
+    register_scoped_value_metadata, tensor_meta_from_tensor, MetadataScope,
 };
 use crate::traced::next_input_key;
 
@@ -153,6 +155,11 @@ pub(crate) fn print_and_reset_eager_op_profile() {
 pub struct EagerRuntimeCacheStats {
     /// Generic extension runtime caches.
     pub extensions: CacheStats,
+}
+
+pub(crate) struct EagerGraphExecution {
+    pub(crate) outputs: Vec<Arc<Tensor>>,
+    pub(crate) retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
 }
 
 /// Shared eager execution context for tensors on a backend.
@@ -435,6 +442,56 @@ impl EagerRuntime {
             .set_cache_limits(limits);
     }
 
+    /// Mutably borrow generic extension runtime cache storage.
+    ///
+    /// This hook is for standard extension crates that need cache entries
+    /// owned by an eager runtime while preserving eager value semantics outside
+    /// a registered extension execution boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::ExtensionCacheKey;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let key = ExtensionCacheKey::new("example.cache.v1", "plans", 1);
+    ///
+    /// ctx.with_extension_caches_mut(|caches| {
+    ///     caches.put(key, 7_usize, std::mem::size_of::<usize>());
+    /// });
+    ///
+    /// assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    /// ```
+    pub fn with_extension_caches_mut<R>(&self, f: impl FnOnce(&mut ExtensionCacheStore) -> R) -> R {
+        let mut executor = self.extension_executor.lock().unwrap();
+        f(executor.caches_mut())
+    }
+
+    /// Mutably borrow this runtime's backend.
+    ///
+    /// This hook lets standard extension crates run a whole contraction program
+    /// in a single backend session (instead of one eager op per step) while
+    /// preserving eager value semantics for untracked tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// // The closure receives `&mut EagerBackend`; standard extension crates
+    /// // use it to open one backend session for a whole contraction program.
+    /// let answer = ctx.with_backend_mut(|_backend| 42);
+    /// assert_eq!(answer, 42);
+    /// ```
+    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> R {
+        let mut backend = self.backend.lock().unwrap();
+        f(&mut backend)
+    }
+
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
     /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
@@ -493,6 +550,82 @@ impl EagerRuntime {
                 &mut *backend,
                 Some(&mut *extension_executor),
             )
+        })
+    }
+
+    pub(crate) fn exec_standard_graph_outputs(
+        &self,
+        graph: &Graph<StdTensorOp>,
+        initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    ) -> Result<EagerGraphExecution> {
+        let mut backend =
+            profile_eager_op_section("exec_graph.lock_backend", || self.backend.lock().unwrap());
+        let mut all_values = initial_data.clone();
+
+        profile_eager_op_section("exec_graph.with_backend_session", || {
+            backend.with_backend_session(|exec| -> Result<()> {
+                for op_node in graph.operations() {
+                    let outputs = {
+                        let input_values = op_node
+                            .inputs
+                            .iter()
+                            .map(|input| {
+                                let key = match input {
+                                    ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                                    ValueRef::External(key) => key,
+                                };
+                                all_values.get(key).cloned().ok_or_else(|| {
+                                    Error::Internal(format!(
+                                        "standard graph eager execution missing value for {key:?}"
+                                    ))
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        let input_reads = input_values
+                            .iter()
+                            .map(|value| TensorRead::from_tensor(value.as_ref()))
+                            .collect::<Vec<_>>();
+                        exec_standard_op_on_tensor_reads_in_session(
+                            &op_node.operation,
+                            &input_reads,
+                            exec,
+                        )?
+                    };
+
+                    if outputs.len() != op_node.outputs.len() {
+                        return Err(Error::Internal(format!(
+                            "standard graph eager execution expected {} outputs for {:?}, got {}",
+                            op_node.outputs.len(),
+                            op_node.operation,
+                            outputs.len()
+                        )));
+                    }
+
+                    for (output_id, output) in op_node.outputs.iter().zip(outputs) {
+                        let key = graph.values()[*output_id].key.clone();
+                        all_values.insert(key, Arc::new(output));
+                    }
+                }
+                Ok(())
+            })
+        })?;
+
+        let outputs = graph
+            .outputs()
+            .iter()
+            .map(|&output_id| {
+                let key = &graph.values()[output_id].key;
+                all_values.get(key).cloned().ok_or_else(|| {
+                    Error::Internal(format!(
+                        "standard graph eager execution missing graph output {key:?}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(EagerGraphExecution {
+            outputs,
+            retained_values: all_values,
         })
     }
 
@@ -1003,6 +1136,15 @@ impl EagerTensor {
         self.requires_grad
     }
 
+    /// Return the number of concrete values saved on this tensor's trace node.
+    ///
+    /// This is a diagnostic hook for extension-crate regression tests and is
+    /// not part of the stable eager tensor API.
+    #[doc(hidden)]
+    pub fn debug_trace_saved_value_count(&self) -> Option<usize> {
+        self.trace.as_ref().map(|trace| trace.saved_values().len())
+    }
+
     /// Return the opaque identifier of the context this tensor belongs to.
     ///
     /// # Examples
@@ -1041,6 +1183,104 @@ impl EagerTensor {
     /// ```
     pub fn same_context(&self, other: &Self) -> bool {
         self.ctx_id() == other.ctx_id()
+    }
+
+    pub(crate) fn standard_graph_op(
+        inputs: &[&Self],
+        build_graph: impl FnOnce(&[TensorInputKey]) -> Result<Arc<Graph<StdTensorOp>>>,
+    ) -> Result<Vec<Self>> {
+        let Some(first) = inputs.first() else {
+            return Err(Error::Internal(
+                "standard eager graph op requires at least one input tensor".to_string(),
+            ));
+        };
+        let ctx = Arc::clone(&first.ctx);
+        for tensor in inputs.iter().skip(1) {
+            if !first.same_context(tensor) {
+                return Err(Error::ContextMismatch {
+                    lhs: first.ctx_id(),
+                    rhs: tensor.ctx_id(),
+                });
+            }
+        }
+
+        let mut recorder = Recorder::new(EagerTensorKeySource);
+        let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
+        let graph = build_graph(&graph_input_keys)?;
+        let initial_data = graph_input_keys
+            .iter()
+            .zip(inputs.iter())
+            .map(|(key, tensor)| (ValueKey::Input(key.clone()), tensor.materialized_arc()))
+            .collect::<HashMap<_, _>>();
+        let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), &initial_data)?;
+        if execution.outputs.len() != graph.outputs().len() {
+            return Err(Error::Internal(format!(
+                "standard eager graph op expected {} graph outputs, got {}",
+                graph.outputs().len(),
+                execution.outputs.len()
+            )));
+        }
+
+        if !inputs.iter().any(|input| input.requires_grad) {
+            return Ok(execution
+                .outputs
+                .into_iter()
+                .map(|output| {
+                    Self::new_result_arc(
+                        Arc::clone(&ctx),
+                        eager_val_key(),
+                        output,
+                        false,
+                        None,
+                        Vec::new(),
+                    )
+                })
+                .collect());
+        }
+
+        let output_keys = graph
+            .outputs()
+            .iter()
+            .map(|&output_id| graph.values()[output_id].key.clone())
+            .collect();
+        let recorded_graph = RecordedGraph::new(Arc::clone(&graph), graph_input_keys, output_keys);
+        let recorded = record_eager_recorded_graph_outputs(
+            &mut recorder,
+            recorded_graph,
+            &execution.outputs,
+            execution.retained_values,
+            inputs,
+        );
+        if recorded.traces.len() != execution.outputs.len() {
+            return Err(Error::Internal(format!(
+                "standard eager graph op expected {} eager traces, got {}",
+                execution.outputs.len(),
+                recorded.traces.len()
+            )));
+        }
+
+        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
+        for input in inputs {
+            for scope in &input.metadata_scopes {
+                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+            }
+        }
+
+        Ok(recorded
+            .traces
+            .into_iter()
+            .zip(execution.outputs)
+            .map(|(trace, output)| {
+                Self::new_result_arc(
+                    Arc::clone(&ctx),
+                    trace.key,
+                    output,
+                    trace.requires_grad,
+                    trace.trace,
+                    metadata_scopes.clone(),
+                )
+            })
+            .collect())
     }
 
     /// Run reverse-mode AD from this scalar output.
@@ -1133,9 +1373,27 @@ pub(crate) fn record_eager_outputs(
     outputs: &[Arc<Tensor>],
     inputs: &[&EagerTensor],
 ) -> RecordedEagerOutputs {
-    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(tensor)).collect();
     let mut recorder = Recorder::new(EagerTensorKeySource);
-    let traces = recorder.record(op.clone(), &input_values, outputs);
+    let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
+    let graph = RecordedGraph::from_primitive(op.clone(), graph_input_keys);
+    let retained_values = graph
+        .output_keys()
+        .iter()
+        .cloned()
+        .zip(outputs.iter().cloned())
+        .collect();
+    record_eager_recorded_graph_outputs(&mut recorder, graph, outputs, retained_values, inputs)
+}
+
+pub(crate) fn record_eager_recorded_graph_outputs(
+    recorder: &mut Recorder<EagerTensorKeySource>,
+    graph: RecordedGraph<StdTensorOp>,
+    outputs: &[Arc<Tensor>],
+    retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    inputs: &[&EagerTensor],
+) -> RecordedEagerOutputs {
+    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(tensor)).collect();
+    let traces = recorder.record_graph(graph, &input_values, outputs, retained_values);
 
     let mut registrations = Vec::new();
     for trace in &traces {

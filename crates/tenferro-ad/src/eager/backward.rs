@@ -6,7 +6,7 @@ use computegraph::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 use tidu::eager::BackwardExecutor;
 use tidu::{LinearizedGraph, PrimitiveGraph};
 
@@ -119,6 +119,57 @@ fn linear_op_depends_on_tangents(mode: &OperationRole) -> bool {
     matches!(mode, OperationRole::Linearized { active_mask } if active_mask.iter().any(|is_active| *is_active))
 }
 
+fn zero_from_exact_metadata<B: TensorBackend>(
+    meta: &TensorMeta,
+    backend: &mut B,
+) -> Option<Tensor> {
+    let shape = meta
+        .exact_shape()?
+        .into_iter()
+        .map(|dim| dim.constant_value())
+        .collect::<Option<Vec<_>>>()?;
+    let host = match meta.dtype {
+        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        DType::Bool => {
+            let len = shape.iter().product();
+            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; len]))
+        }
+        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+    };
+    Some(
+        backend
+            .upload_host_tensor(&host)
+            .unwrap_or_else(|err| panic!("eager primitive zero metadata upload failed: {err}")),
+    )
+}
+
+fn prefill_missing_linear_zero_values<B: TensorBackend>(
+    linear: &LinearizedGraph<StdTensorOp>,
+    external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    ctx: &mut ShapeGuardContext,
+    backend: &mut B,
+) {
+    for value in linear.as_graph().values() {
+        if external_data.contains_key(&value.key) {
+            continue;
+        }
+        let Some(meta) = ctx
+            .try_metadata_of(&ValueRef::External(value.key.clone()))
+            .cloned()
+        else {
+            continue;
+        };
+        let Some(zero) = zero_from_exact_metadata(&meta, backend) else {
+            continue;
+        };
+        external_data.insert(value.key.clone(), Arc::new(zero));
+    }
+}
+
 impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
     for TenferroBackwardCallbacks<'_, B>
 {
@@ -205,12 +256,16 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         external_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
     ) -> tidu::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
+        let mut external_data = external_data.clone();
+        ctx.refresh_global_metadata();
+        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend);
+
         let mut builder = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
             EagerPrimitiveBuilder::with_extension_executor(self.backend, extension_executor)
         } else {
             EagerPrimitiveBuilder::new(self.backend)
         };
-        builder.external_data = external_data.clone();
+        builder.external_data = external_data;
         let cotangent_seed_ids = cotangent_out
             .iter()
             .map(|maybe_seed| {
@@ -220,7 +275,6 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             })
             .collect::<Vec<_>>();
 
-        ctx.refresh_global_metadata();
         tidu::try_linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx).map(
             |cotangent_ids| {
                 cotangent_ids

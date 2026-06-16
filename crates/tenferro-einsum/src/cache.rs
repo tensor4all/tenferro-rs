@@ -13,6 +13,9 @@ pub(crate) const EINSUM_PARSE_CACHE: &str = "parse";
 pub(crate) const EINSUM_RUNTIME_PLANS_CACHE: &str = "runtime_plans";
 /// Executor-side compiled inner execution program cache name.
 pub(crate) const EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE: &str = "runtime_exec_programs";
+/// EagerTensor expanded standard-op program cache name.
+#[cfg(feature = "autodiff")]
+pub(crate) const EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE: &str = "eager_expanded_programs";
 
 /// Parsed einsum notation retained by parse caches.
 pub(crate) struct ParsedEinsum {
