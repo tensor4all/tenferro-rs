@@ -75,6 +75,14 @@ impl Adam {
         }
     }
 
+    /// Override the learning rate used by subsequent `step` calls.
+    ///
+    /// This lets the training loop apply a learning-rate schedule without
+    /// discarding the accumulated first- and second-moment estimates.
+    pub(crate) fn set_lr(&mut self, lr: f64) {
+        self.lr = lr;
+    }
+
     /// Perform one in-place parameter update using Adam.
     pub(crate) fn step(&mut self, params: &mut [Tensor], grads: &[Tensor]) {
         assert_eq!(
@@ -136,6 +144,23 @@ impl Adam {
                 p[i] -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
             }
         }
+    }
+}
+
+/// Step-decayed learning rate schedule.
+///
+/// Returns `base` during the first half of training, `base / 2` during the
+/// third quarter, and `base / 4` during the final quarter. Decaying the
+/// learning rate sharpens convergence of the PINN once Adam has reached a
+/// coarse minimum, which is what keeps the predicted soliton from losing
+/// amplitude at later times.
+pub(crate) fn step_decay_lr(epoch: usize, total_epochs: usize, base: f64) -> f64 {
+    if epoch < total_epochs / 2 {
+        base
+    } else if epoch < 3 * total_epochs / 4 {
+        base * 0.5
+    } else {
+        base * 0.25
     }
 }
 
