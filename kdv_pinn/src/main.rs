@@ -11,6 +11,16 @@
 //! ```bash
 //! cargo run -p kdv_pinn --release
 //! ```
+//!
+//! Optional outputs are controlled by command-line flags:
+//!
+//! - `--gif <path>` writes an animated comparison of the predicted and analytic
+//!   solution over time.
+//! - `--loss-png <path>` writes the training-loss curve (log-scale y-axis).
+//!
+//! ```bash
+//! cargo run -p kdv_pinn --release -- --gif kdv_pinn.gif --loss-png loss.png
+//! ```
 
 mod loss;
 mod network;
@@ -20,32 +30,36 @@ mod plot;
 mod sampler;
 
 use network::Mlp;
-use optimizer::Adam;
+use optimizer::{step_decay_lr, Adam};
 use sampler::Sampler;
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_tensor::Tensor;
 
-fn gif_path_from_args() -> Option<String> {
+/// Return the value following the given command-line `flag`, if present.
+///
+/// For example, with arguments `--gif out.gif`, `arg_value("--gif")` returns
+/// `Some("out.gif")`. Returns `None` when the flag is absent or has no value.
+fn arg_value(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     for window in args.windows(2) {
-        if window[0] == "--gif" {
+        if window[0] == flag {
             return Some(window[1].clone());
         }
     }
     None
 }
 
-const N_IC: usize = 64;
-const N_COL: usize = 512;
-const N_BC: usize = 64;
+const N_IC: usize = 128;
+const N_COL: usize = 1024;
+const N_BC: usize = 128;
 const N_EVAL: usize = 100;
 const LAMBDA_PDE: f64 = 1.0;
 const LAMBDA_IC: f64 = 1.0;
 const LAMBDA_BC: f64 = 1.0;
 const LR: f64 = 0.001;
-const EPOCHS: usize = 1000;
+const EPOCHS: usize = 3000;
 
 fn main() {
     let net = Mlp::new(&[2, 64, 64, 1]);
@@ -127,6 +141,7 @@ fn main() {
     let mut opt = Adam::new(LR);
 
     let mut final_loss = f64::INFINITY;
+    let mut loss_history: Vec<f64> = Vec::with_capacity(EPOCHS);
     for epoch in 0..EPOCHS {
         let (x_col_tensor, t_col_tensor) = sampler.collocation(N_COL, &mut rng);
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
@@ -148,6 +163,7 @@ fn main() {
             .run_with_inputs(&loss_program, &bindings)
             .expect("evaluate loss failed");
         final_loss = loss_tensor.as_slice::<f64>().expect("loss data")[0];
+        loss_history.push(final_loss);
 
         let mut grads = Vec::new();
         for program in &grad_programs {
@@ -158,6 +174,7 @@ fn main() {
             );
         }
 
+        opt.set_lr(step_decay_lr(epoch, EPOCHS, LR));
         opt.step(&mut params, &grads);
 
         if epoch % 50 == 0 {
@@ -165,6 +182,11 @@ fn main() {
         }
     }
     println!("final loss after {} epochs: {:.6e}", EPOCHS, final_loss);
+
+    if let Some(loss_png_path) = arg_value("--loss-png") {
+        plot::write_loss_png(&loss_png_path, &loss_history).expect("write loss png failed");
+        println!("saved loss curve to {}", loss_png_path);
+    }
 
     // Evaluation grid at t = 0.5.
     let x_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1]);
@@ -222,7 +244,7 @@ fn main() {
         / truth.iter().map(|t| t.powi(2)).sum::<f64>().sqrt();
     println!("L2 relative error at t=0.5: {:.6e}", l2_error);
 
-    if let Some(gif_path) = gif_path_from_args() {
+    if let Some(gif_path) = arg_value("--gif") {
         const N_FRAMES: usize = 30;
         let mut frames: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(N_FRAMES);
         for frame in 0..N_FRAMES {
