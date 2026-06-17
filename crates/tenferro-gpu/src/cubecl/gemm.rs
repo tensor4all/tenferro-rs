@@ -172,7 +172,7 @@ where
     backend.runtime().set_current_cuda_context(OP)?;
     validate_dot_general(lhs, rhs, config)?;
     let layout = build_layout(lhs, rhs, config)?;
-    let output = alloc_output::<T>(backend.runtime(), &layout.output_shape);
+    let output = alloc_output::<T>(backend.runtime(), &layout.output_shape)?;
     if output.n_elements() == 0 {
         return Ok(output);
     }
@@ -234,7 +234,7 @@ where
     let rhs_ptr = typed_device_ptr(backend.runtime(), rhs)?;
     let output_ptr = typed_device_ptr(backend.runtime(), &output)?;
 
-    let accumulator = alloc_output::<T>(backend.runtime(), &layout.output_shape);
+    let accumulator = alloc_output::<T>(backend.runtime(), &layout.output_shape)?;
     let accumulator_ptr = typed_device_ptr(backend.runtime(), &accumulator)?;
 
     let alpha = T::one();
@@ -310,7 +310,7 @@ fn zero_alloc<T>(rt: &CubeclRuntime, shape: &[usize]) -> crate::Result<TypedTens
 where
     T: CutensorScalar,
 {
-    let output = alloc_output::<T>(rt, shape);
+    let output = alloc_output::<T>(rt, shape)?;
     launch_nullary_into(
         rt,
         &output,

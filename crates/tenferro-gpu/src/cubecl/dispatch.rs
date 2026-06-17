@@ -298,24 +298,33 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
 pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CubeclRuntime,
     shape: &[usize],
-) -> TypedTensor<T> {
-    let len: usize = shape.iter().product();
-    let handle = rt.client().empty(len * core::mem::size_of::<T>());
-    typed_from_cubecl(
+) -> crate::Result<TypedTensor<T>> {
+    let len = checked_shape_product("cubecl_alloc_output", shape)?;
+    let byte_len = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
+        crate::Error::backend_failure(
+            "cubecl_alloc_output",
+            format!("output byte length overflow for shape {shape:?}"),
+        )
+    })?;
+    let handle = rt.client().empty(byte_len);
+    Ok(typed_from_cubecl(
         shape.to_vec(),
         CubeclBuffer::new(handle, len),
         rt.device_ordinal(),
-    )
+    ))
 }
 
-pub(crate) fn alloc_bool_output(rt: &CubeclRuntime, shape: &[usize]) -> TypedTensor<bool> {
-    let len: usize = shape.iter().product();
+pub(crate) fn alloc_bool_output(
+    rt: &CubeclRuntime,
+    shape: &[usize],
+) -> crate::Result<TypedTensor<bool>> {
+    let len = checked_shape_product("cubecl_alloc_bool_output", shape)?;
     let handle = rt.client().empty(len);
-    typed_from_cubecl(
+    Ok(typed_from_cubecl(
         shape.to_vec(),
         CubeclBuffer::new(handle, len),
         rt.device_ordinal(),
-    )
+    ))
 }
 
 pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
@@ -432,7 +441,7 @@ where
     TOut: CubeElement + Clone,
 {
     validate_raw_unary_shapes(input, out_shape, op)?;
-    let output = alloc_output::<TOut>(rt, out_shape);
+    let output = alloc_output::<TOut>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, input, op)?;
     let input_arg = typed_tensor_array_arg(input, op)?;
@@ -474,7 +483,7 @@ where
     TIn: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
-    let output = alloc_output::<TOut>(rt, out_shape);
+    let output = alloc_output::<TOut>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, input, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
@@ -576,7 +585,7 @@ where
     TOut: CubeElement + Clone,
 {
     validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
-    let output = alloc_output::<TOut>(rt, out_shape);
+    let output = alloc_output::<TOut>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, lhs, op)?;
     ensure_resident_on_runtime(rt, rhs, op)?;
@@ -623,7 +632,7 @@ where
     T: CubeElement + Clone,
 {
     validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
-    let output = alloc_bool_output(rt, out_shape);
+    let output = alloc_bool_output(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, lhs, op)?;
     ensure_resident_on_runtime(rt, rhs, op)?;
@@ -668,7 +677,7 @@ where
     TRhs: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
-    let output = alloc_output::<TOut>(rt, out_shape);
+    let output = alloc_output::<TOut>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, lhs, op)?;
     ensure_resident_on_runtime(rt, rhs, op)?;
@@ -716,7 +725,7 @@ where
     T: CubeElement + Clone,
 {
     validate_raw_ternary_shapes(pred, on_true, on_false, out_shape, op)?;
-    let output = alloc_output::<T>(rt, out_shape);
+    let output = alloc_output::<T>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, pred, op)?;
     ensure_resident_on_runtime(rt, on_true, op)?;
@@ -768,7 +777,7 @@ where
     TOut: CubeElement + Clone,
 {
     validate_raw_ternary_shapes(a, b, c, out_shape, op)?;
-    let output = alloc_output::<TOut>(rt, out_shape);
+    let output = alloc_output::<TOut>(rt, out_shape)?;
     let len = output.n_elements();
     ensure_resident_on_runtime(rt, a, op)?;
     ensure_resident_on_runtime(rt, b, op)?;

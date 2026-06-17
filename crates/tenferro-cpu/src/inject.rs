@@ -323,8 +323,9 @@ impl LapackProviderPtrSet {
 /// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new());
+///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new())?;
 /// }
+/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlasGemmFnPtrSet {
@@ -372,8 +373,9 @@ impl BlasGemmFnPtrSet {
 /// };
 ///
 /// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new());
+///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new())?;
 /// }
+/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LapackFullPivLuFnPtrSet {
@@ -455,8 +457,8 @@ fn lapack_registration_status(
 
 /// Register CBLAS GEMM function pointers in one call.
 ///
-/// This is a thin bulk wrapper over `cblas-inject`'s per-symbol
-/// `register_*` functions.
+/// This is a thin bulk wrapper over `cblas-inject`'s LP64 registration
+/// entry points.
 ///
 /// # Safety
 ///
@@ -469,22 +471,30 @@ fn lapack_registration_status(
 /// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new());
+///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new())?;
 /// }
+/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
 /// ```
-pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
+pub unsafe fn register_blas_gemm_fn_ptrs(
+    ptrs: BlasGemmFnPtrSet,
+) -> Result<(), ProviderRegistrationError> {
     if let Some(f) = ptrs.sgemm {
-        unsafe { cblas_inject::register_sgemm(f) };
+        let status = unsafe { cblas_inject::cblas_inject_register_sgemm_lp64(f as *const c_void) };
+        blas_registration_status("sgemm", status)?;
     }
     if let Some(f) = ptrs.dgemm {
-        unsafe { cblas_inject::register_dgemm(f) };
+        let status = unsafe { cblas_inject::cblas_inject_register_dgemm_lp64(f as *const c_void) };
+        blas_registration_status("dgemm", status)?;
     }
     if let Some(f) = ptrs.cgemm {
-        unsafe { cblas_inject::register_cgemm(f) };
+        let status = unsafe { cblas_inject::cblas_inject_register_cgemm_lp64(f as *const c_void) };
+        blas_registration_status("cgemm", status)?;
     }
     if let Some(f) = ptrs.zgemm {
-        unsafe { cblas_inject::register_zgemm(f) };
+        let status = unsafe { cblas_inject::cblas_inject_register_zgemm_lp64(f as *const c_void) };
+        blas_registration_status("zgemm", status)?;
     }
+    Ok(())
 }
 
 /// Register LAPACK complete-pivoting LU function pointers in one call.
@@ -505,34 +515,46 @@ pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
 /// };
 ///
 /// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new());
+///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new())?;
 /// }
+/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
 /// ```
-pub unsafe fn register_lapack_full_piv_lu_fn_ptrs(ptrs: LapackFullPivLuFnPtrSet) {
+pub unsafe fn register_lapack_full_piv_lu_fn_ptrs(
+    ptrs: LapackFullPivLuFnPtrSet,
+) -> Result<(), ProviderRegistrationError> {
     if let Some(f) = ptrs.sgetc2 {
-        unsafe { lapack_inject::register_sgetc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_sgetc2_lp64(f) };
+        lapack_registration_status("sgetc2", status)?;
     }
     if let Some(f) = ptrs.sgesc2 {
-        unsafe { lapack_inject::register_sgesc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_sgesc2_lp64(f) };
+        lapack_registration_status("sgesc2", status)?;
     }
     if let Some(f) = ptrs.dgetc2 {
-        unsafe { lapack_inject::register_dgetc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_dgetc2_lp64(f) };
+        lapack_registration_status("dgetc2", status)?;
     }
     if let Some(f) = ptrs.dgesc2 {
-        unsafe { lapack_inject::register_dgesc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_dgesc2_lp64(f) };
+        lapack_registration_status("dgesc2", status)?;
     }
     if let Some(f) = ptrs.cgetc2 {
-        unsafe { lapack_inject::register_cgetc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_cgetc2_lp64(f) };
+        lapack_registration_status("cgetc2", status)?;
     }
     if let Some(f) = ptrs.cgesc2 {
-        unsafe { lapack_inject::register_cgesc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_cgesc2_lp64(f) };
+        lapack_registration_status("cgesc2", status)?;
     }
     if let Some(f) = ptrs.zgetc2 {
-        unsafe { lapack_inject::register_zgetc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_zgetc2_lp64(f) };
+        lapack_registration_status("zgetc2", status)?;
     }
     if let Some(f) = ptrs.zgesc2 {
-        unsafe { lapack_inject::register_zgesc2_lp64(f) };
+        let status = unsafe { lapack_inject::register_zgesc2_lp64(f) };
+        lapack_registration_status("zgesc2", status)?;
     }
+    Ok(())
 }
 
 // --- Raw-pointer BLAS GEMM registration ----------------------------------
@@ -1091,6 +1113,32 @@ mod tests {
                 symbol: "dgesvd",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn typed_registration_status_helpers_report_errors() {
+        assert!(matches!(
+            blas_registration_status("dgemm", 2),
+            Err(ProviderRegistrationError::AlreadyRegistered { symbol: "dgemm" })
+        ));
+        assert!(matches!(
+            blas_registration_status("dgemm", 9),
+            Err(ProviderRegistrationError::UnknownStatus {
+                symbol: "dgemm",
+                status: 9
+            })
+        ));
+        assert!(matches!(
+            lapack_registration_status("dgetc2", 2),
+            Err(ProviderRegistrationError::AlreadyRegistered { symbol: "dgetc2" })
+        ));
+        assert!(matches!(
+            lapack_registration_status("dgetc2", 9),
+            Err(ProviderRegistrationError::UnknownStatus {
+                symbol: "dgetc2",
+                status: 9
+            })
         ));
     }
 }

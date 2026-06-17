@@ -89,7 +89,7 @@ pub fn cube_dim_1d() -> CubeDim {
 pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CubeclRuntime,
     shape: &[usize],
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     dispatch::alloc_output(rt, shape)
 }
 

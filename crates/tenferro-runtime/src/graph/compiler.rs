@@ -452,7 +452,7 @@ fn validate_placeholder_spec(
             binding_index: index,
         });
     }
-    let _ = placeholder.input_key().ok_or(Error::UnexpectedBinding {
+    placeholder.input_key().ok_or(Error::UnexpectedBinding {
         binding_index: index,
     })?;
 

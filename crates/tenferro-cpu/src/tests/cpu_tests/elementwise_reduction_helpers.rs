@@ -812,6 +812,22 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
             ..
         })
     ));
+
+    let real = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]));
+    assert!(matches!(
+        reduce_max(&real, &[2]),
+        Err(crate::Error::AxisOutOfBounds {
+            op: "reduce_max",
+            ..
+        })
+    ));
+    assert!(matches!(
+        reduce_min(&real, &[0, 0]),
+        Err(crate::Error::DuplicateAxis {
+            op: "reduce_min",
+            ..
+        })
+    ));
 }
 
 #[test]

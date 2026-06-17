@@ -4,13 +4,13 @@ use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
-use tenferro_cpu::CpuBackend;
-use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::inject::{
+use tenferro_cpu::inject::{
     register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, register_lapack_provider_ptrs,
     BlasGemmFnPtrSet, LapackFullPivLuFnPtrSet, LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_linalg::LinalgBackend;
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -25,12 +25,14 @@ fn register_test_ptrs_once() {
         register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet {
             dgemm: Some(test_dgemm),
             ..BlasGemmFnPtrSet::new()
-        });
+        })
+        .expect("test dgemm registration should succeed");
         register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet {
             dgetc2: Some(test_dgetc2),
             dgesc2: Some(test_dgesc2),
             ..LapackFullPivLuFnPtrSet::new()
-        });
+        })
+        .expect("test dgetc2/dgesc2 registration should succeed");
         register_lapack_provider_ptrs(
             ProviderAbi::Lp64,
             LapackProviderPtrSet {

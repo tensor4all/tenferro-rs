@@ -235,6 +235,23 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 }
 
 #[test]
+fn cubecl_output_allocations_use_checked_shape_products() {
+    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    assert!(
+        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_output\", shape)?;"),
+        "CubeCL typed output allocation must reject shape-product overflow"
+    );
+    assert!(
+        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_bool_output\", shape)?;"),
+        "CubeCL bool output allocation must reject shape-product overflow"
+    );
+    assert!(
+        !dispatch.contains("let len: usize = shape.iter().product();"),
+        "CubeCL output allocation must not use unchecked shape.iter().product()"
+    );
+}
+
+#[test]
 fn webgpu_allocation_uses_checked_shape_products() {
     let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
     assert!(

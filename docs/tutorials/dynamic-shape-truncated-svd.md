@@ -1,18 +1,20 @@
 # Dynamic Shapes: Truncated SVD
 
 Use traced dynamic-shape operations when an output size is known only after
-execution starts. This tutorial builds one compiled program that runs an SVD,
-counts singular values above a threshold, truncates `u`, `s`, and `vt` with
-`dynamic_truncate`, and reconstructs the thresholded matrix.
+execution starts. This tutorial builds compiled programs that run an SVD, count
+singular values above a threshold, truncate `u`, `s`, and `vt` with
+`dynamic_truncate`, and reconstruct the thresholded matrix.
 
-The same `GraphProgram` runs twice below: once with two singular values above
-the threshold and once with three. No re-trace or recompile is needed between
-the two executions.
+The same traced graph and explicit placeholder spec are compiled once, then the
+programs run twice below: once with two singular values above the threshold and
+once with three. No re-trace or recompile is needed between the two executions.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/dynamic_shape_truncated_svd.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{
+    CompareDir, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
+};
 
 fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
     assert_eq!(actual.len(), expected.len());
@@ -47,15 +49,15 @@ fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
 
 fn run_case(
     executor: &mut GraphExecutor<CpuBackend>,
-    program: &tenferro_runtime::GraphProgram,
+    reconstructed_program: &GraphProgram,
+    singular_values_program: &GraphProgram,
     x: &TracedTensor,
     input: &Tensor,
     expected_rank: usize,
     expected_values: &[f64],
 ) -> Result<(), tenferro_runtime::Error> {
-    let outputs = executor.run_many_with_inputs(program, &[(x, input)])?;
-    let reconstructed = &outputs[0];
-    let singular_values = &outputs[1];
+    let reconstructed = executor.run_with_inputs(reconstructed_program, &[(x, input)])?;
+    let singular_values = executor.run_with_inputs(singular_values_program, &[(x, input)])?;
 
     assert_eq!(singular_values.shape(), &[expected_rank]);
     assert_eq!(reconstructed.shape(), &[4, 4]);
@@ -88,7 +90,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "ik,k,kj->ij",
         tenferro_einsum::EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
     )?;
-    let program = compiler.compile_many(&[&reconstructed, &s_truncated])?;
+    let input_specs = [(&x, DType::F64, &[4, 4][..])];
+    let reconstructed_program = compiler.compile_with_input_specs(&reconstructed, &input_specs)?;
+    let singular_values_program = compiler.compile_with_input_specs(&s_truncated, &input_specs)?;
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor.register_extension(tenferro_linalg::register_runtime)?;
@@ -97,7 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rank2 = diagonal_matrix(&[4.0, 3.0, 0.1, 0.01]);
     run_case(
         &mut executor,
-        &program,
+        &reconstructed_program,
+        &singular_values_program,
         &x,
         &rank2,
         2,
@@ -107,7 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rank3 = diagonal_matrix(&[4.0, 3.0, 2.0, 0.01]);
     run_case(
         &mut executor,
-        &program,
+        &reconstructed_program,
+        &singular_values_program,
         &x,
         &rank3,
         3,

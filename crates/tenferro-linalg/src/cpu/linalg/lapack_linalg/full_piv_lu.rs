@@ -440,6 +440,12 @@ fn factor_getc2<T: LapackFullPivLu>(
     let mut info = 0;
     T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
     check_lapack_info(op, "getc2", info.min(0))?;
+    if info > 0 {
+        return Err(tenferro_tensor::Error::backend_failure(
+            op,
+            "matrix is singular",
+        ));
+    }
     Ok((ipiv, jpiv, info))
 }
 

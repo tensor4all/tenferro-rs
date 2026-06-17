@@ -12,6 +12,18 @@ fn cpu_lapack_helpers_source() -> String {
     .unwrap_or_else(|err| panic!("LAPACK helper source should be readable: {err}"))
 }
 
+fn cpu_lapack_full_piv_lu_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cpu")
+            .join("linalg")
+            .join("lapack_linalg")
+            .join("full_piv_lu.rs"),
+    )
+    .unwrap_or_else(|err| panic!("LAPACK full_piv_lu source should be readable: {err}"))
+}
+
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source
         .find(start)
@@ -53,4 +65,23 @@ fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
             "LAPACK batched helpers should reuse pooled input scratch via {needle}"
         );
     }
+}
+
+#[test]
+fn lapack_full_piv_lu_rejects_positive_getc2_info() {
+    let source = cpu_lapack_full_piv_lu_source();
+    let factor = source_section(&source, "fn factor_getc2", "fn full_piv_lu_2d");
+
+    assert!(
+        factor.contains("check_lapack_info(op, \"getc2\", info.min(0))?;"),
+        "factor_getc2 should still report negative LAPACK argument errors"
+    );
+    assert!(
+        factor.contains("if info > 0"),
+        "factor_getc2 should not discard positive getc2 singularity info"
+    );
+    assert!(
+        factor.contains("matrix is singular"),
+        "positive getc2 info should be reported as a singular matrix"
+    );
 }

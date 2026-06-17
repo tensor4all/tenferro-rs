@@ -2,7 +2,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{DType, Tensor, TensorRead, TensorValue, TypedTensor};
 
 use super::GraphExecutor;
-use crate::{GraphCompiler, TracedTensor};
+use crate::{Error, GraphCompiler, TracedTensor};
 
 #[test]
 fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
@@ -60,4 +60,17 @@ fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
         executor.slot_workspace.capacity(),
         program.exec.n_slots
     );
+}
+
+#[test]
+fn compile_with_input_specs_rejects_computed_placeholder_specs() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = &x + &x;
+    let mut compiler = GraphCompiler::new();
+
+    let err = compiler
+        .compile_with_input_specs(&y, &[(&y, DType::F64, &[2])])
+        .unwrap_err();
+
+    assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
 }

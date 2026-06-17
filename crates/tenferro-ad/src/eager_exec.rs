@@ -648,9 +648,12 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 vec![exec.select(inputs[0], b.tensor(), c.tensor())?]
             }
             StdTensorOp::Clamp => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, a.tensor(), inputs[2], op)?;
-                vec![exec.clamp(a.tensor(), b.tensor(), c.tensor())?]
+                let value_dtype =
+                    crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
+                let input = promote_to_dtype(exec, inputs[0], value_dtype)?;
+                let lower = promote_to_dtype(exec, inputs[1], value_dtype)?;
+                let upper = promote_to_dtype(exec, inputs[2], value_dtype)?;
+                vec![exec.clamp(input.tensor(), lower.tensor(), upper.tensor())?]
             }
             StdTensorOp::Concatenate { axis, .. } => {
                 let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));

@@ -1,8 +1,8 @@
 use num_complex::{Complex32, Complex64};
 
+use crate::{dynamic_slice, gather, pad, scatter, CpuBackend};
 use tenferro_tensor::{BackendSessionHost, TensorIndexing};
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
-use crate::{dynamic_slice, gather, pad, scatter, CpuBackend};
 use tenferro_tensor::{Tensor, TypedTensor};
 
 fn simple_gather_config() -> GatherConfig {
@@ -439,6 +439,17 @@ fn cpu_indexing_validation_covers_error_branches() {
         ),
         "pad",
     );
+    expect_invalid_config(
+        backend.pad(
+            &input,
+            &PadConfig {
+                edge_padding_low: vec![-1],
+                edge_padding_high: vec![1],
+                interior_padding: vec![0],
+            },
+        ),
+        "pad",
+    );
 
     let operand_2d = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2],
@@ -489,6 +500,10 @@ fn cpu_indexing_validation_covers_error_branches() {
     let mut gather_cfg = valid_gather_2d_config();
     gather_cfg.collapsed_slice_dims = vec![0, 0];
     expect_duplicate_axis(gather(&operand_2d, &idx, &gather_cfg), "gather");
+
+    let mut gather_cfg = valid_gather_2d_config();
+    gather_cfg.slice_sizes = vec![2, 1];
+    expect_invalid_config(gather(&operand_2d, &idx, &gather_cfg), "gather");
 
     let mut gather_cfg = valid_gather_2d_config();
     gather_cfg.start_index_map = vec![0, 1];

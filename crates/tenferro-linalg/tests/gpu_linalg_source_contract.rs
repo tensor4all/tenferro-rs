@@ -353,8 +353,8 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "let u = alloc_output::<T>(backend.runtime(), &u_shape);",
-        "let v = alloc_output::<T>(backend.runtime(), &v_shape);",
+        "let u = alloc_output::<T>(backend.runtime(), &u_shape)?;",
+        "let v = alloc_output::<T>(backend.runtime(), &v_shape)?;",
         "CusolverEigMode::NoVector",
         "batch_u",
         "batch_v",

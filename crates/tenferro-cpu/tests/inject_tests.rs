@@ -24,12 +24,14 @@ fn register_test_ptrs_once() {
         register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet {
             dgemm: Some(test_dgemm),
             ..BlasGemmFnPtrSet::new()
-        });
+        })
+        .expect("test dgemm registration should succeed");
         register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet {
             dgetc2: Some(test_dgetc2),
             dgesc2: Some(test_dgesc2),
             ..LapackFullPivLuFnPtrSet::new()
-        });
+        })
+        .expect("test dgetc2/dgesc2 registration should succeed");
         register_lapack_provider_ptrs(
             ProviderAbi::Lp64,
             LapackProviderPtrSet {

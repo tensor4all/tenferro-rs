@@ -196,6 +196,7 @@ pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::
 }
 
 pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    validate_axes("reduce_max", axes, input.shape().len())?;
     if axes.is_empty() {
         return Ok(input.clone());
     }
@@ -213,6 +214,7 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+    validate_axes("reduce_max", axes, input.shape().len())?;
     if axes.is_empty() {
         return match input {
             TensorRead::Tensor(input) => {
@@ -252,6 +254,7 @@ pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
 }
 
 pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    validate_axes("reduce_min", axes, input.shape().len())?;
     if axes.is_empty() {
         return Ok(input.clone());
     }
@@ -269,6 +272,7 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+    validate_axes("reduce_min", axes, input.shape().len())?;
     if axes.is_empty() {
         return match input {
             TensorRead::Tensor(input) => {

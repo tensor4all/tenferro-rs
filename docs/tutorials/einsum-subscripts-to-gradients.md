@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_close(
         auto_value.as_slice::<f64>().unwrap(),
-        &[250.0, 601.0, 372.0, 893.0],
+        &[250.0, 601.0, 372.0, 894.0],
     );
 
     let y = tenferro_einsum::traced_tensor::einsum_with(

@@ -47,6 +47,31 @@ rules from `tensor4all-agent-rules`.
   `transpose_view`, `slice_view`, or `reshape_view`. Do not use `_view` for
   operations that allocate, canonicalize, execute kernels, or transfer data.
 
+## Public Boundary Safety Audits
+
+- User-reachable tensor, runtime, eager, traced, CPU, GPU, and extension APIs
+  must validate input-derived shape, axis, dtype, padding, slice, gather,
+  scatter, and linalg config before no-op shortcuts, allocation, launch planning,
+  or FFI calls. Review fast paths and zero-size returns with the same scrutiny as
+  the main path.
+- Shape products, byte lengths, strides, offsets, launch sizes, padding extents,
+  and FFI dimensions must use checked arithmetic before conversion to `usize`,
+  `i32`, `u32`, pointer offsets, or allocation sizes. Audits should search for
+  `shape.iter().product`, `* size_of`, `as usize`, `as i32`, `as u32`,
+  `stride *=`, and unchecked `+`/`*` on shape-derived values.
+- Publicly reachable library paths must not turn invalid user input into
+  `panic`, `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or
+  debug-only assertions. If an invariant is truly internal, keep it close to the
+  proof; otherwise return a typed error.
+- Parallel operation surfaces must keep validation and promotion semantics in
+  parity across owned/read, eager/traced, CPU/GPU, and extension wrapper paths.
+  A bug in one surface should trigger an audit of the corresponding surfaces
+  before the fix is considered complete.
+- Every non-trivial binary under `docs/tutorial-code/src/bin/` should be covered
+  by a runnable tutorial test unless the example is explicitly compile-only or
+  hardware-gated. Markdown snippets copied from those binaries must stay synced
+  with the executable source.
+
 ## Wrapper DRY And Codegen
 
 - Do not assume tensor, eager, traced, and extension wrapper surfaces are fully
