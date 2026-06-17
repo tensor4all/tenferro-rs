@@ -546,7 +546,7 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// // The closure receives `&mut EagerBackend`; standard extension crates
     /// // use it to open one backend session for a whole contraction program.
-    /// let answer = ctx.with_backend_mut(|_backend| 42);
+    /// let answer = ctx.with_backend_mut(|_backend| 42).unwrap();
     /// assert_eq!(answer, 42);
     /// ```
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
