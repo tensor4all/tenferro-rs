@@ -441,29 +441,6 @@ fn validate_tropical_einsum_inputs(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compositional_dot_general_try_api_rejects_rank_mismatch() {
-        let lhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
-        let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
-
-        let err = try_tropical_dot_general(&lhs, &rhs).unwrap_err();
-        assert!(err.to_string().contains("requires rank-2 input"));
-    }
-
-    #[test]
-    fn compositional_dot_general_try_api_rejects_contracting_dim_mismatch() {
-        let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-        let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
-
-        let err = try_min_plus_dot_general(&lhs, &rhs).unwrap_err();
-        assert!(err.to_string().contains("contracting axes must match"));
-    }
-}
-
 /// Tropical max-plus reduction over the given axes.
 ///
 /// In max-plus algebra, reduction under semiring addition is ordinary maximum.
@@ -488,4 +465,27 @@ mod tests {
 #[must_use]
 pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> TracedTensor {
     a.reduce_max(axes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compositional_dot_general_try_api_rejects_rank_mismatch() {
+        let lhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
+        let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
+
+        let err = try_tropical_dot_general(&lhs, &rhs).unwrap_err();
+        assert!(err.to_string().contains("requires rank-2 input"));
+    }
+
+    #[test]
+    fn compositional_dot_general_try_api_rejects_contracting_dim_mismatch() {
+        let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+        let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+
+        let err = try_min_plus_dot_general(&lhs, &rhs).unwrap_err();
+        assert!(err.to_string().contains("contracting axes must match"));
+    }
 }

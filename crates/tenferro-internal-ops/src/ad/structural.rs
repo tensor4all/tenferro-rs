@@ -846,8 +846,8 @@ pub fn transpose_concatenate(
     let mut result = vec![None; input_count];
     let mut axis_offset = 0usize;
     let mut concrete_shapes = Vec::with_capacity(input_count);
-    for input_index in 0..input_count {
-        let input_shape = ctx.shape_of(&inputs[input_index]);
+    for input in inputs.iter().take(input_count) {
+        let input_shape = ctx.shape_of(input);
         let rank = input_shape.len();
         if axis >= rank {
             return vec![None; input_count];
@@ -860,6 +860,9 @@ pub fn transpose_concatenate(
             return vec![None; input_count];
         };
         concrete_shapes.push(concrete_shape);
+    }
+    if concrete_shapes.len() != input_count {
+        return vec![None; input_count];
     }
 
     for input_index in 0..input_count {
