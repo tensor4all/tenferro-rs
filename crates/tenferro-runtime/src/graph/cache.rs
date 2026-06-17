@@ -102,9 +102,13 @@ pub(crate) fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 }
 
 fn cache_key_retained_bytes(key: &CacheKey) -> usize {
-    size_of::<CacheKey>()
-        + exec_program_key_retained_bytes(&key.fingerprint)
-        + key.extensions.capacity() * size_of::<Arc<dyn ExtensionOp>>()
+    saturating_sum([
+        size_of::<CacheKey>(),
+        exec_program_key_retained_bytes(&key.fingerprint),
+        key.extensions
+            .capacity()
+            .saturating_mul(size_of::<Arc<dyn ExtensionOp>>()),
+    ])
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -391,42 +395,47 @@ impl<H: Hasher + ?Sized> Hasher for DynHasherProxy<'_, H> {
 }
 
 fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
+    values.capacity().saturating_mul(size_of::<T>())
 }
 
 fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum()
+    saturating_sum(values.iter().map(vec_retained_bytes))
 }
 
 fn exec_program_key_retained_bytes(key: &ExecProgramKey) -> usize {
-    size_of::<ExecProgramKey>()
-        + vec_retained_bytes(&key.instructions)
-        + key
-            .instructions
-            .iter()
-            .map(exec_instruction_key_retained_bytes)
-            .sum::<usize>()
-        + vec_retained_bytes(&key.input_slots)
-        + vec_retained_bytes(&key.output_slots)
+    saturating_sum([
+        size_of::<ExecProgramKey>(),
+        vec_retained_bytes(&key.instructions),
+        saturating_sum(
+            key.instructions
+                .iter()
+                .map(exec_instruction_key_retained_bytes),
+        ),
+        vec_retained_bytes(&key.input_slots),
+        vec_retained_bytes(&key.output_slots),
+    ])
 }
 
 fn exec_instruction_key_retained_bytes(key: &ExecInstructionKey) -> usize {
-    size_of::<ExecInstructionKey>()
-        + exec_op_key_retained_bytes(&key.op)
-        + vec_retained_bytes(&key.input_slots)
-        + vec_retained_bytes(&key.output_slots)
-        + vec_of_vec_retained_bytes(&key.output_shapes)
-        + vec_of_vec_retained_bytes(&key.output_extents)
-        + vec_retained_bytes(&key.last_use)
+    saturating_sum([
+        size_of::<ExecInstructionKey>(),
+        exec_op_key_retained_bytes(&key.op),
+        vec_retained_bytes(&key.input_slots),
+        vec_retained_bytes(&key.output_slots),
+        vec_of_vec_retained_bytes(&key.output_shapes),
+        vec_of_vec_retained_bytes(&key.output_extents),
+        vec_retained_bytes(&key.last_use),
+    ])
 }
 
 fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
-    size_of::<ExecOpKey>()
-        + match key {
+    saturating_sum([
+        size_of::<ExecOpKey>(),
+        match key {
             ExecOpKey::Transpose { perm } => vec_retained_bytes(perm),
             ExecOpKey::Reshape { shape } => vec_retained_bytes(shape),
             ExecOpKey::BroadcastInDim { shape, dims } => {
-                vec_retained_bytes(shape) + vec_retained_bytes(dims)
+                saturating_sum([vec_retained_bytes(shape), vec_retained_bytes(dims)])
             }
             ExecOpKey::Constant { bytes, .. } => vec_retained_bytes(bytes),
             ExecOpKey::DotGeneral(config) => dot_general_config_retained_bytes(config),
@@ -445,12 +454,12 @@ fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
                 start_index_map,
                 slice_sizes,
                 ..
-            } => {
-                vec_retained_bytes(offset_dims)
-                    + vec_retained_bytes(collapsed_slice_dims)
-                    + vec_retained_bytes(start_index_map)
-                    + vec_retained_bytes(slice_sizes)
-            }
+            } => saturating_sum([
+                vec_retained_bytes(offset_dims),
+                vec_retained_bytes(collapsed_slice_dims),
+                vec_retained_bytes(start_index_map),
+                vec_retained_bytes(slice_sizes),
+            ]),
             ExecOpKey::Scatter(config) => scatter_config_retained_bytes(config),
             ExecOpKey::Slice(config) => slice_config_retained_bytes(config),
             ExecOpKey::DynamicSlice { slice_sizes } => vec_retained_bytes(slice_sizes),
@@ -488,39 +497,50 @@ fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
             | ExecOpKey::DynamicTruncate { .. }
             | ExecOpKey::PadToMatch { .. }
             | ExecOpKey::Extension { .. } => 0,
-        }
+        },
+    ])
 }
 
 fn dot_general_config_retained_bytes(config: &tenferro_tensor::DotGeneralConfig) -> usize {
-    vec_retained_bytes(&config.lhs_contracting_dims)
-        + vec_retained_bytes(&config.rhs_contracting_dims)
-        + vec_retained_bytes(&config.lhs_batch_dims)
-        + vec_retained_bytes(&config.rhs_batch_dims)
+    saturating_sum([
+        vec_retained_bytes(&config.lhs_contracting_dims),
+        vec_retained_bytes(&config.rhs_contracting_dims),
+        vec_retained_bytes(&config.lhs_batch_dims),
+        vec_retained_bytes(&config.rhs_batch_dims),
+    ])
 }
 
 fn gather_config_retained_bytes(config: &tenferro_tensor::GatherConfig) -> usize {
-    vec_retained_bytes(&config.offset_dims)
-        + vec_retained_bytes(&config.collapsed_slice_dims)
-        + vec_retained_bytes(&config.start_index_map)
-        + vec_retained_bytes(&config.slice_sizes)
+    saturating_sum([
+        vec_retained_bytes(&config.offset_dims),
+        vec_retained_bytes(&config.collapsed_slice_dims),
+        vec_retained_bytes(&config.start_index_map),
+        vec_retained_bytes(&config.slice_sizes),
+    ])
 }
 
 fn scatter_config_retained_bytes(config: &tenferro_tensor::ScatterConfig) -> usize {
-    vec_retained_bytes(&config.update_window_dims)
-        + vec_retained_bytes(&config.inserted_window_dims)
-        + vec_retained_bytes(&config.scatter_dims_to_operand_dims)
+    saturating_sum([
+        vec_retained_bytes(&config.update_window_dims),
+        vec_retained_bytes(&config.inserted_window_dims),
+        vec_retained_bytes(&config.scatter_dims_to_operand_dims),
+    ])
 }
 
 fn slice_config_retained_bytes(config: &tenferro_tensor::SliceConfig) -> usize {
-    vec_retained_bytes(&config.starts)
-        + vec_retained_bytes(&config.limits)
-        + vec_retained_bytes(&config.strides)
+    saturating_sum([
+        vec_retained_bytes(&config.starts),
+        vec_retained_bytes(&config.limits),
+        vec_retained_bytes(&config.strides),
+    ])
 }
 
 fn pad_config_retained_bytes(config: &tenferro_tensor::PadConfig) -> usize {
-    vec_retained_bytes(&config.edge_padding_low)
-        + vec_retained_bytes(&config.edge_padding_high)
-        + vec_retained_bytes(&config.interior_padding)
+    saturating_sum([
+        vec_retained_bytes(&config.edge_padding_low),
+        vec_retained_bytes(&config.edge_padding_high),
+        vec_retained_bytes(&config.interior_padding),
+    ])
 }
 
 fn exec_op_retained_bytes(op: &ExecOp) -> usize {
@@ -532,25 +552,30 @@ fn exec_op_retained_bytes(op: &ExecOp) -> usize {
 }
 
 fn exec_instruction_retained_bytes(inst: &ExecInstruction) -> usize {
-    size_of::<ExecInstruction>()
-        + exec_op_retained_bytes(&inst.op)
-        + vec_retained_bytes(&inst.input_slots)
-        + vec_retained_bytes(&inst.output_slots)
-        + vec_of_vec_retained_bytes(&inst.output_shapes)
-        + vec_of_vec_retained_bytes(&inst.output_extents)
-        + vec_retained_bytes(&inst.last_use)
+    saturating_sum([
+        size_of::<ExecInstruction>(),
+        exec_op_retained_bytes(&inst.op),
+        vec_retained_bytes(&inst.input_slots),
+        vec_retained_bytes(&inst.output_slots),
+        vec_of_vec_retained_bytes(&inst.output_shapes),
+        vec_of_vec_retained_bytes(&inst.output_extents),
+        vec_retained_bytes(&inst.last_use),
+    ])
 }
 
 fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
-    size_of::<ExecProgram>()
-        + vec_retained_bytes(&program.instructions)
-        + program
-            .instructions
-            .iter()
-            .map(exec_instruction_retained_bytes)
-            .sum::<usize>()
-        + vec_retained_bytes(&program.input_slots)
-        + vec_retained_bytes(&program.output_slots)
+    saturating_sum([
+        size_of::<ExecProgram>(),
+        vec_retained_bytes(&program.instructions),
+        saturating_sum(
+            program
+                .instructions
+                .iter()
+                .map(exec_instruction_retained_bytes),
+        ),
+        vec_retained_bytes(&program.input_slots),
+        vec_retained_bytes(&program.output_slots),
+    ])
 }
 
 pub(crate) fn compile_cache_stats(cache: &LruCache<CacheKey, ExecProgram>) -> CacheStats {
@@ -559,10 +584,17 @@ pub(crate) fn compile_cache_stats(cache: &LruCache<CacheKey, ExecProgram>) -> Ca
         retained_bytes: cache
             .iter()
             .map(|(key, program)| {
-                cache_key_retained_bytes(key) + exec_program_retained_bytes(program)
+                saturating_sum([
+                    cache_key_retained_bytes(key),
+                    exec_program_retained_bytes(program),
+                ])
             })
-            .sum(),
+            .fold(0usize, usize::saturating_add),
     }
+}
+
+fn saturating_sum(values: impl IntoIterator<Item = usize>) -> usize {
+    values.into_iter().fold(0usize, usize::saturating_add)
 }
 
 #[cfg(test)]

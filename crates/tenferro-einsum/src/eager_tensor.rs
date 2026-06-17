@@ -20,7 +20,10 @@ use tenferro_runtime::ExtensionCacheKey;
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
-use crate::cache::{EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE, EINSUM_EXTENSION_FAMILY_ID};
+use crate::cache::{
+    saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
+    EINSUM_EXTENSION_FAMILY_ID,
+};
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
 };
@@ -468,42 +471,44 @@ fn execute_eager_einsum_program(
 }
 
 fn expanded_eager_program_retained_bytes(program: &ExpandedEagerProgram) -> usize {
-    size_of::<ExpandedEagerProgram>()
-        + vec_retained_bytes(&program.input_slots)
-        + compiled_program_retained_bytes(&program.compiled)
+    saturating_sum([
+        size_of::<ExpandedEagerProgram>(),
+        vec_retained_bytes(&program.input_slots),
+        compiled_program_retained_bytes(&program.compiled),
+    ])
 }
 
 fn compiled_program_retained_bytes(program: &CompiledProgram<StdTensorOp>) -> usize {
-    size_of::<CompiledProgram<StdTensorOp>>()
-        + vec_retained_bytes(&program.instructions)
-        + vec_retained_bytes(&program.input_slots)
-        + vec_retained_bytes(&program.output_slots)
-        + program
-            .instructions
-            .iter()
-            .map(instruction_retained_bytes)
-            .sum::<usize>()
+    saturating_sum([
+        size_of::<CompiledProgram<StdTensorOp>>(),
+        vec_retained_bytes(&program.instructions),
+        vec_retained_bytes(&program.input_slots),
+        vec_retained_bytes(&program.output_slots),
+        saturating_sum(program.instructions.iter().map(instruction_retained_bytes)),
+    ])
 }
 
 fn instruction_retained_bytes(instruction: &Instruction<StdTensorOp>) -> usize {
-    size_of::<Instruction<StdTensorOp>>()
-        + std_tensor_op_retained_bytes(&instruction.operation)
-        + vec_retained_bytes(&instruction.inputs)
-        + vec_retained_bytes(&instruction.outputs)
+    saturating_sum([
+        size_of::<Instruction<StdTensorOp>>(),
+        std_tensor_op_retained_bytes(&instruction.operation),
+        vec_retained_bytes(&instruction.inputs),
+        vec_retained_bytes(&instruction.outputs),
+    ])
 }
 
 fn std_tensor_op_retained_bytes(op: &StdTensorOp) -> usize {
     match op {
-        StdTensorOp::DotGeneral { config } => {
-            vec_retained_bytes(&config.lhs_contracting_dims)
-                + vec_retained_bytes(&config.rhs_contracting_dims)
-                + vec_retained_bytes(&config.lhs_batch_dims)
-                + vec_retained_bytes(&config.rhs_batch_dims)
-        }
+        StdTensorOp::DotGeneral { config } => saturating_sum([
+            vec_retained_bytes(&config.lhs_contracting_dims),
+            vec_retained_bytes(&config.rhs_contracting_dims),
+            vec_retained_bytes(&config.lhs_batch_dims),
+            vec_retained_bytes(&config.rhs_batch_dims),
+        ]),
         StdTensorOp::Transpose { perm } => vec_retained_bytes(perm),
         StdTensorOp::Reshape { to_shape } => vec_retained_bytes(to_shape),
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            vec_retained_bytes(shape) + vec_retained_bytes(dims)
+            saturating_sum([vec_retained_bytes(shape), vec_retained_bytes(dims)])
         }
         StdTensorOp::Constant { bytes, .. } => vec_retained_bytes(bytes),
         StdTensorOp::ReduceSum { axes }
@@ -518,18 +523,14 @@ fn std_tensor_op_retained_bytes(op: &StdTensorOp) -> usize {
             start_index_map,
             slice_sizes,
             ..
-        } => {
-            vec_retained_bytes(offset_dims)
-                + vec_retained_bytes(collapsed_slice_dims)
-                + vec_retained_bytes(start_index_map)
-                + vec_retained_bytes(slice_sizes)
-        }
+        } => saturating_sum([
+            vec_retained_bytes(offset_dims),
+            vec_retained_bytes(collapsed_slice_dims),
+            vec_retained_bytes(start_index_map),
+            vec_retained_bytes(slice_sizes),
+        ]),
         _ => 0,
     }
-}
-
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
 }
 
 fn try_execute_eager_broadcast_multiply_pattern(

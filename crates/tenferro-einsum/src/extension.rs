@@ -37,8 +37,9 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
-    einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID,
-    EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE, EINSUM_RUNTIME_PLANS_CACHE,
+    einsum_subscripts_retained_bytes, saturating_sum, vec_of_vec_retained_bytes,
+    vec_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE,
+    EINSUM_RUNTIME_PLANS_CACHE,
 };
 #[cfg(test)]
 use crate::optimize::default_auto_options;
@@ -957,7 +958,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
             build_runtime_exec_program::<B>(tree.as_ref(), inputs, &shapes, compiler_options)?;
         let key_retained_bytes = runtime_exec_program_key_retained_bytes(op, inputs, &shapes);
         caches.put_with_retained_bytes(key, cached, move |cached| {
-            key_retained_bytes + cached_runtime_exec_program_retained_bytes(cached)
+            saturating_sum([
+                key_retained_bytes,
+                cached_runtime_exec_program_retained_bytes(cached),
+            ])
         });
     }
     let cached = caches
@@ -1074,14 +1078,13 @@ fn runtime_exec_program_key_retained_bytes(
     inputs: &[&Tensor],
     shapes: &[Vec<usize>],
 ) -> usize {
-    einsum_subscripts_retained_bytes(op.subscripts())
-        + shapes
-            .iter()
-            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
-            .sum::<usize>()
-        + inputs.len() * std::mem::size_of::<DType>()
-        + std::mem::size_of::<u64>()
-        + std::mem::size_of::<u64>()
+    saturating_sum([
+        einsum_subscripts_retained_bytes(op.subscripts()),
+        saturating_sum(shapes.iter().map(vec_retained_bytes)),
+        inputs.len().saturating_mul(std::mem::size_of::<DType>()),
+        std::mem::size_of::<u64>(),
+        std::mem::size_of::<u64>(),
+    ])
 }
 
 fn build_runtime_exec_program<B: TensorBackend>(
@@ -1181,41 +1184,50 @@ fn runtime_program_inputs(
 fn cached_runtime_exec_program_retained_bytes<C: RuntimeCacheControl>(
     cached: &CachedRuntimeExecProgram<C>,
 ) -> usize {
-    std::mem::size_of::<CachedRuntimeExecProgram<C>>()
-        + exec_program_retained_bytes(&cached.program)
-        + smallvec_retained_bytes(&cached.input_indices)
-        + cached.backend_cache.stats().retained_bytes
-        + std::mem::size_of_val(&cached.optimizer_fingerprint)
+    saturating_sum([
+        std::mem::size_of::<CachedRuntimeExecProgram<C>>(),
+        exec_program_retained_bytes(&cached.program),
+        smallvec_retained_bytes(&cached.input_indices),
+        cached.backend_cache.stats().retained_bytes,
+        std::mem::size_of_val(&cached.optimizer_fingerprint),
+    ])
 }
 
 fn smallvec_retained_bytes<A: smallvec::Array>(values: &SmallVec<A>) -> usize {
     if values.spilled() {
-        values.capacity() * std::mem::size_of::<A::Item>()
+        values
+            .capacity()
+            .saturating_mul(std::mem::size_of::<A::Item>())
     } else {
         0
     }
 }
 
 fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
-    std::mem::size_of::<ExecProgram>()
-        + vec_retained_bytes(&program.instructions)
-        + program
-            .instructions
-            .iter()
-            .map(exec_instruction_retained_bytes)
-            .sum::<usize>()
-        + vec_retained_bytes(&program.input_slots)
-        + vec_retained_bytes(&program.output_slots)
+    saturating_sum([
+        std::mem::size_of::<ExecProgram>(),
+        vec_retained_bytes(&program.instructions),
+        saturating_sum(
+            program
+                .instructions
+                .iter()
+                .map(exec_instruction_retained_bytes),
+        ),
+        vec_retained_bytes(&program.input_slots),
+        vec_retained_bytes(&program.output_slots),
+    ])
 }
 
 fn exec_instruction_retained_bytes(inst: &ExecInstruction) -> usize {
-    std::mem::size_of::<ExecInstruction>()
-        + exec_op_retained_bytes(&inst.op)
-        + vec_retained_bytes(&inst.input_slots)
-        + vec_retained_bytes(&inst.output_slots)
-        + vec_of_vec_retained_bytes(&inst.output_shapes)
-        + vec_of_vec_retained_bytes(&inst.output_extents)
-        + vec_retained_bytes(&inst.last_use)
+    saturating_sum([
+        std::mem::size_of::<ExecInstruction>(),
+        exec_op_retained_bytes(&inst.op),
+        vec_retained_bytes(&inst.input_slots),
+        vec_retained_bytes(&inst.output_slots),
+        vec_of_vec_retained_bytes(&inst.output_shapes),
+        vec_of_vec_retained_bytes(&inst.output_extents),
+        vec_retained_bytes(&inst.last_use),
+    ])
 }
 
 fn exec_op_retained_bytes(op: &ExecOp) -> usize {
@@ -1224,14 +1236,6 @@ fn exec_op_retained_bytes(op: &ExecOp) -> usize {
         ExecOp::Extension(extension) => std::mem::size_of_val(extension),
         _ => 0,
     }
-}
-
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * std::mem::size_of::<T>()
-}
-
-fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum()
 }
 
 fn cached_runtime_tree<B: TensorBackend>(
@@ -1254,13 +1258,12 @@ fn cached_runtime_tree<B: TensorBackend>(
     }
 
     let tree = Arc::new(build().map_err(einsum_runtime_error)?);
-    let retained_bytes = einsum_subscripts_retained_bytes(subscripts)
-        + shapes
-            .iter()
-            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
-            .sum::<usize>()
-        + std::mem::size_of::<u64>()
-        + tree.retained_bytes_for_cache_stats();
+    let retained_bytes = saturating_sum([
+        einsum_subscripts_retained_bytes(subscripts),
+        saturating_sum(shapes.iter().map(vec_retained_bytes)),
+        std::mem::size_of::<u64>(),
+        tree.retained_bytes_for_cache_stats(),
+    ]);
     ctx.caches_mut().put(key, Arc::clone(&tree), retained_bytes);
     Ok(tree)
 }

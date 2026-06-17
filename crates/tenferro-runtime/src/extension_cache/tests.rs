@@ -98,6 +98,18 @@ fn dynamic_retained_bytes_follow_mutated_cache_entries() {
 }
 
 #[test]
+fn store_stats_saturate_retained_bytes() {
+    let mut store = ExtensionCacheStore::new();
+    store.put(key(FAMILY_A, PLANS, 1), 1_u64, usize::MAX);
+    store.put(key(FAMILY_A, PLANS, 2), 2_u64, usize::MAX);
+
+    assert_eq!(
+        store.stats(ExtensionCacheSelector::All).retained_bytes,
+        usize::MAX
+    );
+}
+
+#[test]
 fn clear_selected_removes_only_matching_entries() {
     let mut store = ExtensionCacheStore::new();
     let a_plan = key(FAMILY_A, PLANS, 1);

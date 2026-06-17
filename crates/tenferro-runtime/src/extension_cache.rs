@@ -273,7 +273,7 @@ impl ExtensionCacheStore {
     /// let mut store = ExtensionCacheStore::new();
     /// let key = ExtensionCacheKey::new("example.cache.v1", "plans", 0);
     /// store.put_with_retained_bytes(key, Vec::<usize>::with_capacity(2), |values| {
-    ///     values.capacity() * std::mem::size_of::<usize>()
+    ///     values.capacity().saturating_mul(std::mem::size_of::<usize>())
     /// });
     /// let values = store.get_mut::<Vec<usize>>(&key).unwrap();
     /// values.reserve_exact(4);
@@ -360,7 +360,7 @@ impl ExtensionCacheStore {
                 .iter()
                 .filter(|(key, _)| selector.matches(key))
                 .map(|(_, entry)| entry.value.retained_bytes())
-                .sum(),
+                .fold(0usize, usize::saturating_add),
         }
     }
 }

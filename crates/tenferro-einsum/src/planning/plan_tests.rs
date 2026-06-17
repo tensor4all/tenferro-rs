@@ -94,3 +94,32 @@ fn pairwise_step_plan_preserves_strict_lowering_error_type() {
             if message.contains("unknown size")
     ));
 }
+
+#[test]
+fn pairwise_step_plan_rejects_overflowing_fused_dimensions() {
+    let size_dict = [(0, usize::MAX), (1, 2), (2, 3), (4, 2)]
+        .into_iter()
+        .collect();
+
+    let err = compile_pairwise_step_plan(&[0, 4, 1], &[1, 2], &[0, 4, 2], &size_dict).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidArgument(message)
+            if message.contains("dimension product overflow")
+    ));
+}
+
+#[test]
+fn strict_binary_lowering_rejects_overflowing_fused_dimensions() {
+    let subs = Subscripts::new(&[&[0, 4, 1], &[1, 2]], &[0, 4, 2]);
+    let shapes = [&[usize::MAX, 2, 2][..], &[2, 3][..]];
+
+    let err = compile_strict_step_plan(&subs, &shapes).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidArgument(message)
+            if message.contains("dimension product overflow")
+    ));
+}

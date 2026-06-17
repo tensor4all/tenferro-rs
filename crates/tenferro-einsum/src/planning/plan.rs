@@ -280,9 +280,9 @@ pub(crate) fn compile_pairwise_step_plan(
     let ro_sizes: Vec<usize> = ro_modes.iter().map(|m| size_dict[m]).collect();
     let sum_sizes: Vec<usize> = sum_modes.iter().map(|m| size_dict[m]).collect();
 
-    let m = product_or_one_for_empty(&lo_sizes);
-    let n = product_or_one_for_empty(&ro_sizes);
-    let k = product_or_one_for_empty(&sum_sizes);
+    let m = product_or_one_for_empty(&lo_sizes, "left-only")?;
+    let n = product_or_one_for_empty(&ro_sizes, "right-only")?;
+    let k = product_or_one_for_empty(&sum_sizes, "contracted")?;
 
     let target_a: Vec<u32> = lo_modes
         .iter()
@@ -359,12 +359,22 @@ pub(crate) fn compile_pairwise_step_plan(
     })
 }
 
-fn product_or_one_for_empty(sizes: &[usize]) -> usize {
+fn product_or_one_for_empty(sizes: &[usize], label: &'static str) -> EinsumResult<usize> {
     if sizes.is_empty() {
-        1
+        Ok(1)
     } else {
-        sizes.iter().product()
+        checked_product(sizes, label)
     }
+}
+
+fn checked_product(sizes: &[usize], label: &'static str) -> EinsumResult<usize> {
+    sizes.iter().try_fold(1usize, |acc, &size| {
+        acc.checked_mul(size).ok_or_else(|| {
+            crate::Error::InvalidArgument(format!(
+                "dimension product overflow while fusing {label} dimensions {sizes:?}"
+            ))
+        })
+    })
 }
 
 /// Compile step plans for all steps in a contraction tree.

@@ -12,8 +12,8 @@ use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph_dim_expr;
 use crate::cache::{
-    einsum_subscripts_retained_bytes, ParsedEinsum, EINSUM_EXTENSION_FAMILY_ID, EINSUM_PARSE_CACHE,
-    EINSUM_STATIC_PLANS_CACHE,
+    einsum_subscripts_retained_bytes, saturating_sum, vec_retained_bytes, ParsedEinsum,
+    EINSUM_EXTENSION_FAMILY_ID, EINSUM_PARSE_CACHE, EINSUM_STATIC_PLANS_CACHE,
 };
 #[cfg(feature = "autodiff")]
 use crate::extension::ensure_einsum_extension_rule_registered;
@@ -331,7 +331,10 @@ fn cached_subscripts(
     let parsed = Arc::new(ParsedEinsum {
         subscripts: parse_einsum_subscripts(notation).map_err(to_tenferro_error)?,
     });
-    let retained_bytes = notation.len() + einsum_subscripts_retained_bytes(&parsed.subscripts);
+    let retained_bytes = saturating_sum([
+        notation.len(),
+        einsum_subscripts_retained_bytes(&parsed.subscripts),
+    ]);
     caches.put(key, Arc::clone(&parsed), retained_bytes);
     Ok(parsed)
 }
@@ -356,13 +359,12 @@ fn cached_static_tree(
     }
 
     let tree = Arc::new(build().map_err(to_tenferro_error)?);
-    let retained_bytes = einsum_subscripts_retained_bytes(subscripts)
-        + shapes
-            .iter()
-            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
-            .sum::<usize>()
-        + std::mem::size_of::<u64>()
-        + tree.retained_bytes_for_cache_stats();
+    let retained_bytes = saturating_sum([
+        einsum_subscripts_retained_bytes(subscripts),
+        saturating_sum(shapes.iter().map(vec_retained_bytes)),
+        std::mem::size_of::<u64>(),
+        tree.retained_bytes_for_cache_stats(),
+    ]);
     caches.put(key, Arc::clone(&tree), retained_bytes);
     Ok(tree)
 }
