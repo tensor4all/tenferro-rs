@@ -2,103 +2,113 @@
 
 ## Summary
 
-Fixed a second bounded batch of recent `terasakisatoshi` reports after the
-previous batch merged. The implemented fixes focus on low-risk shared patterns:
-AD transpose metadata for `BroadcastInDim`, rank-changing reshape preservation
-in compiler layout simplification, checked fused-dimension products in einsum
-planning, saturating cache retained-byte accounting, and CubeCL raw device
-pointer runtime-residency checks.
+Fixed the remaining substantive `terasakisatoshi` bug reports in one
+non-squash PR batch after the previous batch merged. The final scope is a
+same-root-cause remediation sweep across runtime shape validation, public
+fallible APIs, AD metadata and linalg rules, eager poison handling, GPU
+residency/FFI checks, CPU buffer-pool initialization contracts, and repository
+workflow guidance.
 
-The PR also updates the repository remediation rule for false positives:
-intentional invariants must be recorded in the issue or PR ledger, and unclear
-invariants should get a nearby comment, rustdoc note, or source-contract test
-so later humans and AI agents do not rediscover the same non-bug.
-As a follow-up, the `tenferro-bugfix-pr` workflow and skill adapters now always
-read the remediation workflow, route related bug batches to it, and require
-same-root-cause scans, non-squash batch PRs, audit-rule proposals, and
-false-positive source comments or source-contract tests when appropriate.
-Codex, Claude Code, OpenCode, and Kimi CLI entry points are kept in sync, and
-new audit-rule proposals must inventory and merge overlapping existing rules
-where possible.
+The durable rule learned from this batch is general: when a potentially
+dangerous-looking operation is intentional, add a nearby comment, rustdoc note,
+or source-contract test explaining the invariant instead of only dismissing the
+report as a false positive. New audit rules should be merged into existing
+rules where possible so the rule set stays usable.
 
 ## Context Read
 
 - `AGENTS.md`, `CONTRIBUTING.md`, `REPOSITORY_RULES.md`
+- `ai/contribution-workflows/bugfix-pr.md`
 - `ai/contribution-workflows/repository-remediation.md`
 - Previous work log `docs/worklogs/2026-06-17-terasaki-bug-batch.md`
-- Mini-agent audit slices for tensor shape/arithmetic, AD/eager metadata,
-  runtime/compiler/cache, and GPU/FFI contracts
-- Affected modules in `tenferro-internal-ops`, `tenferro-runtime`,
-  `tenferro-einsum`, and `tenferro-gpu`
-
-## Decisions
-
-- Fixed #1092 by making the `BroadcastInDim` transpose rule restore the
-  cotangent axis order after reducing broadcast-only axes. Non-monotonic
-  `dims` now produces the required transpose before reshape.
-- Fixed #1107 in the algebraic layout simplifier by requiring known input rank
-  metadata before removing reshapes. Rank-reducing reshapes are no longer
-  treated as identity layout operations.
-- Treated the `dot_conj_folding` part of #1107 as a false positive: the pass
-  moves `Conj` through transparent layout ops but keeps the `DotGeneral`
-  operand wired to the reshape output. Added a source-contract test and a
-  nearby comment to prevent future misclassification.
-- Fixed #1090 by replacing unchecked products for fused einsum matrix
-  dimensions with checked products in both pairwise planning and strict binary
-  lowering.
-- Fixed #1108 by making runtime graph cache retained-byte accounting saturate
-  instead of wrapping or panicking. The follow-up audit found the same
-  retained-byte pattern in `tenferro-einsum` extension caches, so those
-  estimates now share saturating helpers too.
-- Fixed the low-risk raw-pointer part of #1088 by validating CubeCL tensor
-  residency before exposing raw device pointers to interop or cuTENSOR GEMM
-  FFI. Each raw pointer path carries a one-line invariant comment.
-- Updated `ai/contribution-workflows/bugfix-pr.md` plus Codex, Claude Code,
-  OpenCode, and Kimi `tenferro-bugfix-pr` adapters so future ordinary bug-fix
-  agents read the remediation workflow and repeat the batch pattern when a user
-  asks for related issues in one PR.
-- Added the audit-rule inventory rule: before adding a new audit or repository
-  rule, check nearby existing rules and merge, tighten, or relocate overlapping
-  guidance when possible.
-- Kept the batch scoped to single-PR minor fixes. Reports that require broad
-  fallible API changes, poisoning policy changes, or unsafe/FFI lifecycle
-  redesign are classified as design-gated instead of being partially rewritten.
+- Current open `terasakisatoshi` issue list from GitHub
+- Mini-agent audits for public panic/API, GPU/FFI residency, and workflow rules
 
 ## Classification Ledger
 
-- Fixed in this PR: #1090, #1092, #1107 layout-simplifier case, #1108 retained
-  byte accounting, and the raw CubeCL pointer residency portion of #1088.
-- False positive with source-contract coverage: #1107 `dot_conj_folding`
-  reshape bypass concern.
-- Stale or already fixed on current `origin/main`: #1089, #1094, #1095, #1097,
-  #1100, and the cache-key payload side of #1108.
-- Design-gated follow-up: #1082 and #1098 need fallible `DimExpr` and shape
-  evaluation APIs; #1093, #1102, #1103, and broad #1084 need a public
-  panic/poison policy sweep; #1096 needs an explicit policy for legacy
-  `extension::apply`; #1099 needs an unsafe-proof/design update for borrowed
-  slot workspaces; #1091, #1105, #1106, and #1109 need a broader GPU FFI and
-  lifecycle review.
+- Fixed in this PR: #1076, #1082, #1084, #1088, #1089, #1090, #1091, #1092,
+  #1093, #1094, #1095, #1096, #1097, #1098, #1099, #1100, #1101, #1102,
+  #1103, #1104, #1105, #1106, #1107, #1108, and #1109.
+- False positive with source-contract or source comments: the #1107
+  `dot_conj_folding` concern. The pass moves `Conj` through transparent layout
+  ops, while the `DotGeneral` operand remains wired to the layout output.
+- Out of this bug-fix PR: #1054 is documentation/enhancement work, not a
+  substantive bug in this batch.
 
-## Audit Notes
+## Fixed Patterns
 
-- `rg` audit for retained-byte arithmetic found unchecked `sum::<usize>()`,
-  `capacity() *`, and `+` chains in runtime graph cache and einsum extension
-  cache estimates. Runtime and einsum cache estimates now saturate.
-- `rg` audit for einsum planning products found the fused-dimension products
-  in pairwise and strict binary planning. Both now return `InvalidArgument` on
-  overflow.
-- The remaining runtime graph/ad-support boolean zero/one tensor products are
-  design-gated because making them fallible affects public tangent/default-input
-  APIs and the broader #1082/#1084 shape-arithmetic policy.
-- The raw CubeCL pointer audit found two exposed paths. Both now validate
-  runtime/device residency before obtaining backend-native resources.
+- Runtime and tensor shape arithmetic now uses fallible checked paths for
+  `DimExpr` evaluation, shape inference, graph compilation, accessors, tensor
+  constructors, and fused einsum dimension products.
+- Public panic surfaces now have fallible alternatives and compatibility-wrapper
+  comments where the panic API remains: tensor accessors/constructors,
+  `extension::apply`, traced symbolic axis helpers, reductions, tropical
+  composition helpers, CPU context/cache helpers, and CUDA extension cache
+  helpers.
+- AD structural/indexing/linalg rules fail closed on malformed metadata,
+  symbolic non-concrete shapes, invalid rank, mismatched scatter/gather window
+  metadata, non-square LU variants, and invalid extension metadata instead of
+  panicking.
+- Eager AD/runtime paths return typed errors for backend or extension poison,
+  backend execution errors, invalid recorded graph inputs, and shape-packing
+  upload failures.
+- GPU CUDA/CubeCL/WebGPU paths now validate runtime/device residency before
+  zero-sized fast paths, downloads, raw device pointer exposure, GEMM/cuTENSOR
+  FFI, scatter launches, and linalg downloads. FFI/provider assumptions carry
+  local `SAFETY` comments or source-contract tests.
+- CPU buffer-pool acquisition separates uninitialized/stale output buffers from
+  zeroed buffers. Every uninitialized-pool acquisition has a one-line
+  write-before-read rationale; read-before-write faer paths use zeroed storage.
+- Borrowed graph-executor slot workspace no longer retypes a
+  `Vec<Option<ExecSlot<'static>>>` allocation with `Vec::from_raw_parts`.
+  Borrowed-input execution uses a lifetime-local workspace and retains capacity
+  separately.
+- Runtime shape validation now rejects duplicate gather dims, invalid
+  concatenate non-axis dimensions, unreadable backend default tensor equality,
+  and malformed terminal lazy-view instruction arity before execution while
+  still allowing symbolic shape-reference inputs for dynamic reshape/broadcast
+  arity.
+
+## Workflow And Rule Updates
+
+- `repository-remediation.md` is mandatory reading from the bug-fix workflow.
+- `tenferro-bugfix-pr` adapters cover Codex, Claude Code, OpenCode, and Kimi
+  CLI, and route related issue batches to the remediation workflow.
+- Bug-fix workflow guidance now requires same-root-cause/same-pattern searches,
+  one non-squash PR for related batches, audit-rule proposals when useful, and
+  source comments or source-contract tests for false positives whose invariants
+  are not obvious.
+- Before adding a new audit/repository rule, agents must inventory nearby rules
+  and merge, tighten, or relocate overlapping guidance where possible.
 
 ## Verification
 
-- `cargo fmt --all`
-- `git diff --check`
-- `cargo test -p tenferro-runtime`
-- `cargo test -p tenferro-einsum`
-- `cargo test -p tenferro-einsum --features autodiff`
-- `cargo test -p tenferro-internal-ops`
+Final local verification before push:
+
+- `cargo check -p tenferro-tensor -p tenferro-internal-ops -p tenferro-runtime -p tenferro-einsum -p tenferro-fft -p tenferro-linalg --features tenferro-linalg/autodiff`
+- `cargo test -p tenferro-runtime --lib`
+- `cargo test -p tenferro-runtime --test extension_runtime`
+- `cargo test -p tenferro-tensor --lib`
+- `cargo test -p tenferro-internal-ops --lib`
+- `cargo test -p tenferro-cpu --lib`
+- `cargo test -p tenferro-cpu --features provider-inject --test inject_tests`
+- `cargo test -p tenferro-ad --lib`
+- `cargo test -p tenferro-einsum --lib`
+- `cargo test -p tenferro-einsum --features autodiff --lib`
+- `cargo test -p tenferro-fft --lib`
+- `cargo test -p tenferro-linalg --features autodiff --lib`
 - `cargo test -p tenferro-gpu --test cubecl_launch_contract`
+- `cargo test -p tenferro-gpu --features webgpu --test webgpu_backend_contract`
+- `cargo test -p tenferro-linalg --test gpu_linalg_source_contract`
+- `cargo check -p tenferro-gpu --features webgpu --lib`
+- `cargo check -p tenferro-gpu --features cuda --lib`
+- `cargo check -p tenferro-cpu --features provider-inject --lib`
+- `cargo check -p tenferro-linalg --features cuda,provider-inject,autodiff --lib`
+- `cargo test` in `ext/tropical`
+- `cargo test --features autodiff` in `ext/tropical`
+- `cargo fmt --all --check`
+- `cargo fmt --all --check` in `ext/tropical`
+- `git diff --check`
+
+No cloud GPU run was used for debugging this batch; GPU coverage here is local
+source-contract tests plus feature compilation.

@@ -80,6 +80,8 @@ macro_rules! impl_faer_gemm {
                 let b_cs = super::normalize_singleton_stride(b_cs, n, k);
                 let c_rs = super::normalize_singleton_stride(c_rs, m, 1);
                 let c_cs = super::normalize_singleton_stride(c_cs, n, m);
+                // SAFETY: callers pass dense tensor storage plus validated GEMM
+                // dimensions/strides; singleton strides are normalized above.
                 let a_mat = MatRef::<$ty>::from_raw_parts(a_ptr, m, k, a_rs, a_cs);
                 let b_mat = MatRef::<$ty>::from_raw_parts(b_ptr, k, n, b_rs, b_cs);
                 let zero = <$ty as num_traits::Zero>::zero();
@@ -101,6 +103,9 @@ macro_rules! impl_faer_gemm {
                     }
                     Accum::Add
                 };
+                // SAFETY: `c_ptr` points at the caller-owned output buffer for
+                // an m x n dense result; beta=0 paths may receive uninitialized
+                // storage because faer uses Accum::Replace.
                 let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
                 let conj_a = if conj_a { Conj::Yes } else { Conj::No };
                 let conj_b = if conj_b { Conj::Yes } else { Conj::No };

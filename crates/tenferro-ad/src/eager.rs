@@ -232,6 +232,14 @@ impl EagerRuntime {
             .map_err(|_| Error::Internal("extension executor lock poisoned".to_string()))
     }
 
+    fn lock_grad_slots(
+        &self,
+    ) -> Result<MutexGuard<'_, HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>> {
+        self.grad_slots
+            .lock()
+            .map_err(|_| Error::Internal("gradient slot registry lock poisoned".to_string()))
+    }
+
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_rules(backend, None)
     }
@@ -409,7 +417,15 @@ impl EagerRuntime {
     /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
     /// ```
     pub fn clear_extension_caches(&self) {
-        self.extension_executor.lock().unwrap().clear_caches();
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_clear_extension_caches`; this boundary must not panic on poison.
+        let _ = self.try_clear_extension_caches();
+    }
+
+    /// Fallibly clear generic extension runtime cache entries.
+    pub fn try_clear_extension_caches(&self) -> Result<()> {
+        self.lock_extension_executor()?.clear_caches();
+        Ok(())
     }
 
     /// Clear every cache owned by this eager context.
@@ -425,7 +441,14 @@ impl EagerRuntime {
     /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
     /// ```
     pub fn clear_caches(&self) {
-        self.clear_extension_caches();
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_clear_caches`; this boundary must not panic on poison.
+        let _ = self.try_clear_caches();
+    }
+
+    /// Fallibly clear every cache owned by this eager context.
+    pub fn try_clear_caches(&self) -> Result<()> {
+        self.try_clear_extension_caches()
     }
 
     /// Return eager runtime cache-entry and retained-byte stats.
@@ -441,22 +464,41 @@ impl EagerRuntime {
     /// assert_eq!(stats.extensions.entries, 0);
     /// ```
     pub fn cache_stats(&self) -> EagerRuntimeCacheStats {
-        EagerRuntimeCacheStats {
-            extensions: self.extension_executor.lock().unwrap().cache_stats(),
-        }
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_cache_stats`; stats default to empty when the runtime is poisoned.
+        self.try_cache_stats().unwrap_or_default()
+    }
+
+    /// Fallibly return eager runtime cache-entry and retained-byte stats.
+    pub fn try_cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
+        Ok(EagerRuntimeCacheStats {
+            extensions: self.lock_extension_executor()?.cache_stats(),
+        })
     }
 
     /// Return the extension cache retention limits.
     pub fn extension_cache_limits(&self) -> ExtensionCacheLimits {
-        self.extension_executor.lock().unwrap().cache_limits()
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_extension_cache_limits`.
+        self.try_extension_cache_limits().unwrap_or_default()
+    }
+
+    /// Fallibly return the extension cache retention limits.
+    pub fn try_extension_cache_limits(&self) -> Result<ExtensionCacheLimits> {
+        Ok(self.lock_extension_executor()?.cache_limits())
     }
 
     /// Replace extension cache retention limits.
     pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) {
-        self.extension_executor
-            .lock()
-            .unwrap()
-            .set_cache_limits(limits);
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_set_extension_cache_limits`; this boundary must not panic on poison.
+        let _ = self.try_set_extension_cache_limits(limits);
+    }
+
+    /// Fallibly replace extension cache retention limits.
+    pub fn try_set_extension_cache_limits(&self, limits: ExtensionCacheLimits) -> Result<()> {
+        self.lock_extension_executor()?.set_cache_limits(limits);
+        Ok(())
     }
 
     /// Mutably borrow generic extension runtime cache storage.
@@ -481,9 +523,12 @@ impl EagerRuntime {
     ///
     /// assert_eq!(ctx.cache_stats().extensions.entries, 1);
     /// ```
-    pub fn with_extension_caches_mut<R>(&self, f: impl FnOnce(&mut ExtensionCacheStore) -> R) -> R {
-        let mut executor = self.extension_executor.lock().unwrap();
-        f(executor.caches_mut())
+    pub fn with_extension_caches_mut<R>(
+        &self,
+        f: impl FnOnce(&mut ExtensionCacheStore) -> R,
+    ) -> Result<R> {
+        let mut executor = self.lock_extension_executor()?;
+        Ok(f(executor.caches_mut()))
     }
 
     /// Mutably borrow this runtime's backend.
@@ -504,9 +549,9 @@ impl EagerRuntime {
     /// let answer = ctx.with_backend_mut(|_backend| 42);
     /// assert_eq!(answer, 42);
     /// ```
-    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> R {
-        let mut backend = self.backend.lock().unwrap();
-        f(&mut backend)
+    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
+        let mut backend = self.lock_backend()?;
+        Ok(f(&mut backend))
     }
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
@@ -642,10 +687,19 @@ impl EagerRuntime {
     }
 
     pub(crate) fn register_grad_slot(&self, key: &ValueKey<StdTensorOp>, slot: &GradSlot) {
-        self.grad_slots
-            .lock()
-            .unwrap()
+        // Constructors cannot return an error today. Avoid reading or mutating
+        // poisoned state; fallible paths such as `backward` report the poison.
+        let _ = self.try_register_grad_slot(key, slot);
+    }
+
+    pub(crate) fn try_register_grad_slot(
+        &self,
+        key: &ValueKey<StdTensorOp>,
+        slot: &GradSlot,
+    ) -> Result<()> {
+        self.lock_grad_slots()?
             .insert(key.clone(), Arc::downgrade(slot));
+        Ok(())
     }
 
     /// Clear all live gradient slots tracked by this context.
@@ -671,14 +725,33 @@ impl EagerRuntime {
     /// assert!(y.grad().is_none());
     /// ```
     pub fn clear_grads(&self) {
-        self.grad_slots.lock().unwrap().retain(|_, slot| {
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_clear_grads`; this boundary must not panic on poison.
+        let _ = self.try_clear_grads();
+    }
+
+    /// Fallibly clear all live gradient slots tracked by this context.
+    pub fn try_clear_grads(&self) -> Result<()> {
+        let mut poisoned_slot = false;
+        self.lock_grad_slots()?.retain(|_, slot| {
             if let Some(slot) = slot.upgrade() {
-                *slot.lock().unwrap() = None;
+                match slot.lock() {
+                    Ok(mut current) => {
+                        *current = None;
+                    }
+                    Err(_) => {
+                        poisoned_slot = true;
+                    }
+                }
                 true
             } else {
                 false
             }
         });
+        if poisoned_slot {
+            return Err(Error::Internal("gradient slot lock poisoned".to_string()));
+        }
+        Ok(())
     }
 
     /// Import a concrete tensor into this context as an untracked constant.
@@ -735,7 +808,7 @@ impl EagerRuntime {
         let mut updates = Vec::new();
 
         {
-            let mut slots = self.grad_slots.lock().unwrap();
+            let mut slots = self.lock_grad_slots()?;
             slots.retain(|key, slot| {
                 let Some(slot) = slot.upgrade() else {
                     return false;
@@ -750,7 +823,9 @@ impl EagerRuntime {
         }
 
         for (slot, incoming) in updates {
-            let mut current = slot.lock().unwrap();
+            let mut current = slot
+                .lock()
+                .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))?;
             let next = match current.as_ref() {
                 Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
                 None => incoming,
@@ -1045,17 +1120,24 @@ impl EagerTensor {
     /// callers that need owned materialized data after lazy view storage is
     /// introduced.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        Ok(self.value.to_tensor())
+        self.value.try_to_tensor().map_err(Error::from)
     }
 
-    pub(crate) fn materialized_arc(&self) -> Arc<Tensor> {
+    pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
         if let Some(tensor) = self.value.as_tensor_arc() {
-            return Arc::clone(tensor);
+            return Ok(Arc::clone(tensor));
         }
-        Arc::clone(
-            self.materialized_cache
-                .get_or_init(|| Arc::new(self.value.to_tensor())),
-        )
+        if let Some(tensor) = self.materialized_cache.get() {
+            return Ok(Arc::clone(tensor));
+        }
+
+        let materialized = Arc::new(self.value.try_to_tensor().map_err(Error::from)?);
+        let _ = self.materialized_cache.set(Arc::clone(&materialized));
+        Ok(self
+            .materialized_cache
+            .get()
+            .map(Arc::clone)
+            .unwrap_or(materialized))
     }
 
     #[cfg(test)]
@@ -1087,7 +1169,17 @@ impl EagerTensor {
     /// assert_eq!(grad.shape(), &[2]);
     /// ```
     pub fn grad(&self) -> Option<Arc<Tensor>> {
-        self.grad_slot.lock().unwrap().clone()
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_grad`; this boundary must not panic on poison.
+        self.try_grad().ok().flatten()
+    }
+
+    /// Fallibly return the accumulated gradient currently stored for this tensor.
+    pub fn try_grad(&self) -> Result<Option<Arc<Tensor>>> {
+        self.grad_slot
+            .lock()
+            .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))
+            .map(|slot| slot.clone())
     }
 
     /// Clear the accumulated gradient stored for this tensor.
@@ -1114,7 +1206,18 @@ impl EagerTensor {
     /// assert!(y.grad().is_some());
     /// ```
     pub fn clear_grad(&self) {
-        *self.grad_slot.lock().unwrap() = None;
+        // Compatibility wrapper: callers needing poison visibility should use
+        // `try_clear_grad`; this boundary must not panic on poison.
+        let _ = self.try_clear_grad();
+    }
+
+    /// Fallibly clear the accumulated gradient stored for this tensor.
+    pub fn try_clear_grad(&self) -> Result<()> {
+        *self
+            .grad_slot
+            .lock()
+            .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))? = None;
+        Ok(())
     }
 
     /// Report whether this tensor participates in gradient tracking.
@@ -1215,8 +1318,8 @@ impl EagerTensor {
         let initial_data = graph_input_keys
             .iter()
             .zip(inputs.iter())
-            .map(|(key, tensor)| (ValueKey::Input(key.clone()), tensor.materialized_arc()))
-            .collect::<HashMap<_, _>>();
+            .map(|(key, tensor)| Ok((ValueKey::Input(key.clone()), tensor.materialized_arc()?)))
+            .collect::<Result<HashMap<_, _>>>()?;
         let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), &initial_data)?;
         if execution.outputs.len() != graph.outputs().len() {
             return Err(Error::Internal(format!(
@@ -1255,7 +1358,7 @@ impl EagerTensor {
             &execution.outputs,
             execution.retained_values,
             inputs,
-        );
+        )?;
         if recorded.traces.len() != execution.outputs.len() {
             return Err(Error::Internal(format!(
                 "standard eager graph op expected {} eager traces, got {}",
@@ -1320,9 +1423,9 @@ impl EagerTensor {
             });
         }
 
-        let value = self.materialized_arc();
-        let mut backend = self.ctx.backend.lock().unwrap();
-        let mut extension_executor = self.ctx.extension_executor.lock().unwrap();
+        let value = self.materialized_arc()?;
+        let mut backend = self.ctx.lock_backend()?;
+        let mut extension_executor = self.ctx.lock_extension_executor()?;
         let seed = Arc::new(one_like_tensor(value.as_ref(), &mut *backend));
         let mut callbacks = TenferroBackwardCallbacks::new(
             &mut *backend,
@@ -1359,13 +1462,13 @@ impl KeySource<StdTensorOp> for EagerTensorKeySource {
     }
 }
 
-pub(crate) fn eager_value(tensor: &EagerTensor) -> EagerInput<StdTensorOp> {
-    EagerInput {
+pub(crate) fn eager_value(tensor: &EagerTensor) -> Result<EagerInput<StdTensorOp>> {
+    Ok(EagerInput {
         key: tensor.key.clone(),
         trace: tensor.trace.clone(),
         requires_grad: tensor.requires_grad,
-        data: tensor.materialized_arc(),
-    }
+        data: tensor.materialized_arc()?,
+    })
 }
 
 pub(crate) struct RecordedEagerOutputs {
@@ -1377,7 +1480,7 @@ pub(crate) fn record_eager_outputs(
     op: &StdTensorOp,
     outputs: &[Arc<Tensor>],
     inputs: &[&EagerTensor],
-) -> RecordedEagerOutputs {
+) -> Result<RecordedEagerOutputs> {
     let mut recorder = Recorder::new(EagerTensorKeySource);
     let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
     let graph = RecordedGraph::from_primitive(op.clone(), graph_input_keys);
@@ -1396,8 +1499,11 @@ pub(crate) fn record_eager_recorded_graph_outputs(
     outputs: &[Arc<Tensor>],
     retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     inputs: &[&EagerTensor],
-) -> RecordedEagerOutputs {
-    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(tensor)).collect();
+) -> Result<RecordedEagerOutputs> {
+    let input_values: Vec<_> = inputs
+        .iter()
+        .map(|tensor| eager_value(tensor))
+        .collect::<Result<_>>()?;
     let traces = recorder.record_graph(graph, &input_values, outputs, retained_values);
 
     let mut registrations = Vec::new();
@@ -1413,10 +1519,10 @@ pub(crate) fn record_eager_recorded_graph_outputs(
         }
     }
 
-    RecordedEagerOutputs {
+    Ok(RecordedEagerOutputs {
         traces,
         metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)),
-    }
+    })
 }
 
 pub(crate) fn exec_single_output(

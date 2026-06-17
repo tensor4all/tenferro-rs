@@ -262,8 +262,7 @@ pub fn try_backend_broadcast_multiply_untracked(
         return Ok(None);
     }
 
-    let value = {
-        let mut backend = lhs.runtime().backend.lock().unwrap();
+    let value = lhs.runtime().with_backend_mut(|backend| {
         backend.execute_broadcast_multiply_value(
             lhs.tensor_read(),
             lhs_shape,
@@ -271,8 +270,8 @@ pub fn try_backend_broadcast_multiply_untracked(
             rhs.tensor_read(),
             rhs_shape,
             rhs_dims,
-        )?
-    };
+        )
+    })??;
 
     Ok(value.map(|value| EagerTensor::new_untracked_value_result(lhs.runtime().clone(), value)))
 }

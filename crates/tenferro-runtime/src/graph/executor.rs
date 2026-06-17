@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::mem;
 use std::sync::Arc;
 
 use tenferro_ops::input_key::TensorInputKey;
@@ -41,6 +40,7 @@ pub struct GraphExecutor<B: TensorBackend + 'static> {
     backend_cache: B::RuntimeCache,
     extension_executor: ExtensionExecutor<B>,
     slot_workspace: Vec<Option<ExecSlot<'static>>>,
+    borrowed_slot_workspace_capacity: usize,
 }
 
 impl<B: TensorBackend + 'static> fmt::Debug for GraphExecutor<B> {
@@ -49,6 +49,10 @@ impl<B: TensorBackend + 'static> fmt::Debug for GraphExecutor<B> {
             .field("backend_type", &std::any::type_name::<B>())
             .field("cache_stats", &self.cache_stats())
             .field("slot_workspace_len", &self.slot_workspace.len())
+            .field(
+                "borrowed_slot_workspace_capacity",
+                &self.borrowed_slot_workspace_capacity,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -71,6 +75,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
             backend_cache: B::RuntimeCache::default(),
             extension_executor: ExtensionExecutor::new(),
             slot_workspace: Vec::new(),
+            borrowed_slot_workspace_capacity: 0,
         }
     }
 
@@ -686,15 +691,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<ExecSlot<'a>>,
     ) -> Result<Vec<Tensor>> {
         validate_exec_input_count(program, inputs.len())?;
-        let mut slot_workspace = BorrowedSlotWorkspace::new(&mut self.slot_workspace);
-        crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+        let mut slot_workspace = Vec::with_capacity(self.borrowed_slot_workspace_capacity);
+        let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
             &mut self.backend,
             program,
             inputs,
-            slot_workspace.slots(),
+            &mut slot_workspace,
             &mut self.backend_cache,
             Some(&mut self.extension_executor),
-        )
+        );
+        self.borrowed_slot_workspace_capacity = slot_workspace.capacity();
+        result
     }
 
     fn eval_exec_ir_slot_values<'a>(
@@ -703,15 +710,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<ExecSlot<'a>>,
     ) -> Result<Vec<TensorValue>> {
         validate_exec_input_count(program, inputs.len())?;
-        let mut slot_workspace = BorrowedSlotWorkspace::new(&mut self.slot_workspace);
-        crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+        let mut slot_workspace = Vec::with_capacity(self.borrowed_slot_workspace_capacity);
+        let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
             &mut self.backend,
             program,
             inputs,
-            slot_workspace.slots(),
+            &mut slot_workspace,
             &mut self.backend_cache,
             Some(&mut self.extension_executor),
-        )
+        );
+        self.borrowed_slot_workspace_capacity = slot_workspace.capacity();
+        result
     }
 
     /// Clear backend-specific runtime analysis cache entries.
@@ -780,62 +789,6 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
             extensions: self.extension_executor.cache_stats(),
             backend: self.backend_cache.stats(),
         }
-    }
-}
-
-struct BorrowedSlotWorkspace<'workspace, 'input> {
-    target: &'workspace mut Vec<Option<ExecSlot<'static>>>,
-    slots: Option<Vec<Option<ExecSlot<'input>>>>,
-}
-
-impl<'workspace, 'input> BorrowedSlotWorkspace<'workspace, 'input> {
-    fn new(target: &'workspace mut Vec<Option<ExecSlot<'static>>>) -> Self {
-        debug_assert!(
-            target.is_empty(),
-            "executor slot workspace must be empty between runs"
-        );
-        target.clear();
-
-        let mut static_slots = mem::take(target);
-        let ptr = static_slots.as_mut_ptr().cast::<Option<ExecSlot<'input>>>();
-        let len = static_slots.len();
-        let cap = static_slots.capacity();
-        debug_assert_eq!(len, 0);
-        mem::forget(static_slots);
-
-        // SAFETY: `ExecSlot<'static>` and `ExecSlot<'input>` have identical
-        // layout; the allocation is retyped only while the vector length is
-        // zero, so no `ExecSlot` values are live across the lifetime change.
-        let slots = unsafe { Vec::from_raw_parts(ptr, len, cap) };
-        Self {
-            target,
-            slots: Some(slots),
-        }
-    }
-
-    fn slots(&mut self) -> &mut Vec<Option<ExecSlot<'input>>> {
-        self.slots
-            .as_mut()
-            .expect("borrowed slot workspace already restored")
-    }
-}
-
-impl Drop for BorrowedSlotWorkspace<'_, '_> {
-    fn drop(&mut self) {
-        let Some(mut slots) = self.slots.take() else {
-            return;
-        };
-        slots.clear();
-        let ptr = slots.as_mut_ptr().cast::<Option<ExecSlot<'static>>>();
-        let len = slots.len();
-        let cap = slots.capacity();
-        debug_assert_eq!(len, 0);
-        mem::forget(slots);
-
-        // SAFETY: all borrowed `ExecSlot<'input>` values were dropped by
-        // `clear`, and the restored vector is empty. Only the allocation
-        // capacity is retained for the next executor run.
-        *self.target = unsafe { Vec::from_raw_parts(ptr, len, cap) };
     }
 }
 

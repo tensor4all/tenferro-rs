@@ -283,6 +283,8 @@ pub fn scatter_copy_kernel<E: CubePrimitive>(out: &mut Tensor<E>, operand: &Tens
 
 #[cube(launch_unchecked)]
 pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
+    // Atomic<E> is a CubeCL storage view over the same dense output allocation;
+    // the host launch path gates it with `ensure_atomic_add_supported`.
     out: &mut Tensor<Atomic<E>>,
     operand: &Tensor<E>,
     scatter_indices: &Tensor<I>,

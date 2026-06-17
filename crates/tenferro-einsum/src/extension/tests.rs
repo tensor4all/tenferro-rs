@@ -24,6 +24,33 @@ fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
 }
 
 #[test]
+fn infer_output_meta_returns_empty_for_invalid_extension_metadata() {
+    let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
+    let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
+    let bad_rhs_rank = [SymDim::from(3usize)];
+    let bad_rhs_extent = [SymDim::from(5usize), SymDim::from(4usize)];
+
+    assert!(op
+        .infer_output_meta(
+            &[DType::F64],
+            &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
+        )
+        .is_empty());
+    assert!(op
+        .infer_output_meta(
+            &[DType::F64, DType::F64],
+            &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
+        )
+        .is_empty());
+    assert!(op
+        .infer_output_meta(
+            &[DType::F64, DType::F64],
+            &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()]
+        )
+        .is_empty());
+}
+
+#[test]
 fn payload_identity_ignores_static_tree_execution_hint() {
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
     let raw_subscripts = crate::Subscripts::from(&subscripts);

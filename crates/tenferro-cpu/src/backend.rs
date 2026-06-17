@@ -55,9 +55,9 @@ fn record_cpu_session_profile(section: &'static str, elapsed: Duration) {
     if !cpu_session_profile_enabled() {
         return;
     }
-    let mut state = cpu_session_profile_state()
-        .lock()
-        .expect("CPU session profile mutex poisoned");
+    let Ok(mut state) = cpu_session_profile_state().lock() else {
+        return;
+    };
     let entry = state.entry(section).or_default();
     entry.calls += 1;
     entry.total_time += elapsed;
@@ -78,9 +78,9 @@ fn maybe_print_cpu_session_profile() {
         return;
     };
     let should_print = {
-        let state = cpu_session_profile_state()
-            .lock()
-            .expect("CPU session profile mutex poisoned");
+        let Ok(state) = cpu_session_profile_state().lock() else {
+            return;
+        };
         state
             .get("with_backend_session_cached.total")
             .is_some_and(|entry| entry.calls % print_every == 0)
@@ -89,9 +89,9 @@ fn maybe_print_cpu_session_profile() {
         return;
     }
     let mut entries = {
-        let mut state = cpu_session_profile_state()
-            .lock()
-            .expect("CPU session profile mutex poisoned");
+        let Ok(mut state) = cpu_session_profile_state().lock() else {
+            return;
+        };
         let entries = state
             .iter()
             .map(|(section, entry)| (*section, entry.clone()))

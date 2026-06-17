@@ -610,39 +610,24 @@ pub fn transpose_slice(
 
     let input_shape = ctx.shape_of(&inputs[0]);
     let rank = input_shape.len();
-    assert_eq!(
-        config.starts.len(),
-        rank,
-        "transpose_slice: starts rank mismatch"
-    );
-    assert_eq!(
-        config.limits.len(),
-        rank,
-        "transpose_slice: limits rank mismatch"
-    );
-    assert_eq!(
-        config.strides.len(),
-        rank,
-        "transpose_slice: strides rank mismatch"
-    );
+    if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
+        return vec![None];
+    }
 
     let mut edge_padding_low = Vec::with_capacity(rank);
     let mut edge_padding_high = Vec::with_capacity(rank);
     let mut interior_padding = Vec::with_capacity(rank);
 
     for axis in 0..rank {
-        let input_extent = static_dim(input_shape, axis, "transpose_slice");
+        let Some(input_extent) = try_static_dim(input_shape, axis) else {
+            return vec![None];
+        };
         let start = config.starts[axis];
         let limit = config.limits[axis];
         let stride = config.strides[axis];
-        assert!(
-            stride > 0,
-            "transpose_slice: stride must be positive on axis {axis}"
-        );
-        assert!(
-            start <= limit && limit <= input_extent,
-            "transpose_slice: invalid start/limit on axis {axis}"
-        );
+        if stride == 0 || start > limit || limit > input_extent {
+            return vec![None];
+        }
 
         let selected_len = if limit == start {
             0
@@ -652,13 +637,26 @@ pub fn transpose_slice(
         let covered = if selected_len == 0 {
             0
         } else {
-            (selected_len - 1) * stride + 1
+            let Some(covered_minus_one) = (selected_len - 1).checked_mul(stride) else {
+                return vec![None];
+            };
+            let Some(covered) = covered_minus_one.checked_add(1) else {
+                return vec![None];
+            };
+            covered
         };
         let high = input_extent - start - covered;
 
-        edge_padding_low.push(usize_to_i64(start, "transpose_slice"));
-        edge_padding_high.push(usize_to_i64(high, "transpose_slice"));
-        interior_padding.push(usize_to_i64(stride - 1, "transpose_slice"));
+        let (Some(low), Some(high), Some(interior)) = (
+            try_usize_to_i64(start),
+            try_usize_to_i64(high),
+            try_usize_to_i64(stride - 1),
+        ) else {
+            return vec![None];
+        };
+        edge_padding_low.push(low);
+        edge_padding_high.push(high);
+        interior_padding.push(interior);
     }
 
     let out = builder.add_operation(
@@ -692,21 +690,12 @@ pub fn transpose_pad(
 
     let input_shape = ctx.shape_of(&inputs[0]);
     let rank = input_shape.len();
-    assert_eq!(
-        config.edge_padding_low.len(),
-        rank,
-        "transpose_pad: edge_padding_low rank mismatch"
-    );
-    assert_eq!(
-        config.edge_padding_high.len(),
-        rank,
-        "transpose_pad: edge_padding_high rank mismatch"
-    );
-    assert_eq!(
-        config.interior_padding.len(),
-        rank,
-        "transpose_pad: interior_padding rank mismatch"
-    );
+    if config.edge_padding_low.len() != rank
+        || config.edge_padding_high.len() != rank
+        || config.interior_padding.len() != rank
+    {
+        return vec![None];
+    }
 
     let mut starts = Vec::with_capacity(rank);
     let mut limits = Vec::with_capacity(rank);
@@ -715,15 +704,16 @@ pub fn transpose_pad(
     let mut edge_padding_high = Vec::with_capacity(rank);
 
     for axis in 0..rank {
-        let input_extent = static_dim(input_shape, axis, "transpose_pad");
+        let Some(input_extent) = try_static_dim(input_shape, axis) else {
+            return vec![None];
+        };
         let input_extent_i = input_extent as i128;
         let low = i128::from(config.edge_padding_low[axis]);
         let high = i128::from(config.edge_padding_high[axis]);
         let interior = i128::from(config.interior_padding[axis]);
-        assert!(
-            interior >= 0,
-            "transpose_pad: interior padding must be non-negative on axis {axis}"
-        );
+        if interior < 0 {
+            return vec![None];
+        }
         let stride = interior + 1;
         let base = if input_extent == 0 {
             0
@@ -731,17 +721,21 @@ pub fn transpose_pad(
             (input_extent_i - 1) * stride + 1
         };
         let output_extent = low + high + base;
-        assert!(
-            output_extent >= 0,
-            "transpose_pad: negative output extent on axis {axis}"
-        );
+        if output_extent < 0 {
+            return vec![None];
+        }
 
         let first_kept = if low < 0 {
-            ceil_div_i128(-low, stride)
+            let Some(first_kept) = try_ceil_div_i128(-low, stride) else {
+                return vec![None];
+            };
+            first_kept
         } else {
             0
         };
-        let first_dropped_after = ceil_div_i128(output_extent - low, stride);
+        let Some(first_dropped_after) = try_ceil_div_i128(output_extent - low, stride) else {
+            return vec![None];
+        };
         let j_start = clamp_i128(first_kept, 0, input_extent_i);
         let mut j_end = clamp_i128(first_dropped_after, 0, input_extent_i);
         if j_end < j_start {
@@ -756,16 +750,24 @@ pub fn transpose_pad(
             let empty = clamp_i128(low + j_start * stride, 0, output_extent);
             (empty, empty)
         };
-        assert!(
-            0 <= slice_start && slice_start <= slice_limit && slice_limit <= output_extent,
-            "transpose_pad: invalid inverse slice on axis {axis}"
-        );
+        if !(0 <= slice_start && slice_start <= slice_limit && slice_limit <= output_extent) {
+            return vec![None];
+        }
 
-        starts.push(i128_to_usize(slice_start, "transpose_pad"));
-        limits.push(i128_to_usize(slice_limit, "transpose_pad"));
-        strides.push(i128_to_usize(stride, "transpose_pad"));
-        edge_padding_low.push(i128_to_i64(j_start, "transpose_pad"));
-        edge_padding_high.push(i128_to_i64(input_extent_i - j_end, "transpose_pad"));
+        let (Some(start), Some(limit), Some(stride), Some(low), Some(high)) = (
+            try_i128_to_usize(slice_start),
+            try_i128_to_usize(slice_limit),
+            try_i128_to_usize(stride),
+            try_i128_to_i64(j_start),
+            try_i128_to_i64(input_extent_i - j_end),
+        ) else {
+            return vec![None];
+        };
+        starts.push(start);
+        limits.push(limit);
+        strides.push(stride);
+        edge_padding_low.push(low);
+        edge_padding_high.push(high);
     }
 
     let sliced = builder.add_operation(
@@ -843,24 +845,41 @@ pub fn transpose_concatenate(
 
     let mut result = vec![None; input_count];
     let mut axis_offset = 0usize;
+    let mut concrete_shapes = Vec::with_capacity(input_count);
     for input_index in 0..input_count {
         let input_shape = ctx.shape_of(&inputs[input_index]);
         let rank = input_shape.len();
-        assert!(
-            axis < rank,
-            "transpose_concatenate: axis {axis} out of bounds for rank {rank}"
-        );
-        let axis_extent = static_dim(input_shape, axis, "transpose_concatenate");
+        if axis >= rank {
+            return vec![None; input_count];
+        }
+        let Some(concrete_shape) = input_shape
+            .iter()
+            .map(SymDim::constant_value)
+            .collect::<Option<Vec<_>>>()
+        else {
+            return vec![None; input_count];
+        };
+        concrete_shapes.push(concrete_shape);
+    }
+
+    for input_index in 0..input_count {
+        let input_shape = &concrete_shapes[input_index];
+        let rank = input_shape.len();
+        let axis_extent = input_shape[axis];
+        let Some(next_axis_offset) = axis_offset.checked_add(axis_extent) else {
+            return vec![None; input_count];
+        };
         if active_mask.get(input_index).copied().unwrap_or(false) {
             let starts = vec_with_axis(rank, axis, axis_offset, 0);
             let limits = input_shape
                 .iter()
+                .copied()
                 .enumerate()
-                .map(|(dim, _)| {
+                .map(|(dim, extent)| {
                     if dim == axis {
-                        axis_offset + axis_extent
+                        next_axis_offset
                     } else {
-                        static_dim(input_shape, dim, "transpose_concatenate")
+                        extent
                     }
                 })
                 .collect();
@@ -877,7 +896,7 @@ pub fn transpose_concatenate(
             );
             result[input_index] = Some(out[0]);
         }
-        axis_offset += axis_extent;
+        axis_offset = next_axis_offset;
     }
 
     result
@@ -896,18 +915,18 @@ fn vec_with_axis(rank: usize, axis: usize, axis_value: usize, other_value: usize
         .collect()
 }
 
-fn static_dim(shape: &[SymDim], axis: usize, op: &str) -> usize {
-    shape[axis]
-        .constant_value()
-        .unwrap_or_else(|| panic!("{op}: symbolic input dim {axis} is unsupported"))
+fn try_static_dim(shape: &[SymDim], axis: usize) -> Option<usize> {
+    shape.get(axis)?.constant_value()
 }
 
-fn ceil_div_i128(numer: i128, denom: i128) -> i128 {
-    assert!(denom > 0, "ceil_div_i128: denominator must be positive");
+fn try_ceil_div_i128(numer: i128, denom: i128) -> Option<i128> {
+    if denom <= 0 {
+        return None;
+    }
     if numer >= 0 {
-        (numer + denom - 1) / denom
+        Some(numer.checked_add(denom - 1)? / denom)
     } else {
-        numer / denom
+        Some(numer / denom)
     }
 }
 
@@ -915,14 +934,14 @@ fn clamp_i128(value: i128, min: i128, max: i128) -> i128 {
     value.max(min).min(max)
 }
 
-fn usize_to_i64(value: usize, op: &str) -> i64 {
-    i64::try_from(value).unwrap_or_else(|_| panic!("{op}: usize value does not fit in i64"))
+fn try_usize_to_i64(value: usize) -> Option<i64> {
+    i64::try_from(value).ok()
 }
 
-fn i128_to_usize(value: i128, op: &str) -> usize {
-    usize::try_from(value).unwrap_or_else(|_| panic!("{op}: i128 value does not fit in usize"))
+fn try_i128_to_usize(value: i128) -> Option<usize> {
+    usize::try_from(value).ok()
 }
 
-fn i128_to_i64(value: i128, op: &str) -> i64 {
-    i64::try_from(value).unwrap_or_else(|_| panic!("{op}: i128 value does not fit in i64"))
+fn try_i128_to_i64(value: i128) -> Option<i64> {
+    i64::try_from(value).ok()
 }

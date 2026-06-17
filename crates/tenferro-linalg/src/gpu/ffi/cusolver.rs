@@ -963,6 +963,8 @@ unsafe fn load_symbol<T: Copy>(
     name: &[u8],
     library_name: &'static str,
 ) -> Result<T> {
+    // SAFETY: `name` is a NUL-terminated CUDA library symbol and `T` is the
+    // exact FFI function-pointer type declared in this module's vtables.
     let symbol = lib.get::<T>(name).map_err(|err| {
         Error::backend_failure(
             "cubecl_linalg",
@@ -984,7 +986,11 @@ struct CusolverLibrary {
     _version: i32,
 }
 
+// SAFETY: `CusolverLibrary` owns the loaded dynamic library and stores copied
+// function pointers whose code remains valid while `_lib` is alive.
 unsafe impl Send for CusolverLibrary {}
+// SAFETY: Shared access only reads the immutable vtable and calls cuSOLVER
+// functions with explicit handles owned by the caller.
 unsafe impl Sync for CusolverLibrary {}
 
 impl CusolverLibrary {
@@ -1053,7 +1059,11 @@ struct CublasLibrary {
     vtable: CublasVtable,
 }
 
+// SAFETY: `CublasLibrary` owns the loaded dynamic library and stores copied
+// function pointers whose code remains valid while `_lib` is alive.
 unsafe impl Send for CublasLibrary {}
+// SAFETY: Shared access only reads the immutable vtable and calls cuBLAS
+// functions with explicit handles owned by the caller.
 unsafe impl Sync for CublasLibrary {}
 
 impl CublasLibrary {
@@ -1154,6 +1164,8 @@ impl fmt::Debug for CusolverDnHandle {
     }
 }
 
+// SAFETY: The raw cuSOLVER handle is opaque and remains tied to `lib`; backend
+// execution sets the CUDA context/stream before use and serializes mutable use.
 unsafe impl Send for CusolverDnHandle {}
 
 pub struct GesvdjInfo<'a> {
@@ -2085,6 +2097,8 @@ impl fmt::Debug for CublasHandle {
     }
 }
 
+// SAFETY: The raw cuBLAS handle is opaque and remains tied to `lib`; backend
+// execution sets the CUDA context/stream before use and serializes mutable use.
 unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {

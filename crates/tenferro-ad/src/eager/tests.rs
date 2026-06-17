@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::hash::Hasher;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
+use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
@@ -81,6 +83,105 @@ fn eager_runtime_register_extension_reports_poisoned_executor_lock() {
     let err = ctx.register_extension(|_| Ok(())).unwrap_err();
 
     assert!(err.to_string().contains("extension executor lock poisoned"));
+}
+
+#[test]
+fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.extension_executor.lock().unwrap();
+        panic!("poison extension executor lock");
+    }));
+    assert!(poisoned.is_err());
+
+    assert!(ctx.try_clear_extension_caches().is_err());
+    assert!(ctx.try_cache_stats().is_err());
+    assert!(ctx.try_extension_cache_limits().is_err());
+    assert!(ctx
+        .try_set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
+        .is_err());
+    assert!(ctx.with_extension_caches_mut(|_| ()).is_err());
+
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ctx.clear_extension_caches();
+        ctx.clear_caches();
+        let _ = ctx.cache_stats();
+        let _ = ctx.extension_cache_limits();
+        ctx.set_extension_cache_limits(ExtensionCacheLimits::default());
+    }))
+    .is_ok());
+}
+
+#[test]
+fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.backend.lock().unwrap();
+        panic!("poison eager backend lock");
+    }));
+    assert!(poisoned.is_err());
+
+    let err = ctx.with_backend_mut(|_| ()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::Internal(ref message) if message.contains("backend lock poisoned")
+    ));
+}
+
+#[test]
+fn eager_index_select_reports_poisoned_backend_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Arc::clone(&ctx),
+    );
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.backend.lock().unwrap();
+        panic!("poison eager backend lock");
+    }));
+    assert!(poisoned.is_err());
+
+    let err = x.index_select(0, &[0]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::Internal(ref message) if message.contains("backend lock poisoned")
+    ));
+}
+
+#[test]
+fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]),
+        ctx.clone(),
+    );
+    let poisoned_slot = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = x.grad_slot.lock().unwrap();
+        panic!("poison eager gradient slot");
+    }));
+    assert!(poisoned_slot.is_err());
+
+    assert!(x.try_grad().is_err());
+    assert!(x.try_clear_grad().is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(x.grad().is_none());
+        x.clear_grad();
+    }))
+    .is_ok());
+
+    let poisoned_registry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.grad_slots.lock().unwrap();
+        panic!("poison eager gradient registry");
+    }));
+    assert!(poisoned_registry.is_err());
+
+    assert!(ctx.try_clear_grads().is_err());
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ctx.clear_grads();
+    }))
+    .is_ok());
 }
 
 struct EagerOpProfileOverrideGuard;

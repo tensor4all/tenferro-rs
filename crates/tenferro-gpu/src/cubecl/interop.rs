@@ -167,6 +167,7 @@ where
             Vec::new(),
         ));
     }
+    rt.synchronize()?;
     let bytes = rt
         .client()
         .read_one(buffer.handle().clone())

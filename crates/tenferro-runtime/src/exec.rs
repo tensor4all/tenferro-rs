@@ -126,6 +126,192 @@ impl<'a> ExecSlot<'a> {
     }
 }
 
+fn invalid_compiled_graph(message: impl Into<String>) -> Error {
+    Error::InvalidCompiledGraph {
+        message: message.into(),
+    }
+}
+
+fn checked_input_slot(input_slots: &[usize], idx: usize, caller: &'static str) -> Result<usize> {
+    input_slots.get(idx).copied().ok_or_else(|| {
+        invalid_compiled_graph(format!(
+            "{caller}: input index {idx} out of range for {} input slots",
+            input_slots.len()
+        ))
+    })
+}
+
+fn checked_slot_index(
+    slot: usize,
+    slots_len: usize,
+    role: &'static str,
+    caller: &'static str,
+) -> Result<usize> {
+    if slot < slots_len {
+        Ok(slot)
+    } else {
+        Err(invalid_compiled_graph(format!(
+            "{caller}: {role} slot {slot} out of range for {slots_len} slots"
+        )))
+    }
+}
+
+fn slot_ref<'slot, 'input>(
+    slots: &'slot [Option<ExecSlot<'input>>],
+    slot: usize,
+    role: &'static str,
+    caller: &'static str,
+) -> Result<&'slot ExecSlot<'input>>
+where
+    'input: 'slot,
+{
+    let slot = checked_slot_index(slot, slots.len(), role, caller)?;
+    slots[slot]
+        .as_ref()
+        .ok_or_else(|| TensorError::MissingValue { slot }.into())
+}
+
+fn take_slot<'input>(
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot: usize,
+    role: &'static str,
+    caller: &'static str,
+) -> Result<ExecSlot<'input>> {
+    let slot = checked_slot_index(slot, slots.len(), role, caller)?;
+    slots[slot]
+        .take()
+        .ok_or_else(|| TensorError::MissingValue { slot }.into())
+}
+
+pub(crate) fn validate_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {
+    for (idx, &slot) in program.input_slots.iter().enumerate() {
+        if slot >= program.n_slots {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: input slot {idx} points to slot {slot}, but program has {} slots",
+                program.n_slots
+            )));
+        }
+    }
+    for (idx, &slot) in program.output_slots.iter().enumerate() {
+        if slot >= program.n_slots {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: output slot {idx} points to slot {slot}, but program has {} slots",
+                program.n_slots
+            )));
+        }
+    }
+    for (inst_idx, inst) in program.instructions.iter().enumerate() {
+        for (idx, &slot) in inst.input_slots.iter().enumerate() {
+            if slot >= program.n_slots {
+                return Err(invalid_compiled_graph(format!(
+                    "{caller}: instruction {inst_idx} input slot {idx} points to slot {slot}, but program has {} slots",
+                    program.n_slots
+                )));
+            }
+        }
+        let expected_inputs = exec_op_input_arity_bounds(&inst.op);
+        if let Some((min_inputs, max_inputs)) = expected_inputs {
+            let actual = inst.input_slots.len();
+            if actual < min_inputs || actual > max_inputs {
+                let expected = if min_inputs == max_inputs {
+                    min_inputs.to_string()
+                } else {
+                    format!("{min_inputs}..={max_inputs}")
+                };
+                return Err(invalid_compiled_graph(format!(
+                    "{caller}: instruction {inst_idx} declares {actual} input slots for {:?}, expected {expected}",
+                    inst.op
+                )));
+            }
+        }
+        if inst.output_slots.is_empty() {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: instruction {inst_idx} has no output slots"
+            )));
+        }
+        for (idx, &slot) in inst.output_slots.iter().enumerate() {
+            if slot >= program.n_slots {
+                return Err(invalid_compiled_graph(format!(
+                    "{caller}: instruction {inst_idx} output slot {idx} points to slot {slot}, but program has {} slots",
+                    program.n_slots
+                )));
+            }
+        }
+
+        let expected_outputs = match &inst.op {
+            ExecOp::Extension(ext) => ext.output_count(),
+            _ => 1,
+        };
+        if inst.output_slots.len() != expected_outputs {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: instruction {inst_idx} declares {} output slots for {:?}, expected {expected_outputs}",
+                inst.output_slots.len(),
+                inst.op
+            )));
+        }
+        if inst.output_shapes.len() != inst.output_slots.len() {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: instruction {inst_idx} has {} output shape entries for {} output slots",
+                inst.output_shapes.len(),
+                inst.output_slots.len()
+            )));
+        }
+        if inst.output_extents.len() != inst.output_slots.len() {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: instruction {inst_idx} has {} output extent entries for {} output slots",
+                inst.output_extents.len(),
+                inst.output_slots.len()
+            )));
+        }
+        if inst.last_use.len() > inst.input_slots.len() {
+            return Err(invalid_compiled_graph(format!(
+                "{caller}: instruction {inst_idx} has {} last-use flags for {} input slots",
+                inst.last_use.len(),
+                inst.input_slots.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn exec_op_input_arity_bounds(op: &ExecOp) -> Option<(usize, usize)> {
+    fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
+        exprs
+            .iter()
+            .flat_map(|exprs| exprs.iter())
+            .filter_map(DimExpr::max_input_idx)
+            .max()
+            .map_or(min_inputs, |max_idx| (max_idx + 1).max(min_inputs))
+    }
+
+    match op {
+        ExecOp::Extension(ext) => Some((ext.input_count(), ext.input_count())),
+        ExecOp::Reshape { shape } => {
+            let input_count = n_inputs_from_dim_exprs(1, &[shape]);
+            Some((input_count, input_count))
+        }
+        ExecOp::BroadcastInDim { shape, .. } => {
+            let input_count = n_inputs_from_dim_exprs(1, &[shape]);
+            Some((input_count, input_count))
+        }
+        ExecOp::GatherDynamicSliceSizes { slice_sizes, .. } => {
+            let input_count = n_inputs_from_dim_exprs(2, &[slice_sizes]);
+            Some((input_count, input_count))
+        }
+        _ => op.primitive_kind().and_then(|kind| {
+            tenferro_core_ops::all_primitive_descriptors()
+                .iter()
+                .find(|descriptor| descriptor.kind == kind)
+                .map(|descriptor| {
+                    (
+                        descriptor.min_inputs as usize,
+                        descriptor.max_inputs as usize,
+                    )
+                })
+        }),
+    }
+}
+
 pub(crate) fn get<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
     input_slots: &[usize],
@@ -134,11 +320,8 @@ pub(crate) fn get<'slot, 'input>(
 where
     'input: 'slot,
 {
-    let slot = input_slots[idx];
-    slots[slot]
-        .as_ref()
-        .ok_or_else(|| TensorError::MissingValue { slot }.into())
-        .and_then(|value| value.as_tensor("get"))
+    let slot = checked_input_slot(input_slots, idx, "get")?;
+    slot_ref(slots, slot, "input", "get").and_then(|value| value.as_tensor("get"))
 }
 
 pub(crate) fn get_read<'slot, 'input>(
@@ -149,23 +332,30 @@ pub(crate) fn get_read<'slot, 'input>(
 where
     'input: 'slot,
 {
-    let slot = input_slots[idx];
-    slots[slot]
-        .as_ref()
-        .ok_or_else(|| TensorError::MissingValue { slot }.into())
-        .map(ExecSlot::as_read)
+    let slot = checked_input_slot(input_slots, idx, "get_read")?;
+    slot_ref(slots, slot, "input", "get_read").map(ExecSlot::as_read)
 }
 
 pub(crate) fn initialize_exec_slots_in<'input>(
     program: &ExecProgram,
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
-) {
+) -> Result<()> {
+    if inputs.len() != program.input_slots.len() {
+        return Err(invalid_compiled_graph(format!(
+            "initialize_exec_slots_in: expected {} inputs, got {}",
+            program.input_slots.len(),
+            inputs.len()
+        )));
+    }
     slots.clear();
     slots.resize_with(program.n_slots, || None);
     for (i, input) in inputs.into_iter().enumerate() {
-        slots[program.input_slots[i]] = Some(input);
+        let slot = program.input_slots[i];
+        checked_slot_index(slot, slots.len(), "input", "initialize_exec_slots_in")?;
+        slots[slot] = Some(input);
     }
+    Ok(())
 }
 
 pub(crate) fn collect_outputs_from<'input>(
@@ -176,9 +366,7 @@ pub(crate) fn collect_outputs_from<'input>(
         .output_slots
         .iter()
         .map(|&slot| {
-            let value = slots[slot]
-                .take()
-                .ok_or(TensorError::MissingValue { slot })?;
+            let value = take_slot(slots, slot, "output", "collect_outputs_from")?;
             value.into_tensor()
         })
         .collect()
@@ -192,9 +380,7 @@ pub(crate) fn collect_output_values_from<'input>(
         .output_slots
         .iter()
         .map(|&slot| {
-            let value = slots[slot]
-                .take()
-                .ok_or(TensorError::MissingValue { slot })?;
+            let value = take_slot(slots, slot, "output", "collect_output_values_from")?;
             value.into_value()
         })
         .collect()
@@ -212,8 +398,10 @@ pub(crate) fn terminal_output_slots(program: &ExecProgram) -> Vec<bool> {
 
     let mut terminal = vec![false; program.n_slots];
     for &slot in &program.output_slots {
-        if !consumed.get(slot).copied().unwrap_or(true) {
-            terminal[slot] = true;
+        if let Some(terminal) = terminal.get_mut(slot) {
+            if !consumed.get(slot).copied().unwrap_or(true) {
+                *terminal = true;
+            }
         }
     }
     terminal
@@ -234,6 +422,9 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
     }
 
     let output = match &inst.op {
+        // `validate_exec_program` enforces unary arity for these terminal lazy
+        // view ops before execution; direct slot 0 indexing is an internal
+        // compiled-program invariant here.
         ExecOp::Transpose { perm } => {
             let input_slot = inst.input_slots[0];
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
@@ -282,12 +473,11 @@ fn tensor_value_for_lazy_view<'input>(
     consume: bool,
 ) -> Result<TensorValue> {
     if consume {
-        let value = slots[slot]
-            .take()
-            .ok_or(TensorError::MissingValue { slot })?;
+        let value = take_slot(slots, slot, "input", "tensor_value_for_lazy_view")?;
         return value.into_value();
     }
 
+    let slot = checked_slot_index(slot, slots.len(), "input", "tensor_value_for_lazy_view")?;
     match slots[slot].take() {
         Some(ExecSlot::Owned(tensor)) => {
             let tensor = Arc::new(tensor);
@@ -328,14 +518,11 @@ pub(crate) fn resolve_tensor_shape_exprs(
 ) -> Result<Vec<usize>> {
     let mut input_shapes = Vec::with_capacity(input_slots.len());
     for &slot in input_slots {
-        input_shapes.push(
-            slots[slot]
-                .as_ref()
-                .ok_or(TensorError::MissingValue { slot })?
-                .shape(),
-        );
+        input_shapes.push(slot_ref(slots, slot, "input", "resolve_tensor_shape_exprs")?.shape());
     }
-    Ok(DimExpr::eval_all(exprs, &input_shapes))
+    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
+        message: format!("shape expression evaluation failed: {err}"),
+    })
 }
 
 pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {
@@ -408,7 +595,8 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
-        initialize_exec_slots_in(program, inputs, slots);
+        validate_exec_program(program, "unsegmented executor")?;
+        initialize_exec_slots_in(program, inputs, slots)?;
 
         for inst in &program.instructions {
             if is_host_instruction(inst) {
@@ -447,7 +635,8 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<TensorValue>> {
     let result = (|| {
-        initialize_exec_slots_in(program, inputs, slots);
+        validate_exec_program(program, "unsegmented value executor")?;
+        initialize_exec_slots_in(program, inputs, slots)?;
         let terminal_slots = terminal_output_slots(program);
 
         for (inst_idx, inst) in program.instructions.iter().enumerate() {
@@ -494,7 +683,8 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
-        initialize_exec_slots_in(program, inputs, slots);
+        validate_exec_program(program, "single-session executor")?;
+        initialize_exec_slots_in(program, inputs, slots)?;
 
         backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
@@ -686,79 +876,72 @@ where
 {
     let mut inputs = Vec::with_capacity(input_slots.len());
     for &slot in input_slots {
-        inputs.push(
-            slots[slot]
-                .as_ref()
-                .ok_or(TensorError::MissingValue { slot })?
-                .as_tensor("extension")?,
-        );
+        inputs.push(slot_ref(slots, slot, "input", "extension")?.as_tensor("extension")?);
     }
     Ok(inputs)
 }
 
-pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
+pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
     match dtype {
-        DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
+        DType::F64 => Ok(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![],
-            vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
-        )),
-        DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
+            vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
+        ))),
+        DType::F32 => Ok(Tensor::F32(TypedTensor::from_vec_col_major(
             vec![],
-            vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
-        )),
-        DType::I32 => Tensor::I32(TypedTensor::from_vec_col_major(
+            vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
+        ))),
+        DType::I32 => Ok(Tensor::I32(TypedTensor::from_vec_col_major(
             vec![],
-            vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
-        )),
-        DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
+            vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
+        ))),
+        DType::I64 => Ok(Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
-            vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
-        )),
-        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+            vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
+        ))),
+        DType::Bool => Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
             vec![],
-            vec![exact_bytes::<1>(dtype, bytes)[0] != 0],
-        )),
+            vec![exact_bytes::<1>(dtype, bytes)?[0] != 0],
+        ))),
         DType::C64 => {
-            let data = exact_bytes::<16>(dtype, bytes);
+            let data = exact_bytes::<16>(dtype, bytes)?;
             let mut re_bytes = [0u8; 8];
             let mut im_bytes = [0u8; 8];
             re_bytes.copy_from_slice(&data[..8]);
             im_bytes.copy_from_slice(&data[8..]);
             let re = f64::from_le_bytes(re_bytes);
             let im = f64::from_le_bytes(im_bytes);
-            Tensor::C64(TypedTensor::from_vec_col_major(
+            Ok(Tensor::C64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(re, im)],
-            ))
+            )))
         }
         DType::C32 => {
-            let data = exact_bytes::<8>(dtype, bytes);
+            let data = exact_bytes::<8>(dtype, bytes)?;
             let mut re_bytes = [0u8; 4];
             let mut im_bytes = [0u8; 4];
             re_bytes.copy_from_slice(&data[..4]);
             im_bytes.copy_from_slice(&data[4..]);
             let re = f32::from_le_bytes(re_bytes);
             let im = f32::from_le_bytes(im_bytes);
-            Tensor::C32(TypedTensor::from_vec_col_major(
+            Ok(Tensor::C32(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex32::new(re, im)],
-            ))
+            )))
         }
     }
 }
 
-fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
+fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> Result<[u8; N]> {
     if bytes.len() != N {
-        panic!(
-            "constant {:?} expected {} bytes, got {}",
-            dtype,
-            N,
+        return Err(invalid_compiled_graph(format!(
+            "constant {dtype:?} expected {N} bytes, got {}",
             bytes.len()
-        );
+        )));
     }
     let mut out = [0u8; N];
     out.copy_from_slice(bytes);
-    out
+    Ok(out)
 }
 
 pub(crate) fn reclaim_last_use_inputs_exec(

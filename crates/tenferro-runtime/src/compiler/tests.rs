@@ -1,7 +1,8 @@
 use super::{
     algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
     conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
-    layout_chain_transpose_folding, transpose_folding, CompilerOptions, OptimizerConfig,
+    layout_chain_transpose_folding, populate_last_use, producer_index_by_slot, record_producer,
+    resolve_slot_redirect, slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::{Error, GraphExecutor};
@@ -154,6 +155,72 @@ fn compile_reports_incompatible_broadcast_as_error() {
         err,
         Error::InvalidCompiledGraph { ref message }
             if message.contains("incompatible Add/Mul broadcast dimensions: 2 and 3")
+    ));
+}
+
+#[test]
+fn resolve_slot_redirect_rejects_cycles() {
+    let err = resolve_slot_redirect(0, &[1, 0]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("redirect cycle") && message.contains("slot 0")
+    ));
+}
+
+#[test]
+fn record_producer_rejects_out_of_range_output_slot() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![0], vec![3]);
+    let mut producers = vec![None];
+
+    let err = record_producer(&mut producers, &instr).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("producer output slot 3")
+    ));
+}
+
+#[test]
+fn producer_index_by_slot_rejects_out_of_range_output_slot() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![0], vec![3]);
+    let program = make_exec_program(vec![instr], vec![0], vec![], 1);
+
+    let err = producer_index_by_slot(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("producer output slot 3")
+    ));
+}
+
+#[test]
+fn slot_use_counts_rejects_out_of_range_slots() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![2], vec![0]);
+    let program = make_exec_program(vec![instr], vec![0], vec![], 1);
+
+    let err = slot_use_counts(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("use-count input slot 2")
+    ));
+}
+
+#[test]
+fn populate_last_use_rejects_out_of_range_output_slot() {
+    let mut program = make_exec_program(Vec::new(), vec![0], vec![2], 1);
+
+    let err = populate_last_use(&mut program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("last-use output slot 2")
     ));
 }
 
@@ -692,7 +759,7 @@ fn test_conj_sinking_preserves_transpose_folding_path_to_dot_conj() {
     )
     .unwrap();
     transpose_folding(&mut program);
-    dot_conj_folding(&mut program);
+    dot_conj_folding(&mut program).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -744,7 +811,7 @@ fn test_dot_conj_folding_absorbs_both_operands() {
     );
     let mut program = make_exec_program(vec![lhs_conj, rhs_conj, dot], vec![0, 1], vec![4], 5);
 
-    dot_conj_folding(&mut program);
+    dot_conj_folding(&mut program).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -793,7 +860,7 @@ fn dot_conj_folding_preserves_rank_reducing_reshape_operand() {
     );
     let mut program = make_exec_program(vec![lhs_conj, reshape, dot], vec![0, 1], vec![4], 5);
 
-    dot_conj_folding(&mut program);
+    dot_conj_folding(&mut program).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 2);

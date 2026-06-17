@@ -205,12 +205,30 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
             "let buffer = dispatch::cubecl_buffer(tensor, op)?;",
             "if tensor.n_elements() == 0",
+            "rt.synchronize()?;",
+            ".read_one(buffer.handle().clone())",
         ],
     );
 }
 
 #[test]
 fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
+    let memory_source = cubecl_source("memory.rs");
+    let memory_ptr = source_section(
+        &memory_source,
+        "pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {",
+        "fn upload_typed<",
+    );
+    assert_ordered_needles(
+        "memory::device_ptr",
+        memory_ptr,
+        &[
+            "ensure_tensor_resident_on_runtime(rt, tensor, \"device_ptr\")?;",
+            "let handle = cubecl_handle(tensor)?;",
+            ".get_resource(handle)",
+        ],
+    );
+
     let interop_source = cubecl_source("interop.rs");
     let interop_ptr = source_section(
         &interop_source,
@@ -240,6 +258,104 @@ fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
             "ensure_resident_on_runtime(rt, tensor, OP)?;",
             "cubecl_buffer(tensor, OP)?;",
             ".get_resource(buffer.handle().clone())",
+        ],
+    );
+}
+
+#[test]
+fn cubecl_host_download_paths_synchronize_before_reading() {
+    let memory_source = cubecl_source("memory.rs");
+    let typed_download = source_section(
+        &memory_source,
+        "fn download_typed<T: CubeElement + Clone + 'static>(",
+        "fn upload_bool(",
+    );
+    assert_ordered_needles(
+        "memory::download_typed",
+        typed_download,
+        &[
+            "if typed.n_elements() == 0",
+            "rt.synchronize()?;",
+            ".read_one(handle)",
+        ],
+    );
+
+    let bool_download = source_section(&memory_source, "fn download_bool(", "fn cubecl_handle(");
+    assert_ordered_needles(
+        "memory::download_bool",
+        bool_download,
+        &[
+            "if typed.n_elements() == 0",
+            "rt.synchronize()?;",
+            ".read_one(handle)",
+        ],
+    );
+}
+
+#[test]
+fn cubecl_scatter_validates_all_device_inputs_before_binding() {
+    let mod_source = cubecl_source("mod.rs");
+    let scatter_float = source_section(
+        &mod_source,
+        "    fn scatter_float_typed<",
+        "    fn scatter_complex_typed<",
+    );
+    assert_ordered_needles(
+        "scatter_float_typed",
+        scatter_float,
+        &[
+            "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+            "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+            "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+            "typed_tensor_binding(updates, \"scatter\")?;",
+        ],
+    );
+
+    let scatter_complex = source_section(
+        &mod_source,
+        "    fn scatter_complex_typed<",
+        "impl BackendRuntimeCache for CubeclBackend",
+    );
+    assert_ordered_needles(
+        "scatter_complex_typed",
+        scatter_complex,
+        &[
+            "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+            "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+            "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+            "typed_tensor_binding(updates, \"scatter\")?;",
+        ],
+    );
+}
+
+#[test]
+fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
+    let runtime_source = cubecl_source("runtime.rs");
+    let new_source = source_section(
+        &runtime_source,
+        "    pub fn new(device_ordinal: usize) -> crate::Result<Self> {",
+        "    pub(crate) fn client(&self)",
+    );
+    assert_ordered_needles(
+        "CubeclRuntime::new",
+        new_source,
+        &[
+            "cudarc::runtime::result::device::set",
+            "cudarc::driver::result::init()",
+            "cudarc::driver::result::primary_ctx::retain",
+            "cudarc::driver::result::ctx::set_current",
+            "let device = CudaDevice::new(device_ordinal);",
+            "let client = CudaRuntime::client(&device);",
+        ],
+    );
+
+    let drop_source = source_section(&runtime_source, "impl Drop for CubeclRuntime", "}");
+    assert_ordered_needles(
+        "CubeclRuntime::drop",
+        drop_source,
+        &[
+            "let _ = self.synchronize();",
+            "primary_ctx::release(self.cuda_device)",
         ],
     );
 }

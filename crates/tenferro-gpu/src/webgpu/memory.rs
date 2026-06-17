@@ -4,7 +4,10 @@ use cubecl_wgpu::WgpuRuntime;
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 
-use super::{webgpu_handle_from_backend, webgpu_placement, WebGpuBuffer, WebGpuRuntime};
+use super::{
+    ensure_resident_on_runtime, webgpu_handle_from_backend, webgpu_placement, WebGpuBuffer,
+    WebGpuRuntime,
+};
 use crate::{Buffer, Tensor, TypedTensor};
 
 /// Upload a host tensor into a CubeCL-managed WebGPU allocation.
@@ -47,13 +50,13 @@ pub fn upload_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Resul
 pub fn download_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     let client = rt.client();
     match tensor {
-        Tensor::F64(t) => download_typed::<f64>(client, t).map(Tensor::F64),
-        Tensor::F32(t) => download_typed::<f32>(client, t).map(Tensor::F32),
-        Tensor::I32(t) => download_typed::<i32>(client, t).map(Tensor::I32),
-        Tensor::I64(t) => download_typed::<i64>(client, t).map(Tensor::I64),
-        Tensor::Bool(t) => download_bool(client, t).map(Tensor::Bool),
-        Tensor::C64(t) => download_typed::<Complex64>(client, t).map(Tensor::C64),
-        Tensor::C32(t) => download_typed::<Complex32>(client, t).map(Tensor::C32),
+        Tensor::F64(t) => download_typed::<f64>(rt, client, t).map(Tensor::F64),
+        Tensor::F32(t) => download_typed::<f32>(rt, client, t).map(Tensor::F32),
+        Tensor::I32(t) => download_typed::<i32>(rt, client, t).map(Tensor::I32),
+        Tensor::I64(t) => download_typed::<i64>(rt, client, t).map(Tensor::I64),
+        Tensor::Bool(t) => download_bool(rt, client, t).map(Tensor::Bool),
+        Tensor::C64(t) => download_typed::<Complex64>(rt, client, t).map(Tensor::C64),
+        Tensor::C32(t) => download_typed::<Complex32>(rt, client, t).map(Tensor::C32),
     }
 }
 
@@ -84,9 +87,11 @@ pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
 }
 
 pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
+    rt: &WebGpuRuntime,
     client: &ComputeClient<WgpuRuntime>,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
+    ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
     let handle = match typed.buffer() {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
@@ -142,9 +147,11 @@ fn upload_bool(
 }
 
 fn download_bool(
+    rt: &WebGpuRuntime,
     client: &ComputeClient<WgpuRuntime>,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
+    ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
     let handle = match typed.buffer() {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(

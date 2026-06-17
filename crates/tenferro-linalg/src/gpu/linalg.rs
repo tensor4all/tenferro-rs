@@ -1839,6 +1839,8 @@ fn upload_pointer_array(
     op: &'static str,
 ) -> Result<Workspace> {
     let nbytes = std::mem::size_of_val(pointers);
+    // SAFETY: `pointers` is a live CPU slice of plain usize device-address
+    // values; this reinterprets only those initialized bytes for upload.
     let bytes = unsafe { std::slice::from_raw_parts(pointers.as_ptr().cast::<u8>(), nbytes) };
     upload_device_bytes(rt, bytes, op).map(Workspace::from_device)
 }
@@ -2108,7 +2110,8 @@ fn validate_nonsingular_gpu(backend: &mut CubeclBackend, u: &Tensor) -> Result<(
     let flat = backend.reshape(&abs_diag, &[total])?;
     let min_val = backend.reduce_min(&flat, &[0])?;
 
-    // Download single scalar
+    // Host reads must observe the queued GPU reduction result.
+    backend.runtime().synchronize()?;
     let host_min = download_tensor(backend.runtime(), &min_val)?;
     let is_singular = match &host_min {
         Tensor::F64(t) => t.host_data()[0] == 0.0 || !t.host_data()[0].is_finite(),

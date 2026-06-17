@@ -891,6 +891,78 @@ fn typed_tensor_panics_cover_length_and_indexing_errors() {
 }
 
 #[test]
+fn typed_tensor_try_apis_report_shape_arithmetic_errors() {
+    assert!(matches!(
+        TypedTensor::<f64>::try_from_vec_col_major(vec![usize::MAX, 2], Vec::new()),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedTensor::<f64>::try_from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedTensor::<f64>::try_zeros(vec![usize::MAX, 2]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedTensor::<f64>::try_ones(vec![usize::MAX, 2]),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    assert_eq!(tensor.try_n_elements().unwrap(), 6);
+    assert_eq!(tensor.try_linear_offset(&[1, 2]).unwrap(), 5);
+    assert!(matches!(
+        tensor.try_linear_offset(&[2, 0]),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn tensor_try_constructors_report_shape_arithmetic_errors() {
+    assert!(matches!(
+        Tensor::try_from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        Tensor::try_from_vec_row_major(vec![usize::MAX, 2], Vec::<f64>::new()),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn typed_tensor_ranked_try_accessors_return_none_instead_of_panicking() {
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+
+    assert_eq!(tensor.try_linear_offset2(1, 2), Some(5));
+    assert_eq!(tensor.try_linear_offset2(10, 0), None);
+    assert_eq!(tensor.try_get2(10, 0), None);
+
+    let rank3 = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]);
+    assert_eq!(rank3.try_linear_offset3(1, 2, 1), Some(11));
+    assert_eq!(rank3.try_linear_offset3(1, 2, 99), None);
+    assert_eq!(rank3.try_get3(1, 2, 99), None);
+}
+
+#[test]
+fn tensor_ranked_try_linear_offsets_return_errors_instead_of_panicking() {
+    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
+
+    assert_eq!(tensor.try_linear_offset2(1, 2).unwrap(), 5);
+    assert!(matches!(
+        tensor.try_linear_offset2(10, 0),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let rank3 = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]);
+    assert_eq!(rank3.try_linear_offset3(1, 2, 1).unwrap(), 11);
+    assert!(matches!(
+        rank3.try_linear_offset3(1, 2, 99),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
 fn backend_buffers_panic_when_host_access_is_requested() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
@@ -906,6 +978,11 @@ fn backend_buffers_panic_when_host_access_is_requested() {
     );
     assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
+    assert!(tensor.try_host_data().is_err());
+    let erased = Tensor::F64(tensor.clone());
+    assert_eq!(erased.as_slice::<f64>(), None);
+    assert_eq!(erased.try_get::<f64>(&[0]), None);
+
     let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
     assert!(host_data.is_err());
 
@@ -914,6 +991,11 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 1))),
         placement,
     );
+    assert!(mutable_tensor.try_host_data_mut().is_err());
+    let mut erased_mut = Tensor::F64(mutable_tensor.clone());
+    assert_eq!(erased_mut.as_slice_mut::<f64>(), None);
+    assert_eq!(erased_mut.try_get_mut::<f64>(&[0]), None);
+
     let host_data_mut = catch_unwind(AssertUnwindSafe(|| {
         let _ = mutable_tensor.host_data_mut();
     }));

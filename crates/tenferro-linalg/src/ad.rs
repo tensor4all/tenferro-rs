@@ -238,3 +238,139 @@ fn downcast_ad_op(op: &dyn ExtensionOpTrait, kind: ADRuleKind) -> ADRuleResult<&
             ADRuleError::unsupported("tenferro-linalg.linalg.v1 payload type mismatch", kind)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use computegraph::graph::GraphBuilder;
+    use tenferro_ops::input_key::TensorInputKey;
+    use tenferro_ops::{SymDim, TensorMeta};
+    use tenferro_tensor::DType;
+
+    fn input_key(id: u64) -> ValueKey<StdTensorOp> {
+        ValueKey::Input(TensorInputKey::User { id })
+    }
+
+    fn insert_meta(ctx: &mut ShapeGuardContext, key: ValueKey<StdTensorOp>, shape: &[usize]) {
+        ctx.insert_metadata(
+            key,
+            TensorMeta::exact(
+                DType::F64,
+                shape.iter().copied().map(SymDim::from).collect(),
+            ),
+        );
+    }
+
+    #[test]
+    fn full_piv_lu_jvp_returns_inactive_outputs_for_non_square_input() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let primal = input_key(1);
+        insert_meta(&mut ctx, primal.clone(), &[2, 3]);
+        let tangent = builder.add_input(TensorInputKey::User { id: 2 });
+        let outputs = [
+            input_key(10),
+            input_key(11),
+            input_key(12),
+            input_key(13),
+            input_key(14),
+        ];
+        let op = LinalgExtensionOp::new(LinalgOp::FullPivLu);
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[primal],
+                &outputs,
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![None, None, None, None, None]);
+        assert!(builder.build().operations().is_empty());
+    }
+
+    #[test]
+    fn triangular_solve_jvp_returns_none_for_non_matrix_operands() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let lhs = input_key(20);
+        let rhs = input_key(21);
+        insert_meta(&mut ctx, lhs.clone(), &[2, 2]);
+        insert_meta(&mut ctx, rhs.clone(), &[2]);
+        let rhs_tangent = builder.add_input(TensorInputKey::User { id: 22 });
+        let op = LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        });
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[lhs, rhs],
+                &[input_key(23)],
+                &[None, Some(rhs_tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![None]);
+        assert!(builder.build().operations().is_empty());
+    }
+
+    #[test]
+    fn one_input_linalg_jvps_return_inactive_for_non_matrix_input() {
+        let cases = [
+            LinalgOp::Cholesky,
+            LinalgOp::Lu,
+            LinalgOp::FullPivLu,
+            LinalgOp::Svd { eps: 1e-12 },
+            LinalgOp::SvdVals { eps: 1e-12 },
+            LinalgOp::Qr,
+            LinalgOp::Eigh { eps: 1e-12 },
+            LinalgOp::EighVals { eps: 1e-12 },
+            LinalgOp::Eig {
+                input_dtype: DType::F64,
+            },
+            LinalgOp::EigVals {
+                input_dtype: DType::F64,
+            },
+        ];
+
+        for (case_index, kind) in cases.into_iter().enumerate() {
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let mut ctx = ShapeGuardContext::default();
+            let primal = input_key(100 + case_index as u64);
+            insert_meta(&mut ctx, primal.clone(), &[3]);
+            let tangent = builder.add_input(TensorInputKey::User {
+                id: 200 + case_index as u64,
+            });
+            let op = LinalgExtensionOp::new(kind);
+            let outputs: Vec<_> = (0..op.output_count())
+                .map(|offset| input_key(300 + case_index as u64 * 10 + offset as u64))
+                .collect();
+
+            let result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut builder,
+                    &[primal],
+                    &outputs,
+                    &[Some(tangent)],
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert_eq!(result, vec![None; op.output_count()], "{kind:?}");
+            assert!(
+                builder.build().operations().is_empty(),
+                "{kind:?} should not emit a malformed matrix AD graph"
+            );
+        }
+    }
+}

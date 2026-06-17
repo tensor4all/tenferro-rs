@@ -35,6 +35,14 @@ struct GlobalMetadataEntry {
     scoped_refs: usize,
 }
 
+/// Error returned when the process-global AD metadata registry is unavailable.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MetadataRegistryError {
+    /// A previous panic poisoned the global metadata mutex.
+    #[error("AD global metadata registry lock poisoned")]
+    LockPoisoned,
+}
+
 /// Global metadata registry.
 ///
 /// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
@@ -449,6 +457,9 @@ impl ShapeGuardContext {
     /// assert_eq!(meta.dtype, DType::F64);
     /// ```
     pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> &TensorMeta {
+        // Compatibility panic wrapper for AD rules whose graph-local metadata
+        // invariants have already been established; use `try_metadata_of` for
+        // user-provided or partially built graph values.
         let key = self.resolve_key(val).clone();
         if !self.metadata.contains_key(&key) && self.use_global_registry {
             if let Some(meta) = lookup_global_metadata(&key) {
@@ -462,7 +473,7 @@ impl ShapeGuardContext {
 
     #[doc(hidden)]
     pub fn try_metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&TensorMeta> {
-        let key = self.resolve_key(val).clone();
+        let key = self.try_resolve_key(val)?.clone();
         if !self.metadata.contains_key(&key) && self.use_global_registry {
             if let Some(meta) = lookup_global_metadata(&key) {
                 self.metadata.insert(key.clone(), meta);
@@ -489,22 +500,31 @@ impl ShapeGuardContext {
         self.metadata.extend(entries);
     }
 
-    fn resolve_key<'a>(&'a self, val: &'a ValueRef<StdTensorOp>) -> &'a ValueKey<StdTensorOp> {
+    fn try_resolve_key<'a>(
+        &'a self,
+        val: &'a ValueRef<StdTensorOp>,
+    ) -> Option<&'a ValueKey<StdTensorOp>> {
         match val {
-            ValueRef::External(key) => key,
+            ValueRef::External(key) => Some(key),
             ValueRef::Local(local_id) => self
                 .local_keys
                 .as_ref()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "ShapeGuardContext: cannot resolve local value {local_id} without an attached graph"
-                    )
-                })
-                .get(*local_id)
-                .unwrap_or_else(|| {
-                    panic!("ShapeGuardContext: local value {local_id} is out of bounds")
-                }),
+                .and_then(|keys| keys.get(*local_id)),
         }
+    }
+
+    fn resolve_key<'a>(&'a self, val: &'a ValueRef<StdTensorOp>) -> &'a ValueKey<StdTensorOp> {
+        // Compatibility panic wrapper for established graph-local invariants.
+        // `try_resolve_key` underpins fallible query paths.
+        self.try_resolve_key(val).unwrap_or_else(|| match val {
+            ValueRef::External(_) => unreachable!("external value keys are always resolvable"),
+            ValueRef::Local(local_id) if self.local_keys.is_none() => panic!(
+                "ShapeGuardContext: cannot resolve local value {local_id} without an attached graph"
+            ),
+            ValueRef::Local(local_id) => {
+                panic!("ShapeGuardContext: local value {local_id} is out of bounds")
+            }
+        })
     }
 }
 
@@ -525,10 +545,18 @@ impl ShapeGuardContext {
 /// assert!(meta.is_none());
 /// ```
 pub fn lookup_global_metadata(key: &ValueKey<StdTensorOp>) -> Option<TensorMeta> {
+    try_lookup_global_metadata(key).ok().flatten()
+}
+
+/// Fallibly look up a single metadata entry from the global registry.
+#[doc(hidden)]
+pub fn try_lookup_global_metadata(
+    key: &ValueKey<StdTensorOp>,
+) -> Result<Option<TensorMeta>, MetadataRegistryError> {
     let guard = global_metadata_registry()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.get(key).map(|entry| entry.meta.clone())
+        .map_err(|_| MetadataRegistryError::LockPoisoned)?;
+    Ok(guard.get(key).map(|entry| entry.meta.clone()))
 }
 
 #[doc(hidden)]
@@ -536,9 +564,19 @@ pub fn register_scoped_global_metadata_batch<I>(entries: I) -> GlobalMetadataSco
 where
     I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 {
+    try_register_scoped_global_metadata_batch(entries).unwrap_or_else(|err| panic!("{err}"))
+}
+
+#[doc(hidden)]
+pub fn try_register_scoped_global_metadata_batch<I>(
+    entries: I,
+) -> Result<GlobalMetadataScope, MetadataRegistryError>
+where
+    I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+{
     let mut guard = global_metadata_registry()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .map_err(|_| MetadataRegistryError::LockPoisoned)?;
     let mut keys = Vec::new();
     for (key, meta) in entries {
         let entry = guard.entry(key.clone()).or_insert(GlobalMetadataEntry {
@@ -549,13 +587,16 @@ where
         entry.scoped_refs += 1;
         keys.push(key);
     }
-    GlobalMetadataScope { keys }
+    Ok(GlobalMetadataScope { keys })
 }
 
 fn release_scoped_global_metadata(keys: &[ValueKey<StdTensorOp>]) {
-    let mut guard = global_metadata_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Ok(mut guard) = global_metadata_registry().lock() else {
+        // Drop cannot return an error. Failing closed here avoids reading or
+        // mutating data from a poisoned registry at the cost of leaking entries
+        // until process exit.
+        return;
+    };
     for key in keys {
         let should_remove = if let Some(entry) = guard.get_mut(key) {
             entry.scoped_refs = entry.scoped_refs.saturating_sub(1);

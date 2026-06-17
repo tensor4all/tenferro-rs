@@ -1,4 +1,6 @@
-use super::{linear_offset, Tensor, TensorRank, TensorScalar, TypedTensor};
+use super::{
+    linear_offset, try_linear_offset_for_shape, Tensor, TensorRank, TensorScalar, TypedTensor,
+};
 
 fn try_linear_offset(shape: &[usize], indices: &[usize]) -> Option<usize> {
     if indices.len() != shape.len() {
@@ -42,50 +44,30 @@ fn linear_offset_unchecked(shape: &[usize], indices: &[usize]) -> usize {
 }
 
 fn linear_offset2(shape: &[usize], i: usize, j: usize) -> usize {
-    assert_eq!(shape.len(), 2);
-    assert!(i < shape[0], "index out of bounds");
-    assert!(j < shape[1], "index out of bounds");
-    linear_offset2_unchecked(shape, i, j)
+    // Compatibility panic wrapper; public non-panicking callers use
+    // `try_linear_offset2`/`try_get2`.
+    try_linear_offset2(shape, i, j).unwrap_or_else(|| panic!("rank-2 index out of bounds"))
 }
 
-fn linear_offset2_unchecked(shape: &[usize], i: usize, j: usize) -> usize {
-    debug_assert_eq!(shape.len(), 2);
-    debug_assert!(i < shape[0], "index out of bounds");
-    debug_assert!(j < shape[1], "index out of bounds");
-    i.checked_add(
-        shape[0]
-            .checked_mul(j)
-            .unwrap_or_else(|| panic!("linear offset multiply overflows")),
-    )
-    .unwrap_or_else(|| panic!("linear offset add overflows"))
+fn try_linear_offset2(shape: &[usize], i: usize, j: usize) -> Option<usize> {
+    if shape.len() != 2 || i >= shape[0] || j >= shape[1] {
+        return None;
+    }
+    i.checked_add(shape[0].checked_mul(j)?)
 }
 
 fn linear_offset3(shape: &[usize], i: usize, j: usize, k: usize) -> usize {
-    assert_eq!(shape.len(), 3);
-    assert!(i < shape[0], "index out of bounds");
-    assert!(j < shape[1], "index out of bounds");
-    assert!(k < shape[2], "index out of bounds");
-    linear_offset3_unchecked(shape, i, j, k)
+    // Compatibility panic wrapper; public non-panicking callers use
+    // `try_linear_offset3`/`try_get3`.
+    try_linear_offset3(shape, i, j, k).unwrap_or_else(|| panic!("rank-3 index out of bounds"))
 }
 
-fn linear_offset3_unchecked(shape: &[usize], i: usize, j: usize, k: usize) -> usize {
-    debug_assert_eq!(shape.len(), 3);
-    debug_assert!(i < shape[0], "index out of bounds");
-    debug_assert!(j < shape[1], "index out of bounds");
-    debug_assert!(k < shape[2], "index out of bounds");
-    let inner = j
-        .checked_add(
-            shape[1]
-                .checked_mul(k)
-                .unwrap_or_else(|| panic!("linear offset multiply overflows")),
-        )
-        .unwrap_or_else(|| panic!("linear offset add overflows"));
-    i.checked_add(
-        shape[0]
-            .checked_mul(inner)
-            .unwrap_or_else(|| panic!("linear offset multiply overflows")),
-    )
-    .unwrap_or_else(|| panic!("linear offset add overflows"))
+fn try_linear_offset3(shape: &[usize], i: usize, j: usize, k: usize) -> Option<usize> {
+    if shape.len() != 3 || i >= shape[0] || j >= shape[1] || k >= shape[2] {
+        return None;
+    }
+    let inner = j.checked_add(shape[1].checked_mul(k)?)?;
+    i.checked_add(shape[0].checked_mul(inner)?)
 }
 
 impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
@@ -162,8 +144,18 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank or
+    /// bounds errors; use [`Self::try_linear_offset2`] for user input.
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
         linear_offset2(self.shape(), i, j)
+    }
+
+    /// Try to compute the linear physical-buffer offset for a rank-2 logical index.
+    pub fn try_linear_offset2(&self, i: usize, j: usize) -> Option<usize> {
+        try_linear_offset2(self.shape(), i, j)
     }
 
     /// Compute the linear physical-buffer offset for a rank-3 logical index.
@@ -176,8 +168,18 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank or
+    /// bounds errors; use [`Self::try_linear_offset3`] for user input.
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
         linear_offset3(self.shape(), i, j, k)
+    }
+
+    /// Try to compute the linear physical-buffer offset for a rank-3 logical index.
+    pub fn try_linear_offset3(&self, i: usize, j: usize, k: usize) -> Option<usize> {
+        try_linear_offset3(self.shape(), i, j, k)
     }
 
     /// Try to borrow a single element by multi-index.
@@ -195,7 +197,7 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn try_get(&self, indices: &[usize]) -> Option<&T> {
         let off = try_linear_offset(self.shape(), indices)?;
-        self.host_data().get(off)
+        self.try_host_data().ok()?.get(off)
     }
 
     /// Borrow a single element by rank-2 logical index.
@@ -208,9 +210,21 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.get2(1, 0), &2.0);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank,
+    /// bounds, or backend-buffer host access errors; use [`Self::try_get2`]
+    /// for user input.
     pub fn get2(&self, i: usize, j: usize) -> &T {
         let off = self.linear_offset2(i, j);
         &self.host_data()[off]
+    }
+
+    /// Try to borrow a single element by rank-2 logical index.
+    pub fn try_get2(&self, i: usize, j: usize) -> Option<&T> {
+        let off = self.try_linear_offset2(i, j)?;
+        self.try_host_data().ok()?.get(off)
     }
 
     /// Borrow a single element by rank-3 logical index.
@@ -223,9 +237,21 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1, 1, 2], vec![3.0, 4.0]);
     /// assert_eq!(t.get3(0, 0, 1), &4.0);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank,
+    /// bounds, or backend-buffer host access errors; use [`Self::try_get3`]
+    /// for user input.
     pub fn get3(&self, i: usize, j: usize, k: usize) -> &T {
         let off = self.linear_offset3(i, j, k);
         &self.host_data()[off]
+    }
+
+    /// Try to borrow a single element by rank-3 logical index.
+    pub fn try_get3(&self, i: usize, j: usize, k: usize) -> Option<&T> {
+        let off = self.try_linear_offset3(i, j, k)?;
+        self.try_host_data().ok()?.get(off)
     }
 
     /// Borrow a single element by multi-index without release-mode bounds
@@ -266,7 +292,7 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn try_get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
         let off = try_linear_offset(self.shape(), indices)?;
-        self.host_data_mut().get_mut(off)
+        self.try_host_data_mut().ok()?.get_mut(off)
     }
 
     /// Mutably borrow a single element by rank-2 logical index.
@@ -280,9 +306,21 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// *t.get_mut2(1, 0) = 5.0;
     /// assert_eq!(t.as_slice(), &[1.0, 5.0, 3.0, 4.0]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank,
+    /// bounds, or backend-buffer host access errors; use [`Self::try_get_mut2`]
+    /// for user input.
     pub fn get_mut2(&mut self, i: usize, j: usize) -> &mut T {
         let off = self.linear_offset2(i, j);
         &mut self.host_data_mut()[off]
+    }
+
+    /// Try to mutably borrow a single element by rank-2 logical index.
+    pub fn try_get_mut2(&mut self, i: usize, j: usize) -> Option<&mut T> {
+        let off = self.try_linear_offset2(i, j)?;
+        self.try_host_data_mut().ok()?.get_mut(off)
     }
 
     /// Mutably borrow a single element by rank-3 logical index.
@@ -296,9 +334,21 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// *t.get_mut3(0, 0, 1) = 5.0;
     /// assert_eq!(t.as_slice(), &[3.0, 5.0]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank,
+    /// bounds, or backend-buffer host access errors; use [`Self::try_get_mut3`]
+    /// for user input.
     pub fn get_mut3(&mut self, i: usize, j: usize, k: usize) -> &mut T {
         let off = self.linear_offset3(i, j, k);
         &mut self.host_data_mut()[off]
+    }
+
+    /// Try to mutably borrow a single element by rank-3 logical index.
+    pub fn try_get_mut3(&mut self, i: usize, j: usize, k: usize) -> Option<&mut T> {
+        let off = self.try_linear_offset3(i, j, k)?;
+        self.try_host_data_mut().ok()?.get_mut(off)
     }
 
     /// Mutably borrow a single element by multi-index without release-mode
@@ -343,6 +393,11 @@ impl Tensor {
         linear_offset(self.shape(), indices)
     }
 
+    /// Try to compute the linear physical-buffer offset for a logical index.
+    pub fn try_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), indices, "Tensor::try_linear_offset")
+    }
+
     /// Compute the linear physical-buffer offset for a rank-2 logical index.
     ///
     /// # Examples
@@ -353,8 +408,18 @@ impl Tensor {
     /// let t = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank or
+    /// bounds errors; use [`Self::try_linear_offset2`] for user input.
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
         linear_offset2(self.shape(), i, j)
+    }
+
+    /// Try to compute the linear physical-buffer offset for a rank-2 logical index.
+    pub fn try_linear_offset2(&self, i: usize, j: usize) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), &[i, j], "Tensor::try_linear_offset2")
     }
 
     /// Compute the linear physical-buffer offset for a rank-3 logical index.
@@ -367,8 +432,18 @@ impl Tensor {
     /// let t = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Compatibility wrapper for hot valid-index paths. Panics on rank or
+    /// bounds errors; use [`Self::try_linear_offset3`] for user input.
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
         linear_offset3(self.shape(), i, j, k)
+    }
+
+    /// Try to compute the linear physical-buffer offset for a rank-3 logical index.
+    pub fn try_linear_offset3(&self, i: usize, j: usize, k: usize) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), &[i, j, k], "Tensor::try_linear_offset3")
     }
 
     /// Try to borrow the host data as a typed physical-memory-order slice.

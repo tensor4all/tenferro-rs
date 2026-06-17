@@ -284,3 +284,34 @@ fn transpose_broadcast_restores_non_monotonic_dimension_order() {
     assert_eq!(transpose.inputs, vec![ValueRef::Local(cotangent)]);
     assert!(transpose.outputs.contains(&cotangent_in));
 }
+
+#[test]
+fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(60));
+    let input_key = input_key(61);
+    let inputs = vec![ValueRef::External(input_key.clone())];
+    ctx.insert_metadata(
+        input_key,
+        TensorMeta::exact(
+            DType::F64,
+            vec![SymDim::tensor_axis(100, 0), SymDim::from(2usize)],
+        ),
+    );
+
+    let result = StdTensorOp::Concatenate {
+        axis: 0,
+        input_count: 1,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    );
+
+    assert_eq!(result, vec![None]);
+    assert!(builder.build().operations().is_empty());
+}

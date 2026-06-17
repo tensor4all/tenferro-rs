@@ -159,6 +159,47 @@ fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
     )
 }
 
+fn reduction_output_meta(
+    tensor: &TracedTensor,
+    axes: &[usize],
+    op: &'static str,
+) -> Result<(usize, Option<Vec<SymDim>>)> {
+    let mut seen = vec![false; tensor.rank];
+    for &axis in axes {
+        if axis >= tensor.rank {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("axis {axis} out of bounds for rank {}", tensor.rank),
+            });
+        }
+        if seen[axis] {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("duplicate reduction axis {axis}"),
+            });
+        }
+        seen[axis] = true;
+    }
+
+    let out_shape_hint = tensor.shape_hint.as_ref().map(|shape| {
+        (0..shape.len())
+            .filter(|d| !axes.contains(d))
+            .map(|d| shape[d].clone())
+            .collect()
+    });
+    Ok((tensor.rank - axes.len(), out_shape_hint))
+}
+
+fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) -> Result<()> {
+    if axis >= tensor.rank {
+        return Err(Error::InvalidGraphBuild {
+            op,
+            message: format!("axis {axis} out of bounds for rank {}", tensor.rank),
+        });
+    }
+    Ok(())
+}
+
 impl std::ops::Add for &TracedTensor {
     type Output = TracedTensor;
 
@@ -1020,20 +1061,22 @@ impl TracedTensor {
     /// let y2 = x.sum(&[0]);
     /// ```
     pub fn reduce_sum(&self, axes: &[usize]) -> TracedTensor {
-        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
-            (0..shape.len())
-                .filter(|d| !axes.contains(d))
-                .map(|d| shape[d].clone())
-                .collect()
-        });
-        apply_unary(
+        self.try_reduce_sum(axes)
+            .expect("TracedTensor::reduce_sum axis validation failed")
+    }
+
+    /// Fallibly sum over the given axes.
+    pub fn try_reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
+        let (out_rank, out_shape_hint) =
+            reduction_output_meta(self, axes, "TracedTensor::reduce_sum")?;
+        Ok(apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank.saturating_sub(axes.len()),
+            out_rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Reduce by taking the maximum along the given axes.
@@ -1049,20 +1092,22 @@ impl TracedTensor {
     /// let y = x.reduce_max(&[0]);
     /// ```
     pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
-        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
-            (0..shape.len())
-                .filter(|d| !axes.contains(d))
-                .map(|d| shape[d].clone())
-                .collect()
-        });
-        apply_unary(
+        self.try_reduce_max(axes)
+            .expect("TracedTensor::reduce_max axis validation failed")
+    }
+
+    /// Fallibly reduce by taking the maximum along the given axes.
+    pub fn try_reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
+        let (out_rank, out_shape_hint) =
+            reduction_output_meta(self, axes, "TracedTensor::reduce_max")?;
+        Ok(apply_unary(
             StdTensorOp::ReduceMax {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank.saturating_sub(axes.len()),
+            out_rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Reduce by taking the minimum along the given axes.
@@ -1078,20 +1123,22 @@ impl TracedTensor {
     /// let y = x.reduce_min(&[0]);
     /// ```
     pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
-        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
-            (0..shape.len())
-                .filter(|d| !axes.contains(d))
-                .map(|d| shape[d].clone())
-                .collect()
-        });
-        apply_unary(
+        self.try_reduce_min(axes)
+            .expect("TracedTensor::reduce_min axis validation failed")
+    }
+
+    /// Fallibly reduce by taking the minimum along the given axes.
+    pub fn try_reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
+        let (out_rank, out_shape_hint) =
+            reduction_output_meta(self, axes, "TracedTensor::reduce_min")?;
+        Ok(apply_unary(
             StdTensorOp::ReduceMin {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank.saturating_sub(axes.len()),
+            out_rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Reduce by taking the product along the given axes.
@@ -1104,20 +1151,22 @@ impl TracedTensor {
     /// let y = x.reduce_prod(&[0]);
     /// ```
     pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
-        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
-            (0..shape.len())
-                .filter(|d| !axes.contains(d))
-                .map(|d| shape[d].clone())
-                .collect()
-        });
-        apply_unary(
+        self.try_reduce_prod(axes)
+            .expect("TracedTensor::reduce_prod axis validation failed")
+    }
+
+    /// Fallibly reduce by taking the product along the given axes.
+    pub fn try_reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
+        let (out_rank, out_shape_hint) =
+            reduction_output_meta(self, axes, "TracedTensor::reduce_prod")?;
+        Ok(apply_unary(
             StdTensorOp::ReduceProd {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank.saturating_sub(axes.len()),
+            out_rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Reshape without changing element order.
@@ -1166,17 +1215,20 @@ impl TracedTensor {
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// ```
     pub fn sym_size(&self, axis: usize) -> SymDim {
-        assert!(
-            axis < self.rank,
-            "axis {axis} out of bounds for rank {}",
-            self.rank
-        );
-        self.shape_hint
+        self.try_sym_size(axis)
+            .expect("TracedTensor::sym_size axis validation failed")
+    }
+
+    /// Fallibly return a symbolic expression for the size of one axis.
+    pub fn try_sym_size(&self, axis: usize) -> Result<SymDim> {
+        validate_traced_axis(self, axis, "TracedTensor::sym_size")?;
+        Ok(self
+            .shape_hint
             .as_ref()
             .and_then(|shape| shape.get(axis))
             .filter(|dim| dim.constant_value().is_none())
             .cloned()
-            .unwrap_or_else(|| SymDim::tensor_axis(self.id, axis))
+            .unwrap_or_else(|| SymDim::tensor_axis(self.id, axis)))
     }
 
     /// Return the canonical `SymDim` for `axis` — the concrete
@@ -1204,14 +1256,16 @@ impl TracedTensor {
     /// assert!(b.axis_sym_dim(0).constant_value().is_none());
     /// ```
     pub fn axis_sym_dim(&self, axis: usize) -> SymDim {
-        assert!(
-            axis < self.rank,
-            "axis {axis} out of bounds for rank {}",
-            self.rank
-        );
+        self.try_axis_sym_dim(axis)
+            .expect("TracedTensor::axis_sym_dim axis validation failed")
+    }
+
+    /// Fallibly return the canonical `SymDim` for `axis`.
+    pub fn try_axis_sym_dim(&self, axis: usize) -> Result<SymDim> {
+        validate_traced_axis(self, axis, "TracedTensor::axis_sym_dim")?;
         match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
-            Some(dim) => dim.clone(),
-            None => SymDim::tensor_axis(self.id, axis),
+            Some(dim) => Ok(dim.clone()),
+            None => Ok(SymDim::tensor_axis(self.id, axis)),
         }
     }
 
@@ -1307,8 +1361,10 @@ impl TracedTensor {
     ///
     /// # Panics
     ///
-    /// Panics if a `SymDim` in `shape` references a traced tensor that is
-    /// neither `self` nor any tensor listed in `shape_refs`.
+    /// Compatibility wrapper that panics if a `SymDim` in `shape` references a
+    /// traced tensor that is neither `self` nor any tensor listed in
+    /// `shape_refs`. Use [`Self::try_broadcast_in_dim_sym`] for user-provided
+    /// symbolic shapes.
     ///
     /// # Examples
     ///
@@ -1331,6 +1387,25 @@ impl TracedTensor {
         dims: &[usize],
         shape_refs: &[&TracedTensor],
     ) -> TracedTensor {
+        // Intentional compatibility panic wrapper for callers that already
+        // prove every symbolic shape reference is listed in `shape_refs`.
+        self.try_broadcast_in_dim_sym(shape, dims, shape_refs)
+            .expect("TracedTensor::broadcast_in_dim_sym shape reference validation failed")
+    }
+
+    /// Fallibly broadcast into a symbolic target shape with explicit dimension
+    /// placement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `shape` contains a symbolic tensor-axis reference
+    /// that is neither `self` nor any tensor listed in `shape_refs`.
+    pub fn try_broadcast_in_dim_sym(
+        &self,
+        shape: &[SymDim],
+        dims: &[usize],
+        shape_refs: &[&TracedTensor],
+    ) -> Result<TracedTensor> {
         // Build a dedup'd list of shape-reference tensors (first occurrence
         // wins) and index them starting at 1 — the primary input `self`
         // is at 0.
@@ -1347,15 +1422,16 @@ impl TracedTensor {
         let to_shape: Vec<DimExpr> = shape
             .iter()
             .map(|dim| {
-                dim.to_dim_expr(&tensor_map).unwrap_or_else(|err| {
-                    panic!(
-                        "broadcast_in_dim_sym: unresolved symbolic dimension: {}; \
-                         pass every referenced tensor via `shape_refs`",
-                        err
-                    )
-                })
+                dim.to_dim_expr(&tensor_map)
+                    .map_err(|err| Error::InvalidGraphBuild {
+                        op: "broadcast_in_dim_sym",
+                        message: format!(
+                            "unresolved symbolic dimension: {err}; \
+                             pass every referenced tensor via `shape_refs`"
+                        ),
+                    })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // Trim auxiliary shape-reference inputs down to those actually
         // used by the generated `DimExpr`s. If the target shape resolved
@@ -1367,7 +1443,7 @@ impl TracedTensor {
         let used_refs: Vec<&TracedTensor> = dedup_refs.into_iter().take(max_used_idx).collect();
 
         let out_shape_hint = Some(shape.to_vec());
-        apply_unary_with_shape_refs(
+        Ok(apply_unary_with_shape_refs(
             StdTensorOp::BroadcastInDim {
                 shape: to_shape,
                 dims: dims.to_vec(),
@@ -1376,7 +1452,7 @@ impl TracedTensor {
             &used_refs,
             shape.len(),
             out_shape_hint,
-        )
+        ))
     }
 
     /// Permute tensor axes.

@@ -64,6 +64,10 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
     inputs: Vec<Tensor>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
+    crate::exec::ensure_core_exec_program(
+        program,
+        "extension::execute_lowered_program_with_backend_cache",
+    )?;
     crate::exec::eval_exec_ir_with_backend_cache(backend, program, inputs, backend_cache)
 }
 
@@ -85,7 +89,7 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// ```rust
 /// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro_runtime::extension::{apply, ExtensionOpTrait};
+/// use tenferro_runtime::extension::{try_apply, ExtensionOpTrait};
 /// use tenferro_runtime::{DType, SymDim, Tensor, TracedTensor};
 ///
 /// # #[derive(Clone, Debug)]
@@ -113,10 +117,19 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// # }
 /// let op: Arc<dyn ExtensionOpTrait> = Arc::new(IdentityExt);
 /// let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let outputs = apply(op, &[&a]);
+/// let outputs = try_apply(op, &[&a])?;
 /// assert_eq!(outputs.len(), 1);
+/// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
+///
+/// # Panics
+///
+/// Panics on validation errors. This is the compatibility wrapper for legacy
+/// call sites; new runtime-facing code should use [`try_apply`] so malformed
+/// extension metadata is returned as [`Error::InvalidGraphBuild`].
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTensor> {
+    // Intentional compatibility panic wrapper. Keep `try_apply` as the
+    // non-panicking API so audits do not mistake this for an unhandled error.
     try_apply(op, inputs).expect("extension::apply validation failed")
 }
 

@@ -3,8 +3,9 @@ use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+use crate::Result;
 
-use super::exact_extents_from_shape;
+use super::{exact_extents_from_shape, invalid_compiled_graph, missing_slot_meta};
 
 // ============================================================================
 // Pass 3: DotDecomposer
@@ -47,16 +48,24 @@ use super::exact_extents_from_shape;
 /// `input_shapes` are the program-input shapes (matching `program.input_slots`).
 /// They are needed because `ExecProgram` does not otherwise carry input-slot
 /// shape metadata.
-pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) {
-    assert_eq!(
-        program.input_slots.len(),
-        input_shapes.len(),
-        "dot_decomposer: input shape count must match input slot count"
-    );
+pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) -> Result<()> {
+    if program.input_slots.len() != input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "dot_decomposer input shape count {} must match input slot count {}",
+            input_shapes.len(),
+            program.input_slots.len()
+        )));
+    }
 
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; program.n_slots];
     let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; program.n_slots];
     for (index, &slot) in program.input_slots.iter().enumerate() {
+        if slot >= program.n_slots {
+            return Err(invalid_compiled_graph(format!(
+                "dot_decomposer input slot {slot} is outside slot table of length {}",
+                program.n_slots
+            )));
+        }
         slot_shapes[slot] = Some(input_shapes[index].clone());
         slot_extents[slot] = Some(exact_extents_from_shape(&input_shapes[index]));
     }
@@ -67,6 +76,12 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
             .zip(instr.output_shapes.iter())
             .zip(instr.output_extents.iter())
         {
+            if *slot >= program.n_slots {
+                return Err(invalid_compiled_graph(format!(
+                    "dot_decomposer output slot {slot} is outside slot table of length {}",
+                    program.n_slots
+                )));
+            }
             slot_shapes[*slot] = Some(shape.clone());
             slot_extents[*slot] = Some(extents.clone());
         }
@@ -90,10 +105,10 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
             if instr.input_slots.len() == 2 && !config.lhs_contracting_dims.is_empty() {
                 let lhs_slot = instr.input_slots[0];
                 let rhs_slot = instr.input_slots[1];
-                let lhs_shape = require_slot_shape(&slot_shapes, lhs_slot);
-                let rhs_shape = require_slot_shape(&slot_shapes, rhs_slot);
-                let lhs_extents = require_slot_extents(&slot_extents, lhs_slot);
-                let rhs_extents = require_slot_extents(&slot_extents, rhs_slot);
+                let lhs_shape = require_slot_shape(&slot_shapes, lhs_slot)?;
+                let rhs_shape = require_slot_shape(&slot_shapes, rhs_slot)?;
+                let lhs_extents = require_slot_extents(&slot_extents, lhs_slot)?;
+                let rhs_extents = require_slot_extents(&slot_extents, rhs_slot)?;
                 if !is_dot_canonical(config, lhs_shape.len(), rhs_shape.len()) {
                     let mut builder = InstructionBuilder {
                         n_slots: &mut n_slots,
@@ -117,7 +132,7 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
                             rhs_conj,
                         },
                         &mut builder,
-                    );
+                    )?;
                     continue;
                 }
             }
@@ -127,6 +142,7 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
 
     program.instructions = new_instructions;
     program.n_slots = n_slots;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -182,21 +198,23 @@ impl InstructionBuilder<'_> {
     }
 }
 
-fn require_slot_shape(slot_shapes: &[Option<Vec<DimExpr>>], slot: usize) -> &[DimExpr] {
-    slot_shapes[slot]
-        .as_ref()
-        .unwrap_or_else(|| panic!("dot_decomposer: missing shape for slot {slot}"))
-        .as_slice()
+fn require_slot_shape(slot_shapes: &[Option<Vec<DimExpr>>], slot: usize) -> Result<&[DimExpr]> {
+    Ok(slot_shapes
+        .get(slot)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| missing_slot_meta("shape", slot))?
+        .as_slice())
 }
 
 fn require_slot_extents(
     slot_extents: &[Option<Vec<ShapeExtent<DimExpr>>>],
     slot: usize,
-) -> &[ShapeExtent<DimExpr>] {
-    slot_extents[slot]
-        .as_ref()
-        .unwrap_or_else(|| panic!("dot_decomposer: missing extents for slot {slot}"))
-        .as_slice()
+) -> Result<&[ShapeExtent<DimExpr>]> {
+    Ok(slot_extents
+        .get(slot)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| missing_slot_meta("extents", slot))?
+        .as_slice())
 }
 
 /// Canonical form predicate for a `DotGeneral` with the given operand ranks.
@@ -259,7 +277,7 @@ fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr 
 }
 
 /// Emit decomposed instructions for a single non-canonical DotGeneral.
-fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<'_>) {
+fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<'_>) -> Result<()> {
     let instr = input.instr;
     let config = input.config;
     let lhs = input.lhs;
@@ -268,11 +286,13 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
     let lhs_rank = lhs.shape.len();
     let rhs_rank = rhs.shape.len();
     let nb = config.lhs_batch_dims.len();
-    assert_eq!(
-        nb,
-        config.rhs_batch_dims.len(),
-        "dot_decomposer: mismatched batch dim count"
-    );
+    if nb != config.rhs_batch_dims.len() {
+        return Err(invalid_compiled_graph(format!(
+            "dot_decomposer: lhs batch dim count {} must match rhs batch dim count {}",
+            nb,
+            config.rhs_batch_dims.len()
+        )));
+    }
 
     let lhs_free = free_axes_of(
         lhs_rank,
@@ -425,6 +445,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             last_use: Vec::new(),
         });
     }
+    Ok(())
 }
 
 fn emit_transpose_if_needed(

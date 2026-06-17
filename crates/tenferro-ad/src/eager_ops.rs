@@ -156,17 +156,16 @@ impl EagerTensor {
 
         if !self.requires_grad && !other.requires_grad {
             let ctx = Arc::clone(&self.ctx);
-            let output = {
-                let mut backend = ctx.backend.lock().unwrap();
+            let output = ctx.with_backend_mut(|backend| {
                 exec_dot_general_with_conj_on_tensor_reads(
                     self.tensor_read(),
                     other.tensor_read(),
                     config,
                     lhs_conj,
                     rhs_conj,
-                    &mut *backend,
-                )?
-            };
+                    backend,
+                )
+            })??;
             return Ok(Self::new_untracked_result(ctx, output));
         }
 
@@ -717,9 +716,9 @@ impl EagerTensor {
             return Ok(Self::new_untracked_value_result(ctx, value));
         }
 
-        let output = Arc::new(value.to_tensor());
+        let output = Arc::new(value.try_to_tensor().map_err(Error::from)?);
         let outputs = vec![Arc::clone(&output)];
-        let mut recorded = record_eager_outputs(&op, &outputs, tensors);
+        let mut recorded = record_eager_outputs(&op, &outputs, tensors)?;
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
@@ -786,8 +785,8 @@ impl EagerTensor {
             tensors
                 .iter()
                 .map(|tensor| tensor.materialized_arc())
-                .collect::<Vec<_>>()
-        });
+                .collect::<Result<Vec<_>>>()
+        })?;
         let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
             input_arcs.iter().map(|tensor| tensor.as_ref()).collect()
         });
@@ -799,7 +798,7 @@ impl EagerTensor {
         let outputs = vec![Arc::clone(&output)];
         let mut recorded = profile_eager_op_section("nary_op.record_outputs", || {
             record_eager_outputs(&op, &outputs, tensors)
-        });
+        })?;
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;

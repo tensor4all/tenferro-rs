@@ -86,7 +86,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     }
 
     let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-    let recorded = record_eager_outputs(&op, &outputs, inputs);
+    let recorded = record_eager_outputs(&op, &outputs, inputs)?;
     if recorded.traces.len() != outputs.len() {
         return Err(Error::Internal(format!(
             "expected {} eager traces for {:?}, got {}",

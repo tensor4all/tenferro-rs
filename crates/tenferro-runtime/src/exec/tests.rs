@@ -15,7 +15,11 @@ use super::dispatch::{
     backend_dispatch_entry, ffi_dispatch_entry, host_dispatch_entry, FfiDispatchKey,
     HostDispatchKey, BACKEND_DISPATCH_TABLE,
 };
-use super::{tensor_value_for_lazy_view, ExecInstruction, ExecOp, ExecSlot};
+use super::{
+    collect_outputs_from, constant_tensor, get, initialize_exec_slots_in,
+    tensor_value_for_lazy_view, validate_exec_program, ExecInstruction, ExecOp, ExecProgram,
+    ExecSlot,
+};
 use tenferro_cpu::CpuBackend;
 
 #[test]
@@ -149,6 +153,161 @@ fn lazy_view_input_conversion_shares_live_owned_tensor() {
         _ => panic!("expected promoted tensor value"),
     };
     assert!(Arc::ptr_eq(output, stored));
+}
+
+#[test]
+fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
+    let slots = [Some(ExecSlot::Owned(Tensor::from_vec_col_major(
+        vec![1],
+        vec![1.0_f64],
+    )))];
+
+    let err = get(&slots, &[], 0).unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("invalid compiled graph"), "{message}");
+    assert!(message.contains("input index 0"), "{message}");
+}
+
+#[test]
+fn exec_accessors_reject_out_of_range_slot_without_panicking() {
+    let slots = [Some(ExecSlot::Owned(Tensor::from_vec_col_major(
+        vec![1],
+        vec![1.0_f64],
+    )))];
+
+    let err = get(&slots, &[4], 0).unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("slot 4"), "{message}");
+    assert!(message.contains("out of range"), "{message}");
+}
+
+#[test]
+fn initialize_exec_slots_rejects_input_count_mismatch_without_panicking() {
+    let program = empty_program(1);
+    let mut slots = Vec::new();
+    let inputs = vec![
+        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])),
+        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])),
+    ];
+
+    let err = initialize_exec_slots_in(&program, inputs, &mut slots).unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("expected 1 inputs"), "{message}");
+    assert!(message.contains("got 2"), "{message}");
+}
+
+#[test]
+fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
+    let mut program = empty_program(1);
+    program.output_slots = vec![3];
+    let mut slots = vec![Some(ExecSlot::Owned(Tensor::from_vec_col_major(
+        vec![1],
+        vec![1.0_f64],
+    )))];
+
+    let err = collect_outputs_from(&program, &mut slots).unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("output slot 3"), "{message}");
+    assert!(message.contains("out of range"), "{message}");
+}
+
+#[test]
+fn validate_exec_program_rejects_empty_instruction_outputs() {
+    let mut program = empty_program(1);
+    program.instructions.push(ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![0],
+        output_slots: vec![],
+        dtype: DType::F64,
+        output_shapes: Vec::new().into(),
+        output_extents: Vec::new().into(),
+        last_use: vec![true],
+    });
+
+    let err = validate_exec_program(&program, "test").unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("instruction 0"), "{message}");
+    assert!(message.contains("no output slots"), "{message}");
+}
+
+#[test]
+fn validate_exec_program_rejects_terminal_value_instruction_input_arity() {
+    let mut program = empty_program(0);
+    program.n_slots = 1;
+    program.output_slots = vec![0];
+    program.instructions.push(ExecInstruction {
+        op: ExecOp::Transpose { perm: vec![0] },
+        input_slots: vec![],
+        output_slots: vec![0],
+        dtype: DType::F64,
+        output_shapes: vec![vec![DimExpr::Const(1)]].into(),
+        output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(1))]].into(),
+        last_use: vec![],
+    });
+
+    let err = validate_exec_program(&program, "test").unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("instruction 0"), "{message}");
+    assert!(message.contains("input slots"), "{message}");
+}
+
+#[test]
+fn validate_exec_program_accepts_symbolic_shape_reference_inputs() {
+    let mut program = empty_program(2);
+    program.n_slots = 3;
+    program.output_slots = vec![2];
+    program.instructions.push(ExecInstruction {
+        op: ExecOp::BroadcastInDim {
+            shape: vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+            dims: vec![],
+        },
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        dtype: DType::F64,
+        output_shapes: vec![vec![DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0,
+        }]]
+        .into(),
+        output_extents: vec![vec![ShapeExtent::exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0,
+        })]]
+        .into(),
+        last_use: vec![true],
+    });
+
+    validate_exec_program(&program, "test").unwrap();
+}
+
+#[test]
+fn constant_tensor_rejects_payload_length_mismatch_without_panicking() {
+    let err = constant_tensor(DType::F64, &[0; 4]).unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("constant F64 expected 8 bytes"),
+        "{message}"
+    );
+    assert!(message.contains("got 4"), "{message}");
+}
+
+fn empty_program(input_count: usize) -> ExecProgram {
+    ExecProgram {
+        instructions: Vec::new(),
+        input_slots: (0..input_count).collect(),
+        output_slots: Vec::new(),
+        n_slots: input_count,
+    }
 }
 
 fn backend_dispatch_cases() -> Vec<(ExecOp, PrimitiveOpKind)> {

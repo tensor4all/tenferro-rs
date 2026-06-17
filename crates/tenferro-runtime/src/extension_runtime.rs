@@ -209,6 +209,25 @@ fn validate_runtime_output_count(
     Ok(outputs)
 }
 
+fn validate_runtime_input_count(
+    op: &dyn ExtensionOp,
+    actual: usize,
+) -> tenferro_tensor::Result<()> {
+    let expected = op.input_count();
+    if actual != expected {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "extension",
+            message: format!(
+                "family_id {:?}: op expects {} inputs, got {}",
+                op.family_id(),
+                expected,
+                actual
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Registry of backend-specific extension runtime executors.
 pub struct ExtensionRegistry<B: TensorBackend + 'static> {
     executors: HashMap<&'static str, Arc<dyn ExtensionRuntime<B>>>,
@@ -364,6 +383,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
         op: &dyn ExtensionOp,
         inputs: &[&Tensor],
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_runtime_input_count(op, inputs.len())?;
         let Some(executor) = self.registry.get(op.family_id()) else {
             return Err(tenferro_tensor::Error::InvalidConfig {
                 op: "extension",
@@ -471,6 +491,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
         op: &dyn ExtensionOp,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_runtime_input_count(op, inputs.len())?;
         let Some(executor) = self.registry.get(op.family_id()) else {
             return Err(tenferro_tensor::Error::InvalidConfig {
                 op: "extension",

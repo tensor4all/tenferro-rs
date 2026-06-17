@@ -165,7 +165,7 @@ pub fn einsum_subscripts_with(
 
     let op =
         EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec);
-    let outputs = extension::apply(Arc::new(op), inputs);
+    let outputs = extension::try_apply(Arc::new(op), inputs)?;
     outputs
         .into_iter()
         .next()

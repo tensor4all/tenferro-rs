@@ -223,7 +223,11 @@ impl EagerTensor {
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = {
-            let mut backend = self.ctx.backend.lock().unwrap();
+            let mut backend = self
+                .ctx
+                .backend
+                .lock()
+                .map_err(|_| Error::Internal("backend lock poisoned".to_string()))?;
             backend.upload_host_tensor(&indices)?
         };
         let indices = self.ctx.constant_from(indices);

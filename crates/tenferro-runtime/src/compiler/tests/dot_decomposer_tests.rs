@@ -39,10 +39,54 @@ fn test_dot_decomposer_already_canonical_is_noop() {
     );
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
 
-    dot_decomposer(&mut program, &[dim_shape(&[4, 5]), dim_shape(&[5, 6])]);
+    dot_decomposer(&mut program, &[dim_shape(&[4, 5]), dim_shape(&[5, 6])]).unwrap();
 
     assert_eq!(program.instructions.len(), 1);
     assert_eq!(program.n_slots, 3);
+}
+
+#[test]
+fn test_dot_decomposer_missing_slot_metadata_returns_error() {
+    let instr = dot_general_exec_instr(
+        vec![1],
+        vec![0],
+        vec![],
+        vec![],
+        vec![0, 2],
+        3,
+        dim_shape(&[4, 6]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![3], 4);
+
+    let err = dot_decomposer(&mut program, &[dim_shape(&[4, 5]), dim_shape(&[5, 6])]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("missing shape for slot 2")
+    ));
+}
+
+#[test]
+fn test_dot_decomposer_mismatched_batch_dim_count_returns_error() {
+    let instr = dot_general_exec_instr(
+        vec![1],
+        vec![0],
+        vec![0],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[4, 6]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    let err = dot_decomposer(&mut program, &[dim_shape(&[4, 5]), dim_shape(&[5, 6])]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("lhs batch dim count 1")
+    ));
 }
 
 #[test]
@@ -64,7 +108,8 @@ fn test_dot_decomposer_multi_contracting_dim() {
     dot_decomposer(
         &mut program,
         &[dim_shape(&[2, 3, 7, 4, 5]), dim_shape(&[2, 3, 4, 5, 11])],
-    );
+    )
+    .unwrap();
 
     // Expected instruction chain:
     //   Transpose(slot 0) -> N1        // [M, K1, K2, a, b]
@@ -114,7 +159,7 @@ fn test_dot_decomposer_multi_free_dim_emits_output_reshape() {
     );
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
 
-    dot_decomposer(&mut program, &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])]);
+    dot_decomposer(&mut program, &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])]).unwrap();
 
     // Expected: merge Reshape for LHS (no Transpose needed), canonical
     // DotGeneral, output Reshape.
@@ -179,7 +224,8 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
     dot_decomposer(
         &mut program,
         &[dim_shape(&[5, 3, 4]), Vec::new(), dim_shape(&[4, 2])],
-    );
+    )
+    .unwrap();
 
     let lhs_merge = program
         .instructions
@@ -228,7 +274,8 @@ fn test_dot_decomposer_noncanonical_dot_then_permute_downstream() {
     dot_decomposer(
         &mut program,
         &[dim_shape(&[7, 3, 4]), dim_shape(&[7, 4, 5])],
-    );
+    )
+    .unwrap();
 
     // Downstream Transpose must still refer to the same slot (the original
     // DotGeneral output slot) and must still see the original [M, N, a]
@@ -281,7 +328,8 @@ fn test_dot_decomposer_noncanonical_dot_then_dot_downstream() {
             dim_shape(&[6, 8, 5]),    // RHS 0: [a, K, N]
             dim_shape(&[6, 5, 7]),    // RHS 1: [a, N, P]
         ],
-    );
+    )
+    .unwrap();
 
     // Two canonical DotGenerals must be present after decomp, and the
     // first dot's output (slot 2) must still be consumed somewhere in the

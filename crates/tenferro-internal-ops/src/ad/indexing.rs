@@ -388,7 +388,10 @@ pub fn transpose_dynamic_update_slice(
     }
 
     if active_mask.get(1).copied().unwrap_or(false) {
-        let update_shape = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose");
+        let Some(update_shape) = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose")
+        else {
+            return result;
+        };
         let update_ct = builder.add_operation(
             StdTensorOp::DynamicSlice {
                 slice_sizes: update_shape,
@@ -516,7 +519,11 @@ pub fn transpose_scatter(
     if updates_active {
         let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
         let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
-        let inverse = compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2]);
+        let Some(inverse) =
+            compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2])
+        else {
+            return result;
+        };
 
         let out = match inverse {
             InverseGather::Concrete(config) => builder.add_operation(
@@ -584,32 +591,21 @@ fn compute_inverse_gather(
     updates_shape: &[SymDim],
     config: &ScatterConfig,
     updates_ref: &ValueRef<StdTensorOp>,
-) -> InverseGather {
+) -> Option<InverseGather> {
     let rank = operand_shape.len();
     let operand_window_dims: Vec<usize> = (0..rank)
         .filter(|dim| !config.inserted_window_dims.contains(dim))
         .collect();
-    assert_eq!(
-        operand_window_dims.len(),
-        config.update_window_dims.len(),
-        "transpose_scatter: update_window_dims length ({}) does not match \
-         operand window dims count ({})",
-        config.update_window_dims.len(),
-        operand_window_dims.len(),
-    );
+    if operand_window_dims.len() != config.update_window_dims.len() {
+        return None;
+    }
 
     let mut concrete_slice_sizes = vec![1usize; rank];
     let mut dynamic_slice_sizes = vec![DimExpr::Const(1); rank];
     let mut has_dynamic_slice_size = false;
     for (k, &operand_dim) in operand_window_dims.iter().enumerate() {
         let update_axis = config.update_window_dims[k];
-        let dim = updates_shape.get(update_axis).unwrap_or_else(|| {
-            panic!(
-                "transpose_scatter: update_window_dims axis {} out of range for updates rank {}",
-                update_axis,
-                updates_shape.len()
-            )
-        });
+        let dim = updates_shape.get(update_axis)?;
         if let Some(value) = dim.constant_value() {
             concrete_slice_sizes[operand_dim] = value;
             dynamic_slice_sizes[operand_dim] = DimExpr::Const(value);
@@ -623,36 +619,32 @@ fn compute_inverse_gather(
     }
 
     if has_dynamic_slice_size {
-        InverseGather::Dynamic {
+        Some(InverseGather::Dynamic {
             offset_dims: config.update_window_dims.clone(),
             collapsed_slice_dims: config.inserted_window_dims.clone(),
             start_index_map: config.scatter_dims_to_operand_dims.clone(),
             index_vector_dim: config.index_vector_dim,
             slice_sizes: dynamic_slice_sizes,
             shape_sources: vec![updates_ref.clone()],
-        }
+        })
     } else {
-        InverseGather::Concrete(GatherConfig {
+        Some(InverseGather::Concrete(GatherConfig {
             offset_dims: config.update_window_dims.clone(),
             collapsed_slice_dims: config.inserted_window_dims.clone(),
             start_index_map: config.scatter_dims_to_operand_dims.clone(),
             index_vector_dim: config.index_vector_dim,
             slice_sizes: concrete_slice_sizes,
-        })
+        }))
     }
 }
 
 fn exact_usize_shape(
     ctx: &mut ShapeGuardContext,
     value: &ValueRef<StdTensorOp>,
-    op_name: &'static str,
-) -> Vec<usize> {
-    ctx.exact_shape_of(value)
-        .unwrap_or_else(|| panic!("{op_name} requires exact update shape metadata"))
+    _op_name: &'static str,
+) -> Option<Vec<usize>> {
+    ctx.exact_shape_of(value)?
         .into_iter()
-        .map(|dim| {
-            dim.constant_value()
-                .unwrap_or_else(|| panic!("{op_name} requires concrete update shape metadata"))
-        })
+        .map(|dim| dim.constant_value())
         .collect()
 }

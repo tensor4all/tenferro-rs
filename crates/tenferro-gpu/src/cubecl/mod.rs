@@ -357,6 +357,8 @@ impl CudaExtensionCache {
     /// assert!(CudaExtensionCache::new().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
+        // Compatibility panic wrapper; use `try_is_empty` where lock poison
+        // must be reported as a typed backend error.
         self.try_is_empty()
             .expect("CUDA extension cache lock poisoned")
     }
@@ -368,6 +370,8 @@ impl CudaExtensionCache {
 
     /// Remove every cached CUDA extension state value.
     pub fn clear(&self) {
+        // Compatibility panic wrapper; use `try_clear` where lock poison must
+        // be reported as a typed backend error.
         self.try_clear()
             .expect("CUDA extension cache lock poisoned");
     }
@@ -383,6 +387,8 @@ impl CudaExtensionCache {
 
     /// Snapshot the number of retained entries and logical retained bytes.
     pub fn stats(&self) -> CacheStats {
+        // Compatibility panic wrapper; use `try_stats` where lock poison must
+        // be reported as a typed backend error.
         self.try_stats()
             .expect("CUDA extension cache lock poisoned")
     }
@@ -398,6 +404,8 @@ impl CudaExtensionCache {
 
     /// Return the configured entry bound.
     pub fn max_entries(&self) -> NonZeroUsize {
+        // Compatibility panic wrapper; use `try_max_entries` where lock poison
+        // must be reported as a typed backend error.
         self.try_max_entries()
             .expect("CUDA extension cache lock poisoned")
     }
@@ -409,6 +417,8 @@ impl CudaExtensionCache {
 
     /// Replace the entry bound and evict oldest entries if needed.
     pub fn set_max_entries(&self, max_entries: NonZeroUsize) {
+        // Compatibility panic wrapper; use `try_set_max_entries` where lock
+        // poison must be reported as a typed backend error.
         self.try_set_max_entries(max_entries)
             .expect("CUDA extension cache lock poisoned");
     }
@@ -485,6 +495,8 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
+        // Internal TypeId invariant: get_or_try_init stores entries under
+        // TypeId::of::<T>(), so a downcast miss indicates cache corruption.
         self.inner
             .entries
             .get(&self.type_id)
@@ -1598,6 +1610,8 @@ impl CubeclBackend {
             return Ok(output);
         }
         let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
         ensure_atomic_add_supported::<T>(client, "scatter")?;
         let output_arg = typed_tensor_binding(&output, "scatter")?;
         let operand_arg = typed_tensor_binding(operand, "scatter")?;
@@ -1675,6 +1689,8 @@ impl CubeclBackend {
             return Ok(output);
         }
         let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
         ensure_atomic_add_supported::<F>(client, "scatter")?;
         let output_part_len = output.n_elements().checked_mul(2).ok_or_else(|| {
             crate::Error::backend_failure("scatter", "complex output part length overflow")

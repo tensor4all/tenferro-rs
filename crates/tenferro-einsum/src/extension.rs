@@ -210,37 +210,25 @@ impl ExtensionOp for EinsumExtensionOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(
-            input_shapes.len(),
-            self.subscripts.inputs.len(),
-            "einsum extension subscripts expect {} inputs, got {}",
-            self.subscripts.inputs.len(),
-            input_shapes.len()
-        );
-        assert_eq!(
-            input_dtypes.len(),
-            input_shapes.len(),
-            "einsum extension expects dtype and shape arity to match"
-        );
+        if input_shapes.len() != self.subscripts.inputs.len()
+            || input_dtypes.len() != input_shapes.len()
+        {
+            return Vec::new();
+        }
 
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
         for (labels, shape) in self.subscripts.inputs.iter().zip(input_shapes.iter()) {
-            assert_eq!(
-                labels.len(),
-                shape.len(),
-                "einsum extension input rank mismatch: labels={}, shape={}",
-                labels.len(),
-                shape.len()
-            );
+            if labels.len() != shape.len() {
+                return Vec::new();
+            }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
                 if let Some(existing) = label_dims.get(&label) {
                     if let (Some(lhs), Some(rhs)) =
                         (existing.constant_value(), dim.constant_value())
                     {
-                        assert_eq!(
-                            lhs, rhs,
-                            "einsum extension label {label} has inconsistent concrete sizes {lhs} vs {rhs}"
-                        );
+                        if lhs != rhs {
+                            return Vec::new();
+                        }
                     }
                 } else {
                     label_dims.insert(label, dim.clone());
@@ -254,13 +242,13 @@ impl ExtensionOp for EinsumExtensionOp {
                 .subscripts
                 .output
                 .iter()
-                .map(|label| {
-                    label_dims.get(label).cloned().unwrap_or_else(|| {
-                        panic!("unknown size for label {label} in einsum extension output")
-                    })
-                })
-                .collect(),
+                .map(|label| label_dims.get(label).cloned())
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default(),
         };
+        if output_shape.len() != self.subscripts.output.len() {
+            return Vec::new();
+        }
         vec![(promote_dtypes(input_dtypes.iter().copied()), output_shape)]
     }
 
@@ -464,14 +452,18 @@ impl ExtensionAdRule for EinsumAdRule {
             );
             let mut cotangent = out[0];
             if vjp_output_labels != input_labels[active_idx] {
-                cotangent = broadcast_einsum_vjp_to_input_shape(
+                let Some(remapped) = broadcast_einsum_vjp_to_input_shape(
                     builder,
                     cotangent,
                     &vjp_output_labels,
                     &input_labels[active_idx],
                     inputs[active_idx].clone(),
                     &output_shape_hint,
-                );
+                ) else {
+                    result.push(None);
+                    continue;
+                };
+                cotangent = remapped;
             }
             result.push(Some(cotangent));
         }
@@ -835,13 +827,13 @@ fn broadcast_einsum_vjp_to_input_shape(
     input_labels: &[u32],
     shape_source: ValueRef<StdTensorOp>,
     input_shape: &[SymDim],
-) -> LocalValueId {
+) -> Option<LocalValueId> {
     let shape: Vec<DimExpr> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, _)| DimExpr::InputDim { input_idx: 1, axis })
         .collect();
-    let dims = map_label_occurrences(cotangent_labels, input_labels);
+    let dims = map_label_occurrences(cotangent_labels, input_labels)?;
     let mut inputs = vec![ValueRef::Local(cotangent)];
     if !shape.is_empty() {
         inputs.push(shape_source);
@@ -853,11 +845,15 @@ fn broadcast_einsum_vjp_to_input_shape(
             active_mask: vec![true, false],
         },
     )[0];
-    project_repeated_labels_to_diagonal(builder, broadcast, input_labels)
+    Some(project_repeated_labels_to_diagonal(
+        builder,
+        broadcast,
+        input_labels,
+    ))
 }
 
 #[cfg(feature = "autodiff")]
-fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Vec<usize> {
+fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Option<Vec<usize>> {
     let mut used = vec![false; target_labels.len()];
     source_labels
         .iter()
@@ -865,10 +861,9 @@ fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Vec<us
             let axis = target_labels
                 .iter()
                 .enumerate()
-                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))
-                .unwrap_or_else(|| panic!("einsum VJP label {label} missing from input labels"));
+                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))?;
             used[axis] = true;
-            axis
+            Some(axis)
         })
         .collect()
 }

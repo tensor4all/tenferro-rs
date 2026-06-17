@@ -215,7 +215,7 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
     })
 }
 
-fn ensure_resident_on_runtime<T: 'static>(
+pub(super) fn ensure_resident_on_runtime<T: 'static>(
     rt: &WebGpuRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,

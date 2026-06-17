@@ -187,7 +187,7 @@ fn try_whole_program_untracked(
     let tensors: Vec<_> = inputs.iter().map(|tensor| tensor.data()).collect();
     let result = runtime.with_backend_mut(|backend| {
         crate::eager::eager_einsum_subscripts(backend, &tensors, &subs)
-    })?;
+    })??;
     Ok(Some(EagerTensor::from_tensor_in(result, runtime.clone())))
 }
 
@@ -247,7 +247,7 @@ pub fn einsum_whole_program_untracked(
     let tensors: Vec<_> = inputs.iter().map(|tensor| tensor.data()).collect();
     let result = runtime.with_backend_mut(|backend| {
         crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
-    })?;
+    })??;
     Ok(EagerTensor::from_tensor_in(result, runtime.clone()))
 }
 
@@ -336,7 +336,7 @@ fn cached_expanded_eager_program(
         let retained_bytes = expanded_eager_program_retained_bytes(&program);
         caches.put(key, Arc::clone(&program), retained_bytes);
         Ok(program)
-    })
+    })?
 }
 
 fn expanded_eager_program_cache_key(
