@@ -94,6 +94,12 @@ item stale and remove it from the active fix queue. If a small docs-only
 follow-up remains, rewrite the finding to that concrete docs path instead of
 preserving the broader historical issue text.
 
+If the finding is a false positive because an intentional invariant is not
+obvious, do not silently skip it. Record the reason in the issue, PR body, or
+classification ledger, and add a narrow source comment, rustdoc note, or
+source-contract test when that would prevent future humans or agents from
+misidentifying the same code as a bug.
+
 ### Design Gate
 
 Do not implement directly when a finding requires any of the following:
