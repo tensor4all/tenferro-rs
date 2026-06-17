@@ -136,6 +136,177 @@ fn gather_rejects_duplicate_offset_and_collapsed_slice_dims() {
 }
 
 #[test]
+fn invalid_structural_shape_rules_return_errors() {
+    let shape = DimExpr::from_concrete(&[2, 3]);
+
+    let missing_rhs = StdTensorOp::Mul;
+    assert!(infer_output_shapes(&missing_rhs, &[&shape]).is_err());
+
+    let extract_axis_oob = StdTensorOp::ExtractDiag {
+        axis_a: 0,
+        axis_b: 2,
+    };
+    assert!(infer_output_shapes(&extract_axis_oob, &[&shape]).is_err());
+
+    let extract_duplicate_axis = StdTensorOp::ExtractDiag {
+        axis_a: 1,
+        axis_b: 1,
+    };
+    assert!(infer_output_shapes(&extract_duplicate_axis, &[&shape]).is_err());
+
+    let embed_axis_a_oob = StdTensorOp::EmbedDiag {
+        axis_a: 2,
+        axis_b: 0,
+    };
+    assert!(infer_output_shapes(&embed_axis_a_oob, &[&shape]).is_err());
+
+    let embed_axis_b_oob = StdTensorOp::EmbedDiag {
+        axis_a: 0,
+        axis_b: 3,
+    };
+    assert!(infer_output_shapes(&embed_axis_b_oob, &[&shape]).is_err());
+
+    let truncate_axis_oob = StdTensorOp::DynamicTruncate { axis: 2 };
+    assert!(infer_output_shapes(&truncate_axis_oob, &[&shape]).is_err());
+    assert!(infer_output_extents(&truncate_axis_oob, &[&shape]).is_err());
+
+    let reference = DimExpr::from_concrete(&[2]);
+    let pad_reference_axis_oob = StdTensorOp::PadToMatch { axis: 1 };
+    assert!(infer_output_shapes(&pad_reference_axis_oob, &[&shape, &reference]).is_err());
+}
+
+#[test]
+fn gather_shape_rules_validate_dynamic_slice_metadata() {
+    let operand = DimExpr::from_concrete(&[4, 5]);
+    let indices = DimExpr::from_concrete(&[2, 2]);
+
+    let slice_rank_mismatch = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    });
+    assert!(infer_output_shapes(&slice_rank_mismatch, &[&operand, &indices]).is_err());
+
+    let index_vector_oob = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 3,
+        slice_sizes: vec![1, 5],
+    });
+    assert!(infer_output_shapes(&index_vector_oob, &[&operand, &indices]).is_err());
+
+    let collapsed_axis_oob = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![2],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 5],
+    });
+    assert!(infer_output_shapes(&collapsed_axis_oob, &[&operand, &indices]).is_err());
+
+    let offset_len_mismatch = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 5],
+    });
+    assert!(infer_output_shapes(&offset_len_mismatch, &[&operand, &indices]).is_err());
+
+    let offset_axis_oob = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![2],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 5],
+    });
+    assert!(infer_output_shapes(&offset_axis_oob, &[&operand, &indices]).is_err());
+
+    let unresolved_dynamic_slice_size = StdTensorOp::GatherDynamicSliceSizes {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![
+            DimExpr::Const(1),
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 0,
+            },
+        ],
+    };
+    assert!(infer_output_shapes(&unresolved_dynamic_slice_size, &[&operand, &indices]).is_err());
+}
+
+#[test]
+fn slice_and_pad_shape_rules_validate_arithmetic() {
+    let shape = DimExpr::from_concrete(&[4, 5]);
+
+    let bad_slice_rank = StdTensorOp::Slice(SliceConfig {
+        starts: vec![0],
+        limits: vec![4, 5],
+        strides: vec![1, 1],
+    });
+    assert!(infer_output_shapes(&bad_slice_rank, &[&shape]).is_err());
+
+    let bad_slice_bounds = StdTensorOp::Slice(SliceConfig {
+        starts: vec![3, 0],
+        limits: vec![2, 5],
+        strides: vec![1, 1],
+    });
+    assert!(infer_output_shapes(&bad_slice_bounds, &[&shape]).is_err());
+
+    let zero_slice_stride = StdTensorOp::Slice(SliceConfig {
+        starts: vec![0, 0],
+        limits: vec![4, 5],
+        strides: vec![0, 1],
+    });
+    assert!(infer_output_shapes(&zero_slice_stride, &[&shape]).is_err());
+
+    let bad_pad_rank = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![0],
+        edge_padding_high: vec![0, 0],
+        interior_padding: vec![0, 0],
+    });
+    assert!(infer_output_shapes(&bad_pad_rank, &[&shape]).is_err());
+
+    let negative_interior_pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![0, 0],
+        edge_padding_high: vec![0, 0],
+        interior_padding: vec![-1, 0],
+    });
+    assert!(infer_output_shapes(&negative_interior_pad, &[&shape]).is_err());
+
+    let symbolic_shape = vec![DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    }];
+    let symbolic_negative_edge_pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![-2],
+        edge_padding_high: vec![0],
+        interior_padding: vec![0],
+    });
+    assert!(infer_output_shapes(&symbolic_negative_edge_pad, &[&symbolic_shape]).is_ok());
+
+    let symbolic_interior_pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![2],
+        interior_padding: vec![1],
+    });
+    assert!(infer_output_shapes(&symbolic_interior_pad, &[&symbolic_shape]).is_ok());
+
+    let overflowing_edge_pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![i64::MAX],
+        edge_padding_high: vec![1],
+        interior_padding: vec![0],
+    });
+    assert!(infer_output_shapes(&overflowing_edge_pad, &[&symbolic_shape]).is_err());
+}
+
+#[test]
 fn shape_arithmetic_overflow_returns_errors_instead_of_wrapping() {
     let huge = vec![DimExpr::Const(usize::MAX), DimExpr::Const(1)];
 
