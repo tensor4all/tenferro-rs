@@ -175,7 +175,7 @@ fn algebraic_layout_simplifier_removes_identity_transpose() {
     );
     let mut program = make_exec_program(vec![transpose, neg], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -205,7 +205,7 @@ fn algebraic_layout_simplifier_composes_adjacent_inverse_transposes() {
     );
     let mut program = make_exec_program(vec![transpose_a, transpose_b], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3, 4])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.output_slots, vec![0]);
@@ -232,12 +232,40 @@ fn algebraic_layout_simplifier_removes_identity_reshape() {
     );
     let mut program = make_exec_program(vec![reshape, neg], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
     assert!(matches!(program.instructions[0].op, ExecOp::Negate));
     assert_eq!(program.instructions[0].input_slots, vec![0]);
+}
+
+#[test]
+fn algebraic_layout_simplifier_keeps_rank_reducing_reshape() {
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: DimExpr::input_shape(0, 2),
+        },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let neg = make_exec_instr_with_meta(
+        ExecOp::Negate,
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let mut program = make_exec_program(vec![reshape, neg], vec![0], vec![2], 3);
+
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3, 1])]).unwrap();
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Reshape { .. }));
+    assert_eq!(program.instructions[1].input_slots, vec![1]);
 }
 
 #[test]
@@ -730,6 +758,56 @@ fn test_dot_conj_folding_absorbs_both_operands() {
         }
         other => panic!("expected DotGeneralWithConj, got {other:?}"),
     }
+}
+
+#[test]
+fn dot_conj_folding_preserves_rank_reducing_reshape_operand() {
+    let lhs_conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![0],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[2, 3, 1])],
+    );
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: dim_shape(&[2, 3]),
+        },
+        vec![2],
+        vec![3],
+        DType::C64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr_with_meta(
+        ExecOp::DotGeneral(config),
+        vec![3, 1],
+        vec![4],
+        DType::C64,
+        vec![dim_shape(&[2, 4])],
+    );
+    let mut program = make_exec_program(vec![lhs_conj, reshape, dot], vec![0, 1], vec![4], 5);
+
+    dot_conj_folding(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Reshape { .. }));
+    assert_eq!(program.instructions[0].input_slots, vec![0]);
+    assert_eq!(program.instructions[1].input_slots, vec![3, 1]);
+    assert!(matches!(
+        program.instructions[1].op,
+        ExecOp::DotGeneralWithConj {
+            lhs_conj: true,
+            rhs_conj: false,
+            ..
+        }
+    ));
 }
 
 #[test]

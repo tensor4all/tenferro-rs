@@ -758,16 +758,24 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 // split out of the fixed compile pipeline.
 
 /// Simplify algebraically redundant layout operations in place.
-pub(crate) fn algebraic_layout_simplifier(program: &mut ExecProgram) {
+pub(crate) fn algebraic_layout_simplifier(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<()> {
     loop {
-        if !algebraic_layout_simplifier_one_pass(program) {
+        if !algebraic_layout_simplifier_one_pass(program, input_shapes)? {
             break;
         }
     }
+    Ok(())
 }
 
-fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
+fn algebraic_layout_simplifier_one_pass(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<bool> {
     let producer_by_slot = producer_indices_by_slot(program);
+    let slot_shapes = collect_slot_shapes(program, input_shapes)?;
     let use_counts = slot_use_counts(program);
     let mut changed = false;
 
@@ -789,7 +797,14 @@ fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
                 replace_slot_uses(program, from, to);
                 changed = true;
             }
-            ExecOp::Reshape { shape } if is_identity_reshape_shape(&shape) => {
+            ExecOp::Reshape { shape }
+                if is_identity_reshape_shape(
+                    &shape,
+                    slot_shapes
+                        .get(program.instructions[index].input_slots[0])
+                        .and_then(Option::as_deref),
+                ) =>
+            {
                 let from = output_slot;
                 let to = program.instructions[index].input_slots[0];
                 replace_slot_uses(program, from, to);
@@ -826,7 +841,42 @@ fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
         }
     }
 
-    changed
+    Ok(changed)
+}
+
+fn collect_slot_shapes(
+    program: &ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<Vec<Option<Vec<DimExpr>>>> {
+    if program.input_slots.len() != input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "algebraic_layout_simplifier input shape count {} must match input slot count {}",
+            input_shapes.len(),
+            program.input_slots.len()
+        )));
+    }
+    let mut slot_shapes = vec![None; program.n_slots];
+    for (index, &slot) in program.input_slots.iter().enumerate() {
+        let Some(shape) = slot_shapes.get_mut(slot) else {
+            return Err(invalid_compiled_graph(format!(
+                "input slot {} is outside slot table of length {}",
+                slot, program.n_slots
+            )));
+        };
+        *shape = Some(input_shapes[index].clone());
+    }
+    for instr in &program.instructions {
+        for (&slot, shape) in instr.output_slots.iter().zip(instr.output_shapes.iter()) {
+            let Some(slot_shape) = slot_shapes.get_mut(slot) else {
+                return Err(invalid_compiled_graph(format!(
+                    "output slot {} is outside slot table of length {}",
+                    slot, program.n_slots
+                )));
+            };
+            *slot_shape = Some(shape.clone());
+        }
+    }
+    Ok(slot_shapes)
 }
 
 fn is_identity_perm(perm: &[usize]) -> bool {
@@ -835,8 +885,11 @@ fn is_identity_perm(perm: &[usize]) -> bool {
         .all(|(axis, &mapped)| axis == mapped)
 }
 
-fn is_identity_reshape_shape(shape: &[DimExpr]) -> bool {
-    if shape.is_empty() {
+fn is_identity_reshape_shape(shape: &[DimExpr], input_shape: Option<&[DimExpr]>) -> bool {
+    let Some(input_shape) = input_shape else {
+        return false;
+    };
+    if shape.is_empty() || shape.len() != input_shape.len() {
         return false;
     }
     shape.iter().enumerate().all(|(axis, dim)| {
@@ -1285,6 +1338,8 @@ fn find_dot_operand_conj_fold(
 }
 
 fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
+    // These ops are transparent only for elementwise Conj movement; the Dot input
+    // remains the layout op output, so rank-changing reshapes are not bypassed.
     matches!(
         op,
         ExecOp::Transpose { .. }

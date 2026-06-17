@@ -389,29 +389,47 @@ pub fn transpose_broadcast_in_dim(
         broadcast_transpose_reduce_axes(shape, dims, inputs, ctx);
 
     let primary = match cotangent_out[0] {
-        Some(ct) if reduce_axes.is_empty() => Some(ct),
         Some(ct) => {
-            let reduced = builder.add_operation(
-                StdTensorOp::ReduceSum { axes: reduce_axes },
-                vec![ValueRef::Local(ct)],
-                OperationRole::Linearized {
-                    active_mask: vec![true],
-                },
-            )[0];
+            let reduced = if reduce_axes.is_empty() {
+                ct
+            } else {
+                builder.add_operation(
+                    StdTensorOp::ReduceSum {
+                        axes: reduce_axes.clone(),
+                    },
+                    vec![ValueRef::Local(ct)],
+                    OperationRole::Linearized {
+                        active_mask: vec![true],
+                    },
+                )[0]
+            };
+            let restored_order = if let Some(perm) =
+                broadcast_transpose_restore_perm(shape.len(), dims, &reduce_axes)
+            {
+                builder.add_operation(
+                    StdTensorOp::Transpose { perm },
+                    vec![ValueRef::Local(reduced)],
+                    OperationRole::Linearized {
+                        active_mask: vec![true],
+                    },
+                )[0]
+            } else {
+                reduced
+            };
             if needs_input_shape_restore {
                 let input_rank = ctx.shape_of(&inputs[0]).len();
                 let reshaped = builder.add_operation(
                     StdTensorOp::Reshape {
                         to_shape: DimExpr::input_shape(1, input_rank),
                     },
-                    vec![ValueRef::Local(reduced), inputs[0].clone()],
+                    vec![ValueRef::Local(restored_order), inputs[0].clone()],
                     OperationRole::Linearized {
                         active_mask: vec![true, false],
                     },
                 );
                 Some(reshaped[0])
             } else {
-                Some(reduced)
+                Some(restored_order)
             }
         }
         None => None,
@@ -463,6 +481,31 @@ fn broadcast_transpose_reduce_axes(
     reduce_axes.sort_unstable();
     reduce_axes.dedup();
     (reduce_axes, needs_input_shape_restore)
+}
+
+fn broadcast_transpose_restore_perm(
+    output_rank: usize,
+    dims: &[usize],
+    reduce_axes: &[usize],
+) -> Option<Vec<usize>> {
+    let remaining_output_axes: Vec<_> = (0..output_rank)
+        .filter(|axis| !reduce_axes.contains(axis))
+        .collect();
+    let mut perm = Vec::new();
+    for &output_axis in dims {
+        if reduce_axes.contains(&output_axis) {
+            continue;
+        }
+        let reduced_axis = remaining_output_axes
+            .iter()
+            .position(|&axis| axis == output_axis)?;
+        perm.push(reduced_axis);
+    }
+    let is_identity = perm
+        .iter()
+        .enumerate()
+        .all(|(axis, &mapped)| axis == mapped);
+    (!is_identity).then_some(perm)
 }
 
 fn collect_known_input_shapes(

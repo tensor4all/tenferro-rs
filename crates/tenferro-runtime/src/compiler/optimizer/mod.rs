@@ -16,7 +16,7 @@ pub fn optimize_exec_program(
     super::conj_sinking(program, input_dtypes, input_shapes)?;
     super::dot_dimension_sorter(program);
     if config.algebraic_layout_simplifier {
-        super::algebraic_layout_simplifier(program);
+        super::algebraic_layout_simplifier(program, input_shapes)?;
     }
     super::transpose_folding(program);
     if config.layout_chain_transpose_folding {
@@ -26,7 +26,7 @@ pub fn optimize_exec_program(
     if config.dot_decomposer {
         super::dot_decomposer(program, input_shapes);
         if config.algebraic_layout_simplifier {
-            super::algebraic_layout_simplifier(program);
+            super::algebraic_layout_simplifier(program, input_shapes)?;
         }
     }
     super::eliminate_dead_code(program);
