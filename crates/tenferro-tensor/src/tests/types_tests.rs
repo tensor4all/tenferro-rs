@@ -4,10 +4,10 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
-    col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
-    DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec,
-    Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
-    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, flat_to_multi, materialize_typed_view_col_major, try_col_major_strides,
+    Buffer, BufferHandle, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
+    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
+    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use crate::{Error, SliceConfig};
@@ -221,6 +221,11 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
     assert_eq!(col_major_strides(&[]), Vec::<isize>::new());
     assert_eq!(col_major_strides(&[2, 3, 4]), vec![1, 2, 6]);
+    assert_eq!(try_col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
+    assert!(matches!(
+        try_col_major_strides(&[usize::MAX, 2]),
+        Err(Error::InvalidConfig { .. })
+    ));
 
     let mut scalar_idx = [];
     flat_to_multi(0, &[], &mut scalar_idx);

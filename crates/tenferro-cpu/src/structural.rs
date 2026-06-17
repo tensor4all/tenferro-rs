@@ -49,6 +49,20 @@ fn validate_axes_distinct(op: &'static str, axis_a: usize, axis_b: usize) -> cra
     Ok(())
 }
 
+fn checked_shape_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> crate::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("{role} element count overflows usize"),
+            })
+    })
+}
+
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     validate_rank(op, rank, perm.len())?;
     let mut seen = vec![false; rank];
@@ -117,26 +131,31 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync>(
     Ok(tensor_from_array(out))
 }
 
-fn zeroed_tensor_from_pool<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> TypedTensor<T>
+fn zeroed_tensor_from_pool<T>(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    shape: Vec<usize>,
+) -> crate::Result<TypedTensor<T>>
 where
     T: Zero + Clone + PoolScalar + 'static,
 {
-    filled_tensor_from_pool(buffers, shape, T::zero())
+    filled_tensor_from_pool(buffers, op, shape, T::zero())
 }
 
 fn filled_tensor_from_pool<T>(
     buffers: &mut BufferPool,
+    op: &'static str,
     shape: Vec<usize>,
     fill: T,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
-    let len = shape.iter().product();
-    // SAFETY: every element is initialized with `fill` before returning.
+    let len = checked_shape_product(op, "output shape", &shape)?;
+    // SAFETY: every pooled element is initialized with `fill` before returning.
     let mut data = unsafe { T::pool_acquire(buffers, len) };
     data.fill(fill);
-    TypedTensor::from_vec_col_major(shape, data)
+    Ok(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn clone_host_tensor_from_pool<T>(
@@ -151,7 +170,7 @@ where
         crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
-    // SAFETY: copy_from_slice initializes every element before returning.
+    // SAFETY: copy_from_slice initializes every pooled element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
     data.copy_from_slice(input);
     Ok(TypedTensor::from_buffer_col_major(
@@ -312,7 +331,7 @@ pub(crate) fn embed_diagonal_with_pool(
         |t| typed_embed_diagonal_with_pool(buffers, t, axis_a, axis_b),
         bool | t
             | typed_embed_diagonal_impl(t, axis_a, axis_b, |shape| {
-                filled_tensor_from_pool(buffers, shape, false)
+                filled_tensor_from_pool(buffers, "embed_diagonal", shape, false)
             })
     )
 }
@@ -404,6 +423,7 @@ where
     R: TensorRank,
 {
     typed_transpose_view_impl(view, perm, |shape| unsafe {
+        // SAFETY: transpose materialization copies every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
 }
@@ -412,8 +432,8 @@ pub fn typed_reshape<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let old_n: usize = tensor.shape().iter().product();
-    let new_n: usize = shape.iter().product();
+    let old_n = checked_shape_product("reshape", "input shape", tensor.shape())?;
+    let new_n = checked_shape_product("reshape", "output shape", shape)?;
     if old_n != new_n {
         return Err(crate::Error::ShapeMismatch {
             op: "reshape",
@@ -449,6 +469,7 @@ where
     T: Copy + Clone + PoolScalar,
 {
     typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
+        // SAFETY: broadcast materialization writes every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
 }
@@ -571,7 +592,9 @@ pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone>(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| TypedTensor::zeros(shape))
+    typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| {
+        Ok(TypedTensor::zeros(shape))
+    })
 }
 
 pub(crate) fn typed_embed_diagonal_with_pool<T>(
@@ -584,7 +607,7 @@ where
     T: Copy + Zero + Clone + PoolScalar + 'static,
 {
     typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| {
-        zeroed_tensor_from_pool(buffers, shape)
+        zeroed_tensor_from_pool(buffers, "embed_diagonal", shape)
     })
 }
 
@@ -592,7 +615,7 @@ fn typed_embed_diagonal_impl<T>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
-    make_zeroed: impl FnOnce(Vec<usize>) -> TypedTensor<T>,
+    make_zeroed: impl FnOnce(Vec<usize>) -> crate::Result<TypedTensor<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone,
@@ -609,7 +632,7 @@ where
     let n = tensor.shape()[axis_a];
     let mut out_shape = tensor.shape().to_vec();
     out_shape.insert(axis_b, n);
-    let mut out = make_zeroed(out_shape);
+    let mut out = make_zeroed(out_shape)?;
 
     let in_rank = tensor.shape().len();
     let out_rank = out.shape().len();

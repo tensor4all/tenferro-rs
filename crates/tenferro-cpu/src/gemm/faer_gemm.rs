@@ -88,6 +88,7 @@ macro_rules! impl_faer_gemm {
                     Accum::Replace
                 } else {
                     if beta != one {
+                        // SAFETY: beta != 0 callers must pass initialized C; pooled dot_general uses beta = 0.
                         let mut col_off = 0isize;
                         for _ in 0..n {
                             let mut off = col_off;

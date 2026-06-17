@@ -142,6 +142,30 @@ fn gpu_triangular_solve_batched_offsets_use_checked_arithmetic() {
 }
 
 #[test]
+fn gpu_linalg_batched_pointer_offsets_use_checked_arithmetic_contract() {
+    let source = linalg_source();
+
+    assert!(
+        !source.contains("batch *"),
+        "GPU batched linalg pointer offsets must go through checked_batch_offset"
+    );
+    for banned in [
+        "let matrix_stride = n * n",
+        "let matrix_stride = m * n",
+        "let a_stride = m * n",
+        "let u_stride = m * k",
+        "let vt_stride = k * n",
+        "let v_stride = n * k",
+        "let q_stride = m * k",
+    ] {
+        assert!(
+            !source.contains(banned),
+            "GPU linalg stride products must use checked_mul_usize: found {banned}"
+        );
+    }
+}
+
+#[test]
 fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
     let source = linalg_source();
     let zero_lu = source_section(&source, "fn zero_sized_lu_factor_outputs", "fn raw_stream");

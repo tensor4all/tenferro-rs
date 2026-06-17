@@ -19,6 +19,8 @@
 
 use cubecl::prelude::*;
 
+use crate::kernels::{CubeclKernelError, Result};
+
 /// Validated single-axis reduction dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ReduceProblem {
@@ -52,25 +54,33 @@ pub struct ReduceLaunchSettings {
 pub(crate) fn unit_launch_settings<R: Runtime>(
     client: &ComputeClient<R>,
     problem: ReduceProblem,
-) -> ReduceLaunchSettings {
+) -> Result<ReduceLaunchSettings> {
     unit_launch_settings_for_plane_size(client.properties().hardware.plane_size_max, problem)
 }
 
 fn unit_launch_settings_for_plane_size(
     plane_size: u32,
     problem: ReduceProblem,
-) -> ReduceLaunchSettings {
+) -> Result<ReduceLaunchSettings> {
     let cube_dim = CubeDim::new_1d(plane_size);
     let units_per_cube = cube_dim.num_elems() as usize;
-    let cubes = problem.reduce_count.div_ceil(units_per_cube).max(1) as u32;
+    let cubes =
+        u32::try_from(problem.reduce_count.div_ceil(units_per_cube).max(1)).map_err(|_| {
+            CubeclKernelError::InvalidStrategy {
+                reason: format!(
+                    "reduction output element count {} exceeds static CubeCL launch limit",
+                    problem.reduce_count
+                ),
+            }
+        })?;
 
-    ReduceLaunchSettings {
+    Ok(ReduceLaunchSettings {
         cube_count: CubeCount::Static(cubes, 1, 1),
         cube_dim,
         blueprint: UnitReduceBlueprint {
             idle_units: problem.reduce_count % units_per_cube != 0,
         },
-    }
+    })
 }
 
 #[cfg(test)]

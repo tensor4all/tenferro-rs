@@ -79,6 +79,29 @@ fn eager_einsum_handles_higher_rank_repeated_labels() {
 }
 
 #[test]
+fn eager_einsum_handles_three_or_more_repeated_labels() {
+    let mut ctx = CpuBackend::new();
+    let cube = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+    );
+
+    let diagonal = eager_einsum(&mut ctx, &[&cube], "iii->i").unwrap();
+    assert_f64_tensor(&diagonal, &[2], &[1.0, 8.0]);
+
+    let hypercube = Tensor::from_vec_col_major(
+        vec![2, 2, 2, 2],
+        (1..=16).map(|value| value as f64).collect(),
+    );
+    let trace = eager_einsum(&mut ctx, &[&hypercube], "iiii->").unwrap();
+    assert_f64_tensor(&trace, &[], &[17.0]);
+
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 5.0]);
+    let mixed = eager_einsum(&mut ctx, &[&cube, &rhs], "iii,j->ij").unwrap();
+    assert_f64_tensor(&mixed, &[2, 3], &[2.0, 16.0, 3.0, 24.0, 5.0, 40.0]);
+}
+
+#[test]
 fn eager_einsum_read_views_match_owned_inputs() {
     let a_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let b_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];

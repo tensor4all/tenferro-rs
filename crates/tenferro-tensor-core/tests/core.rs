@@ -205,6 +205,25 @@ fn compact_layout_reports_stride_overflow() {
 }
 
 #[test]
+fn compact_host_tensor_view_reuses_checked_col_major_stride_helper() {
+    let source = include_str!("../src/lib.rs");
+    let helper = source
+        .split("fn compact_col_major_strides")
+        .nth(1)
+        .and_then(|rest| rest.split("/// Return compact column-major strides").next())
+        .expect("compact_col_major_strides helper should exist");
+
+    assert!(
+        helper.contains("col_major_strides(shape)"),
+        "compact host view strides must not duplicate unchecked stride arithmetic"
+    );
+    assert!(
+        !helper.contains("stride *= extent as isize"),
+        "compact host view strides must avoid unchecked stride multiplication"
+    );
+}
+
+#[test]
 fn layout_from_parts_preserves_offset() {
     let layout =
         TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7, 10).unwrap();

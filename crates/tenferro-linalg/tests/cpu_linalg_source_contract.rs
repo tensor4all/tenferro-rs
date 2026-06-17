@@ -24,6 +24,16 @@ fn cpu_lapack_full_piv_lu_source() -> String {
     .unwrap_or_else(|err| panic!("LAPACK full_piv_lu source should be readable: {err}"))
 }
 
+fn cpu_backend_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cpu")
+            .join("backend.rs"),
+    )
+    .unwrap_or_else(|err| panic!("CPU linalg backend source should be readable: {err}"))
+}
+
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source
         .find(start)
@@ -84,4 +94,39 @@ fn lapack_full_piv_lu_rejects_positive_getc2_info() {
         factor.contains("matrix is singular"),
         "positive getc2 info should be reported as a singular matrix"
     );
+}
+
+#[test]
+fn cpu_eigh_complex_output_adapters_are_fallible() {
+    let source = cpu_backend_source();
+    let eigh_impl = source_section(&source, "fn eigh(&mut self", "fn eigh_values");
+    let c32_adapter = source_section(
+        &source,
+        "fn eigh_c32_outputs_to_public_tensors",
+        "fn eigh_c64_outputs_to_public_tensors",
+    );
+    let c64_adapter = source_section(
+        &source,
+        "fn eigh_c64_outputs_to_public_tensors",
+        "fn apply_lu_pivots_cpu",
+    );
+
+    assert!(
+        eigh_impl.contains(".and_then(eigh_c32_outputs_to_public_tensors)")
+            && eigh_impl.contains(".and_then(eigh_c64_outputs_to_public_tensors)"),
+        "CPU complex eigh output adapters should propagate malformed output errors"
+    );
+    for (name, adapter) in [
+        ("eigh_c32_outputs_to_public_tensors", c32_adapter),
+        ("eigh_c64_outputs_to_public_tensors", c64_adapter),
+    ] {
+        assert!(
+            adapter.contains("tenferro_tensor::Result<Vec<Tensor>>"),
+            "{name} should return a typed Result"
+        );
+        assert!(
+            !adapter.contains(".expect("),
+            "{name} should not panic on malformed backend output"
+        );
+    }
 }

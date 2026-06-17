@@ -294,6 +294,36 @@ fn traced_inv_rejects_rank_less_than_two_without_panicking() {
 }
 
 #[test]
+fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
+    let matrix = TracedTensor::input_symbolic_shape(DType::F64, 2);
+
+    for (op, result) in [
+        ("inv", tenferro_linalg::inv(&matrix)),
+        ("pinv", tenferro_linalg::pinv(&matrix)),
+        (
+            "pinv_with_rtol",
+            tenferro_linalg::pinv_with_rtol(&matrix, 1.0e-12),
+        ),
+        (
+            "norm",
+            tenferro_linalg::norm(&matrix, Some(2.0), Some(&[0, 1]), true),
+        ),
+    ] {
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::TensorRuntime(TensorError::BackendFailure {
+                    op: actual_op,
+                    ref message,
+                }) if actual_op == op && message.contains("symbolic shape")
+            ),
+            "expected symbolic-shape error for {op}, got {err:?}"
+        );
+    }
+}
+
+#[test]
 fn traced_norm_rejects_out_of_range_axis_without_panicking() {
     let tensor = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 

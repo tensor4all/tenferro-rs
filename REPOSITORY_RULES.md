@@ -325,6 +325,22 @@ Tests follow implementation ownership.
 
 ## Performance And Layout Rules
 
+### Performance-Sensitive Safety Contracts
+
+- Potentially dangerous operations that are intentionally kept for performance,
+  such as raw scratch-buffer acquisition, unchecked indexing after validation,
+  raw pointer arithmetic, or backend-native view construction, must carry a
+  nearby one-line comment explaining the invariant that makes the operation
+  valid. This is required even when the operation is technically correct, so
+  later agents and reviewers do not "fix" a false positive by adding hidden
+  copies, repeated checks, or unconditional initialization to a hot path.
+- Buffer-pool and scratch-buffer APIs must distinguish full-overwrite callers
+  from read-before-write callers. Do not fix stale or uninitialized reads by
+  adding unconditional zero-fill to shared hot-path acquisition. Instead expose
+  an explicit zeroed/initialized acquisition path, keep raw acquisition unsafe
+  and documented for full-overwrite kernels only, and add regression coverage
+  for both contracts.
+
 ### Complexity Budget
 
 - Do not introduce accidental `O(n^2)` behavior in graph construction,

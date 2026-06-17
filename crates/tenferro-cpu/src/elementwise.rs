@@ -605,6 +605,7 @@ where
     R: TensorRank,
 {
     if lhs.shape() == rhs.shape() {
+        // SAFETY: the following kernel overwrites every output element before any read.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         zip_map2_into(
             &mut out.view_mut(),
@@ -616,6 +617,7 @@ where
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
+        // SAFETY: the following kernel overwrites every output element before any read.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
             f(scalar, x)
@@ -624,6 +626,7 @@ where
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
+        // SAFETY: the following kernel overwrites every output element before any read.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
             f(x, scalar)
@@ -649,6 +652,7 @@ where
     T: Copy + PoolScalar + 'static,
     R: TensorRank,
 {
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
         .map_err(|err| crate::Error::backend_failure(op, err))?;
@@ -675,6 +679,7 @@ where
             rhs: rhs.shape().to_vec(),
         });
     }
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
@@ -712,6 +717,7 @@ where
             rhs: on_false.shape().to_vec(),
         });
     }
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) };
     zip_map3_into(
         &mut out.view_mut(),
@@ -750,6 +756,7 @@ where
             rhs: upper.shape().to_vec(),
         });
     }
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     zip_map3_into(
         &mut out.view_mut(),
@@ -2554,6 +2561,7 @@ fn typed_complex_abs_with_pool<T>(
 where
     T: num_traits::Float + PoolScalar,
 {
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.norm()
@@ -2570,6 +2578,7 @@ where
     T: num_traits::Float + PoolScalar + 'static,
     R: TensorRank,
 {
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(
         &mut out.view_mut(),

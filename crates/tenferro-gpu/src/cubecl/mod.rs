@@ -2040,8 +2040,8 @@ impl TensorStructural for CubeclBackend {
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        let old_n: usize = input.shape().iter().product();
-        let new_n: usize = shape.iter().product();
+        let old_n = checked_dim_product("reshape", "input shape", input.shape())?;
+        let new_n = checked_dim_product("reshape", "output shape", shape)?;
         if old_n != new_n {
             return Err(crate::Error::ShapeMismatch {
                 op: "reshape",
@@ -3132,7 +3132,12 @@ fn concatenate_output_shape<T>(
         ensure_rank("concatenate", rank, input.shape().len())?;
         for dim in 0..rank {
             if dim == axis {
-                axis_extent += input.shape()[dim];
+                axis_extent = axis_extent.checked_add(input.shape()[dim]).ok_or_else(|| {
+                    crate::Error::backend_failure(
+                        "concatenate",
+                        "concatenate axis extent overflows usize",
+                    )
+                })?;
             } else if input.shape()[dim] != first.shape()[dim] {
                 return Err(crate::Error::ShapeMismatch {
                     op: "concatenate",

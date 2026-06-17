@@ -54,15 +54,25 @@ fn fresh_alloc_fallback() {
 }
 
 #[test]
-fn acquired_buffers_are_initialized_on_fresh_and_reused_paths() {
+fn zeroed_acquire_initializes_fresh_and_reused_buffers() {
     let mut pool = BufferPool::new();
 
-    let fresh = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
+    let fresh = <f64 as PoolScalar>::pool_acquire_zeroed(&mut pool, 4);
     assert_eq!(fresh, vec![0.0; 4]);
 
     <f64 as PoolScalar>::pool_release(&mut pool, vec![7.0, 8.0, 9.0, 10.0]);
-    let reused = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
+    let reused = <f64 as PoolScalar>::pool_acquire_zeroed(&mut pool, 4);
     assert_eq!(reused, vec![0.0; 4]);
+}
+
+#[test]
+fn raw_acquire_does_not_zero_initialized_reused_buffers() {
+    let mut pool = BufferPool::new();
+
+    <f64 as PoolScalar>::pool_release(&mut pool, vec![7.0, 8.0, 9.0, 10.0]);
+    let reused = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
+
+    assert_eq!(reused, vec![7.0, 8.0, 9.0, 10.0]);
 }
 
 #[test]

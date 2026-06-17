@@ -514,16 +514,19 @@ fn jvp_optional_result_with_rules(
         return Ok(None);
     };
     let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
+    let tangent_data =
+        tangent
+            .attached_data()
+            .cloned()
+            .ok_or_else(|| Error::InvalidGraphBuild {
+                op: "jvp",
+                message: "jvp tangent must have concrete tensor data".to_string(),
+            })?;
     let metadata_scope = register_scoped_graph_metadata(
         linear.as_graph(),
         vec![(
             ValueKey::Input(tangent_input_key.clone()),
-            tensor_meta_from_tensor(
-                tangent
-                    .attached_data()
-                    .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data"))
-                    .as_ref(),
-            ),
+            tensor_meta_from_tensor(tangent_data.as_ref()),
         )],
     );
 
@@ -531,13 +534,7 @@ fn jvp_optional_result_with_rules(
     if let Some(chain) = &checkpoint_chain {
         inputs_map.extend(chain.collect_inputs());
     }
-    inputs_map.insert(
-        tangent_input_key,
-        tangent
-            .attached_data()
-            .cloned()
-            .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
-    );
+    inputs_map.insert(tangent_input_key, tangent_data);
 
     let mut extra_roots = vec![Arc::clone(output.graph())];
     extra_roots.extend(checkpoint_graphs);
@@ -610,16 +607,19 @@ fn vjp_optional_result_with_rules(
         .map_err(|err| Error::Internal(err.to_string()))?;
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1);
+    let cotangent_data =
+        cotangent
+            .attached_data()
+            .cloned()
+            .ok_or_else(|| Error::InvalidGraphBuild {
+                op: "vjp",
+                message: "vjp cotangent must have concrete tensor data".to_string(),
+            })?;
     let transposed_metadata_scope = register_scoped_graph_metadata(
         transposed.as_graph(),
         vec![(
             ValueKey::Input(cotangent_input_key.clone()),
-            tensor_meta_from_tensor(
-                cotangent
-                    .attached_data()
-                    .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data"))
-                    .as_ref(),
-            ),
+            tensor_meta_from_tensor(cotangent_data.as_ref()),
         )],
     );
     let linear_graph = Arc::new(linear.into_graph());
@@ -631,13 +631,7 @@ fn vjp_optional_result_with_rules(
     if let Some(chain) = &checkpoint_chain {
         inputs_map.extend(chain.collect_inputs());
     }
-    inputs_map.insert(
-        cotangent_input_key.clone(),
-        cotangent
-            .attached_data()
-            .cloned()
-            .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
-    );
+    inputs_map.insert(cotangent_input_key.clone(), cotangent_data);
 
     let mut extra_roots = vec![Arc::clone(output.graph()), linear_graph];
     extra_roots.extend(checkpoint_graphs);

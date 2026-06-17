@@ -294,7 +294,12 @@ fn lower_extension_instruction(
                 ),
             });
         };
-        let input_idx = *id as usize;
+        let input_idx = usize::try_from(*id).map_err(|_| Error::InvalidProgram {
+            message: format!(
+                "extension family {:?} standard-op lowering referenced oversized input id {id}",
+                op.family_id()
+            ),
+        })?;
         let Some(input_value) = input_values.get(input_idx) else {
             return Err(Error::InvalidProgram {
                 message: format!(
@@ -639,6 +644,18 @@ fn emit_transpose(
                 output_ty.shape.len()
             ),
         });
+    }
+    let mut seen = vec![false; input.ty.shape.len()];
+    for &axis in perm {
+        if axis >= input.ty.shape.len() || seen[axis] {
+            return Err(Error::InvalidProgram {
+                message: format!(
+                    "transpose permutation must be a bijection over rank {}, got {perm:?}",
+                    input.ty.shape.len()
+                ),
+            });
+        }
+        seen[axis] = true;
     }
     let name = emitter.value();
     emitter.line(format!(

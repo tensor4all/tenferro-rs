@@ -77,8 +77,7 @@ where
         .map_err(map_strided_error)?;
     let out_n = checked_product(&out_shape)?;
 
-    // SAFETY: dot_general_with_backend_into is called with beta=0 and either
-    // overwrites every output element or explicitly zero-fills k=0 outputs.
+    // SAFETY: beta=0 strided dot fully overwrites outputs or explicitly zero-fills k=0.
     let mut out_data = unsafe { T::pool_acquire(buffers, out_n) };
     let out_strides = strided_einsum2::col_major_strides(&out_shape);
     let out_view = strided_einsum2::StridedViewMut::new(&mut out_data, &out_shape, &out_strides, 0)
