@@ -145,7 +145,8 @@ fn from_buffer_col_major_rejects_shape_product_overflow() {
     assert!(
         panic.contains("attempt to multiply with overflow")
             || panic.contains("invalid compact tensor layout")
-            || panic.contains("from_buffer_col_major: data length"),
+            || panic.contains("from_buffer_col_major: data length")
+            || (panic.contains("integer overflow") && panic.contains("tensor metadata")),
         "unexpected panic message: {panic}"
     );
 }

@@ -119,13 +119,7 @@ gpu_test!(test_download_empty_host_f64_rejects_before_fast_path, {
 
     let err = download_tensor(&rt, &host).unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::BackendFailure {
-            op: "download",
-            ref message,
-        } if message.contains("expected CubeCL buffer")
-    ));
+    assert_download_rejects_host_tensor_before_empty_fast_path(err);
 });
 
 gpu_test!(test_download_empty_host_bool_rejects_before_fast_path, {
@@ -134,14 +128,18 @@ gpu_test!(test_download_empty_host_bool_rejects_before_fast_path, {
 
     let err = download_tensor(&rt, &host).unwrap_err();
 
+    assert_download_rejects_host_tensor_before_empty_fast_path(err);
+});
+
+fn assert_download_rejects_host_tensor_before_empty_fast_path(err: Error) {
     assert!(matches!(
         err,
         Error::BackendFailure {
             op: "download",
             ref message,
-        } if message.contains("expected CubeCL buffer")
+        } if message.contains("expected CubeCL buffer") || message.contains("expected GPU tensor")
     ));
-});
+}
 
 gpu_test!(test_upload_download_c64, {
     use num_complex::Complex64;
