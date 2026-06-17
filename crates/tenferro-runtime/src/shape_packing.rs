@@ -8,7 +8,7 @@ use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
-use crate::metadata::{metadata_scopes_with_new, register_scoped_graph_metadata};
+use crate::metadata::{metadata_scopes_with_new, register_scoped_value_metadata, tensor_meta};
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{apply_binary_preserve_input_dtypes, next_traced_id, try_concrete_shape};
@@ -244,7 +244,16 @@ fn apply_nary_concatenate(
     );
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
-    let metadata_scope = register_scoped_graph_metadata(graph.as_ref(), std::iter::empty());
+    // Stack already validated concrete input shapes; re-inferring this
+    // concat would treat equal non-axis dims from different inputs as
+    // unrelated `InputDim`s.
+    let metadata_scope = register_scoped_value_metadata(
+        graph.values()[outputs[0]].key.clone(),
+        tensor_meta(
+            out_dtype,
+            out_shape.iter().copied().map(SymDim::from).collect(),
+        ),
+    );
 
     let mut inputs_map = HashMap::new();
     let mut extra_roots = Vec::new();

@@ -80,12 +80,12 @@ fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
 }
 
 #[test]
-fn traced_reduction_with_too_many_axes_does_not_underflow_rank() {
+fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
     let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
 
-    let y = x.reduce_max(&[0, 1, 2]);
+    let err = x.try_reduce_max(&[0, 1, 2]).unwrap_err().to_string();
 
-    assert_eq!(y.rank, 0);
+    assert!(err.contains("axis 2 out of bounds for rank 2"), "{err}");
 }
 
 #[test]
