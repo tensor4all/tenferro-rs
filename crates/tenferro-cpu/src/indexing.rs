@@ -131,13 +131,17 @@ fn advance_col_major_index(index: &mut [usize], shape: &[usize]) {
     }
 }
 
-fn pooled_filled_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>, fill: T) -> TypedTensor<T>
+fn pooled_filled_tensor<T>(
+    buffers: &mut BufferPool,
+    shape: Vec<usize>,
+    fill: T,
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar,
 {
-    let mut out = pooled_uninit_tensor(buffers, shape);
+    let mut out = pooled_uninit_tensor(buffers, shape)?;
     out.host_data_mut().fill(fill);
-    out
+    Ok(out)
 }
 
 fn clone_host_tensor_from_pool<T>(
@@ -148,7 +152,7 @@ fn clone_host_tensor_from_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
-    let mut out = pooled_uninit_tensor(buffers, tensor.shape().to_vec());
+    let mut out = pooled_uninit_tensor(buffers, tensor.shape().to_vec())?;
     out.host_data_mut()
         .copy_from_slice(typed_host_data(op, tensor)?);
     Ok(out)
@@ -378,7 +382,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
@@ -476,12 +480,10 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
         })
         .collect();
 
-    let out_len: usize = out_shape.iter().product();
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    debug_assert_eq!(out.n_elements(), out_len);
     for out_value in out.host_data_mut().iter_mut() {
         let concat_idx = out_idx[axis];
         let input_pos = segment_ends.partition_point(|&end| concat_idx >= end);
@@ -525,7 +527,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
         reverse_axis[axis] = true;
     }
 
-    let mut out = pooled_uninit_tensor(buffers, input_shape.to_vec());
+    let mut out = pooled_uninit_tensor(buffers, input_shape.to_vec())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
@@ -786,6 +788,17 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
             seen[dim] = true;
         }
     }
+    for &dim in &config.collapsed_slice_dims {
+        if config.slice_sizes[dim] != 1 {
+            return Err(crate::Error::InvalidConfig {
+                op: "gather",
+                message: format!(
+                    "collapsed slice dimension {dim} must have slice_size == 1, got {}",
+                    config.slice_sizes[dim]
+                ),
+            });
+        }
+    }
 
     let index_size =
         try_index_vector_size("gather", &start_indices.shape, config.index_vector_dim)?;
@@ -886,7 +899,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
         let _ = component;
     }
 
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; out_rank];
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut operand_idx = vec![0usize; rank];
@@ -1216,7 +1229,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     }
 
     let out_shape = slice_sizes.to_vec();
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; out_shape.len()];
     let mut input_idx = vec![0usize; out_shape.len()];
 
@@ -1334,12 +1347,42 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
+        if config.edge_padding_low[axis] < 0 || config.edge_padding_high[axis] < 0 {
+            return Err(crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("edge padding must be non-negative on axis {axis}"),
+            });
+        }
+        let input_extent_i64 =
+            i64::try_from(input_extent).map_err(|_| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("input extent on axis {axis} does not fit in i64"),
+            })?;
+        let spacing = config.interior_padding[axis]
+            .checked_add(1)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("interior padding overflow on axis {axis}"),
+            })?;
         let base = if input_extent == 0 {
             0
         } else {
-            (input_extent as i64 - 1) * (config.interior_padding[axis] + 1) + 1
+            input_extent_i64
+                .checked_sub(1)
+                .and_then(|extent| extent.checked_mul(spacing))
+                .and_then(|extent| extent.checked_add(1))
+                .ok_or_else(|| crate::Error::InvalidConfig {
+                    op: "pad",
+                    message: format!("padded input extent overflow on axis {axis}"),
+                })?
         };
-        let dim = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
+        let dim = config.edge_padding_low[axis]
+            .checked_add(config.edge_padding_high[axis])
+            .and_then(|edge| edge.checked_add(base))
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("output dimension overflow on axis {axis}"),
+            })?;
         out_shape.push(
             usize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
                 op: "pad",
@@ -1348,7 +1391,7 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
         );
     }
 
-    let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill);
+    let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill)?;
     let mut input_idx = vec![0usize; input_shape.len()];
     let mut out_idx = vec![0usize; input_shape.len()];
 

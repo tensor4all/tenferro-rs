@@ -196,6 +196,26 @@ fn promote_i64_mul_c64_eager() {
 }
 
 #[test]
+fn clamp_promotes_all_three_operands_to_common_dtype() {
+    let ctx = test_ctx();
+    let input = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]),
+        ctx.clone(),
+    );
+    let lower = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![0.0_f32, 0.0]),
+        ctx.clone(),
+    );
+    let upper =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.5_f64, 1.5]), ctx);
+
+    let out = input.clamp(&lower, &upper).unwrap();
+
+    assert_eq!(out.dtype(), DType::F64);
+    assert_eq!(out.data().as_slice::<f64>().unwrap(), &[1.0, 1.5]);
+}
+
+#[test]
 fn promote_f32_add_f64_eager() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(

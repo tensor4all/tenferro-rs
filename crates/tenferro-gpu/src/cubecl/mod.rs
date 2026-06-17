@@ -873,7 +873,7 @@ impl CubeclBackend {
         OutFloat: CubeElement + Clone,
     {
         let n = input.n_elements();
-        let output = alloc_output::<OutComplex>(self.runtime(), input.shape());
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
         if n == 0 {
             return Ok(output);
         }
@@ -1022,7 +1022,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
-        let output = alloc_output::<T>(self.runtime(), &output_shape);
+        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         launch_nullary_into(
             self.runtime(),
             &output,
@@ -1134,7 +1134,7 @@ impl CubeclBackend {
         T: CubeElement + Clone,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
-        let output = alloc_output::<T>(self.runtime(), &output_shape);
+        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
@@ -1462,7 +1462,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = concatenate_output_shape(inputs, axis)?;
-        let output = alloc_output::<T>(self.runtime(), &output_shape);
+        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         let mut offset = 0usize;
         for input in inputs {
             launch_unary_tensor_into(
@@ -1545,7 +1545,7 @@ impl CubeclBackend {
             updates.shape(),
             config,
         )?;
-        let output = alloc_output::<T>(self.runtime(), operand.shape());
+        let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
@@ -1622,7 +1622,7 @@ impl CubeclBackend {
             updates.shape(),
             config,
         )?;
-        let output = alloc_output::<T>(self.runtime(), operand.shape());
+        let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
         }

@@ -16,6 +16,13 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
+fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start = source.find(start).expect("section start should exist");
+    let tail = &source[start..];
+    let end = tail.find(end).expect("section end should exist");
+    &tail[..end]
+}
+
 fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
     Tensor::F64(TypedTensor::from_buffer_col_major(
@@ -89,6 +96,59 @@ fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
         !backend_dispatch.contains("catch_unwind"),
         "CPU backend error handling should not depend on panic unwinding"
     );
+}
+
+#[test]
+fn cpu_pooled_output_allocation_uses_checked_shape_product() {
+    let indexing_alloc = include_str!("../src/indexing_alloc.rs");
+    assert!(
+        indexing_alloc.contains("checked_shape_product(\"cpu_pooled_output\", &shape)?"),
+        "CPU pooled output allocation must reject shape-product overflow"
+    );
+    assert!(
+        !indexing_alloc.contains("let len = shape.iter().product();"),
+        "CPU pooled output allocation must not use unchecked shape.iter().product()"
+    );
+}
+
+#[test]
+fn cpu_reduce_max_min_validate_axes_before_empty_fast_path() {
+    let reduction = include_str!("../src/reduction.rs");
+    for (start, end, op) in [
+        (
+            "pub fn reduce_max",
+            "pub(crate) fn reduce_max_read",
+            "reduce_max",
+        ),
+        (
+            "pub(crate) fn reduce_max_read",
+            "pub fn reduce_min",
+            "reduce_max",
+        ),
+        (
+            "pub fn reduce_min",
+            "pub(crate) fn reduce_min_read",
+            "reduce_min",
+        ),
+        (
+            "pub(crate) fn reduce_min_read",
+            "fn typed_reduce<",
+            "reduce_min",
+        ),
+    ] {
+        let section = source_section(reduction, start, end);
+        let validate = format!("validate_axes(\"{op}\", axes, input.shape().len())?;");
+        let validate_pos = section
+            .find(&validate)
+            .unwrap_or_else(|| panic!("{start} should validate axes"));
+        let empty_pos = section
+            .find("if axes.is_empty()")
+            .unwrap_or_else(|| panic!("{start} should have an empty-axis fast path"));
+        assert!(
+            validate_pos < empty_pos,
+            "{start} must validate axes before empty-axis fast path"
+        );
+    }
 }
 
 #[test]

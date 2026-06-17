@@ -7,8 +7,8 @@ publish = false
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer"]
-cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas"]
+cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer", "tenferro-linalg/cpu-faer"]
+cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas", "tenferro-linalg/cpu-blas"]
 
 [dependencies]
 num-complex.workspace = true

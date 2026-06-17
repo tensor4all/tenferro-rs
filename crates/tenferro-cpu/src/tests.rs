@@ -286,3 +286,5 @@ mod dot_structural_analytic;
 mod elementwise_reduction_helpers;
 #[path = "tests/cpu_tests/indexing.rs"]
 mod indexing;
+#[path = "tests/cpu_indexing_coverage_tests.rs"]
+mod indexing_coverage;

@@ -519,7 +519,7 @@ where
     ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), input.shape()));
+        return Ok(alloc_output(backend.runtime(), input.shape())?);
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
@@ -540,7 +540,7 @@ where
         OP,
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = n * n;
 
@@ -614,7 +614,7 @@ where
     let n = square_matrix_dim(op, a.shape())?;
     validate_triangular_rhs(op, a.shape(), b.shape(), left_side)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return Ok(alloc_output(backend.runtime(), b.shape()));
+        return Ok(alloc_output(backend.runtime(), b.shape())?);
     }
 
     let out = clone_device_tensor(backend.runtime(), b, op)?;
@@ -764,8 +764,8 @@ where
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(&input.shape()[2..]);
-    let pivots = alloc_output::<i32>(backend.runtime(), &pivot_shape);
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let pivots = alloc_output::<i32>(backend.runtime(), &pivot_shape)?;
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = m * n;
@@ -825,7 +825,7 @@ where
     ensure_cubecl_resident_typed(OP, b)?;
     validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), b.shape())?;
     if has_zero_dim(packed_lu.shape()) || has_zero_dim(b.shape()) {
-        return Ok(alloc_output(backend.runtime(), b.shape()));
+        return Ok(alloc_output(backend.runtime(), b.shape())?);
     }
 
     match (transpose_a, conjugate_a) {
@@ -882,7 +882,7 @@ fn copy_svd_v_to_vt_real<T>(
 where
     T: LinalgScalar,
 {
-    let vt = alloc_output::<T>(rt, vt_shape);
+    let vt = alloc_output::<T>(rt, vt_shape)?;
     launch_svd_v_to_vt_real(rt, v, &vt, op)?;
     Ok(vt)
 }
@@ -896,7 +896,7 @@ fn copy_svd_v_to_vt_complex<T>(
 where
     T: LinalgScalar + ComplexCore,
 {
-    let vt = alloc_output::<T>(rt, vt_shape);
+    let vt = alloc_output::<T>(rt, vt_shape)?;
     launch_svd_v_to_vt_complex(rt, v, &vt, op)?;
     Ok(vt)
 }
@@ -983,15 +983,15 @@ where
     vt_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
         return Ok((
-            alloc_output(backend.runtime(), &u_shape),
-            alloc_output(backend.runtime(), &s_shape),
-            alloc_output(backend.runtime(), &vt_shape),
+            alloc_output(backend.runtime(), &u_shape)?,
+            alloc_output(backend.runtime(), &s_shape)?,
+            alloc_output(backend.runtime(), &vt_shape)?,
         ));
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let u = alloc_output::<T>(backend.runtime(), &u_shape);
-    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape);
+    let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
+    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape)?;
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
@@ -1005,7 +1005,7 @@ where
         SvdDriver::Gesvdj => {
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
-            let v = alloc_output::<T>(backend.runtime(), &v_shape);
+            let v = alloc_output::<T>(backend.runtime(), &v_shape)?;
             {
                 let handles = linalg_handles(backend)?;
                 let stream = raw_stream(backend.runtime(), OP)?;
@@ -1034,7 +1034,7 @@ where
                     OP,
                 )?;
                 let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-                let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+                let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
                 let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
                 let v_stride = n * k;
 
@@ -1073,7 +1073,7 @@ where
             Ok((u, s, vt))
         }
         SvdDriver::Gesvd => {
-            let vt = alloc_output::<T>(backend.runtime(), &vt_shape);
+            let vt = alloc_output::<T>(backend.runtime(), &vt_shape)?;
             let handles = linalg_handles(backend)?;
             let stream = raw_stream(backend.runtime(), OP)?;
             handles.cusolver().set_stream(stream, OP)?;
@@ -1096,7 +1096,7 @@ where
             } else {
                 Workspace::none()
             };
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
             let vt_stride = k * n;
             let job = b'S' as c_char;
@@ -1153,11 +1153,11 @@ where
     let mut s_shape = vec![k];
     s_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), &s_shape));
+        return Ok(alloc_output(backend.runtime(), &s_shape)?);
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let s = alloc_output::<T::Real>(backend.runtime(), &s_shape);
+    let s = alloc_output::<T::Real>(backend.runtime(), &s_shape)?;
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
@@ -1171,8 +1171,8 @@ where
             u_shape.extend_from_slice(batch_shape);
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
-            let u = alloc_output::<T>(backend.runtime(), &u_shape);
-            let v = alloc_output::<T>(backend.runtime(), &v_shape);
+            let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
+            let v = alloc_output::<T>(backend.runtime(), &v_shape)?;
             let handles = linalg_handles(backend)?;
             let stream = raw_stream(backend.runtime(), OP)?;
             handles.cusolver().set_stream(stream, OP)?;
@@ -1199,7 +1199,7 @@ where
                 OP,
             )?;
             let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
             let u_stride = m * k;
             let v_stride = n * k;
@@ -1255,7 +1255,7 @@ where
             } else {
                 Workspace::none()
             };
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
             let job = b'N' as c_char;
 
@@ -1311,13 +1311,13 @@ where
     r_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
         return Ok((
-            alloc_output(backend.runtime(), &q_shape),
-            alloc_output(backend.runtime(), &r_shape),
+            alloc_output(backend.runtime(), &q_shape)?,
+            alloc_output(backend.runtime(), &r_shape)?,
         ));
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let q = alloc_output::<T>(backend.runtime(), &q_shape);
+    let q = alloc_output::<T>(backend.runtime(), &q_shape)?;
     let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
@@ -1346,8 +1346,8 @@ where
     )?;
     let orgqr_workspace = alloc_workspace_elems::<T>(backend.runtime(), orgqr_lwork, OP)?;
     let batch_total = batch_count(batch_shape);
-    let geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
-    let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
+    let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let geqrf_info_ptr = typed_device_ptr(backend.runtime(), &geqrf_info, OP)?;
     let orgqr_info_ptr = typed_device_ptr(backend.runtime(), &orgqr_info, OP)?;
     let work_stride = m * n;
@@ -1421,13 +1421,13 @@ where
     values_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
         return Ok((
-            alloc_output(backend.runtime(), &values_shape),
-            alloc_output(backend.runtime(), input.shape()),
+            alloc_output(backend.runtime(), &values_shape)?,
+            alloc_output(backend.runtime(), input.shape())?,
         ));
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape);
+    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape)?;
     let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
@@ -1448,7 +1448,7 @@ where
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let batch_total = batch_count(batch_shape);
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = n * n;
     let values_stride = n;
@@ -1494,11 +1494,11 @@ where
     let mut values_shape = vec![n];
     values_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), &values_shape));
+        return Ok(alloc_output(backend.runtime(), &values_shape)?);
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape);
+    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape)?;
     let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
@@ -1519,7 +1519,7 @@ where
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let batch_total = batch_count(batch_shape);
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = n * n;
     let values_stride = n;
@@ -1574,10 +1574,10 @@ where
     u_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
 
-    let p = alloc_output::<T>(rt, &p_shape);
-    let l = alloc_output::<T>(rt, &l_shape);
-    let u = alloc_output::<T>(rt, &u_shape);
-    let parity = alloc_output::<T>(rt, &parity_shape);
+    let p = alloc_output::<T>(rt, &p_shape)?;
+    let l = alloc_output::<T>(rt, &l_shape)?;
+    let u = alloc_output::<T>(rt, &u_shape)?;
+    let parity = alloc_output::<T>(rt, &parity_shape)?;
     let launch_len = p
         .n_elements()
         .max(l.n_elements())
@@ -1619,7 +1619,7 @@ fn build_lu_parity_device<T>(
 where
     T: LinalgScalar,
 {
-    let parity = alloc_output::<T>(rt, batch_shape);
+    let parity = alloc_output::<T>(rt, batch_shape)?;
     let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
     let launch_count = cube_count_for_len(parity.n_elements())?;
@@ -1645,7 +1645,7 @@ fn fill_one_device_tensor<T>(
 where
     T: LinalgScalar,
 {
-    let out = alloc_output::<T>(rt, shape);
+    let out = alloc_output::<T>(rt, shape)?;
     let out_arg = typed_tensor_binding(&out, op)?;
     let launch_count = cube_count_for_len(out.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
@@ -1669,7 +1669,7 @@ fn apply_lu_pivots_typed<T>(
 where
     T: LinalgScalar,
 {
-    let out = alloc_output::<T>(rt, input.shape());
+    let out = alloc_output::<T>(rt, input.shape())?;
     if out.n_elements() == 0 {
         return Ok(out);
     }
@@ -1711,8 +1711,8 @@ where
     let parity_shape = batch_shape.to_vec();
     let parity = fill_one_device_tensor(rt, &parity_shape, "lu_factor")?;
     Ok((
-        alloc_output(rt, shape),
-        alloc_output(rt, &pivot_shape),
+        alloc_output(rt, shape)?,
+        alloc_output(rt, &pivot_shape)?,
         parity,
     ))
 }
@@ -1757,7 +1757,7 @@ fn clone_device_tensor<T>(
 where
     T: CubeElement + CubePrimitive + Copy + Clone,
 {
-    let out = alloc_output(rt, tensor.shape());
+    let out = alloc_output(rt, tensor.shape())?;
     if out.n_elements() == 0 {
         return Ok(out);
     }
@@ -1976,10 +1976,10 @@ fn zero_like_linalg_device_tensor(
     op: &'static str,
 ) -> Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(alloc_output(rt, t.shape()))),
-        Tensor::F64(t) => Ok(Tensor::F64(alloc_output(rt, t.shape()))),
-        Tensor::C32(t) => Ok(Tensor::C32(alloc_output(rt, t.shape()))),
-        Tensor::C64(t) => Ok(Tensor::C64(alloc_output(rt, t.shape()))),
+        Tensor::F32(t) => Ok(Tensor::F32(alloc_output(rt, t.shape())?)),
+        Tensor::F64(t) => Ok(Tensor::F64(alloc_output(rt, t.shape())?)),
+        Tensor::C32(t) => Ok(Tensor::C32(alloc_output(rt, t.shape())?)),
+        Tensor::C64(t) => Ok(Tensor::C64(alloc_output(rt, t.shape())?)),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype(op, input))
         }

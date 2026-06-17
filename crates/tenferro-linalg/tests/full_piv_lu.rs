@@ -93,6 +93,23 @@ fn full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column() {
     assert_close(&f64_data(&u)[..1], &[100.0]);
 }
 
+#[cfg(feature = "cpu-blas")]
+#[test]
+fn full_piv_lu_blas_rejects_singular_matrix() {
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
+    let mut backend = CpuBackend::with_kind(tenferro_cpu::CpuBackendKind::Blas).unwrap();
+
+    let err = backend.full_piv_lu(&a).unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_tensor::Error::BackendFailure {
+            op: "full_piv_lu",
+            ref message,
+        } if message.contains("singular")
+    ));
+}
+
 #[test]
 fn full_piv_lu_solve_returns_expected_solution() {
     let a = f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]);

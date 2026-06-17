@@ -35,4 +35,12 @@ fn tutorial_binaries_run_successfully() {
         "complex_ad_convention",
         env!("CARGO_BIN_EXE_complex_ad_convention"),
     );
+    run_tutorial(
+        "einsum_subscripts_to_gradients",
+        env!("CARGO_BIN_EXE_einsum_subscripts_to_gradients"),
+    );
+    run_tutorial(
+        "dynamic_shape_truncated_svd",
+        env!("CARGO_BIN_EXE_dynamic_shape_truncated_svd"),
+    );
 }
