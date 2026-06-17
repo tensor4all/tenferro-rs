@@ -179,6 +179,9 @@ must tell the user:
 
 - the concrete rule text or summary;
 - why it would help future automated fixes;
+- which existing rule section it overlaps with, and whether the update should
+  merge, tighten, relocate, or replace an existing rule instead of adding a new
+  standalone rule;
 - whether it changes agent authority or only clarifies existing behavior;
 - any tradeoff or risk.
 
@@ -195,6 +198,9 @@ session, the agent may apply rule improvements that make future automatic
 resolution safer or more precise. Such updates must stay within the user's
 approved objective, must not silently expand project policy, and must be
 committed as their own coherent review unit or clearly separated in the PR.
+Before adding a new audit or repository rule, inventory nearby existing rules
+and merge overlapping guidance when possible. Prefer one sharper general rule
+over multiple narrow bullets that future agents must reconcile.
 
 ## Category-Specific Fix Rules
 

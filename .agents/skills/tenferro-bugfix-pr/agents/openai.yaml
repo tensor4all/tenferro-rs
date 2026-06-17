@@ -1,4 +1,4 @@
 interface:
   display_name: "tenferro Bug-Fix PR"
-  short_description: "Prepare scoped bug-fix PRs for tenferro-rs."
+  short_description: "Prepare tenferro bug-fix PRs, related bug batches, and audit fixes."
   default_prompt: "Prepare a bug-fix PR for this tenferro-rs issue."

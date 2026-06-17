@@ -10,13 +10,14 @@ to create or refine a feature request or design discussion issue.
 
 ## Operating Rules
 
-- Read `CONTRIBUTING.md`, `AGENTS.md`, and `REPOSITORY_RULES.md` before
-  implementation work.
+- Read `CONTRIBUTING.md`, `AGENTS.md`, `REPOSITORY_RULES.md`, and
+  `ai/contribution-workflows/repository-remediation.md` before implementation
+  work. Always read the remediation workflow so the agent can recognize when a
+  one-bug PR should become a related-finding batch.
 - If the request covers multiple related bug reports, a repository-rule audit,
-  or a bug batch that should stay in one PR, also read and follow
-  `ai/contribution-workflows/repository-remediation.md`. That workflow adds
-  the classification ledger, coherent commit, and non-squash merge rules for
-  batched work.
+  or a bug batch that should stay in one PR, follow the remediation workflow.
+  That workflow adds the classification ledger, coherent commit, and
+  non-squash merge rules for batched work.
 - Keep the PR focused on the bug. Do not include opportunistic refactors,
   unrelated cleanup, feature work, or dependency changes.
 - Preserve user changes in the working tree. Do not reset, stash, or overwrite
@@ -96,6 +97,9 @@ Prefer:
   clarifies an existing contract
 - A small repository-rule or workflow-rule proposal when the root cause can be
   detected by a general audit rule and the rule would prevent similar bugs.
+  Before adding a new rule, check existing audit and repository rules for
+  overlap and prefer merging, tightening, or relocating an existing rule over
+  adding another near-duplicate bullet.
 
 Avoid:
 
@@ -143,6 +147,9 @@ Before creating the PR, prepare a body that includes:
   findings intentionally deferred
 - Any audit rule, repository-rule update, or workflow-rule proposal created to
   prevent the same class of bug
+- The rule-inventory decision when adding or changing an audit rule: reused an
+  existing rule, merged overlapping rules, or added a new rule because no
+  existing rule fit
 - Regression test or verification commands
 - Related issue
 - Any skipped checks or residual risk

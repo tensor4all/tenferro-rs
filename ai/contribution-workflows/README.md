@@ -8,6 +8,7 @@ Tool-specific entry points should stay thin and refer to these files:
 - Codex CLI: `.agents/skills/`
 - Claude Code: `.claude/skills/`
 - OpenCode: `.opencode/commands/`
+- Kimi CLI: `.kimi/skills/`
 
 The contribution policy itself lives in `CONTRIBUTING.md` and
 `REPOSITORY_RULES.md`. These workflows help agents collect the right

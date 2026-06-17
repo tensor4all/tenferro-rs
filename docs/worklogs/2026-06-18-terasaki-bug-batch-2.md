@@ -13,10 +13,13 @@ The PR also updates the repository remediation rule for false positives:
 intentional invariants must be recorded in the issue or PR ledger, and unclear
 invariants should get a nearby comment, rustdoc note, or source-contract test
 so later humans and AI agents do not rediscover the same non-bug.
-As a follow-up, the `tenferro-bugfix-pr` workflow and skill adapters now route
-related bug batches to the remediation workflow and require same-root-cause
-scans, non-squash batch PRs, audit-rule proposals, and false-positive source
-comments or source-contract tests when appropriate.
+As a follow-up, the `tenferro-bugfix-pr` workflow and skill adapters now always
+read the remediation workflow, route related bug batches to it, and require
+same-root-cause scans, non-squash batch PRs, audit-rule proposals, and
+false-positive source comments or source-contract tests when appropriate.
+Codex, Claude Code, OpenCode, and Kimi CLI entry points are kept in sync, and
+new audit-rule proposals must inventory and merge overlapping existing rules
+where possible.
 
 ## Context Read
 
@@ -50,9 +53,13 @@ comments or source-contract tests when appropriate.
 - Fixed the low-risk raw-pointer part of #1088 by validating CubeCL tensor
   residency before exposing raw device pointers to interop or cuTENSOR GEMM
   FFI. Each raw pointer path carries a one-line invariant comment.
-- Updated `ai/contribution-workflows/bugfix-pr.md` plus Codex/Claude
-  `tenferro-bugfix-pr` skill adapters so future ordinary bug-fix agents repeat
-  the batch pattern when a user asks for related issues in one PR.
+- Updated `ai/contribution-workflows/bugfix-pr.md` plus Codex, Claude Code,
+  OpenCode, and Kimi `tenferro-bugfix-pr` adapters so future ordinary bug-fix
+  agents read the remediation workflow and repeat the batch pattern when a user
+  asks for related issues in one PR.
+- Added the audit-rule inventory rule: before adding a new audit or repository
+  rule, check nearby existing rules and merge, tighten, or relocate overlapping
+  guidance when possible.
 - Kept the batch scoped to single-PR minor fixes. Reports that require broad
   fallible API changes, poisoning policy changes, or unsafe/FFI lifecycle
   redesign are classified as design-gated instead of being partially rewritten.

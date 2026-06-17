@@ -64,8 +64,8 @@ deliberate exception to the normal one-bug-fix-PR path: collect all local fixes
 and verification before opening a PR, keep coherent commits in a single PR, and
 do not use squash merge.
 
-Thin tool adapters live in `.agents/skills/`, `.claude/skills/`, and
-`.opencode/commands/`. Keep policy in `CONTRIBUTING.md` and
+Thin tool adapters live in `.agents/skills/`, `.claude/skills/`,
+`.opencode/commands/`, and `.kimi/skills/`. Keep policy in `CONTRIBUTING.md` and
 `REPOSITORY_RULES.md`; keep reusable workflow steps in
 `ai/contribution-workflows/`.
 See `ai/README.md` for the repository-local AI workflow layout.

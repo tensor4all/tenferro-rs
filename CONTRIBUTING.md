@@ -25,6 +25,8 @@ Supported entry points:
   project skills live in `.claude/skills/`.
 - OpenCode: invoke `/tenferro-issue-intake` or `/tenferro-bugfix-pr`; the
   project commands live in `.opencode/commands/`.
+- Kimi CLI: invoke `/skill:tenferro-issue-intake` or
+  `/skill:tenferro-bugfix-pr`; the project skills live in `.kimi/skills/`.
 
 The shared workflow bodies live in `ai/contribution-workflows/`.
 

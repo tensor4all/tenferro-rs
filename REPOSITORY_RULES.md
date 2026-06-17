@@ -128,6 +128,10 @@ rules from `tensor4all-agent-rules`.
   invariant is not obvious from the code. Do not just skip the finding; leave
   enough context that later humans and AI agents do not rediscover the same
   non-bug as suspicious.
+- Before adding a new audit or repository rule, inventory nearby existing rules
+  and merge, tighten, or relocate overlapping guidance when possible. Prefer
+  one sharper general rule over many narrow bullets that future agents must
+  reconcile.
 
 ## External Contribution Intake
 
