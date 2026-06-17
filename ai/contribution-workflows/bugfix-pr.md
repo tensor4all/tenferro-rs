@@ -12,6 +12,11 @@ to create or refine a feature request or design discussion issue.
 
 - Read `CONTRIBUTING.md`, `AGENTS.md`, and `REPOSITORY_RULES.md` before
   implementation work.
+- If the request covers multiple related bug reports, a repository-rule audit,
+  or a bug batch that should stay in one PR, also read and follow
+  `ai/contribution-workflows/repository-remediation.md`. That workflow adds
+  the classification ledger, coherent commit, and non-squash merge rules for
+  batched work.
 - Keep the PR focused on the bug. Do not include opportunistic refactors,
   unrelated cleanup, feature work, or dependency changes.
 - Preserve user changes in the working tree. Do not reset, stash, or overwrite
@@ -19,6 +24,8 @@ to create or refine a feature request or design discussion issue.
 - Ask only for missing facts. Prefer reproducing, searching, and reading code
   over asking the user for facts available in the repository.
 - Ask at most three questions at a time.
+- Do not use squash merge for bug-fix batches. Preserve coherent commits with a
+  merge commit unless maintainers explicitly choose another non-squash method.
 - Maintainers retain review, merge, and policy authority.
 
 ## Step 1: Scope Gate
@@ -64,6 +71,18 @@ Inspect the implementation boundary before editing:
 - Dependency and feature declarations
 - Backend, device, layout, cache, and AD contracts when touched
 
+Before committing, search for same-root-cause and same-pattern bugs in the
+neighborhood:
+
+- the touched file and module;
+- the same operation family, trait implementation family, generated wrapper, or
+  cache/runtime/backend boundary;
+- equivalent eager/traced/CPU/GPU/FFI paths when the bug pattern is shared.
+
+Fix same-root-cause instances in the same PR when they share the same contract
+and verification path. Stop expanding when the search reaches another
+subsystem, requires a different policy decision, or would dominate review.
+
 ## Step 4: Implement The Smallest Correct Fix
 
 Patch the root cause at the lowest appropriate layer.
@@ -75,6 +94,8 @@ Prefer:
 - Existing local helper APIs and crate patterns
 - Documentation updates only when the bug fix changes user-visible behavior or
   clarifies an existing contract
+- A small repository-rule or workflow-rule proposal when the root cause can be
+  detected by a general audit rule and the rule would prevent similar bugs.
 
 Avoid:
 
@@ -87,6 +108,12 @@ Avoid:
 
 If implementation reveals that the fix needs design work, stop and create or
 update an issue instead of stretching the PR.
+
+If the reported bug is a false positive because the code intentionally relies
+on a non-obvious invariant, do not silently skip it. Record the evidence in the
+issue, PR body, or work log, and add a nearby source comment, rustdoc note, or
+source-contract test when that would prevent future humans or agents from
+misidentifying the same code as a bug.
 
 ## Step 5: Verify
 
@@ -112,6 +139,10 @@ Before creating the PR, prepare a body that includes:
 - Summary of the bug and root cause
 - What changed
 - Why the change stays within bug-fix scope
+- Same-root-cause search performed, related instances fixed, and related
+  findings intentionally deferred
+- Any audit rule, repository-rule update, or workflow-rule proposal created to
+  prevent the same class of bug
 - Regression test or verification commands
 - Related issue
 - Any skipped checks or residual risk
