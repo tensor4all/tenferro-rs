@@ -927,9 +927,7 @@ where
     let out_n = checked_product(&dims.out_shape)
         .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
-        // SAFETY: the buffer is fully initialized immediately by fill.
-        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
-        data.fill(T::zero());
+        let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(
             dims.out_shape.into_vec(),
             Buffer::Host(data),
@@ -1250,9 +1248,7 @@ where
     let out_n = checked_product(&dims.out_shape)
         .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
-        // SAFETY: the buffer is fully initialized immediately by fill.
-        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
-        data.fill(T::zero());
+        let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(
             dims.out_shape.into_vec(),
             Buffer::Host(data),
@@ -1290,8 +1286,7 @@ where
     let a_base = lhs.offset();
     let b_base = rhs.offset();
 
-    // SAFETY: each batch GEMM writes its full output block with beta = 0 when
-    // the BLAS layout can represent the requested conjugation.
+    // SAFETY: BLAS conjugation path uses beta = 0 and writes each output block fully.
     let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out.as_mut_ptr();
 
@@ -1356,9 +1351,7 @@ where
     let out_n = checked_product(&dims.out_shape)
         .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
-        // SAFETY: the buffer is fully initialized immediately by fill.
-        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
-        data.fill(T::zero());
+        let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(
             dims.out_shape.into_vec(),
             Buffer::Host(data),

@@ -10,8 +10,8 @@ fn try_linear_offset(shape: &[usize], indices: &[usize]) -> Option<usize> {
         if idx >= extent {
             return None;
         }
-        offset += idx * stride;
-        stride *= extent;
+        offset = offset.checked_add(idx.checked_mul(stride)?)?;
+        stride = stride.checked_mul(extent)?;
     }
     Some(offset)
 }
@@ -28,8 +28,15 @@ fn linear_offset_unchecked(shape: &[usize], indices: &[usize]) -> usize {
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (&idx, &extent) in indices.iter().zip(shape) {
-        offset += idx * stride;
-        stride *= extent;
+        offset = offset
+            .checked_add(
+                idx.checked_mul(stride)
+                    .unwrap_or_else(|| panic!("linear offset multiply overflows")),
+            )
+            .unwrap_or_else(|| panic!("linear offset add overflows"));
+        stride = stride
+            .checked_mul(extent)
+            .unwrap_or_else(|| panic!("linear offset stride overflows"));
     }
     offset
 }
@@ -45,7 +52,12 @@ fn linear_offset2_unchecked(shape: &[usize], i: usize, j: usize) -> usize {
     debug_assert_eq!(shape.len(), 2);
     debug_assert!(i < shape[0], "index out of bounds");
     debug_assert!(j < shape[1], "index out of bounds");
-    i + shape[0] * j
+    i.checked_add(
+        shape[0]
+            .checked_mul(j)
+            .unwrap_or_else(|| panic!("linear offset multiply overflows")),
+    )
+    .unwrap_or_else(|| panic!("linear offset add overflows"))
 }
 
 fn linear_offset3(shape: &[usize], i: usize, j: usize, k: usize) -> usize {
@@ -61,7 +73,19 @@ fn linear_offset3_unchecked(shape: &[usize], i: usize, j: usize, k: usize) -> us
     debug_assert!(i < shape[0], "index out of bounds");
     debug_assert!(j < shape[1], "index out of bounds");
     debug_assert!(k < shape[2], "index out of bounds");
-    i + shape[0] * (j + shape[1] * k)
+    let inner = j
+        .checked_add(
+            shape[1]
+                .checked_mul(k)
+                .unwrap_or_else(|| panic!("linear offset multiply overflows")),
+        )
+        .unwrap_or_else(|| panic!("linear offset add overflows"));
+    i.checked_add(
+        shape[0]
+            .checked_mul(inner)
+            .unwrap_or_else(|| panic!("linear offset multiply overflows")),
+    )
+    .unwrap_or_else(|| panic!("linear offset add overflows"))
 }
 
 impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
@@ -531,5 +555,20 @@ impl Tensor {
     /// ```
     pub fn iter_mut<T: TensorScalar>(&mut self) -> Option<std::slice::IterMut<'_, T>> {
         self.as_slice_mut::<T>().map(|slice| slice.iter_mut())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{linear_offset2, linear_offset3, linear_offset_unchecked, try_linear_offset};
+
+    #[test]
+    fn linear_offset_helpers_check_overflow() {
+        let shape = [usize::MAX, 3];
+
+        assert_eq!(try_linear_offset(&shape, &[0, 2]), None);
+        assert!(std::panic::catch_unwind(|| linear_offset_unchecked(&shape, &[0, 2])).is_err());
+        assert!(std::panic::catch_unwind(|| linear_offset2(&shape, 0, 2)).is_err());
+        assert!(std::panic::catch_unwind(|| linear_offset3(&[usize::MAX, 3, 2], 0, 2, 1)).is_err());
     }
 }

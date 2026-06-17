@@ -2928,19 +2928,33 @@ impl<'a> TensorRead<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::col_major_strides;
+/// use tenferro_tensor::{col_major_strides, try_col_major_strides};
 ///
 /// assert_eq!(col_major_strides(&[2, 3]), vec![1, 2]);
+/// assert_eq!(try_col_major_strides(&[2, 3])?, vec![1, 2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+pub fn try_col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
+    let mut strides = Vec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &extent in shape {
+        strides.push(stride);
+        let extent = isize::try_from(extent).map_err(|_| crate::Error::InvalidConfig {
+            op: "col_major_strides",
+            message: format!("shape extent {extent} does not fit in isize"),
+        })?;
+        stride = stride
+            .checked_mul(extent)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "col_major_strides",
+                message: format!("column-major stride overflows for shape {shape:?}"),
+            })?;
+    }
+    Ok(strides)
+}
+
 pub fn col_major_strides(shape: &[usize]) -> Vec<isize> {
-    if shape.is_empty() {
-        return vec![];
-    }
-    let mut strides = vec![1isize; shape.len()];
-    for i in 1..shape.len() {
-        strides[i] = strides[i - 1] * shape[i - 1] as isize;
-    }
-    strides
+    try_col_major_strides(shape).unwrap_or_else(|err| panic!("col_major_strides failed: {err}"))
 }
 
 fn linear_offset(shape: &[usize], indices: &[usize]) -> usize {
@@ -2949,14 +2963,28 @@ fn linear_offset(shape: &[usize], indices: &[usize]) -> usize {
     let mut stride = 1usize;
     for (&idx, &extent) in indices.iter().zip(shape) {
         assert!(idx < extent, "index out of bounds");
-        offset += idx * stride;
-        stride *= extent;
+        offset = offset
+            .checked_add(
+                idx.checked_mul(stride)
+                    .unwrap_or_else(|| panic!("linear offset multiply overflows")),
+            )
+            .unwrap_or_else(|| panic!("linear offset add overflows"));
+        stride = stride
+            .checked_mul(extent)
+            .unwrap_or_else(|| panic!("linear offset stride overflows"));
     }
     offset
 }
 
+fn checked_shape_product(shape: &[usize], op: &str) -> usize {
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .unwrap_or_else(|| panic!("{op}: shape product overflows for shape {shape:?}"))
+}
+
 fn checked_shape_len(shape: &[usize], data_len: usize, op: &str) {
-    let n: usize = shape.iter().product();
+    let n = checked_shape_product(shape, op);
     assert_eq!(
         data_len, n,
         "{op}: data length {} does not match shape product {}",
@@ -3466,11 +3494,19 @@ fn slice_axis_specs(
 }
 
 fn row_major_offset(shape: &[usize], indices: &[usize]) -> usize {
-    let mut stride = 1;
-    let mut offset = 0;
+    let mut stride = 1usize;
+    let mut offset = 0usize;
     for (&dim, &index) in shape.iter().rev().zip(indices.iter().rev()) {
-        offset += index * stride;
-        stride *= dim;
+        offset = offset
+            .checked_add(
+                index
+                    .checked_mul(stride)
+                    .unwrap_or_else(|| panic!("row-major offset multiply overflows")),
+            )
+            .unwrap_or_else(|| panic!("row-major offset add overflows"));
+        stride = stride
+            .checked_mul(dim)
+            .unwrap_or_else(|| panic!("row-major offset stride overflows"));
     }
     offset
 }
@@ -3603,7 +3639,7 @@ fn typed_tensor_zeros<T: Clone + Zero, R: TensorRank>(
     shape: impl Into<R::Shape>,
 ) -> TypedTensor<T, R> {
     let layout = compact_layout(shape, "zeros");
-    let n: usize = layout.shape().iter().product();
+    let n = checked_shape_product(layout.shape(), "zeros");
     TypedTensor {
         buffer: Buffer::Host(vec![T::zero(); n]),
         layout,
@@ -3615,7 +3651,7 @@ fn typed_tensor_ones<T: Clone + One + Zero, R: TensorRank>(
     shape: impl Into<R::Shape>,
 ) -> TypedTensor<T, R> {
     let layout = compact_layout(shape, "ones");
-    let n: usize = layout.shape().iter().product();
+    let n = checked_shape_product(layout.shape(), "ones");
     TypedTensor {
         buffer: Buffer::Host(vec![T::one(); n]),
         layout,

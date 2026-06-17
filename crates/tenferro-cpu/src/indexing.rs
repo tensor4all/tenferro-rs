@@ -460,7 +460,12 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
         }
         for dim in 0..rank {
             if dim == axis {
-                axis_extent += input_shape[dim];
+                axis_extent = axis_extent.checked_add(input_shape[dim]).ok_or_else(|| {
+                    crate::Error::InvalidConfig {
+                        op: "concatenate",
+                        message: "concatenate axis extent overflows usize".to_string(),
+                    }
+                })?;
             } else if input_shape[dim] != first_shape[dim] {
                 return Err(crate::Error::ShapeMismatch {
                     op: "concatenate",
@@ -472,13 +477,17 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     }
     out_shape[axis] = axis_extent;
 
-    let segment_ends: Vec<usize> = inputs
-        .iter()
-        .scan(0usize, |sum, input| {
-            *sum += input.shape()[axis];
-            Some(*sum)
-        })
-        .collect();
+    let mut segment_ends = Vec::with_capacity(inputs.len());
+    let mut segment_end = 0usize;
+    for input in inputs {
+        segment_end = segment_end
+            .checked_add(input.shape()[axis])
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "concatenate",
+                message: "concatenate segment offset overflows usize".to_string(),
+            })?;
+        segment_ends.push(segment_end);
+    }
 
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; rank];
@@ -1111,9 +1120,8 @@ where
         window_shape[window_dims[pos]] = dim;
     }
 
-    let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?.max(1);
-    let window_elems =
-        checked_product("scatter", "window update shape", &window_shape_updates)?.max(1);
+    let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?;
+    let window_elems = checked_product("scatter", "window update shape", &window_shape_updates)?;
     let mut out = clone_host_tensor_from_pool(buffers, "scatter", operand)?;
 
     let mut batch_idx = vec![0usize; batch_shape.len()];

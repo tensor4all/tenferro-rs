@@ -594,6 +594,45 @@ fn einsum_three_way_repeated_label_trace() {
 }
 
 #[test]
+fn einsum_three_or_more_repeated_labels_keep_and_mix() {
+    let cube = f64_tensor(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    let hypercube = f64_tensor(
+        vec![2, 2, 2, 2],
+        (1..=16).map(|value| value as f64).collect(),
+    );
+    let rhs = f64_tensor(vec![3], vec![2.0, 3.0, 5.0]);
+
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let tcube = TracedTensor::from_tensor_concrete_shape(cube.clone());
+    let diag = einsum(&mut engine, &[&tcube], "iii->i").unwrap();
+    let diag_result = diag.run_with(&mut engine).unwrap();
+    assert_eq!(diag_result.shape(), &[2]);
+    assert_close(get_v2(&diag_result, &[0]), 1.0, "iii_to_i[0]");
+    assert_close(get_v2(&diag_result, &[1]), 8.0, "iii_to_i[1]");
+
+    let thyper = TracedTensor::from_tensor_concrete_shape(hypercube);
+    let trace = einsum(&mut engine, &[&thyper], "iiii->").unwrap();
+    let trace_result = trace.run_with(&mut engine).unwrap();
+    assert!(trace_result.shape().is_empty());
+    assert_close(get_f64_data(&trace_result)[0], 17.0, "iiii_trace");
+
+    let tcube = TracedTensor::from_tensor_concrete_shape(cube);
+    let trhs = TracedTensor::from_tensor_concrete_shape(rhs);
+    let mixed = einsum(&mut engine, &[&tcube, &trhs], "iii,j->ij").unwrap();
+    let mixed_result = mixed.run_with(&mut engine).unwrap();
+    assert_eq!(mixed_result.shape(), &[2, 3]);
+    for (i, diag_value) in [1.0, 8.0].iter().copied().enumerate() {
+        for (j, rhs_value) in [2.0, 3.0, 5.0].iter().copied().enumerate() {
+            assert_close(
+                get_v2(&mixed_result, &[i, j]),
+                diag_value * rhs_value,
+                &format!("iii_j_to_ij[{i},{j}]"),
+            );
+        }
+    }
+}
+
+#[test]
 fn einsum_binary_diag_ii_jk_to_ijk() {
     // "ii,jk->ijk" — extract diagonal from A, outer product with B
     let a = f64_tensor(

@@ -18,6 +18,18 @@ The follow-up audit added two more durable rules: batch pointer-offset loops
 must check both stride products and `batch * stride`, and public cache/runtime
 locks must not fabricate default state after poison.
 
+After #1086 merged, a final audit follow-up added targeted coverage/fixes for
+the remaining low-risk `terasakisatoshi` reports: repeated-label einsum
+coverage for #1073, tensor stride/accessor and CPU structural/indexing checked
+arithmetic for #1081, symbolic-shape traced linalg and AD seed error handling
+as representative #1084 cases, and tropical traced extension fallibility. It
+also corrected the #1080 buffer-pool fix to split full-overwrite raw acquisition
+from explicit zeroed acquisition instead of zero-filling every pooled buffer.
+The repository rule update was generalized: performance-sensitive operations
+that look potentially dangerous must carry a nearby invariant comment so later
+agents do not "fix" false positives with hidden initialization, copies, or
+checks.
+
 ## Context Read
 
 - `REPOSITORY_RULES.md` and existing work-log guidance.
@@ -47,9 +59,15 @@ locks must not fabricate default state after poison.
   `?` propagation to make the intended validation obvious.
 - Updated tutorial source and prose together so snippet and tutorial tests
   exercise the documented examples.
-- Made CPU buffer-pool acquisition return initialized zero values instead of
-  stale or uninitialized elements, keeping the existing unsafe signature only
-  for compatibility.
+- Corrected the CPU buffer-pool fix after review: `pool_acquire` remains the
+  unsafe full-overwrite path for hot kernels, while
+  `pool_acquire_zeroed` / `BufferPool::acquire_zeroed` are explicit safe paths
+  for callers that may read before every element is overwritten. Zero-dimension
+  GEMM returns use the zeroed path; normal BLAS/faer `beta = 0` full-overwrite
+  paths keep raw acquisition.
+- Added one-line invariant comments at raw pooled-buffer acquisition sites and
+  uninitialized pooled-output helper call sites, including the faer `beta != 0`
+  accumulation branch.
 - Replaced panic-unsafe CPU buffer-pool lending with a Drop-backed loan guard so
   the pool is restored when a backend session or linalg pool closure panics.
 - Held eager gradient slot locks through accumulation writes to remove the
@@ -66,20 +84,39 @@ locks must not fabricate default state after poison.
   batched linalg pointer offsets.
 - Added the eager SVD singular-value-sum backward MWE as a regression test; it
   already passes on this branch, so #1056 is covered without code changes.
+- Added eager and traced regression coverage for #1073 (`iii`, `iiii`, and
+  mixed repeated-label cases). These pass with the existing recursive planner
+  and eager implementation, so the issue is covered without changing einsum
+  logic.
+- Extended #1081 coverage to tensor column-major stride construction, tensor
+  offset helpers, CPU reshape/concatenate shape arithmetic, and zero-sized
+  scatter iteration. Remaining GPU/integer-cast cases are design or hardware
+  follow-ups.
+- Made traced linalg helpers return typed symbolic-shape errors instead of
+  panicking when `inv`, `pinv`, `pinv_with_rtol`, or `norm(..., keepdim=true)`
+  receive a symbolic-shape tensor.
+- Made traced `jvp`/`vjp` return typed errors for symbolic seed tensors instead
+  of panicking while registering seed metadata.
+- Switched tropical traced einsum through the fallible extension builder and
+  added symbolic-shape coverage for the standard `ij,jk->ik` path.
 
 ## Deferred
 
 - #1054 remains outside this PR until its current reproducer and intended
   behavior are rechecked.
-- #1073 was not closed; the existing three-way repeated-label trace test for
-  `iii` passes, so it needs a sharper reproducer before changing einsum logic.
 - #1082 requires a larger design decision because `DimExpr` and shape inference
   currently expose infallible arithmetic in several public-facing paths.
 - #1084 is a broad public-panic audit. This PR fixes representative traced,
   linalg, poison, and buffer-pool cases and records the rule; remaining cases
   should be handled as a follow-up sweep.
-- #1081 is partially fixed for CPU triangular masks and GPU triangular batched
-  linalg offsets. Tensor stride/accessor API changes need a separate API design.
+- #1081 is still not completely closed for every GPU launch/cast and internal
+  shape-expression path. This follow-up covers tensor stride/accessor overflow
+  and more CPU boundary arithmetic; remaining GPU and `DimExpr` cases should be
+  handled with a broader fallibility design.
+- #1084 still has broader public-panic surface in AD structural helpers, FFT,
+  and several traced shape-manipulation helpers. This follow-up fixes symbolic
+  AD seed and traced linalg representative cases, but does not attempt the
+  whole API redesign.
 
 ## Verification
 
@@ -120,3 +157,17 @@ Additional targeted checks after the second audit pass:
 - `cargo test -p tenferro-linalg gpu_triangular_solve_batched_offsets_use_checked_arithmetic`
 - `cargo test -p tenferro-cpu triu`
 - `cargo test -p tenferro-cpu test_triangular_masks_use_checked_index_arithmetic_contract`
+
+Additional targeted checks after the final audit follow-up:
+
+- `cargo fmt --all --check`
+- `cargo test -p tenferro-einsum eager_einsum_handles_three_or_more_repeated_labels -- --nocapture`
+- `cargo test -p tenferro-einsum einsum_three_or_more_repeated_labels_keep_and_mix -- --nocapture`
+- `cargo test -p tenferro-tensor col_major_helpers_cover_scalar_and_higher_rank_shapes -- --nocapture`
+- `cargo test -p tenferro-tensor linear_offset_helpers_check_overflow -- --nocapture`
+- `cargo test -p tenferro-cpu cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract -- --nocapture`
+- `cargo test -p tenferro-cpu buffer_pool -- --nocapture`
+- `cargo test -p tenferro-linalg traced_linalg_helpers_reject_symbolic_shapes_without_panicking -- --nocapture`
+- `cargo test -p tenferro-linalg without_panicking -- --nocapture`
+- `cargo test --manifest-path ext/tropical/Cargo.toml traced_einsum_accepts_symbolic_shapes_without_panicking -- --nocapture`
+- `cargo test -p tenferro-ad traced_jvp_vjp_return_errors_for_symbolic_seed_tensors -- --nocapture`

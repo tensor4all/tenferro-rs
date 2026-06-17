@@ -370,7 +370,7 @@ pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_min_rank("inv", a.rank, 2)?;
-    let shape = a.concrete_shape();
+    let shape = require_concrete_shape("inv", a)?;
     let eye = eye_like(a, shape[0]);
     solve(a, &eye)
 }
@@ -424,7 +424,7 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_float_or_complex("pinv", a.dtype)?;
-    let shape = a.concrete_shape();
+    let shape = require_concrete_shape("pinv", a)?;
     let max_dim = match (shape.first(), shape.get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
         (Some(&m), None) => m,
@@ -450,6 +450,7 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     ensure_float_or_complex("pinv_with_rtol", a.dtype)?;
+    require_concrete_shape("pinv_with_rtol", a)?;
     let (u, s, vt) = svd(a)?;
     let abs_s = s.abs();
     let s_max = abs_s.reduce_max(&[0]);
@@ -491,6 +492,7 @@ pub fn norm(
     keepdim: bool,
 ) -> Result<TracedTensor> {
     ensure_float_or_complex("norm", a.dtype)?;
+    let shape = require_concrete_shape("norm", a)?;
     let axes = dim.map_or_else(|| (0..a.rank).collect::<Vec<_>>(), |dims| dims.to_vec());
     if axes.is_empty() {
         return Ok(a.clone());
@@ -511,7 +513,6 @@ pub fn norm(
             }
         }
     };
-    let shape = a.concrete_shape();
     Ok(restore_keepdim(out, &shape, &axes, keepdim))
 }
 
@@ -639,6 +640,15 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn require_concrete_shape(op: &'static str, input: &TracedTensor) -> Result<Vec<usize>> {
+    input.try_concrete_shape().ok_or_else(|| {
+        Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+            op,
+            "symbolic shape is not supported by this traced linalg helper",
+        ))
+    })
 }
 
 fn zero_scalar(dtype: DType) -> TracedTensor {

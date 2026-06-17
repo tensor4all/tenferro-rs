@@ -168,6 +168,7 @@ where
     T: Copy + PoolScalar + 'static,
     R: TensorRank,
 {
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
         .map_err(|err| crate::Error::backend_failure(op, err))?;
@@ -192,6 +193,7 @@ where
             rhs: rhs.shape().to_vec(),
         });
     }
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
@@ -272,6 +274,7 @@ macro_rules! define_unary_analytic_op {
         where
             T: UnaryAnalyticElem + PoolScalar,
         {
+            // SAFETY: the following kernel overwrites every output element before any read.
             let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
             map_into(
                 &mut out.view_mut(),
@@ -423,6 +426,7 @@ where
             rhs: rhs.shape().to_vec(),
         });
     }
+    // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),

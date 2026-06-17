@@ -204,10 +204,10 @@ pub fn tropical_einsum_subscripts(
     subscripts: &Subscripts,
 ) -> Result<TracedTensor> {
     validate_tropical_einsum_inputs(inputs, subscripts)?;
-    let outputs = extension::apply(
+    let outputs = extension::try_apply(
         Arc::new(TropicalEinsumOp::new(kind, subscripts.clone())),
         inputs,
-    );
+    )?;
     outputs
         .into_iter()
         .next()

@@ -231,7 +231,7 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
     let total: usize = shape.iter().product();
     let strides = kernel_col_major_strides(shape);
     let mut data = Vec::with_capacity(total);
-    // SAFETY: caller guarantees every element is written before any read.
+    // SAFETY: test-only helper is used for outputs whose elements are fully overwritten.
     unsafe { data.set_len(total) };
     StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }
@@ -239,8 +239,8 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
 /// Create an output array from the CPU buffer pool WITHOUT initializing values.
 ///
 /// # Safety
-/// Caller should overwrite every element that is part of the operation output.
-/// The pool supplies valid zero values so accidental reads are memory-safe.
+/// Caller must write every element before reading. The returned array contains
+/// uninitialized or stale data acquired from `buffers`.
 pub(crate) unsafe fn typed_array_uninit_from_pool<T>(
     buffers: &mut BufferPool,
     shape: &[usize],
@@ -250,7 +250,7 @@ where
 {
     let total: usize = shape.iter().product();
     let strides = kernel_col_major_strides(shape);
-    // SAFETY: caller guarantees every element is written before any read.
+    // SAFETY: callers use this only for operation outputs that fully overwrite every element.
     let data = unsafe { T::pool_acquire(buffers, total) };
     StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }

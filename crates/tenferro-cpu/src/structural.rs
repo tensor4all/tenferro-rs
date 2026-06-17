@@ -49,6 +49,20 @@ fn validate_axes_distinct(op: &'static str, axis_a: usize, axis_b: usize) -> cra
     Ok(())
 }
 
+fn checked_shape_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> crate::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("{role} element count overflows usize"),
+            })
+    })
+}
+
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     validate_rank(op, rank, perm.len())?;
     let mut seen = vec![false; rank];
@@ -133,7 +147,7 @@ where
     T: Copy + Clone + PoolScalar + 'static,
 {
     let len = shape.iter().product();
-    // SAFETY: every element is initialized with `fill` before returning.
+    // SAFETY: every pooled element is initialized with `fill` before returning.
     let mut data = unsafe { T::pool_acquire(buffers, len) };
     data.fill(fill);
     TypedTensor::from_vec_col_major(shape, data)
@@ -151,7 +165,7 @@ where
         crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
-    // SAFETY: copy_from_slice initializes every element before returning.
+    // SAFETY: copy_from_slice initializes every pooled element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
     data.copy_from_slice(input);
     Ok(TypedTensor::from_buffer_col_major(
@@ -404,6 +418,7 @@ where
     R: TensorRank,
 {
     typed_transpose_view_impl(view, perm, |shape| unsafe {
+        // SAFETY: transpose materialization copies every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
 }
@@ -412,8 +427,8 @@ pub fn typed_reshape<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let old_n: usize = tensor.shape().iter().product();
-    let new_n: usize = shape.iter().product();
+    let old_n = checked_shape_product("reshape", "input shape", tensor.shape())?;
+    let new_n = checked_shape_product("reshape", "output shape", shape)?;
     if old_n != new_n {
         return Err(crate::Error::ShapeMismatch {
             op: "reshape",
@@ -449,6 +464,7 @@ where
     T: Copy + Clone + PoolScalar,
 {
     typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
+        // SAFETY: broadcast materialization writes every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
 }

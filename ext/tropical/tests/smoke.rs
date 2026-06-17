@@ -1,6 +1,7 @@
 use tenferro_einsum::Subscripts;
 use tenferro_ext_tropical::{traced::tropical_einsum_subscripts, MaxPlus, MinPlus, TropicalKind};
 use tenferro_runtime::{DType, TracedTensor};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[test]
 fn tropical_crate_exports_core_types() {
@@ -33,4 +34,20 @@ fn traced_einsum_validation_rejects_inputs_before_extension_shape_inference() {
         &missing_output
     )
     .is_err());
+}
+
+#[test]
+fn traced_einsum_accepts_symbolic_shapes_without_panicking() {
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let matmul = Subscripts::parse("ij,jk->ik").unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&lhs, &rhs], &matmul)
+    }));
+
+    assert!(result.is_ok(), "symbolic tropical einsum should not panic");
+    let output = result.unwrap().unwrap();
+    assert_eq!(output.rank, 2);
+    assert!(output.sym_shape().is_none());
 }

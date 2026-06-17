@@ -18,8 +18,7 @@ where
     T: Clone + PoolScalar,
 {
     let len = checked_shape_product("cpu_pooled_output", &shape)?;
-    // SAFETY: callers use this helper only for outputs that are fully written
-    // before any read.
+    // SAFETY: callers use this helper only for pooled outputs that are fully overwritten.
     let data = unsafe { T::pool_acquire(buffers, len) };
     Ok(TypedTensor::from_vec_col_major(shape, data))
 }

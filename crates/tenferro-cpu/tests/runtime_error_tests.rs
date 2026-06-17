@@ -112,6 +112,53 @@ fn cpu_pooled_output_allocation_uses_checked_shape_product() {
 }
 
 #[test]
+fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
+    let structural = include_str!("../src/structural.rs");
+    let reshape_section = source_section(
+        structural,
+        "pub fn typed_reshape",
+        "pub(crate) fn typed_broadcast_in_dim",
+    );
+    assert!(
+        reshape_section.contains("checked_shape_product(\"reshape\", \"input shape\","),
+        "CPU reshape must check input shape products"
+    );
+    assert!(
+        reshape_section.contains("checked_shape_product(\"reshape\", \"output shape\","),
+        "CPU reshape must check output shape products"
+    );
+    assert!(
+        !reshape_section.contains("shape.iter().product"),
+        "CPU reshape must not use unchecked shape.iter().product()"
+    );
+
+    let indexing = include_str!("../src/indexing.rs");
+    let concat_section = source_section(indexing, "fn typed_concatenate", "fn typed_reverse");
+    assert!(
+        concat_section.contains("axis_extent = axis_extent.checked_add"),
+        "CPU concatenate must check output-axis extent accumulation"
+    );
+    assert!(
+        concat_section.contains("segment_end")
+            && concat_section.contains(".checked_add(input.shape()[axis])"),
+        "CPU concatenate must check segment prefix offsets"
+    );
+
+    let scatter_section = source_section(indexing, "fn typed_scatter", "fn typed_dynamic_slice");
+    assert!(
+        !scatter_section
+            .contains("checked_product(\"scatter\", \"batch shape\", &batch_shape)?.max(1)"),
+        "CPU scatter must not force a phantom iteration over zero-size batch domains"
+    );
+    assert!(
+        !scatter_section.contains(
+            "checked_product(\"scatter\", \"window update shape\", &window_shape_updates)?.max(1)"
+        ),
+        "CPU scatter must not force a phantom iteration over zero-size update windows"
+    );
+}
+
+#[test]
 fn cpu_reduce_max_min_validate_axes_before_empty_fast_path() {
     let reduction = include_str!("../src/reduction.rs");
     for (start, end, op) in [
