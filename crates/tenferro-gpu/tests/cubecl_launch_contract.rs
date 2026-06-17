@@ -210,6 +210,41 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
 }
 
 #[test]
+fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
+    let interop_source = cubecl_source("interop.rs");
+    let interop_ptr = source_section(
+        &interop_source,
+        "pub fn typed_device_ptr<T: 'static>(",
+        "/// Upload host data into a dense GPU tensor",
+    );
+    assert_ordered_needles(
+        "interop::typed_device_ptr",
+        interop_ptr,
+        &[
+            "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
+            "dispatch::cubecl_buffer(tensor, op)?;",
+            ".get_resource(buffer.handle().clone())",
+        ],
+    );
+
+    let gemm_source = cubecl_source("gemm.rs");
+    let gemm_ptr = source_section(
+        &gemm_source,
+        "fn typed_device_ptr<T: 'static>(",
+        "fn zero_alloc<T>",
+    );
+    assert_ordered_needles(
+        "gemm::typed_device_ptr",
+        gemm_ptr,
+        &[
+            "ensure_resident_on_runtime(rt, tensor, OP)?;",
+            "cubecl_buffer(tensor, OP)?;",
+            ".get_resource(buffer.handle().clone())",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_gemm_zero_contracting_path_stays_device_native() {
     let gemm_source = cubecl_source("gemm.rs");
     let zero_alloc_source = source_section(&gemm_source, "fn zero_alloc<", "fn build_layout<");

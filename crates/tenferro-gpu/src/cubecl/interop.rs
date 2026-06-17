@@ -124,6 +124,7 @@ pub fn typed_device_ptr<T: 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<*mut c_void> {
+    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;
     let resource = rt
         .client()
@@ -131,6 +132,7 @@ pub fn typed_device_ptr<T: 'static>(
         .map_err(|err| {
             crate::Error::backend_failure(op, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;
+    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     Ok(resource.resource().ptr as usize as *mut c_void)
 }
 

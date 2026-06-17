@@ -7,7 +7,7 @@ use num_traits::{One, Zero};
 
 use super::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, dtype_mismatch,
-    launch_nullary_into,
+    ensure_resident_on_runtime, launch_nullary_into,
 };
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
@@ -296,6 +296,7 @@ fn typed_device_ptr<T: 'static>(
     rt: &CubeclRuntime,
     tensor: &TypedTensor<T>,
 ) -> crate::Result<*mut c_void> {
+    ensure_resident_on_runtime(rt, tensor, OP)?;
     let buffer = cubecl_buffer(tensor, OP)?;
     let resource = rt
         .client()
@@ -303,6 +304,7 @@ fn typed_device_ptr<T: 'static>(
         .map_err(|err| {
             crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;
+    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     Ok(resource.resource().ptr as usize as *mut c_void)
 }
 
