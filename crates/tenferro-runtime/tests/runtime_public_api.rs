@@ -61,6 +61,34 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
 }
 
 #[test]
+fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+
+    let z = &x + &y;
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&z, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+    let out = GraphExecutor::new(CpuBackend::new())
+        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
+fn traced_reduction_with_too_many_axes_does_not_underflow_rank() {
+    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+
+    let y = x.reduce_max(&[0, 1, 2]);
+
+    assert_eq!(y.rank, 0);
+}
+
+#[test]
 fn graph_executor_runs_dot_general_with_borrowed_inputs() {
     let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);

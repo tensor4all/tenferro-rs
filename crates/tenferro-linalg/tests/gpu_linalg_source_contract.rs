@@ -120,6 +120,28 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
 }
 
 #[test]
+fn gpu_triangular_solve_batched_offsets_use_checked_arithmetic() {
+    let source = linalg_source();
+    let triangular = source_section(
+        &source,
+        "fn triangular_solve_typed_with_op",
+        "fn solve_typed",
+    );
+
+    for needle in [
+        "checked_mul_usize(op, \"triangular matrix stride\", n, n)",
+        "checked_mul_usize(op, \"triangular rhs stride\", rows, cols)",
+        "checked_batch_offset(op, \"triangular matrix batch offset\", batch, a_stride)",
+        "checked_batch_offset(op, \"triangular rhs batch offset\", batch, out_stride)",
+    ] {
+        assert!(
+            triangular.contains(needle),
+            "triangular_solve_typed_with_op should use checked arithmetic: missing {needle}"
+        );
+    }
+}
+
+#[test]
 fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
     let source = linalg_source();
     let zero_lu = source_section(&source, "fn zero_sized_lu_factor_outputs", "fn raw_stream");

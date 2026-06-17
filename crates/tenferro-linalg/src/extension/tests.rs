@@ -34,3 +34,12 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
         other => panic!("expected BackendFailure, got {other:?}"),
     }
 }
+
+#[test]
+fn infer_output_meta_returns_empty_on_input_count_mismatch() {
+    let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
+
+    let metas = op.infer_output_meta(&[], &[]);
+
+    assert!(metas.is_empty());
+}

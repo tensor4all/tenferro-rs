@@ -239,9 +239,8 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
 /// Create an output array from the CPU buffer pool WITHOUT initializing values.
 ///
 /// # Safety
-/// Caller must write every element before reading. The returned array contains
-/// uninitialized data acquired from `buffers`.
-#[allow(clippy::uninit_vec)]
+/// Caller should overwrite every element that is part of the operation output.
+/// The pool supplies valid zero values so accidental reads are memory-safe.
 pub(crate) unsafe fn typed_array_uninit_from_pool<T>(
     buffers: &mut BufferPool,
     shape: &[usize],

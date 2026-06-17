@@ -22,6 +22,9 @@ pub enum ExtensionRuntimeRegistryError {
     /// `"<crate-name>.<op-name>.v<major>"`.
     #[error("family_id {family_id:?} does not match the namespaced format")]
     MalformedFamilyId { family_id: &'static str },
+    /// A registry lock was poisoned by a panic in another thread.
+    #[error("{name} poisoned")]
+    PoisonedLock { name: &'static str },
 }
 
 /// Backend and cache state passed to one extension execution.

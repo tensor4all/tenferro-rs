@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheStore};
@@ -220,6 +220,18 @@ impl fmt::Debug for EagerRuntime {
 }
 
 impl EagerRuntime {
+    fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
+        self.backend
+            .lock()
+            .map_err(|_| Error::Internal("backend lock poisoned".to_string()))
+    }
+
+    fn lock_extension_executor(&self) -> Result<MutexGuard<'_, ExtensionExecutor<EagerBackend>>> {
+        self.extension_executor
+            .lock()
+            .map_err(|_| Error::Internal("extension executor lock poisoned".to_string()))
+    }
+
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_rules(backend, None)
     }
@@ -376,7 +388,12 @@ impl EagerRuntime {
             &mut ExtensionExecutor<EagerBackend>,
         ) -> std::result::Result<(), ExtensionRuntimeRegistryError>,
     ) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
-        register(&mut self.extension_executor.lock().unwrap())
+        let mut executor = self.extension_executor.lock().map_err(|_| {
+            ExtensionRuntimeRegistryError::PoisonedLock {
+                name: "extension executor lock",
+            }
+        })?;
+        register(&mut executor)
     }
 
     /// Clear generic extension runtime cache entries.
@@ -507,20 +524,16 @@ impl EagerRuntime {
     /// ctx.synchronize().unwrap();
     /// ```
     pub fn synchronize(&self) -> Result<()> {
-        self.backend
-            .lock()
-            .unwrap()
-            .synchronize()
-            .map_err(Error::from)
+        self.lock_backend()?.synchronize().map_err(Error::from)
     }
 
     pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
         let mut backend =
-            profile_eager_op_section("exec_outputs.lock_backend", || self.backend.lock().unwrap());
+            profile_eager_op_section("exec_outputs.lock_backend", || self.lock_backend())?;
         let mut extension_executor =
             profile_eager_op_section("exec_outputs.lock_extensions", || {
-                self.extension_executor.lock().unwrap()
-            });
+                self.lock_extension_executor()
+            })?;
         profile_eager_op_section("exec_outputs.exec_op", || {
             exec_op_on_tensors_with_extension_executor(
                 op,
@@ -536,13 +549,12 @@ impl EagerRuntime {
         op: &StdTensorOp,
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>> {
-        let mut backend = profile_eager_op_section("exec_outputs_read.lock_backend", || {
-            self.backend.lock().unwrap()
-        });
+        let mut backend =
+            profile_eager_op_section("exec_outputs_read.lock_backend", || self.lock_backend())?;
         let mut extension_executor =
             profile_eager_op_section("exec_outputs_read.lock_extensions", || {
-                self.extension_executor.lock().unwrap()
-            });
+                self.lock_extension_executor()
+            })?;
         profile_eager_op_section("exec_outputs_read.exec_op", || {
             exec_op_on_tensor_reads_with_extension_executor(
                 op,
@@ -559,7 +571,7 @@ impl EagerRuntime {
         initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ) -> Result<EagerGraphExecution> {
         let mut backend =
-            profile_eager_op_section("exec_graph.lock_backend", || self.backend.lock().unwrap());
+            profile_eager_op_section("exec_graph.lock_backend", || self.lock_backend())?;
         let mut all_values = initial_data.clone();
 
         profile_eager_op_section("exec_graph.with_backend_session", || {
@@ -721,7 +733,6 @@ impl EagerRuntime {
         backend: &mut EagerBackend,
     ) -> Result<()> {
         let mut updates = Vec::new();
-        let mut staged = Vec::new();
 
         {
             let mut slots = self.grad_slots.lock().unwrap();
@@ -739,18 +750,12 @@ impl EagerRuntime {
         }
 
         for (slot, incoming) in updates {
-            let next = {
-                let current = slot.lock().unwrap();
-                match current.as_ref() {
-                    Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
-                    None => incoming,
-                }
+            let mut current = slot.lock().unwrap();
+            let next = match current.as_ref() {
+                Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
+                None => incoming,
             };
-            staged.push((slot, next));
-        }
-
-        for (slot, next) in staged {
-            *slot.lock().unwrap() = Some(next);
+            *current = Some(next);
         }
 
         Ok(())

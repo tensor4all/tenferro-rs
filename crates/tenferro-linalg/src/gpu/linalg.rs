@@ -641,8 +641,8 @@ where
     };
     let rows = b.shape()[0];
     let cols = b.shape()[1];
-    let a_stride = n * n;
-    let out_stride = rows * cols;
+    let a_stride = checked_mul_usize(op, "triangular matrix stride", n, n)?;
+    let out_stride = checked_mul_usize(op, "triangular rhs stride", rows, cols)?;
     let lda = as_i32(n, op, "lda")?;
     let ldb = as_i32(rows, op, "ldb")?;
     let m = as_i32(rows, op, "m")?;
@@ -654,8 +654,12 @@ where
         let mut a_pointers = Vec::with_capacity(batch_total);
         let mut b_pointers = Vec::with_capacity(batch_total);
         for batch in 0..batch_total {
-            let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), batch * a_stride) };
-            let batch_b = unsafe { batch_ptr::<T>(out_ptr, batch * out_stride) };
+            let a_offset =
+                checked_batch_offset(op, "triangular matrix batch offset", batch, a_stride)?;
+            let b_offset =
+                checked_batch_offset(op, "triangular rhs batch offset", batch, out_stride)?;
+            let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), a_offset) };
+            let batch_b = unsafe { batch_ptr::<T>(out_ptr, b_offset) };
             a_pointers.push(batch_a as usize);
             b_pointers.push(batch_b as usize);
         }
@@ -1940,6 +1944,27 @@ fn has_zero_dim(shape: &[usize]) -> bool {
 
 fn batch_count(batch_shape: &[usize]) -> usize {
     batch_shape.iter().product::<usize>().max(1)
+}
+
+fn checked_mul_usize(
+    op: &'static str,
+    label: &'static str,
+    lhs: usize,
+    rhs: usize,
+) -> Result<usize> {
+    lhs.checked_mul(rhs).ok_or_else(|| Error::InvalidConfig {
+        op,
+        message: format!("{label} overflows usize: {lhs} * {rhs}"),
+    })
+}
+
+fn checked_batch_offset(
+    op: &'static str,
+    label: &'static str,
+    batch: usize,
+    stride: usize,
+) -> Result<usize> {
+    checked_mul_usize(op, label, batch, stride)
 }
 
 fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {

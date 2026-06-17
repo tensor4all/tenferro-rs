@@ -27,6 +27,16 @@ fn eager_runtime_synchronize_is_available_and_cpu_noop() {
     runtime.synchronize().unwrap();
 }
 
+#[test]
+fn eager_runtime_grad_accumulation_keeps_slot_locked_through_update() {
+    let source = include_str!("../src/eager.rs");
+
+    assert!(
+        !source.contains("let mut staged = Vec::new();"),
+        "gradient accumulation must not stage slot updates after releasing the per-slot lock"
+    );
+}
+
 #[cfg(feature = "webgpu")]
 #[test]
 fn eager_runtime_accepts_webgpu_backend_constructor() {

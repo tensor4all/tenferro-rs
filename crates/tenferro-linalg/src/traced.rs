@@ -369,6 +369,7 @@ pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(inverse.rank, 2);
 /// ```
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
+    ensure_min_rank("inv", a.rank, 2)?;
     let shape = a.concrete_shape();
     let eye = eye_like(a, shape[0]);
     solve(a, &eye)
@@ -494,6 +495,7 @@ pub fn norm(
     if axes.is_empty() {
         return Ok(a.clone());
     }
+    validate_axes("norm", a.rank, &axes)?;
 
     let out = match axes.len() {
         1 => vector_norm(a, axes[0], ord),
@@ -615,6 +617,28 @@ fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
             tenferro_tensor::Error::backend_failure(op, format!("unsupported dtype {dtype:?}")),
         )),
     }
+}
+
+fn ensure_min_rank(op: &'static str, actual: usize, expected: usize) -> Result<()> {
+    if actual < expected {
+        return Err(Error::TensorRuntime(tenferro_tensor::Error::RankMismatch {
+            op,
+            expected,
+            actual,
+        }));
+    }
+    Ok(())
+}
+
+fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
+    for &axis in axes {
+        if axis >= rank {
+            return Err(Error::TensorRuntime(
+                tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank },
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn zero_scalar(dtype: DType) -> TracedTensor {

@@ -278,6 +278,38 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
 }
 
 #[test]
+fn traced_inv_rejects_rank_less_than_two_without_panicking() {
+    let scalar = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+
+    let err = tenferro_linalg::inv(&scalar).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::TensorRuntime(TensorError::RankMismatch {
+            op: "inv",
+            expected: 2,
+            actual: 0,
+        })
+    ));
+}
+
+#[test]
+fn traced_norm_rejects_out_of_range_axis_without_panicking() {
+    let tensor = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+
+    let err = tenferro_linalg::norm(&tensor, Some(2.0), Some(&[5]), false).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::TensorRuntime(TensorError::AxisOutOfBounds {
+            op: "norm",
+            axis: 5,
+            rank: 1,
+        })
+    ));
+}
+
+#[test]
 fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
     for dtype in [DType::I32, DType::I64, DType::Bool] {
         let tensor = traced_with_dtype(dtype, vec![2, 2]);

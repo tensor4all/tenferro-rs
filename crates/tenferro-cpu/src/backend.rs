@@ -111,6 +111,34 @@ fn maybe_print_cpu_session_profile() {
     }
 }
 
+struct BufferPoolLoan<'a> {
+    target: &'a mut BufferPool,
+    buffers: Option<BufferPool>,
+}
+
+impl<'a> BufferPoolLoan<'a> {
+    fn new(target: &'a mut BufferPool) -> Self {
+        Self {
+            buffers: Some(std::mem::take(target)),
+            target,
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut BufferPool {
+        self.buffers
+            .as_mut()
+            .expect("buffer pool loan already restored")
+    }
+}
+
+impl Drop for BufferPoolLoan<'_> {
+    fn drop(&mut self) {
+        if let Some(buffers) = self.buffers.take() {
+            *self.target = buffers;
+        }
+    }
+}
+
 /// CPU provider selected by a [`CpuBackend`] instance.
 ///
 /// CPU provider features are additive at compile time; this runtime selector
@@ -576,21 +604,17 @@ impl CpuBackend {
     }
 
     fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
+        let mut buffers = BufferPoolLoan::new(&mut self.buffers);
         let ctx = Arc::clone(&self.ctx);
-        let result = ctx.install(|| op(&mut buffers));
-        self.buffers = buffers;
-        result
+        ctx.install(|| op(buffers.get_mut()))
     }
 
     // Selected when the BLAS provider is active; default Faer-only builds keep
     // it dormant.
     #[allow(dead_code)]
     fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
-        let result = op(&mut buffers);
-        self.buffers = buffers;
-        result
+        let mut buffers = BufferPoolLoan::new(&mut self.buffers);
+        op(buffers.get_mut())
     }
 
     fn linalg_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
@@ -624,11 +648,9 @@ impl CpuBackend {
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
         op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
     ) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
+        let mut buffers = BufferPoolLoan::new(&mut self.buffers);
         let ctx = Arc::clone(&self.ctx);
-        let result = ctx.install(|| op(&mut buffers, gemm_analysis_cache));
-        self.buffers = buffers;
-        result
+        ctx.install(|| op(buffers.get_mut(), gemm_analysis_cache))
     }
 
     // Selected when the BLAS provider handles cached GEMM execution; default
@@ -639,10 +661,8 @@ impl CpuBackend {
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
         op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
     ) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
-        let result = op(&mut buffers, gemm_analysis_cache);
-        self.buffers = buffers;
-        result
+        let mut buffers = BufferPoolLoan::new(&mut self.buffers);
+        op(buffers.get_mut(), gemm_analysis_cache)
     }
 }
 
@@ -1377,26 +1397,24 @@ impl BackendSessionHost for CpuBackend {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         if !cpu_session_profile_enabled() {
-            let mut buffers = std::mem::take(&mut self.buffers);
+            let mut buffers = BufferPoolLoan::new(&mut self.buffers);
             let ctx = Arc::clone(&self.ctx);
             let kind = self.kind;
-            let result = ctx.install(|| {
+            return ctx.install(|| {
                 let mut session = CpuExecSession {
                     ctx: ctx.as_ref(),
-                    buffers: &mut buffers,
+                    buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
                     kind,
                 };
                 f(&mut session)
             });
-            self.buffers = buffers;
-            return result;
         }
 
         let total_started = Instant::now();
         let mut buffers =
             profile_cpu_session_section("with_backend_session_cached.take_buffers", || {
-                std::mem::take(&mut self.buffers)
+                BufferPoolLoan::new(&mut self.buffers)
             });
         let ctx = Arc::clone(&self.ctx);
         let kind = self.kind;
@@ -1406,7 +1424,7 @@ impl BackendSessionHost for CpuBackend {
                     let session_started = Instant::now();
                     let mut session = CpuExecSession {
                         ctx: ctx.as_ref(),
-                        buffers: &mut buffers,
+                        buffers: buffers.get_mut(),
                         gemm_analysis_cache: cache,
                         kind,
                     };
@@ -1425,7 +1443,7 @@ impl BackendSessionHost for CpuBackend {
                 })
             });
         profile_cpu_session_section("with_backend_session_cached.restore_buffers", || {
-            self.buffers = buffers;
+            drop(buffers);
         });
         record_cpu_session_profile("with_backend_session_cached.total", total_started.elapsed());
         maybe_print_cpu_session_profile();

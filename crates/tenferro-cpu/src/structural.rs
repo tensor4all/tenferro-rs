@@ -689,9 +689,10 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     k: i64,
     upper: bool,
 ) -> crate::Result<TypedTensor<T>> {
+    let op = if upper { "triu" } else { "tril" };
     if tensor.shape().len() < 2 {
         return Err(crate::Error::RankMismatch {
-            op: if upper { "triu" } else { "tril" },
+            op,
             expected: 2,
             actual: tensor.shape().len(),
         });
@@ -703,26 +704,27 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
         return Ok(tensor.clone());
     }
 
-    let batch_count: usize = tensor.shape()[2..].iter().product();
-    let block_size = rows * cols;
+    let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
     let mut out = tensor.clone();
     let data = out.host_data_mut();
 
     // Intentionally sequential: triangular masks are index-dependent in the
     // innermost matrix plane and remain a dedicated CPU-kernel exception.
     for batch_idx in 0..batch_count {
-        let base = batch_idx * block_size;
         for col in 0..cols {
             let boundary = col as i128 - k as i128;
             for row in 0..rows {
-                let row = row as i128;
+                let row_idx = row;
+                let row = row_idx as i128;
                 let keep = if upper {
                     row <= boundary
                 } else {
                     row >= boundary
                 };
                 if !keep {
-                    data[base + row as usize + col * rows] = T::zero();
+                    let offset =
+                        checked_triangular_offset(op, batch_idx, block_size, col, rows, row_idx)?;
+                    data[offset] = T::zero();
                 }
             }
         }
@@ -741,9 +743,10 @@ fn typed_triangular_mask_with_fill_pool<T>(
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
+    let op = if upper { "triu" } else { "tril" };
     if tensor.shape().len() < 2 {
         return Err(crate::Error::RankMismatch {
-            op: if upper { "triu" } else { "tril" },
+            op,
             expected: 2,
             actual: tensor.shape().len(),
         });
@@ -755,31 +758,81 @@ where
         return Ok(tensor.clone());
     }
 
-    let batch_count: usize = tensor.shape()[2..].iter().product();
-    let block_size = rows * cols;
-    let mut out =
-        clone_host_tensor_from_pool(buffers, if upper { "triu" } else { "tril" }, tensor)?;
+    let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
+    let mut out = clone_host_tensor_from_pool(buffers, op, tensor)?;
     let data = out.host_data_mut();
 
     // Intentionally sequential: triangular masks are index-dependent in the
     // innermost matrix plane and remain a dedicated CPU-kernel exception.
     for batch_idx in 0..batch_count {
-        let base = batch_idx * block_size;
         for col in 0..cols {
             let boundary = col as i128 - k as i128;
             for row in 0..rows {
-                let row = row as i128;
+                let row_idx = row;
+                let row = row_idx as i128;
                 let keep = if upper {
                     row <= boundary
                 } else {
                     row >= boundary
                 };
                 if !keep {
-                    data[base + row as usize + col * rows] = fill;
+                    let offset =
+                        checked_triangular_offset(op, batch_idx, block_size, col, rows, row_idx)?;
+                    data[offset] = fill;
                 }
             }
         }
     }
 
     Ok(out)
+}
+
+fn checked_triangular_extent(
+    op: &'static str,
+    shape: &[usize],
+    rows: usize,
+    cols: usize,
+) -> crate::Result<(usize, usize)> {
+    let batch_count = shape[2..].iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("batch extent overflows usize: {acc} * {dim}"),
+            })
+    })?;
+    let block_size = rows
+        .checked_mul(cols)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!("matrix block size overflows usize: {rows} * {cols}"),
+        })?;
+    Ok((batch_count, block_size))
+}
+
+fn checked_triangular_offset(
+    op: &'static str,
+    batch_idx: usize,
+    block_size: usize,
+    col: usize,
+    rows: usize,
+    row_idx: usize,
+) -> crate::Result<usize> {
+    let base = batch_idx
+        .checked_mul(block_size)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!("batch offset overflows usize: {batch_idx} * {block_size}"),
+        })?;
+    let col_offset = col
+        .checked_mul(rows)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!("column offset overflows usize: {col} * {rows}"),
+        })?;
+    base.checked_add(col_offset)
+        .and_then(|offset| offset.checked_add(row_idx))
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: "triangular mask offset overflows usize".to_string(),
+        })
 }
