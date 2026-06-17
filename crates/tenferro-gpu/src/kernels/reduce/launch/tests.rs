@@ -35,6 +35,21 @@ fn validate_reduce_problem_rejects_non_keepdims_output_shape() {
 }
 
 #[test]
+fn validate_reduce_problem_rejects_input_shape_product_overflow() {
+    let input_shape = [usize::MAX, 2];
+    let err = super::validate_reduce_problem(&input_shape, &[usize::MAX, 1], 1).unwrap_err();
+
+    assert_eq!(
+        err,
+        CubeclKernelError::InvalidStrategy {
+            reason: format!(
+                "reduction input element count overflows usize for shape {input_shape:?}"
+            ),
+        }
+    );
+}
+
+#[test]
 fn auto_strategy_uses_unit_only_within_bounded_axis_limit() {
     assert_eq!(
         super::auto_reduce_strategy_for_capabilities(32, 32, false).unwrap(),

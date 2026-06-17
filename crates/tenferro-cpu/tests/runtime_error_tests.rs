@@ -112,6 +112,25 @@ fn cpu_pooled_output_allocation_uses_checked_shape_product() {
 }
 
 #[test]
+fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
+    let structural = include_str!("../src/structural.rs");
+    let filled_section = source_section(
+        structural,
+        "fn filled_tensor_from_pool",
+        "fn clone_host_tensor_from_pool",
+    );
+
+    assert!(
+        filled_section.contains("checked_shape_product(op, \"output shape\", &shape)?"),
+        "CPU zero/fill pooled output allocation must reject shape-product overflow"
+    );
+    assert!(
+        !filled_section.contains("let len = shape.iter().product();"),
+        "CPU zero/fill pooled output allocation must not use unchecked shape.iter().product()"
+    );
+}
+
+#[test]
 fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
     let structural = include_str!("../src/structural.rs");
     let reshape_section = source_section(

@@ -51,7 +51,8 @@ pub use extension::{register_tropical_ad_rules, tropical_ad_rules};
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
 pub use traced::{
     min_plus_dot_general, min_plus_dot_general_fused, tropical_dot_general,
-    tropical_dot_general_fused, tropical_reduce_sum,
+    tropical_dot_general_fused, tropical_reduce_sum, try_min_plus_dot_general_fused,
+    try_tropical_dot_general_fused,
 };
 
 /// Tropical semiring flavor used by traced and future fused tropical ops.

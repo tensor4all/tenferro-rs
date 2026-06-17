@@ -633,9 +633,9 @@ impl LinalgBackend for CpuBackend {
                         Tensor::F64(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                         Tensor::C32(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
-                            .map(eigh_c32_outputs_to_public_tensors),
+                            .and_then(eigh_c32_outputs_to_public_tensors),
                         Tensor::C64(t) => linalg::faer::eigh(ctx.as_ref(), buffers, t)
-                            .map(eigh_c64_outputs_to_public_tensors),
+                            .and_then(eigh_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("eigh", input.dtype())),
                     })
                 }
@@ -652,12 +652,10 @@ impl LinalgBackend for CpuBackend {
                             .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                         Tensor::F64(t) => linalg::blas::eigh(buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-                        Tensor::C32(t) => {
-                            linalg::blas::eigh(buffers, t).map(eigh_c32_outputs_to_public_tensors)
-                        }
-                        Tensor::C64(t) => {
-                            linalg::blas::eigh(buffers, t).map(eigh_c64_outputs_to_public_tensors)
-                        }
+                        Tensor::C32(t) => linalg::blas::eigh(buffers, t)
+                            .and_then(eigh_c32_outputs_to_public_tensors),
+                        Tensor::C64(t) => linalg::blas::eigh(buffers, t)
+                            .and_then(eigh_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("eigh", input.dtype())),
                     })
                 }
@@ -1034,6 +1032,10 @@ fn full_piv_lu_output_count_error(count: usize) -> Error {
     Error::backend_failure("full_piv_lu", format!("expected 5 outputs, got {count}"))
 }
 
+fn eigh_output_count_error(count: usize) -> Error {
+    Error::backend_failure("eigh", format!("expected 2 outputs, got {count}"))
+}
+
 fn full_piv_lu_c32_outputs_to_public_tensors(
     outputs: Vec<TypedTensor<Complex32>>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1122,24 +1124,32 @@ fn svd_c64_outputs_to_public_tensors(
     }
 }
 
-fn eigh_c32_outputs_to_public_tensors(outputs: Vec<TypedTensor<Complex32>>) -> Vec<Tensor> {
+fn eigh_c32_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex32>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
     let mut outputs = outputs.into_iter();
-    let values = outputs.next().expect("eigh returns eigenvalues");
-    let vectors = outputs.next().expect("eigh returns eigenvectors");
-    vec![
-        Tensor::F32(complex32_real_part_tensor(values)),
-        Tensor::C32(vectors),
-    ]
+    match (outputs.next(), outputs.next(), outputs.next()) {
+        (Some(values), Some(vectors), None) => Ok(vec![
+            Tensor::F32(complex32_real_part_tensor(values)),
+            Tensor::C32(vectors),
+        ]),
+        _ => Err(eigh_output_count_error(count)),
+    }
 }
 
-fn eigh_c64_outputs_to_public_tensors(outputs: Vec<TypedTensor<Complex64>>) -> Vec<Tensor> {
+fn eigh_c64_outputs_to_public_tensors(
+    outputs: Vec<TypedTensor<Complex64>>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let count = outputs.len();
     let mut outputs = outputs.into_iter();
-    let values = outputs.next().expect("eigh returns eigenvalues");
-    let vectors = outputs.next().expect("eigh returns eigenvectors");
-    vec![
-        Tensor::F64(complex64_real_part_tensor(values)),
-        Tensor::C64(vectors),
-    ]
+    match (outputs.next(), outputs.next(), outputs.next()) {
+        (Some(values), Some(vectors), None) => Ok(vec![
+            Tensor::F64(complex64_real_part_tensor(values)),
+            Tensor::C64(vectors),
+        ]),
+        _ => Err(eigh_output_count_error(count)),
+    }
 }
 
 fn apply_lu_pivots_cpu(

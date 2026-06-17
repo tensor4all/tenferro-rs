@@ -100,6 +100,15 @@ checks.
   of panicking while registering seed metadata.
 - Switched tropical traced einsum through the fallible extension builder and
   added symbolic-shape coverage for the standard `ij,jk->ik` path.
+- Added fallible tropical fused dot-general entrypoints so callers can validate
+  rank and concrete contracting dimensions without using the legacy panic
+  wrappers.
+- Converted CPU complex `eigh` output adapters from internal `expect` calls to
+  typed output-count errors, matching the SVD/full-piv-LU adapter pattern.
+- Extended the checked-arithmetic sweep to GPU structural reshape/concatenate,
+  GPU reduction launch input-size and cube-count planning, CPU pooled zero/fill
+  allocation used by embed-diagonal, and XLA extension-lowering input-id plus
+  transpose-permutation validation.
 
 ## Deferred
 
@@ -114,6 +123,11 @@ checks.
   and several traced shape-manipulation helpers. This follow-up fixes symbolic
   AD seed and traced linalg representative cases, but does not attempt the
   whole API redesign.
+- The latest full-source audit still finds unchecked shape products or
+  infallible shape arithmetic in FFT output planning, linalg batch helpers,
+  runtime graph/ad-support internals, and `DimExpr`/shape-inference utilities.
+  Those should be grouped with the #1082/#1084 design follow-up because they
+  require either fallible shape metadata APIs or broader helper refactors.
 
 ## Verification
 
@@ -171,3 +185,14 @@ Additional targeted checks after the final audit follow-up:
 - `cargo test -p tenferro-linalg without_panicking -- --nocapture`
 - `cargo test --manifest-path ext/tropical/Cargo.toml traced_einsum_accepts_symbolic_shapes_without_panicking -- --nocapture`
 - `cargo test -p tenferro-ad traced_jvp_vjp_return_errors_for_symbolic_seed_tensors -- --nocapture`
+
+Additional targeted checks after the full-source mini-agent audit:
+
+- `cargo test -p tenferro-linalg cpu_eigh_complex_output_adapters_are_fallible --test cpu_linalg_source_contract -- --nocapture`
+- `cargo test --manifest-path ext/tropical/Cargo.toml fused_dot_general_has_fallible_validation_entrypoint -- --nocapture`
+- `cargo test -p tenferro-gpu cubecl_structural_shape_arithmetic_is_checked --test public_surface_contract -- --nocapture`
+- `cargo test -p tenferro-gpu --features cuda validate_reduce_problem_rejects_input_shape_product_overflow --lib -- --nocapture`
+- `cargo test -p tenferro-gpu --features cuda unit_launch_settings_rejects_cube_count_overflow --lib -- --nocapture`
+- `cargo test -p tenferro-xla extension_lowering_input_ids_are_checked_before_usize_indexing --test source_contract -- --nocapture`
+- `cargo test -p tenferro-xla lowering_helpers_reject_invalid_internal_shapes --lib -- --nocapture`
+- `cargo test -p tenferro-cpu cpu_zero_fill_pooled_outputs_use_checked_shape_product --test runtime_error_tests -- --nocapture`

@@ -252,6 +252,30 @@ fn cubecl_output_allocations_use_checked_shape_products() {
 }
 
 #[test]
+fn cubecl_structural_shape_arithmetic_is_checked() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    assert!(
+        cubecl_mod.contains("checked_dim_product(\"reshape\", \"input shape\", input.shape())?")
+            && cubecl_mod.contains("checked_dim_product(\"reshape\", \"output shape\", shape)?"),
+        "CubeCL reshape must reject shape-product overflow before reusing buffers"
+    );
+    assert!(
+        cubecl_mod.contains("axis_extent = axis_extent.checked_add(input.shape()[dim])"),
+        "CubeCL concatenate axis extent must use checked_add"
+    );
+    for banned in [
+        "let old_n: usize = input.shape().iter().product();",
+        "let new_n: usize = shape.iter().product();",
+        "axis_extent += input.shape()[dim];",
+    ] {
+        assert!(
+            !cubecl_mod.contains(banned),
+            "CubeCL structural path must not use unchecked shape arithmetic: found {banned}"
+        );
+    }
+}
+
+#[test]
 fn webgpu_allocation_uses_checked_shape_products() {
     let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
     assert!(

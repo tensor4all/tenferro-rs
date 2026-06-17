@@ -71,7 +71,14 @@ fn validate_reduce_problem(
         });
     }
 
-    let input_len = input_shape.iter().product::<usize>();
+    let input_len = input_shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| CubeclKernelError::InvalidStrategy {
+                reason: format!(
+                    "reduction input element count overflows usize for shape {input_shape:?}"
+                ),
+            })
+    })?;
     let reduce_count = input_len / reduce_len;
 
     Ok(ReduceProblem {
@@ -84,16 +91,16 @@ fn validate_reduce_problem(
 fn launch_with_unit_settings<R: Runtime>(
     client: &ComputeClient<R>,
     problem: ReduceProblem,
-) -> ResolvedReduceLaunch {
-    let settings = unit_launch_settings(client, problem);
+) -> Result<ResolvedReduceLaunch> {
+    let settings = unit_launch_settings(client, problem)?;
     let _has_idle_units = settings.blueprint.idle_units;
-    ResolvedReduceLaunch {
+    Ok(ResolvedReduceLaunch {
         kind: ResolvedReduceStrategy::Unit,
         cube_count: settings.cube_count,
         cube_dim: settings.cube_dim,
         axis: problem.axis,
         output_len: problem.reduce_count,
-    }
+    })
 }
 
 fn launch_with_plane_settings<R: Runtime>(
@@ -184,7 +191,7 @@ fn resolve_launch_settings<R: Runtime>(
 ) -> Result<ResolvedReduceLaunch> {
     match strategy {
         ReduceStrategy::Auto => match auto_reduce_strategy(client, problem)? {
-            ResolvedReduceStrategy::Unit => Ok(launch_with_unit_settings(client, problem)),
+            ResolvedReduceStrategy::Unit => launch_with_unit_settings(client, problem),
             ResolvedReduceStrategy::Plane => launch_with_plane_settings(client, problem),
         },
     }

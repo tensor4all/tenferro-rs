@@ -36,6 +36,16 @@ fn require_rank2(tensor: &TracedTensor, label: &str) {
     );
 }
 
+fn try_require_rank2(tensor: &TracedTensor, label: &str) -> Result<()> {
+    if tensor.rank != 2 {
+        return Err(Error::ContractionError(format!(
+            "{label}: tropical matrix composition requires rank-2 input, got rank {}",
+            tensor.rank
+        )));
+    }
+    Ok(())
+}
+
 fn assert_contracting_axes_compatible(a: &TracedTensor, b: &TracedTensor, label: &str) {
     if let (Some(a_shape), Some(b_shape)) = (a.try_concrete_shape(), b.try_concrete_shape()) {
         assert_eq!(
@@ -44,6 +54,22 @@ fn assert_contracting_axes_compatible(a: &TracedTensor, b: &TracedTensor, label:
             a_shape[1], b_shape[0]
         );
     }
+}
+
+fn try_require_contracting_axes_compatible(
+    a: &TracedTensor,
+    b: &TracedTensor,
+    label: &str,
+) -> Result<()> {
+    if let (Some(a_shape), Some(b_shape)) = (a.try_concrete_shape(), b.try_concrete_shape()) {
+        if a_shape[1] != b_shape[0] {
+            return Err(Error::ContractionError(format!(
+                "{label}: contracting axes must match, got a[1]={} and b[0]={}",
+                a_shape[1], b_shape[0]
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn tropical_dot_general_impl(
@@ -244,7 +270,20 @@ pub fn tropical_einsum_subscripts(
 /// ```
 #[must_use]
 pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    fused_dot_general_impl(TropicalKind::MaxPlus, a, b, "tropical_dot_general_fused")
+    try_tropical_dot_general_fused(a, b).unwrap_or_else(|err| panic!("{err}"))
+}
+
+/// Fallible fused max-plus matrix multiplication on rank-2 traced tensors.
+///
+/// # Errors
+///
+/// Returns an error if either input is not rank 2 or if concrete contracting
+/// dimensions are known and incompatible.
+pub fn try_tropical_dot_general_fused(
+    a: &TracedTensor,
+    b: &TracedTensor,
+) -> Result<TracedTensor> {
+    try_fused_dot_general_impl(TropicalKind::MaxPlus, a, b, "tropical_dot_general_fused")
 }
 
 /// Fused min-plus matrix multiplication on rank-2 traced tensors.
@@ -277,23 +316,36 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedT
 /// ```
 #[must_use]
 pub fn min_plus_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    fused_dot_general_impl(TropicalKind::MinPlus, a, b, "min_plus_dot_general_fused")
+    try_min_plus_dot_general_fused(a, b).unwrap_or_else(|err| panic!("{err}"))
 }
 
-fn fused_dot_general_impl(
+/// Fallible fused min-plus matrix multiplication on rank-2 traced tensors.
+///
+/// # Errors
+///
+/// Returns an error if either input is not rank 2 or if concrete contracting
+/// dimensions are known and incompatible.
+pub fn try_min_plus_dot_general_fused(
+    a: &TracedTensor,
+    b: &TracedTensor,
+)-> Result<TracedTensor> {
+    try_fused_dot_general_impl(TropicalKind::MinPlus, a, b, "min_plus_dot_general_fused")
+}
+
+fn try_fused_dot_general_impl(
     kind: TropicalKind,
     a: &TracedTensor,
     b: &TracedTensor,
     label: &str,
-) -> TracedTensor {
-    require_rank2(a, &format!("{label}.a"));
-    require_rank2(b, &format!("{label}.b"));
-    assert_contracting_axes_compatible(a, b, label);
+) -> Result<TracedTensor> {
+    try_require_rank2(a, &format!("{label}.a"))?;
+    try_require_rank2(b, &format!("{label}.b"))?;
+    try_require_contracting_axes_compatible(a, b, label)?;
     let subscripts = Subscripts::new(
         &[&[b'i' as u32, b'j' as u32], &[b'j' as u32, b'k' as u32]],
         &[b'i' as u32, b'k' as u32],
     );
-    tropical_einsum_subscripts(kind, &[a, b], &subscripts).unwrap_or_else(|err| panic!("{err}"))
+    tropical_einsum_subscripts(kind, &[a, b], &subscripts)
 }
 
 fn validate_tropical_einsum_inputs(

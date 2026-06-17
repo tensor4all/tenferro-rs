@@ -64,6 +64,16 @@ fn lowering_helpers_reject_invalid_internal_shapes() {
             if message.contains("transpose permutation length 2")
                 && message.contains("output rank 1")
     ));
+
+    let output_ty = f64_type(&[3, 2]);
+    for perm in [&[1, 1][..], &[2, 0][..]] {
+        let err = emit_transpose(&input, perm, &output_ty, &mut emitter).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidProgram { ref message }
+                if message.contains("transpose permutation must be a bijection")
+        ));
+    }
 }
 
 #[test]
