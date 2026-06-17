@@ -394,13 +394,8 @@ fn validate_shape_metadata(shape: &[usize]) -> Result<()> {
 }
 
 fn compact_col_major_strides(shape: &[usize]) -> StrideVec {
-    let mut strides = StrideVec::new();
-    let mut stride = 1isize;
-    for &extent in shape {
-        strides.push(stride);
-        stride *= extent as isize;
-    }
-    strides
+    // Invariant: HostTensor constructors validate shape metadata before as_view can call this.
+    col_major_strides(shape).expect("HostTensor shape metadata is validated at construction")
 }
 
 /// Return compact column-major strides for a shape.

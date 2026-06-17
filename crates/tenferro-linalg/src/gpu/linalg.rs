@@ -542,10 +542,12 @@ where
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-    let matrix_stride = n * n;
+    let matrix_stride = checked_mul_usize(OP, "cholesky matrix stride", n, n)?;
 
     for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(first_ptr, batch * matrix_stride) };
+        let a_offset =
+            checked_batch_offset(OP, "cholesky matrix batch offset", batch, matrix_stride)?;
+        let batch_a = unsafe { batch_ptr::<T>(first_ptr, a_offset) };
         let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().potrf(
@@ -772,11 +774,13 @@ where
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-    let matrix_stride = m * n;
+    let matrix_stride = checked_mul_usize(OP, "lu matrix stride", m, n)?;
 
     for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
-        let batch_pivots = unsafe { batch_ptr::<i32>(pivots_ptr, batch * k) };
+        let a_offset = checked_batch_offset(OP, "lu matrix batch offset", batch, matrix_stride)?;
+        let pivot_offset = checked_batch_offset(OP, "lu pivot batch offset", batch, k)?;
+        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+        let batch_pivots = unsafe { batch_ptr::<i32>(pivots_ptr, pivot_offset) };
         let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().getrf(
@@ -1001,8 +1005,8 @@ where
     let lda = as_i32(m, OP, "lda")?;
     let ldu = as_i32(m, OP, "ldu")?;
     let batch_total = batch_count(batch_shape);
-    let a_stride = m * n;
-    let u_stride = m * k;
+    let a_stride = checked_mul_usize(OP, "svd input stride", m, n)?;
+    let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
@@ -1040,14 +1044,24 @@ where
                 let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
                 let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
                 let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-                let v_stride = n * k;
+                let v_stride = checked_mul_usize(OP, "svd v stride", n, k)?;
 
                 for batch in 0..batch_total {
-                    let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
+                    let a_offset =
+                        checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
+                    let s_offset = checked_batch_offset(
+                        OP,
+                        "svd singular value batch offset",
+                        batch,
+                        s_stride,
+                    )?;
+                    let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
+                    let v_offset = checked_batch_offset(OP, "svd v batch offset", batch, v_stride)?;
+                    let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
                     let batch_s =
-                        unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, batch * s_stride) };
-                    let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
-                    let batch_v = unsafe { batch_ptr::<T>(v_ptr, batch * v_stride) };
+                        unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset) };
+                    let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
+                    let batch_v = unsafe { batch_ptr::<T>(v_ptr, v_offset) };
                     let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
                     unsafe {
                         handles.cusolver().gesvdj(
@@ -1094,7 +1108,11 @@ where
             let rwork = if T::NEEDS_RWORK {
                 alloc_workspace_elems::<<T as LinalgScalar>::Real>(
                     backend.runtime(),
-                    as_i32(5 * k, OP, "rwork")?,
+                    as_i32(
+                        checked_mul_usize(OP, "svd rwork length", 5, k)?,
+                        OP,
+                        "rwork",
+                    )?,
                     OP,
                 )?
             } else {
@@ -1102,15 +1120,19 @@ where
             };
             let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let vt_stride = k * n;
+            let vt_stride = checked_mul_usize(OP, "svd vt stride", k, n)?;
             let job = b'S' as c_char;
 
             for batch in 0..batch_total {
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
-                let batch_s =
-                    unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, batch * s_stride) };
-                let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
-                let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, batch * vt_stride) };
+                let a_offset = checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
+                let s_offset =
+                    checked_batch_offset(OP, "svd singular value batch offset", batch, s_stride)?;
+                let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
+                let vt_offset = checked_batch_offset(OP, "svd vt batch offset", batch, vt_stride)?;
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+                let batch_s = unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset) };
+                let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
+                let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, vt_offset) };
                 let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
                 unsafe {
                     handles.cusolver().gesvd(
@@ -1166,7 +1188,7 @@ where
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
     let batch_total = batch_count(batch_shape);
-    let a_stride = m * n;
+    let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
@@ -1205,14 +1227,26 @@ where
             let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
             let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let u_stride = m * k;
-            let v_stride = n * k;
+            let u_stride = checked_mul_usize(OP, "svd_values u stride", m, k)?;
+            let v_stride = checked_mul_usize(OP, "svd_values v stride", n, k)?;
 
             for batch in 0..batch_total {
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
-                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
-                let batch_u = unsafe { batch_ptr::<T>(u_ptr, batch * u_stride) };
-                let batch_v = unsafe { batch_ptr::<T>(v_ptr, batch * v_stride) };
+                let a_offset =
+                    checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
+                let s_offset = checked_batch_offset(
+                    OP,
+                    "svd_values singular value batch offset",
+                    batch,
+                    s_stride,
+                )?;
+                let u_offset =
+                    checked_batch_offset(OP, "svd_values u batch offset", batch, u_stride)?;
+                let v_offset =
+                    checked_batch_offset(OP, "svd_values v batch offset", batch, v_stride)?;
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, s_offset) };
+                let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
+                let batch_v = unsafe { batch_ptr::<T>(v_ptr, v_offset) };
                 let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
                 unsafe {
                     handles.cusolver().gesvdj(
@@ -1253,7 +1287,11 @@ where
             let rwork = if T::NEEDS_RWORK {
                 alloc_workspace_elems::<T::Real>(
                     backend.runtime(),
-                    as_i32(5 * k, OP, "rwork")?,
+                    as_i32(
+                        checked_mul_usize(OP, "svd_values rwork length", 5, k)?,
+                        OP,
+                        "rwork",
+                    )?,
                     OP,
                 )?
             } else {
@@ -1264,8 +1302,16 @@ where
             let job = b'N' as c_char;
 
             for batch in 0..batch_total {
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * a_stride) };
-                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, batch * s_stride) };
+                let a_offset =
+                    checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
+                let s_offset = checked_batch_offset(
+                    OP,
+                    "svd_values singular value batch offset",
+                    batch,
+                    s_stride,
+                )?;
+                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, s_offset) };
                 let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
                 unsafe {
                     handles.cusolver().gesvd(
@@ -1337,7 +1383,8 @@ where
             .cusolver()
             .geqrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, work_ptr, lda, OP)?;
     let geqrf_workspace = alloc_workspace_elems::<T>(backend.runtime(), geqrf_lwork, OP)?;
-    let tau = alloc_workspace_bytes(backend.runtime(), k * std::mem::size_of::<T>(), OP)?;
+    let tau_bytes = checked_mul_usize(OP, "qr tau workspace bytes", k, std::mem::size_of::<T>())?;
+    let tau = alloc_workspace_bytes(backend.runtime(), tau_bytes, OP)?;
     let orgqr_lwork = handles.cusolver().orgqr_buffer_size(
         T::DATA_TYPE,
         m_i32,
@@ -1354,12 +1401,14 @@ where
     let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let geqrf_info_ptr = typed_device_ptr(backend.runtime(), &geqrf_info, OP)?;
     let orgqr_info_ptr = typed_device_ptr(backend.runtime(), &orgqr_info, OP)?;
-    let work_stride = m * n;
-    let q_stride = m * k;
+    let work_stride = checked_mul_usize(OP, "qr work stride", m, n)?;
+    let q_stride = checked_mul_usize(OP, "qr q stride", m, k)?;
 
     for batch in 0..batch_total {
-        let batch_work = unsafe { batch_ptr::<T>(work_ptr, batch * work_stride) };
-        let batch_q = unsafe { batch_ptr::<T>(q_ptr, batch * q_stride) };
+        let work_offset = checked_batch_offset(OP, "qr work batch offset", batch, work_stride)?;
+        let q_offset = checked_batch_offset(OP, "qr q batch offset", batch, q_stride)?;
+        let batch_work = unsafe { batch_ptr::<T>(work_ptr, work_offset) };
+        let batch_q = unsafe { batch_ptr::<T>(q_ptr, q_offset) };
         let batch_geqrf_info = unsafe { batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>() };
         let batch_orgqr_info = unsafe { batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>() };
         unsafe {
@@ -1454,12 +1503,15 @@ where
     let batch_total = batch_count(batch_shape);
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-    let matrix_stride = n * n;
+    let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
     let values_stride = n;
 
     for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
-        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, batch * values_stride) };
+        let a_offset = checked_batch_offset(OP, "eigh matrix batch offset", batch, matrix_stride)?;
+        let values_offset =
+            checked_batch_offset(OP, "eigh values batch offset", batch, values_stride)?;
+        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, values_offset) };
         let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().syevd(
@@ -1525,12 +1577,16 @@ where
     let batch_total = batch_count(batch_shape);
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-    let matrix_stride = n * n;
+    let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
     let values_stride = n;
 
     for batch in 0..batch_total {
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
-        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, batch * values_stride) };
+        let a_offset =
+            checked_batch_offset(OP, "eigh_values matrix batch offset", batch, matrix_stride)?;
+        let values_offset =
+            checked_batch_offset(OP, "eigh_values values batch offset", batch, values_stride)?;
+        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
+        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, values_offset) };
         let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
         unsafe {
             handles.cusolver().syevd(

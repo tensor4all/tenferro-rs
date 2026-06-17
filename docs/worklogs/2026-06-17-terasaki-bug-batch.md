@@ -20,11 +20,12 @@ locks must not fabricate default state after poison.
 
 After #1086 merged, a final audit follow-up added targeted coverage/fixes for
 the remaining low-risk `terasakisatoshi` reports: repeated-label einsum
-coverage for #1073, tensor stride/accessor and CPU structural/indexing checked
-arithmetic for #1081, symbolic-shape traced linalg and AD seed error handling
-as representative #1084 cases, and tropical traced extension fallibility. It
-also corrected the #1080 buffer-pool fix to split full-overwrite raw acquisition
-from explicit zeroed acquisition instead of zero-filling every pooled buffer.
+coverage for #1073, tensor/tensor-core stride and accessor checked arithmetic
+plus CPU/GPU batched offset arithmetic for #1081, symbolic-shape traced linalg
+and AD seed error handling as representative #1084 cases, and tropical traced
+extension fallibility. It also corrected the #1080 buffer-pool fix to split
+full-overwrite raw acquisition from explicit zeroed acquisition instead of
+zero-filling every pooled buffer.
 The repository rule update was generalized: performance-sensitive operations
 that look potentially dangerous must carry a nearby invariant comment so later
 agents do not "fix" false positives with hidden initialization, copies, or
@@ -88,10 +89,10 @@ checks.
   mixed repeated-label cases). These pass with the existing recursive planner
   and eager implementation, so the issue is covered without changing einsum
   logic.
-- Extended #1081 coverage to tensor column-major stride construction, tensor
-  offset helpers, CPU reshape/concatenate shape arithmetic, and zero-sized
-  scatter iteration. Remaining GPU/integer-cast cases are design or hardware
-  follow-ups.
+- Completed #1081's listed overflow class: tensor and tensor-core column-major
+  stride construction, tensor offset helpers, CPU triangular/reshape/
+  concatenate/scatter boundary arithmetic, and GPU batched linalg stride and
+  `batch * stride` pointer offsets now use checked arithmetic.
 - Made traced linalg helpers return typed symbolic-shape errors instead of
   panicking when `inv`, `pinv`, `pinv_with_rtol`, or `norm(..., keepdim=true)`
   receive a symbolic-shape tensor.
@@ -109,10 +110,6 @@ checks.
 - #1084 is a broad public-panic audit. This PR fixes representative traced,
   linalg, poison, and buffer-pool cases and records the rule; remaining cases
   should be handled as a follow-up sweep.
-- #1081 is still not completely closed for every GPU launch/cast and internal
-  shape-expression path. This follow-up covers tensor stride/accessor overflow
-  and more CPU boundary arithmetic; remaining GPU and `DimExpr` cases should be
-  handled with a broader fallibility design.
 - #1084 still has broader public-panic surface in AD structural helpers, FFT,
   and several traced shape-manipulation helpers. This follow-up fixes symbolic
   AD seed and traced linalg representative cases, but does not attempt the
@@ -165,8 +162,11 @@ Additional targeted checks after the final audit follow-up:
 - `cargo test -p tenferro-einsum einsum_three_or_more_repeated_labels_keep_and_mix -- --nocapture`
 - `cargo test -p tenferro-tensor col_major_helpers_cover_scalar_and_higher_rank_shapes -- --nocapture`
 - `cargo test -p tenferro-tensor linear_offset_helpers_check_overflow -- --nocapture`
+- `cargo test -p tenferro-tensor-core compact_ -- --nocapture`
 - `cargo test -p tenferro-cpu cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract -- --nocapture`
 - `cargo test -p tenferro-cpu buffer_pool -- --nocapture`
+- `cargo test -p tenferro-linalg gpu_ --test gpu_linalg_source_contract -- --nocapture`
+- `cargo check -p tenferro-linalg --features cuda`
 - `cargo test -p tenferro-linalg traced_linalg_helpers_reject_symbolic_shapes_without_panicking -- --nocapture`
 - `cargo test -p tenferro-linalg without_panicking -- --nocapture`
 - `cargo test --manifest-path ext/tropical/Cargo.toml traced_einsum_accepts_symbolic_shapes_without_panicking -- --nocapture`
