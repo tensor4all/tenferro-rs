@@ -266,8 +266,9 @@ impl ExtensionOpTrait for LinalgExtensionOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(input_dtypes.len(), self.input_count());
-        assert_eq!(input_shapes.len(), self.input_count());
+        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
+            return Vec::new();
+        }
         match self.op {
             LinalgOp::Cholesky
             | LinalgOp::FullPivLuSolve { .. }

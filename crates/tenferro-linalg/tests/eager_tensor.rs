@@ -41,6 +41,25 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     }
 }
 
+fn well_conditioned_4x4() -> Vec<f64> {
+    let n = 4;
+    let mut data: Vec<f64> = (0..n * n)
+        .map(|i| {
+            let x = (i as u64)
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(10_u64.wrapping_mul(1442695040888963407));
+            ((x % 1024) as f64 - 512.0) / 512.0
+        })
+        .collect();
+    for j in 0..n {
+        for i in 0..n {
+            data[i + n * j] *= 0.05;
+        }
+        data[j + n * j] += 1.0 + j as f64 / n as f64;
+    }
+    data
+}
+
 #[test]
 fn svd_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
@@ -52,6 +71,21 @@ fn svd_returns_correct_shapes() {
     assert_eq!(u.data().shape(), &[2, 2]);
     assert_eq!(s.data().shape(), &[2]);
     assert_eq!(vt.data().shape(), &[2, 2]);
+}
+
+#[test]
+fn svd_singular_value_sum_backward_does_not_panic() {
+    let ctx = ad_test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![4, 4], well_conditioned_4x4()),
+        ctx,
+    );
+    let (_, s, _) = tenferro_linalg::eager_tensor::svd(&a).unwrap();
+    let loss = s.reduce_sum(&[0]).unwrap();
+
+    loss.backward().unwrap();
+
+    assert!(a.grad().is_some());
 }
 
 #[test]

@@ -51,8 +51,7 @@ pub struct BufferPoolStats {
 /// Typed buffer pool keyed by element capacity and separated by scalar type.
 ///
 /// Each supported dtype has an independent best-fit pool. Acquired buffers are
-/// returned without zero-initialization so GEMM callers can avoid redundant
-/// writes when they fully overwrite the output.
+/// initialized to that dtype's zero value before they are returned.
 ///
 /// # Examples
 ///
@@ -104,15 +103,19 @@ impl fmt::Debug for BufferPool {
 /// <f64 as PoolScalar>::pool_release(&mut pool, buf);
 /// ```
 pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
+    /// Zero value used to initialize acquired buffers.
+    fn pool_zero() -> Self;
+
     /// Acquire a buffer with length `len`.
     ///
-    /// The vector length is set without initializing its contents. Callers must
-    /// overwrite every element before any read.
+    /// The returned vector has length `len`, capacity at least `len`, and every
+    /// element initialized to this dtype's zero value.
     ///
     /// # Safety
     ///
-    /// The returned vector may contain uninitialized elements. Reading any
-    /// element before writing it is undefined behavior.
+    /// This method remains unsafe for API compatibility with older tenferro
+    /// releases. Implementations must return fully initialized values, and
+    /// callers do not need to uphold additional memory-safety invariants.
     ///
     /// # Examples
     ///
@@ -202,27 +205,23 @@ fn smallest_pool_candidate<T>(
 }
 
 macro_rules! impl_pool_scalar {
-    ($ty:ty, $field:ident) => {
+    ($ty:ty, $field:ident, $zero:expr) => {
         impl PoolScalar for $ty {
-            #[allow(clippy::uninit_vec)]
+            fn pool_zero() -> Self {
+                $zero
+            }
+
             unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self> {
                 match take_best_fit(&mut pool.$field, len) {
                     Some(mut buf) => {
                         pool.retained_capacity_bytes = pool
                             .retained_capacity_bytes
                             .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
-                        // SAFETY: caller upholds that elements will be written
-                        // before any read. len <= capacity by construction.
-                        unsafe { buf.set_len(len) };
+                        buf.resize(len, Self::pool_zero());
+                        buf.fill(Self::pool_zero());
                         buf
                     }
-                    None => {
-                        let mut buf = Vec::with_capacity(len);
-                        // SAFETY: caller upholds that elements will be written
-                        // before any read. len == capacity here.
-                        unsafe { buf.set_len(len) };
-                        buf
-                    }
+                    None => vec![Self::pool_zero(); len],
                 }
             }
 
@@ -240,13 +239,13 @@ macro_rules! impl_pool_scalar {
     };
 }
 
-impl_pool_scalar!(f64, f64_pool);
-impl_pool_scalar!(f32, f32_pool);
-impl_pool_scalar!(i32, i32_pool);
-impl_pool_scalar!(i64, i64_pool);
-impl_pool_scalar!(bool, bool_pool);
-impl_pool_scalar!(Complex64, c64_pool);
-impl_pool_scalar!(Complex32, c32_pool);
+impl_pool_scalar!(f64, f64_pool, 0.0);
+impl_pool_scalar!(f32, f32_pool, 0.0);
+impl_pool_scalar!(i32, i32_pool, 0);
+impl_pool_scalar!(i64, i64_pool, 0);
+impl_pool_scalar!(bool, bool_pool, false);
+impl_pool_scalar!(Complex64, c64_pool, Complex64::new(0.0, 0.0));
+impl_pool_scalar!(Complex32, c32_pool, Complex32::new(0.0, 0.0));
 
 impl BufferPool {
     /// Create an empty typed buffer pool.
@@ -449,9 +448,7 @@ impl BufferPool {
         }
 
         let mut buf = unsafe { T::pool_acquire(self, cap) };
-        // SAFETY: shrinking the length to zero does not read the buffer. The
-        // pool only stores `PoolScalar` values, which are `Copy`.
-        unsafe { buf.set_len(0) };
+        buf.clear();
         buf
     }
 

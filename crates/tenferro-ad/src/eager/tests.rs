@@ -12,7 +12,7 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_runtime::{ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
+use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
 use tenferro_tensor::{TensorFusion, TensorRead};
@@ -50,6 +50,37 @@ fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>
     )[0];
     builder.set_outputs(vec![loss]);
     Arc::new(builder.build())
+}
+
+#[test]
+fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.backend.lock().unwrap();
+        panic!("poison eager backend lock");
+    }));
+    assert!(poisoned.is_err());
+
+    let err = ctx.synchronize().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::Internal(ref message) if message.contains("backend lock poisoned")
+    ));
+}
+
+#[test]
+fn eager_runtime_register_extension_reports_poisoned_executor_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = ctx.extension_executor.lock().unwrap();
+        panic!("poison extension executor lock");
+    }));
+    assert!(poisoned.is_err());
+
+    let err = ctx.register_extension(|_| Ok(())).unwrap_err();
+
+    assert!(err.to_string().contains("extension executor lock poisoned"));
 }
 
 struct EagerOpProfileOverrideGuard;

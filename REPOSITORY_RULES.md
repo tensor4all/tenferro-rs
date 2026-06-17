@@ -59,10 +59,23 @@ rules from `tensor4all-agent-rules`.
   `i32`, `u32`, pointer offsets, or allocation sizes. Audits should search for
   `shape.iter().product`, `* size_of`, `as usize`, `as i32`, `as u32`,
   `stride *=`, and unchecked `+`/`*` on shape-derived values.
+- Pointer-offset loops over batches, matrix blocks, tensor strides, or packed
+  FFI pointer arrays must check both the per-item stride product and the
+  `batch * stride` offset. Source-contract tests are appropriate for GPU/FFI
+  paths that cannot be exercised on every CI machine.
 - Publicly reachable library paths must not turn invalid user input into
   `panic`, `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or
   debug-only assertions. If an invariant is truly internal, keep it close to the
   proof; otherwise return a typed error.
+- Public cache, runtime, extension, and AD registry locks must not silently
+  ignore poison by reporting empty/default state. If the method can return a
+  `Result`, return a typed poison error; if the legacy API cannot return a
+  `Result`, provide a fallible `try_*` API and make the legacy wrapper fail
+  visibly rather than fabricating success.
+- Public traced/eager helpers must validate rank and axis counts before
+  computing output ranks or indexing shape arrays. Symbolic-shape traced values
+  must not be forced through concrete-shape helpers unless the API explicitly
+  returns a symbolic-shape error.
 - Parallel operation surfaces must keep validation and promotion semantics in
   parity across owned/read, eager/traced, CPU/GPU, and extension wrapper paths.
   A bug in one surface should trigger an audit of the corresponding surfaces

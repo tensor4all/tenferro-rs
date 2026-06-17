@@ -3,14 +3,20 @@
 ## Summary
 
 Fixed a bounded batch of recent `terasakisatoshi` bug reports in one PR. The
-batch focuses on narrow public-boundary defects: unchecked shape arithmetic,
+batch focuses on public-boundary defects: unchecked shape arithmetic,
 validation order, tutorial drift, dtype promotion parity, provider registration
-status propagation, and LAPACK singular-status handling.
+status propagation, LAPACK singular-status handling, panic-safe CPU buffer-pool
+ownership, poisoned-lock handling, traced symbolic/rank validation, and
+selected GPU/CPU batched offset overflow checks.
 
 The PR also records a general repository audit rule for this class of bugs:
 public API boundaries must validate user-derived shape, axis, dtype, padding,
 slice, gather/scatter, linalg, allocation, launch, and FFI inputs before fast
 paths, allocation, backend launch, or unchecked arithmetic.
+
+The follow-up audit added two more durable rules: batch pointer-offset loops
+must check both stride products and `batch * stride`, and public cache/runtime
+locks must not fabricate default state after poison.
 
 ## Context Read
 
@@ -41,15 +47,39 @@ paths, allocation, backend launch, or unchecked arithmetic.
   `?` propagation to make the intended validation obvious.
 - Updated tutorial source and prose together so snippet and tutorial tests
   exercise the documented examples.
+- Made CPU buffer-pool acquisition return initialized zero values instead of
+  stale or uninitialized elements, keeping the existing unsafe signature only
+  for compatibility.
+- Replaced panic-unsafe CPU buffer-pool lending with a Drop-backed loan guard so
+  the pool is restored when a backend session or linalg pool closure panics.
+- Held eager gradient slot locks through accumulation writes to remove the
+  read-compute-write race reported in #1075.
+- Allowed traced binary operations over same-rank symbolic-shape tensors without
+  forcing `concrete_shape()`, and stopped reduction helpers from underflowing
+  output rank when too many axes are supplied.
+- Added early traced linalg rank/axis validation and removed assertion panics
+  from linalg extension metadata inference on bad input counts.
+- Added fallible poison-reporting paths for EagerRuntime locks, global
+  extension AD rule registry lookup/registration, and CUDA extension cache
+  inspection/clear methods.
+- Added checked arithmetic for CPU triangular mask indexing and GPU triangular
+  batched linalg pointer offsets.
+- Added the eager SVD singular-value-sum backward MWE as a regression test; it
+  already passes on this branch, so #1056 is covered without code changes.
 
 ## Deferred
 
-- #1054 and #1056 are not part of this PR.
+- #1054 remains outside this PR until its current reproducer and intended
+  behavior are rechecked.
 - #1073 was not closed; the existing three-way repeated-label trace test for
   `iii` passes, so it needs a sharper reproducer before changing einsum logic.
-- #1071, #1072, #1074, #1075, #1076, and #1080 through #1084 are broader
-  safety, panic, concurrency, or overflow audits and should be split into
-  follow-up PRs.
+- #1082 requires a larger design decision because `DimExpr` and shape inference
+  currently expose infallible arithmetic in several public-facing paths.
+- #1084 is a broad public-panic audit. This PR fixes representative traced,
+  linalg, poison, and buffer-pool cases and records the rule; remaining cases
+  should be handled as a follow-up sweep.
+- #1081 is partially fixed for CPU triangular masks and GPU triangular batched
+  linalg offsets. Tensor stride/accessor API changes need a separate API design.
 
 ## Verification
 
@@ -72,3 +102,21 @@ paths, allocation, backend launch, or unchecked arithmetic.
 - `python3.11 scripts/check-guide-dependency-snippets.py`
 - `cargo check -p tenferro-gpu --features cuda`
 - `cargo check -p tenferro-linalg --features cuda`
+
+Additional targeted checks after the second audit pass:
+
+- `cargo test -p tenferro-cpu acquired_buffers_are_initialized_on_fresh_and_reused_paths`
+- `cargo test -p tenferro-cpu restores_buffers_after_panic`
+- `cargo test -p tenferro-ad eager_runtime_grad_accumulation_keeps_slot_locked_through_update`
+- `cargo test -p tenferro-runtime traced_broadcast_binary_accepts_symbolic_same_rank_input`
+- `cargo test -p tenferro-runtime traced_reduction_with_too_many_axes_does_not_underflow_rank`
+- `cargo test -p tenferro-linalg without_panicking`
+- `cargo test -p tenferro-linalg infer_output_meta_returns_empty_on_input_count_mismatch`
+- `cargo test -p tenferro-ad eager_runtime_synchronize_reports_poisoned_backend_lock`
+- `cargo test -p tenferro-ad eager_runtime_register_extension_reports_poisoned_executor_lock`
+- `cargo test -p tenferro-gpu --features cuda cuda_extension_cache_try_methods_report_poisoned_lock`
+- `cargo test -p tenferro-internal-ops global_extension_rule_registry_does_not_expect_on_poison_contract --features autodiff`
+- `cargo test -p tenferro-linalg --features autodiff,cpu-faer svd_singular_value_sum_backward_does_not_panic -- --nocapture`
+- `cargo test -p tenferro-linalg gpu_triangular_solve_batched_offsets_use_checked_arithmetic`
+- `cargo test -p tenferro-cpu triu`
+- `cargo test -p tenferro-cpu test_triangular_masks_use_checked_index_arithmetic_contract`

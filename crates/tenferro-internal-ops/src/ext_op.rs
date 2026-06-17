@@ -292,6 +292,9 @@ pub enum ExtensionRegistryError {
     /// `"<crate-name>.<op-name>.v<major>"`.
     #[error("family_id {family_id:?} does not match the namespaced format")]
     MalformedFamilyId { family_id: &'static str },
+    /// The global AD rule registry lock was poisoned by another thread.
+    #[error("extension rule registry lock poisoned")]
+    PoisonedRegistry,
 }
 
 #[cfg(feature = "autodiff")]
@@ -576,18 +579,14 @@ pub fn register_extension_rule(
     }
     let mut guard = rule_registry()
         .write()
-        .expect("extension rule registry RwLock poisoned");
+        .map_err(|_| ExtensionRegistryError::PoisonedRegistry)?;
     insert_rule(&mut guard, rule)
 }
 
 /// Look up an extension AD rule by `family_id`.
 #[cfg(feature = "autodiff")]
 pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
-    rule_registry()
-        .read()
-        .expect("extension rule registry RwLock poisoned")
-        .get(family_id)
-        .cloned()
+    rule_registry().read().ok()?.get(family_id).cloned()
 }
 
 /// Emit a registered extension linearization rule.

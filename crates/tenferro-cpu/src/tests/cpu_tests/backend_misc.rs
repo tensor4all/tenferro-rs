@@ -280,6 +280,40 @@ fn test_install_with_pool_preserves_buffers() {
 }
 
 #[test]
+fn test_with_linalg_pool_restores_buffers_after_panic() {
+    let mut backend = CpuBackend::with_threads(1);
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1.0, 2.0],
+    )));
+    assert_eq!(backend.buffer_pool_len(), 1);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_linalg_pool::<()>(|_| panic!("forced linalg panic"));
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(backend.buffer_pool_len(), 1);
+}
+
+#[test]
+fn test_backend_session_restores_buffers_after_panic() {
+    let mut backend = CpuBackend::with_threads(1);
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1.0, 2.0],
+    )));
+    assert_eq!(backend.buffer_pool_len(), 1);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session::<()>(|_| panic!("forced session panic"));
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(backend.buffer_pool_len(), 1);
+}
+
+#[test]
 fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
     let mut backend = CpuBackend::new();
     backend.with_backend_session(|exec| {

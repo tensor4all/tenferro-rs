@@ -22,6 +22,16 @@ use crate::std_tensor_op::StdTensorOp;
 use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim};
 use tenferro_tensor::{DType, Tensor};
 
+#[test]
+fn global_extension_rule_registry_does_not_expect_on_poison_contract() {
+    let source = include_str!("../ext_op.rs");
+
+    assert!(
+        !source.contains("extension rule registry RwLock poisoned"),
+        "global extension rule registry should return errors/None on poison instead of panicking"
+    );
+}
+
 #[derive(Debug)]
 struct CoverageRule {
     family: &'static str,

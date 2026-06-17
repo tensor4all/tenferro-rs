@@ -315,6 +315,14 @@ impl CudaExtensionCacheInner {
 }
 
 impl CudaExtensionCache {
+    fn poisoned_lock_error() -> crate::Error {
+        crate::Error::backend_failure("cuda_extension_cache", "extension cache lock poisoned")
+    }
+
+    fn lock_inner(&self) -> crate::Result<MutexGuard<'_, CudaExtensionCacheInner>> {
+        self.inner.lock().map_err(|_| Self::poisoned_lock_error())
+    }
+
     /// Create an empty extension cache.
     ///
     /// # Examples
@@ -349,49 +357,68 @@ impl CudaExtensionCache {
     /// assert!(CudaExtensionCache::new().is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|inner| inner.entries.is_empty())
-            .unwrap_or(false)
+        self.try_is_empty()
+            .expect("CUDA extension cache lock poisoned")
+    }
+
+    /// Fallibly return whether no extension state has been initialized.
+    pub fn try_is_empty(&self) -> crate::Result<bool> {
+        Ok(self.lock_inner()?.entries.is_empty())
     }
 
     /// Remove every cached CUDA extension state value.
     pub fn clear(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.entries.clear();
-            inner.order.clear();
-            inner.retained_bytes = 0;
-        }
+        self.try_clear()
+            .expect("CUDA extension cache lock poisoned");
+    }
+
+    /// Fallibly remove every cached CUDA extension state value.
+    pub fn try_clear(&self) -> crate::Result<()> {
+        let mut inner = self.lock_inner()?;
+        inner.entries.clear();
+        inner.order.clear();
+        inner.retained_bytes = 0;
+        Ok(())
     }
 
     /// Snapshot the number of retained entries and logical retained bytes.
     pub fn stats(&self) -> CacheStats {
-        self.inner
-            .lock()
-            .map(|inner| CacheStats {
-                entries: inner.entries.len(),
-                retained_bytes: inner.retained_bytes,
-            })
-            .unwrap_or_else(|_| CacheStats::empty())
+        self.try_stats()
+            .expect("CUDA extension cache lock poisoned")
+    }
+
+    /// Fallibly snapshot the number of retained entries and logical retained bytes.
+    pub fn try_stats(&self) -> crate::Result<CacheStats> {
+        let inner = self.lock_inner()?;
+        Ok(CacheStats {
+            entries: inner.entries.len(),
+            retained_bytes: inner.retained_bytes,
+        })
     }
 
     /// Return the configured entry bound.
     pub fn max_entries(&self) -> NonZeroUsize {
-        self.inner
-            .lock()
-            .map(|inner| inner.max_entries)
-            .unwrap_or_else(|_| {
-                NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
-                    .expect("default CUDA extension cache capacity is non-zero")
-            })
+        self.try_max_entries()
+            .expect("CUDA extension cache lock poisoned")
+    }
+
+    /// Fallibly return the configured entry bound.
+    pub fn try_max_entries(&self) -> crate::Result<NonZeroUsize> {
+        Ok(self.lock_inner()?.max_entries)
     }
 
     /// Replace the entry bound and evict oldest entries if needed.
     pub fn set_max_entries(&self, max_entries: NonZeroUsize) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.max_entries = max_entries;
-            inner.evict_to_limit();
-        }
+        self.try_set_max_entries(max_entries)
+            .expect("CUDA extension cache lock poisoned");
+    }
+
+    /// Fallibly replace the entry bound and evict oldest entries if needed.
+    pub fn try_set_max_entries(&self, max_entries: NonZeroUsize) -> crate::Result<()> {
+        let mut inner = self.lock_inner()?;
+        inner.max_entries = max_entries;
+        inner.evict_to_limit();
+        Ok(())
     }
 
     /// Get or lazily initialize one cache entry keyed by `T`.
@@ -413,9 +440,7 @@ impl CudaExtensionCache {
         T: Send + 'static,
     {
         let type_id = TypeId::of::<T>();
-        let mut inner = self.inner.lock().map_err(|_| {
-            crate::Error::backend_failure("cuda_extension_cache", "extension cache lock poisoned")
-        })?;
+        let mut inner = self.lock_inner()?;
         if !inner.entries.contains_key(&type_id) {
             inner.insert(type_id, init()?, std::mem::size_of::<T>());
         }

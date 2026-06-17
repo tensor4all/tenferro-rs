@@ -435,6 +435,25 @@ fn test_tril_triu_extreme_offsets_do_not_overflow() {
 }
 
 #[test]
+fn test_triangular_masks_use_checked_index_arithmetic_contract() {
+    let source = include_str!("../../structural.rs");
+    let section_start = source
+        .find("fn typed_triangular_mask")
+        .expect("typed_triangular_mask should exist");
+    let section = &source[section_start..];
+
+    for needle in [
+        "checked_triangular_extent(op, tensor.shape(), rows, cols)?",
+        "checked_triangular_offset(op, batch_idx, block_size, col, rows, row_idx)?",
+    ] {
+        assert!(
+            section.contains(needle),
+            "triangular masks should use checked index arithmetic: missing {needle}"
+        );
+    }
+}
+
+#[test]
 fn test_neg_and_conj() {
     let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, -7.0]));
     let n = neg(&t).unwrap();

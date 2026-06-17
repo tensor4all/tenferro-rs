@@ -115,6 +115,9 @@ pub(crate) fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTen
     if a.shape_hint == b.shape_hint && a.rank == b.rank {
         return (a.clone(), b.clone());
     }
+    if (try_concrete_shape(a).is_none() || try_concrete_shape(b).is_none()) && a.rank == b.rank {
+        return (a.clone(), b.clone());
+    }
     let a_shape = concrete_shape(a);
     let b_shape = concrete_shape(b);
     let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|_| {
@@ -1028,7 +1031,7 @@ impl TracedTensor {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank - axes.len(),
+            self.rank.saturating_sub(axes.len()),
             out_shape_hint,
         )
     }
@@ -1057,7 +1060,7 @@ impl TracedTensor {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank - axes.len(),
+            self.rank.saturating_sub(axes.len()),
             out_shape_hint,
         )
     }
@@ -1086,7 +1089,7 @@ impl TracedTensor {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank - axes.len(),
+            self.rank.saturating_sub(axes.len()),
             out_shape_hint,
         )
     }
@@ -1112,7 +1115,7 @@ impl TracedTensor {
                 axes: axes.to_vec(),
             },
             self,
-            self.rank - axes.len(),
+            self.rank.saturating_sub(axes.len()),
             out_shape_hint,
         )
     }

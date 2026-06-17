@@ -76,6 +76,22 @@ fn cuda_extension_cache_reports_stats_and_clear() {
 }
 
 #[test]
+fn cuda_extension_cache_try_methods_report_poisoned_lock() {
+    let cache = CudaExtensionCache::new();
+    let poisoned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let _guard = cache.inner.lock().unwrap();
+        panic!("poison cuda extension cache lock");
+    }));
+    assert!(poisoned.is_err());
+
+    assert!(cache.try_is_empty().is_err());
+    assert!(cache.try_stats().is_err());
+    assert!(cache.try_clear().is_err());
+    assert!(cache.try_max_entries().is_err());
+    assert!(cache.get_or_try_init::<usize>(|| Ok(17)).is_err());
+}
+
+#[test]
 fn cuda_extension_cache_has_configurable_entry_bound() {
     let cache = CudaExtensionCache::with_max_entries(NonZeroUsize::new(1).unwrap());
     let mut usize_initializers = 0usize;
