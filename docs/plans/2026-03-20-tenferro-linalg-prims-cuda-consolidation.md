@@ -14,7 +14,7 @@
 
 **Current State:** The protocol split is only partial today. `TensorLinalgPrims` and `LinalgCapabilityOp` already live in `tenferro-linalg-prims`, but `TensorLinalgContextFor`, the backend marker types, the tensor-level CPU implementation, and the internal slice-level `LinalgBackend`/provider modules still live in `tenferro-linalg`. This plan finishes that split instead of redoing it from scratch.
 
-**Public API guardrail:** The public `tenferro_linalg::svd(&mut ctx, &tensor, options)` signature should stay unchanged while `tenferro-linalg` becomes CPU/GPU-generic. Backend ownership moves, but the user-facing API does not. The backend/kernel contract remains `TensorLinalgPrims::thin_svd(ctx, a) -> SvdTensorResult<T>`.
+**Public API guardrail:** The public `tenferro_linalg::traced_tensor::svd(&mut ctx, &tensor, options)` signature should stay unchanged while `tenferro-linalg` becomes CPU/GPU-generic. Backend ownership moves, but the user-facing API does not. The backend/kernel contract remains `TensorLinalgPrims::thin_svd(ctx, a) -> SvdTensorResult<T>`.
 
 **SVD layering guardrail:** `SvdOptions` stays in `tenferro-linalg` as public/composite-layer policy, not in `tenferro-linalg-prims`. The `options == None` path is already close to backend-generic because it can return the backend-produced tensors directly. The `options != None` path is not generic today because it reads CPU slices to truncate/repack outputs. CUDA support must not paper over that with GPU→CPU fallback.
 

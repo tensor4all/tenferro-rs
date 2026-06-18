@@ -1,7 +1,7 @@
 //! Traced tensor linear algebra operations.
 //!
 //! This module is the canonical traced tensor namespace for the linalg
-//! extension crate. Root-level re-exports remain available for compatibility.
+//! extension crate.
 
 pub use crate::traced::{
     cholesky, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu, full_piv_lu_solve,

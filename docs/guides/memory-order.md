@@ -42,29 +42,30 @@ assert_eq!(
 );
 ```
 
-## Importing Row-Major Data
+## Importing External Data
 
 PyTorch, NumPy, JAX, and many C-style examples present flat buffers in
-row-major order. Use `from_vec_row_major` at the boundary when the input buffer
-is written row by row.
+row-major order. tenferro does not keep a row-major compatibility constructor:
+reorder those buffers explicitly at the boundary, then construct tensors from
+column-major data.
 
 ```rust
 use tenferro_runtime::Tensor;
 
-let tensor = Tensor::from_vec_row_major(
+let tensor = Tensor::from_vec_col_major(
     vec![2, 3],
-    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+    vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+)?;
 
 assert_eq!(
     tensor.as_slice::<f64>().unwrap(),
     &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
 );
+# Ok::<(), tenferro_runtime::Error>(())
 ```
 
-Use `from_vec_col_major` when the buffer already follows tenferro's physical
-order. Use `from_vec_row_major` when the buffer follows the order shown in most
-PyTorch, NumPy, and JAX snippets.
+The constructor name is intentionally explicit: a flat buffer passed to
+`from_vec_col_major` is interpreted as tenferro's physical storage order.
 
 ## Batch Axes
 
@@ -85,7 +86,7 @@ Owned export returns the column-major host buffer:
 use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-let (shape, data) = tensor.try_into_vec_col_major::<f64>().unwrap();
+let (shape, data) = tensor.into_vec_col_major::<f64>().unwrap();
 
 assert_eq!(shape, vec![2, 2]);
 assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);

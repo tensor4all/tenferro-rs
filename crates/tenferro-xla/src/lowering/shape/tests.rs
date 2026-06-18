@@ -4,7 +4,7 @@ use tenferro_runtime::{GraphCompiler, TracedTensor};
 
 #[test]
 fn missing_output_shape_metadata_maps_to_invalid_program() {
-    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg()).unwrap();
     let inst = program.lowering_view().instructions().next().unwrap();

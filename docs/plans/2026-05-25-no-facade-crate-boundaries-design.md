@@ -278,7 +278,7 @@ Recommended user-facing imports:
 ```rust
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_tensor::{CpuBackend, Tensor};
-use tenferro_linalg::solve;
+use tenferro_linalg::traced_tensor::solve;
 ```
 
 ### `tenferro-gpu` Instead Of Vendor-Specific Crates
@@ -289,9 +289,9 @@ crate keeps the first split simple while preserving room for vendor-specific
 features or modules:
 
 ```rust
-use tenferro_gpu::CubeclBackend;
+use tenferro_gpu::CudaBackend;
 
-let backend = CubeclBackend::cuda(0)?;
+let backend = CudaBackend::cuda(0)?;
 let mut executor = tenferro_runtime::GraphExecutor::new(backend);
 ```
 
@@ -533,12 +533,12 @@ such as `tenferro/autodiff`, `tenferro/cuda`, or
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-tensor/cpu-faer"]
 cpu-blas = ["tenferro-tensor/cpu-blas"]
-gpu = []
 cuda = []
 rocm = []
 ```
 
-Primal extension crates may expose empty `gpu`, `cuda`, or `rocm` features
+Primal extension crates may expose empty concrete backend features such as `cuda`
+or `rocm`
 only if they gate their own GPU-specific primal code. They must not forward
 those features into `tenferro-tensor` or `tenferro-runtime`. GPU execution is
 selected by using `tenferro-gpu` as the backend crate.
@@ -812,10 +812,10 @@ should be vendor-neutral and should not require CubeCL dependencies.
 The orphan-rule-safe pattern for GPU is:
 
 - `TensorBackend` and backend-facing traits live in `tenferro-tensor`.
-- `CubeclBackend` and any GPU buffer types that require CubeCL/vendor
+- `CudaBackend` and any GPU buffer types that require CubeCL/vendor
   dependencies live in `tenferro-gpu`.
 - `tenferro-gpu` implements `tenferro_tensor::TensorBackend` for its local
-  `CubeclBackend` type. This is legal because the implementing type is local to
+  `CudaBackend` type. This is legal because the implementing type is local to
   `tenferro-gpu`.
 - Third-party backend crates follow the same pattern: define their backend type
   locally and implement the public traits from `tenferro-tensor`.
@@ -841,7 +841,7 @@ it. The public user-facing boundary should still be only `tenferro-gpu`.
 Recommended `tenferro-gpu` modules:
 
 ```text
-tenferro_gpu::backend       CubeclBackend and TensorBackend impl
+tenferro_gpu::backend       CudaBackend and TensorBackend impl
 tenferro_gpu::memory        upload_tensor, download_tensor, device buffer store
 tenferro_gpu::device        availability and DeviceId validation
 tenferro_gpu::cuda          CUDA-specific runtime and FFI, behind feature
@@ -853,19 +853,19 @@ tenferro_gpu::kernels       GPU kernels and fusion codegen
 Recommended public API:
 
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{DeviceId, DeviceKind, GpuBackendKind};
 
 let device = DeviceId {
     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
     ordinal: 0,
 };
-let mut backend = CubeclBackend::new(device)?;
+let mut backend = CudaBackend::new(device)?;
 let gpu_x = upload_tensor(&mut backend, &cpu_x)?;
 let cpu_x = download_tensor(&mut backend, &gpu_x)?;
 ```
 
-`CubeclBackend::cuda(0)` can exist as a convenience constructor, but the
+`CudaBackend::cuda(0)` can exist as a convenience constructor, but the
 canonical constructor should accept the vendor-neutral `DeviceId`. That keeps
 runtime construction aligned with tensor placement metadata while still
 isolating driver validation in `tenferro-gpu`.
@@ -899,10 +899,10 @@ let out = executor.run(&program)?;
 GPU usage is also explicit:
 
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_runtime::GraphExecutor;
 
-let backend = CubeclBackend::cuda(0)?;
+let backend = CudaBackend::cuda(0)?;
 let mut executor = GraphExecutor::new(backend);
 ```
 

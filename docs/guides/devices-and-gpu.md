@@ -70,7 +70,7 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorElementwise};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,8 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut backend = CudaBackend::new(0)?;
-    let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+    let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let gpu_a = upload_tensor(backend.runtime(), &cpu_a)?;
     let gpu_b = upload_tensor(backend.runtime(), &cpu_b)?;

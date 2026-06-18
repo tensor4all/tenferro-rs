@@ -15,7 +15,7 @@ struct DefaultReadBackend {
 }
 
 fn marker() -> Tensor {
-    Tensor::from_vec_col_major(vec![1], vec![42.0_f64])
+    Tensor::from_vec_col_major(vec![1], vec![42.0_f64]).unwrap()
 }
 
 impl TensorElementwise for DefaultReadBackend {
@@ -318,10 +318,10 @@ impl TensorBackend for DefaultReadBackend {}
 
 #[test]
 fn default_read_methods_delegate_owned_tensors_and_reject_views() {
-    let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
-    let b = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-    let pred = Tensor::from_vec_col_major(vec![1], vec![true]);
-    let view_source = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]);
+    let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let pred = Tensor::from_vec_col_major(vec![1], vec![true]).unwrap();
+    let view_source = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]).unwrap();
     let mut backend = DefaultReadBackend::default();
 
     backend
@@ -465,7 +465,7 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
 
 #[test]
 fn tensor_index_select_builds_gather_config_and_validates_inputs() {
-    let input = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
+    let input = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
     let mut backend = DefaultReadBackend::default();
 
     input.index_select(-1, &[2, 0], &mut backend).unwrap();
@@ -492,8 +492,8 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
 
 #[test]
 fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
-    let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+    let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let mut backend = DefaultReadBackend::default();
 
     Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
@@ -505,7 +505,7 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
     let empty_err = Tensor::stack(&empty, 0, &mut backend).unwrap_err();
     assert!(empty_err.to_string().contains("at least one input"));
 
-    let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]);
+    let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
     let shape_err = Tensor::stack(&[&a, &c], 0, &mut backend).unwrap_err();
     assert!(shape_err.to_string().contains("shape mismatch"));
 

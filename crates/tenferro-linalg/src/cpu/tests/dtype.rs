@@ -82,14 +82,14 @@ fn diag_c32_from_real(values: &[f32]) -> Vec<Complex32> {
 
 fn f32_data(tensor: &Tensor) -> &[f32] {
     match tensor {
-        Tensor::F32(inner) => inner.host_data(),
+        Tensor::F32(inner) => inner.host_data().unwrap(),
         other => panic!("expected F32 tensor, got {:?}", other.dtype()),
     }
 }
 
 fn c32_data(tensor: &Tensor) -> &[Complex32] {
     match tensor {
-        Tensor::C32(inner) => inner.host_data(),
+        Tensor::C32(inner) => inner.host_data().unwrap(),
         other => panic!("expected C32 tensor, got {:?}", other.dtype()),
     }
 }
@@ -128,10 +128,9 @@ fn cpu_linalg_accepts_f32_happy_paths() {
     let lower = vec![2.0, 0.5, 0.0, 1.5];
     let spd = matmul_f32(&lower, &transpose_f32(&lower, 2, 2), 2, 2, 2);
     let chol = backend
-        .cholesky(&Tensor::F32(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            spd.clone(),
-        )))
+        .cholesky(&Tensor::F32(
+            TypedTensor::from_vec_col_major(vec![2, 2], spd.clone()).unwrap(),
+        ))
         .unwrap();
     let chol_recon = matmul_f32(
         f32_data(&chol),
@@ -143,10 +142,8 @@ fn cpu_linalg_accepts_f32_happy_paths() {
     assert_f32_slice_close(&chol_recon, &spd, tol);
 
     let rectangular = vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0];
-    let input = Tensor::F32(TypedTensor::from_vec_col_major(
-        vec![3, 2],
-        rectangular.clone(),
-    ));
+    let input =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![3, 2], rectangular.clone()).unwrap());
     let qr = backend.qr(&input).unwrap();
     assert_eq!(qr[0].shape(), &[3, 2]);
     assert_eq!(qr[1].shape(), &[2, 2]);
@@ -174,10 +171,9 @@ fn cpu_linalg_accepts_f32_happy_paths() {
 
     let symmetric = vec![4.0, 1.0, 1.0, 3.0];
     let eigh = backend
-        .eigh(&Tensor::F32(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            symmetric.clone(),
-        )))
+        .eigh(&Tensor::F32(
+            TypedTensor::from_vec_col_major(vec![2, 2], symmetric.clone()).unwrap(),
+        ))
         .unwrap();
     assert_f32_slice_close(
         &matmul_f32(
@@ -192,22 +188,18 @@ fn cpu_linalg_accepts_f32_happy_paths() {
     );
 
     let eig = backend
-        .eig(&Tensor::F32(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            vec![1.0, 0.0, 0.0, 3.0],
-        )))
+        .eig(&Tensor::F32(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]).unwrap(),
+        ))
         .unwrap();
     assert_eq!(eig[0].dtype(), DType::C32);
     assert_eq!(eig[1].dtype(), DType::C32);
 
-    let a = Tensor::F32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![3.0, 1.0, 1.0, 2.0],
-    ));
-    let b = Tensor::F32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![5.0, 1.0, -2.0, 4.0],
-    ));
+    let a =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]).unwrap());
+    let b = Tensor::F32(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 1.0, -2.0, 4.0]).unwrap(),
+    );
     let x = backend.solve(&a, &b).unwrap();
     assert_f32_slice_close(
         &matmul_f32(f32_data(&a), f32_data(&x), 2, 2, 2),
@@ -215,11 +207,9 @@ fn cpu_linalg_accepts_f32_happy_paths() {
         tol,
     );
 
-    let triangular = Tensor::F32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![2.0, 1.0, 0.0, 3.0],
-    ));
-    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 7.0]));
+    let triangular =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap());
+    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 7.0]).unwrap());
     let y = backend
         .triangular_solve(&triangular, &rhs, true, true, false, false)
         .unwrap();
@@ -229,10 +219,8 @@ fn cpu_linalg_accepts_f32_happy_paths() {
         tol,
     );
 
-    let lu_input = Tensor::F32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![0.0, 1.0, 1.0, 0.0],
-    ));
+    let lu_input =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]).unwrap());
     let lu = backend.lu(&lu_input).unwrap();
     assert_eq!(lu.len(), 4);
     assert_eq!(lu[3].shape(), &[] as &[usize]);
@@ -260,10 +248,9 @@ fn cpu_linalg_accepts_c32_happy_paths() {
     ];
     let spd = matmul_c32(&lower, &conjugate_transpose_c32(&lower, 2, 2), 2, 2, 2);
     let chol = backend
-        .cholesky(&Tensor::C32(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            spd.clone(),
-        )))
+        .cholesky(&Tensor::C32(
+            TypedTensor::from_vec_col_major(vec![2, 2], spd.clone()).unwrap(),
+        ))
         .unwrap();
     assert_c32_slice_close(
         &matmul_c32(
@@ -285,10 +272,8 @@ fn cpu_linalg_accepts_c32_happy_paths() {
         Complex32::new(-0.25, 1.5),
         Complex32::new(3.0, 0.75),
     ];
-    let input = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![3, 2],
-        rectangular.clone(),
-    ));
+    let input =
+        Tensor::C32(TypedTensor::from_vec_col_major(vec![3, 2], rectangular.clone()).unwrap());
     let qr = backend.qr(&input).unwrap();
     assert_c32_slice_close(
         &matmul_c32(c32_data(&qr[0]), c32_data(&qr[1]), 3, 2, 2),
@@ -319,10 +304,9 @@ fn cpu_linalg_accepts_c32_happy_paths() {
     );
 
     let eigh = backend
-        .eigh(&Tensor::C32(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            spd.clone(),
-        )))
+        .eigh(&Tensor::C32(
+            TypedTensor::from_vec_col_major(vec![2, 2], spd.clone()).unwrap(),
+        ))
         .unwrap();
     assert_eq!(eigh[0].dtype(), DType::F32);
     assert_eq!(eigh[1].dtype(), DType::C32);
@@ -344,32 +328,41 @@ fn cpu_linalg_accepts_c32_happy_paths() {
         2.0e-3,
     );
 
-    let eig_input = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![
-            Complex32::new(0.0, 0.0),
-            Complex32::new(1.0, 0.0),
-            Complex32::new(-1.0, 0.0),
-            Complex32::new(0.0, 0.0),
-        ],
-    ));
+    let eig_input = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex32::new(0.0, 0.0),
+                Complex32::new(1.0, 0.0),
+                Complex32::new(-1.0, 0.0),
+                Complex32::new(0.0, 0.0),
+            ],
+        )
+        .unwrap(),
+    );
     let eig = backend.eig(&eig_input).unwrap();
     assert_eq!(eig[0].dtype(), DType::C32);
     assert_eq!(eig[1].dtype(), DType::C32);
 
-    let a = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![
-            Complex32::new(3.0, 0.0),
-            Complex32::new(1.0, -1.0),
-            Complex32::new(1.0, 0.5),
-            Complex32::new(2.0, 0.0),
-        ],
-    ));
-    let b = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![2, 1],
-        vec![Complex32::new(5.0, 1.0), Complex32::new(1.0, -2.0)],
-    ));
+    let a = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex32::new(3.0, 0.0),
+                Complex32::new(1.0, -1.0),
+                Complex32::new(1.0, 0.5),
+                Complex32::new(2.0, 0.0),
+            ],
+        )
+        .unwrap(),
+    );
+    let b = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![2, 1],
+            vec![Complex32::new(5.0, 1.0), Complex32::new(1.0, -2.0)],
+        )
+        .unwrap(),
+    );
     let x = backend.solve(&a, &b).unwrap();
     assert_c32_slice_close(
         &matmul_c32(c32_data(&a), c32_data(&x), 2, 2, 1),
@@ -377,15 +370,18 @@ fn cpu_linalg_accepts_c32_happy_paths() {
         2.0e-3,
     );
 
-    let triangular = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![
-            Complex32::new(2.0, 0.0),
-            Complex32::new(1.0, -0.5),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(3.0, 0.0),
-        ],
-    ));
+    let triangular = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex32::new(2.0, 0.0),
+                Complex32::new(1.0, -0.5),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(3.0, 0.0),
+            ],
+        )
+        .unwrap(),
+    );
     let y = backend
         .triangular_solve(&triangular, &b, true, true, false, false)
         .unwrap();

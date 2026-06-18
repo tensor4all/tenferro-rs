@@ -228,22 +228,22 @@ let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3
 
 let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
 let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
-x.clear_grad();
-assert!(x.grad().is_none());
+x.clear_grad().unwrap();
+assert!(x.grad().unwrap().is_none());
 
 let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
-ctx.clear_grads();
-assert!(x.grad().is_none());
-assert!(y.grad().is_none());
+ctx.clear_grads().unwrap();
+assert!(x.grad().unwrap().is_none());
+assert!(y.grad().unwrap().is_none());
 ```
 
 `matmul` participates in the same eager reverse-mode workflow:
@@ -269,7 +269,7 @@ let loss = y.mul(&y).unwrap().reduce_sum(&[0, 1]).unwrap();
 assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[1685.0]);
 
 loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
 ```
 
 ## When To Use Each Immediate Layer

@@ -40,7 +40,7 @@ an extension crate.
 |---|---|---|---|---|
 | `zeros` / `ones` | ✅ | · | (`constant_from`) | · |
 | `full` | · | · | · | · |
-| `from_vec_row_major` / `from_vec_col_major` | ✅ | ✅ | (`constant_from`/`variable_from`) | ✅ |
+| `from_vec_col_major` | ✅ | ✅ | (`constant_from`/`variable_from`) | ✅ |
 | `arange` | · | · | — | — |
 | `eye` / `identity` | · | · | · | · |
 

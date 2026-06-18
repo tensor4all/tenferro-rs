@@ -352,10 +352,7 @@ where
             .map_err(|err| crate::Error::backend_failure(label, err))?;
     }
 
-    Ok(TypedTensor::from_vec_col_major(
-        output_shape,
-        current.into_data(),
-    ))
+    TypedTensor::from_vec_col_major(output_shape, current.into_data())
 }
 
 pub(crate) fn typed_reduce_view<T, M, R, TR>(
@@ -400,10 +397,7 @@ where
             .map_err(|err| crate::Error::backend_failure(label, err))?;
     }
 
-    Ok(TypedTensor::from_vec_col_major(
-        output_shape,
-        current.into_data(),
-    ))
+    TypedTensor::from_vec_col_major(output_shape, current.into_data())
 }
 
 fn view_to_dyn_contiguous<T, R>(input: &TypedTensorView<'_, T, R>) -> crate::Result<TypedTensor<T>>
@@ -412,8 +406,8 @@ where
     R: TensorRank,
 {
     let compact = input.to_contiguous()?;
-    let (shape, data) = compact.try_into_vec_col_major()?;
-    Ok(TypedTensor::from_vec_col_major(shape, data))
+    let (shape, data) = compact.into_vec_col_major()?;
+    TypedTensor::from_vec_col_major(shape, data)
 }
 
 fn view_to_contiguous_tensor(input: TensorView<'_>) -> crate::Result<Tensor> {

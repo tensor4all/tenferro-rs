@@ -155,7 +155,7 @@ where
     // SAFETY: every pooled element is initialized with `fill` before returning.
     let mut data = unsafe { T::pool_acquire(buffers, len) };
     data.fill(fill);
-    Ok(TypedTensor::from_vec_col_major(shape, data))
+    TypedTensor::from_vec_col_major(shape, data)
 }
 
 fn clone_host_tensor_from_pool<T>(
@@ -173,11 +173,11 @@ where
     // SAFETY: copy_from_slice initializes every pooled element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
     data.copy_from_slice(input);
-    Ok(TypedTensor::from_buffer_col_major(
+    TypedTensor::from_buffer_col_major(
         tensor.shape().to_vec(),
         crate::Buffer::Host(data),
         tensor.placement().clone(),
-    ))
+    )
 }
 
 pub fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
@@ -442,11 +442,11 @@ pub fn typed_reshape<T: Clone + 'static>(
             rhs: shape.to_vec(),
         });
     }
-    Ok(TypedTensor::from_buffer_col_major(
+    TypedTensor::from_buffer_col_major(
         shape.to_vec(),
         tensor.buffer().clone(),
         tensor.placement().clone(),
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -595,9 +595,7 @@ pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone>(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| {
-        Ok(TypedTensor::zeros(shape))
-    })
+    typed_embed_diagonal_impl(tensor, axis_a, axis_b, TypedTensor::zeros)
 }
 
 pub(crate) fn typed_embed_diagonal_with_pool<T>(
@@ -666,7 +664,7 @@ where
                 src_axis += 1;
             }
         }
-        *out.get_mut(&out_idx) = value;
+        *out.get_mut(&out_idx)? = value;
     }
     Ok(out)
 }
@@ -732,7 +730,7 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
 
     let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
     let mut out = tensor.clone();
-    let data = out.host_data_mut();
+    let data = out.host_data_mut()?;
 
     // Intentionally sequential: triangular masks are index-dependent in the
     // innermost matrix plane and remain a dedicated CPU-kernel exception.
@@ -786,7 +784,7 @@ where
 
     let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
     let mut out = clone_host_tensor_from_pool(buffers, op, tensor)?;
-    let data = out.host_data_mut();
+    let data = out.host_data_mut()?;
 
     // Intentionally sequential: triangular masks are index-dependent in the
     // innermost matrix plane and remain a dedicated CPU-kernel exception.

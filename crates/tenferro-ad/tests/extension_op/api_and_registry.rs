@@ -2,21 +2,20 @@ use super::*;
 
 #[test]
 fn apply_rejects_wrong_input_count() {
-    let panic = catch_unwind(AssertUnwindSafe(|| {
-        let _ = apply(Arc::new(TestScaleBy2), &[]);
-    }));
+    let err = apply(Arc::new(TestScaleBy2), &[]).unwrap_err();
 
-    assert!(panic.is_err());
+    assert!(err.to_string().contains("expects 1 inputs, got 0"));
 }
 
 #[test]
 fn apply_rejects_mismatched_output_metadata_count() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let panic = catch_unwind(AssertUnwindSafe(|| {
-        let _ = apply(Arc::new(TestBadOutputCount), &[&x]);
-    }));
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let err = apply(Arc::new(TestBadOutputCount), &[&x]).unwrap_err();
 
-    assert!(panic.is_err());
+    let message = err.to_string();
+    assert!(message.contains("tenferro-tests.bad_output_count.v1"));
+    assert!(message.contains("produced 1 output metadata entries"));
+    assert!(message.contains("declared 2 outputs"));
 }
 
 #[test]
@@ -32,7 +31,10 @@ fn apply_eager_rejects_empty_input_list() {
 #[test]
 fn apply_eager_rejects_wrong_input_count() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        ctx,
+    );
 
     let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
         Ok(_) => panic!("wrong eager extension input count unexpectedly succeeded"),
@@ -46,10 +48,14 @@ fn apply_eager_rejects_wrong_input_count() {
 fn apply_eager_rejects_cross_context_inputs() {
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let lhs =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
-    let rhs =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
+    let lhs = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        lhs_ctx,
+    );
+    let rhs = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        rhs_ctx,
+    );
 
     let err = match apply_eager(Arc::new(TestSwap), &[&lhs, &rhs]) {
         Ok(_) => panic!("cross-context eager extension inputs unexpectedly succeeded"),
@@ -65,7 +71,10 @@ fn apply_eager_rejects_cross_context_inputs() {
 #[test]
 fn apply_eager_reports_missing_extension_runtime() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        ctx,
+    );
 
     let err = match apply_eager(Arc::new(TestScaleBy2), &[&x]) {
         Ok(_) => panic!("unregistered eager extension runtime unexpectedly succeeded"),
@@ -85,7 +94,7 @@ fn apply_eager_untracked_forward_returns_untracked_result() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx,
     );
 
@@ -102,8 +111,9 @@ fn apply_eager_untracked_forward_returns_untracked_result() {
 
 #[test]
 fn graph_executor_reports_missing_extension_runtime() {
-    let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let y = apply(Arc::new(TestScaleBy2), &[&x])
+        .unwrap()
         .into_iter()
         .next()
         .unwrap();
@@ -126,7 +136,10 @@ fn graph_executor_reports_missing_extension_runtime() {
 fn apply_eager_rejects_mismatched_output_count() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     register_test_eager_runtime(&ctx, "tenferro-tests.bad_output_count.v1");
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        ctx,
+    );
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {
         Ok(_) => panic!("bad eager extension output count unexpectedly succeeded"),
@@ -144,20 +157,20 @@ fn apply_eager_rejects_mismatched_output_count() {
 
 #[test]
 fn scale_by_2_grad_through_symbolic_placeholder() {
-    ensure_scale_by_2_registered();
-
     // Same loss but with an input_symbolic_shape placeholder so the AD
     // path exercises the deferred zero-tangent policy (spec
     // Section 10).
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
+        .unwrap()
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]);
+    let loss = scaled.reduce_sum(&[0]).unwrap();
 
-    let g = loss.grad(&x).expect("grad build");
-    let bound = Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
+    let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
+    let bound =
+        Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g
@@ -170,11 +183,9 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
 
 #[test]
 fn swap_forward_roundtrip() {
-    ensure_swap_registered();
-
-    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let b = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]);
-    let outputs = apply(Arc::new(TestSwap), &[&a, &b]);
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]).unwrap();
+    let outputs = apply(Arc::new(TestSwap), &[&a, &b]).unwrap();
     assert_eq!(outputs.len(), 2);
     let mut iter = outputs.into_iter();
     let out_first = iter.next().unwrap();
@@ -192,22 +203,21 @@ fn swap_forward_roundtrip() {
 
 #[test]
 fn swap_grad_routes_cotangents_across_inputs() {
-    ensure_swap_registered();
-
     // loss = sum(out0 + out1)   where (out0, out1) = swap(a, b)
     //       = sum(b + a)
     // => dloss/da = ones_like(a),  dloss/db = ones_like(b)
-    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
-    let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    let swapped = apply(Arc::new(TestSwap), &[&a, &b]).unwrap();
     let mut iter = swapped.into_iter();
     let out0 = iter.next().unwrap();
     let out1 = iter.next().unwrap();
-    let combined = &out0 + &out1;
-    let loss = combined.reduce_sum(&[0]);
+    let combined = (&out0 + &out1).unwrap();
+    let loss = combined.reduce_sum(&[0]).unwrap();
 
-    let grad_a = loss.grad(&a).expect("grad a");
-    let grad_b = loss.grad(&b).expect("grad b");
+    let ad = swap_ad_context();
+    let grad_a = ad.grad(&loss, &a).expect("grad a");
+    let grad_b = ad.grad(&loss, &b).expect("grad b");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ga = grad_a.run_with(&mut engine).unwrap().clone();
@@ -219,25 +229,25 @@ fn swap_grad_routes_cotangents_across_inputs() {
 
 #[test]
 fn swap_grad_routes_only_through_active_output() {
-    ensure_swap_registered();
-
     // loss = sum(out1)  where (out0, out1) = swap(a, b)  (so out1 = a)
     // => dloss/da = ones_like(a)
-    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
-    let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    let swapped = apply(Arc::new(TestSwap), &[&a, &b]).unwrap();
     let mut iter = swapped.into_iter();
     let _out0 = iter.next().unwrap();
     let out1 = iter.next().unwrap();
-    let loss = out1.reduce_sum(&[0]);
+    let loss = out1.reduce_sum(&[0]).unwrap();
 
-    let grad_a = loss.grad(&a).expect("grad a");
+    let ad = swap_ad_context();
+    let grad_a = ad.grad(&loss, &a).expect("grad a");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ga = grad_a.run_with(&mut engine).unwrap().clone();
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);
 
-    // grad wrt b: sum(out1) does not depend on b; grad_optional returns None.
-    let maybe = loss.grad_optional(&b).expect("grad_optional b");
+    // Even inactive extension paths need the owned extension rule set to
+    // linearize the graph before transpose can prove the tangent is absent.
+    let maybe = ad.grad_optional(&loss, &b).expect("grad_optional b");
     assert!(
         maybe.is_none(),
         "expected sum(swap(a,b)[1]) to have no gradient wrt b"
@@ -270,8 +280,9 @@ fn extension_carrier_hash_and_eq_are_stable() {
 fn duplicate_rule_registration_is_rejected() {
     use tenferro_ad::extension::ExtensionRegistryError;
 
-    ensure_scale_by_2_registered();
-    let err = register_extension_rule(Arc::new(TestScaleBy2Rule))
+    let mut rules = scale_by_2_rules();
+    let err = rules
+        .register_rule(Arc::new(TestScaleBy2Rule))
         .expect_err("second rule registration must error");
     assert!(matches!(
         err,
@@ -287,7 +298,7 @@ fn malformed_family_id_is_rejected() {
 
     #[derive(Debug)]
     struct BadRule;
-    impl ExtensionAdRuleTrait for BadRule {
+    impl ExtensionAdRule for BadRule {
         fn family_id(&self) -> &'static str {
             "no-version-suffix"
         }
@@ -315,8 +326,9 @@ fn malformed_family_id_is_rejected() {
         }
     }
 
-    let err =
-        register_extension_rule(Arc::new(BadRule)).expect_err("malformed family_id must error");
+    let err = ExtensionRuleSet::new()
+        .with_rule(Arc::new(BadRule))
+        .expect_err("malformed family_id must error");
     assert!(matches!(
         err,
         ExtensionRegistryError::MalformedFamilyId { .. }

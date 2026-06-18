@@ -6,7 +6,7 @@ use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, ScatterConfig};
 fn test_add_preserves_f32() {
     let op = StdTensorOp::Add;
     assert_eq!(
-        infer_output_dtype(&op, &[DType::F32, DType::F32]),
+        infer_output_dtype(&op, &[DType::F32, DType::F32]).unwrap(),
         DType::F32
     );
 }
@@ -15,7 +15,7 @@ fn test_add_preserves_f32() {
 fn test_add_preserves_c32() {
     let op = StdTensorOp::Add;
     assert_eq!(
-        infer_output_dtype(&op, &[DType::C32, DType::C32]),
+        infer_output_dtype(&op, &[DType::C32, DType::C32]).unwrap(),
         DType::C32
     );
 }
@@ -26,7 +26,7 @@ fn test_convert_uses_target_dtype() {
         from: DType::F32,
         to: DType::F64,
     };
-    assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::F64);
+    assert_eq!(infer_output_dtype(&op, &[DType::F32]).unwrap(), DType::F64);
 }
 
 #[test]
@@ -35,17 +35,17 @@ fn test_constant_uses_variant_dtype() {
         dtype: DType::C64,
         bytes: vec![],
     };
-    assert_eq!(infer_output_dtype(&op, &[]), DType::C64);
+    assert_eq!(infer_output_dtype(&op, &[]).unwrap(), DType::C64);
 }
 
 #[test]
 fn test_abs_complex_outputs_real_dtype() {
     assert_eq!(
-        infer_output_dtype(&StdTensorOp::Abs, &[DType::C32]),
+        infer_output_dtype(&StdTensorOp::Abs, &[DType::C32]).unwrap(),
         DType::F32
     );
     assert_eq!(
-        infer_output_dtype(&StdTensorOp::Abs, &[DType::C64]),
+        infer_output_dtype(&StdTensorOp::Abs, &[DType::C64]).unwrap(),
         DType::F64
     );
 }
@@ -53,7 +53,7 @@ fn test_abs_complex_outputs_real_dtype() {
 #[test]
 fn test_reduce_sum_preserves_dtype() {
     let op = StdTensorOp::ReduceSum { axes: vec![0] };
-    assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::F32);
+    assert_eq!(infer_output_dtype(&op, &[DType::F32]).unwrap(), DType::F32);
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn test_dot_general_preserves_lhs_dtype() {
         },
     };
     assert_eq!(
-        infer_output_dtype(&op, &[DType::F32, DType::F32]),
+        infer_output_dtype(&op, &[DType::F32, DType::F32]).unwrap(),
         DType::F32
     );
 }
@@ -82,7 +82,7 @@ fn test_indexing_dtype_inference_ignores_index_operands() {
         slice_sizes: vec![1],
     });
     assert_eq!(
-        infer_output_dtype(&gather, &[DType::C64, DType::I64]),
+        infer_output_dtype(&gather, &[DType::C64, DType::I64]).unwrap(),
         DType::C64
     );
 
@@ -90,7 +90,7 @@ fn test_indexing_dtype_inference_ignores_index_operands() {
         slice_sizes: vec![1],
     };
     assert_eq!(
-        infer_output_dtype(&dynamic_slice, &[DType::F32, DType::I64]),
+        infer_output_dtype(&dynamic_slice, &[DType::F32, DType::I64]).unwrap(),
         DType::F32
     );
 
@@ -101,7 +101,7 @@ fn test_indexing_dtype_inference_ignores_index_operands() {
         index_vector_dim: 1,
     });
     assert_eq!(
-        infer_output_dtype(&scatter, &[DType::F32, DType::I64, DType::F32]),
+        infer_output_dtype(&scatter, &[DType::F32, DType::I64, DType::F32]).unwrap(),
         DType::F32
     );
 
@@ -109,7 +109,8 @@ fn test_indexing_dtype_inference_ignores_index_operands() {
         infer_output_dtype(
             &StdTensorOp::DynamicUpdateSlice,
             &[DType::F32, DType::F32, DType::I64],
-        ),
+        )
+        .unwrap(),
         DType::F32
     );
 }

@@ -33,8 +33,9 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     let identity_reshape = StdTensorOp::Reshape {
         to_shape: shape![2, 2],
     };
-    let identity_reshape_result =
-        identity_reshape.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let identity_reshape_result = identity_reshape
+        .jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx)
+        .unwrap();
     let identity_reshape_graph = builder.build();
     assert_eq!(identity_reshape_result, vec![Some(tangent)]);
     assert!(identity_reshape_graph.operations().is_empty());
@@ -78,8 +79,9 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         shape: shape![2, 3],
         dims: vec![0, 1],
     };
-    let identity_broadcast_result =
-        identity_broadcast.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let identity_broadcast_result = identity_broadcast
+        .jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx)
+        .unwrap();
     let identity_broadcast_graph = builder.build();
     assert_eq!(identity_broadcast_result, vec![Some(tangent)]);
     assert!(identity_broadcast_graph.operations().is_empty());
@@ -126,7 +128,8 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         &external_inputs(911, 1),
         &linear_mode(&[true]),
         &mut ad_ctx,
-    );
+    )
+    .unwrap();
     assert_eq!(result, vec![Some(cotangent)]);
     assert!(builder.build().operations().is_empty());
 
@@ -259,7 +262,8 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         &external_inputs(930, 1),
         &linear_mode(&[true]),
         &mut ad_ctx,
-    );
+    )
+    .unwrap();
     assert_eq!(none_broadcast, vec![None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -323,13 +327,15 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(980));
     seed_dot_general_ref_metadata(&mut ad_ctx, &external_inputs(981, 2));
-    let primal_mode_result = matmul.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &external_inputs(981, 2),
-        &OperationRole::Primary,
-        &mut ad_ctx,
-    );
+    let primal_mode_result = matmul
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &external_inputs(981, 2),
+            &OperationRole::Primary,
+            &mut ad_ctx,
+        )
+        .unwrap();
     assert_eq!(primal_mode_result, vec![None, None]);
     assert!(builder.build().operations().is_empty());
 
@@ -417,13 +423,15 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
             ),
         );
     }
-    let complex_transpose_result = scalar_contract.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &inputs,
-        &linear_mode(&[true, false]),
-        &mut ad_ctx,
-    );
+    let complex_transpose_result = scalar_contract
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &inputs,
+            &linear_mode(&[true, false]),
+            &mut ad_ctx,
+        )
+        .unwrap();
     let complex_transpose_graph = builder.build();
     assert!(complex_transpose_result[0].is_some());
     assert_eq!(complex_transpose_result[1], None);
@@ -520,30 +528,34 @@ impl ExtensionAdRule for RuleOnlyIdentityAd {
 }
 
 #[test]
-fn extension_try_linearize_uses_registered_rule() {
+fn extension_linearize_uses_registered_rule() {
     let family = "stdtensor.rule_only_identity.v1";
-    let _ = register_extension_rule(Arc::new(RuleOnlyIdentityAd { family }));
+    let rules = ExtensionRuleSet::new()
+        .with_rule(Arc::new(RuleOnlyIdentityAd { family }))
+        .expect("extension rule should register");
     let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
     let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default();
+    let mut ad_ctx = ShapeGuardContext::default().with_extension_rules(rules);
     let dx = builder.add_input(tensor_input_key(900));
     let result = op
-        .try_jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
         .expect("registered extension rule should linearize");
 
     assert_eq!(result, vec![Some(dx)]);
 }
 
 #[test]
-fn extension_try_transpose_uses_registered_rule() {
+fn extension_transpose_uses_registered_rule() {
     let family = "stdtensor.rule_only_transpose.v1";
-    let _ = register_extension_rule(Arc::new(RuleOnlyIdentityAd { family }));
+    let rules = ExtensionRuleSet::new()
+        .with_rule(Arc::new(RuleOnlyIdentityAd { family }))
+        .expect("extension rule should register");
     let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
     let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default();
+    let mut ad_ctx = ShapeGuardContext::default().with_extension_rules(rules);
     let ct = builder.add_input(tensor_input_key(901));
     let result = op
-        .try_linear_transpose_rule(
+        .transpose_rule(
             &mut builder,
             &[Some(ct)],
             &external_inputs(910, 1),
@@ -556,14 +568,14 @@ fn extension_try_transpose_uses_registered_rule() {
 }
 
 #[test]
-fn extension_try_linearize_reports_missing_rule() {
+fn extension_linearize_reports_missing_rule() {
     let family = "stdtensor.missing_rule.v1";
     let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
     let dx = builder.add_input(tensor_input_key(920));
     let err = op
-        .try_jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
         .expect_err("missing extension rule should be an AD error");
 
     assert_eq!(err.rule(), ADRuleKind::Jvp);

@@ -15,7 +15,7 @@ use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_ex
 use crate::extension_runtime::ExtensionExecutor;
 use crate::metadata::{
     push_metadata_scope, register_scoped_live_graph_metadata, tensor_meta_from_tensor,
-    MetadataScope,
+    GlobalMetadataScope,
 };
 
 use super::zero_like_tensor;
@@ -23,14 +23,14 @@ use super::zero_like_tensor;
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
     extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-    metadata_scopes: Vec<Arc<MetadataScope>>,
+    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
 }
 
 impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
     pub(crate) fn new(
         backend: &'a mut B,
         extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-        metadata_scopes: Vec<Arc<MetadataScope>>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Self {
         Self {
             backend,
@@ -83,7 +83,10 @@ pub(super) fn eager_forward_value<B: TensorBackend>(
     let base = initial_data
         .get(&base_key)
         .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
-    let value = Arc::new(zero_like_tensor(base.as_ref(), backend));
+    // tidu's eager callback trait is infallible here; backend zero creation has
+    // already been validated by the surrounding backward pass setup.
+    let value =
+        Arc::new(zero_like_tensor(base.as_ref(), backend).expect("eager tangent zero creation"));
     all_values.insert(key.clone(), Arc::clone(&value));
     value
 }
@@ -129,16 +132,32 @@ fn zero_from_exact_metadata<B: TensorBackend>(
         .map(|dim| dim.constant_value())
         .collect::<Option<Vec<_>>>()?;
     let host = match meta.dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::F32 => Tensor::F32(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::F64 => Tensor::F64(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::I32 => Tensor::I32(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::I64 => Tensor::I64(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
         DType::Bool => {
             let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; len]))
+            // The boolean buffer length is computed from the same exact shape.
+            Tensor::Bool(
+                TypedTensor::from_vec_col_major(shape, vec![false; len])
+                    .expect("exact metadata bool zero shape/data match"),
+            )
         }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::C32 => Tensor::C32(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
+        // The zero tensor shape comes from exact tensor metadata, so shape/product
+        // overflow would indicate an earlier metadata-validation bug.
+        DType::C64 => Tensor::C64(TypedTensor::zeros(shape).expect("exact metadata zero shape")),
     };
     Some(
         backend
@@ -158,7 +177,7 @@ fn prefill_missing_linear_zero_values<B: TensorBackend>(
             continue;
         }
         let Some(meta) = ctx
-            .try_metadata_of(&ValueRef::External(value.key.clone()))
+            .metadata_if_available(&ValueRef::External(value.key.clone()))
             .cloned()
         else {
             continue;
@@ -243,7 +262,9 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         }
 
         let metadata_scope =
-            register_scoped_live_graph_metadata(graph, &live_values, input_metadata);
+            register_scoped_live_graph_metadata(graph, &live_values, input_metadata)
+                // The replay graph and live set were produced by the eager recorder.
+                .expect("eager replay metadata registration failed");
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
 
         all_values
@@ -275,7 +296,7 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             })
             .collect::<Vec<_>>();
 
-        tidu::try_linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx).map(
+        tidu::linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx).map(
             |cotangent_ids| {
                 cotangent_ids
                     .into_iter()

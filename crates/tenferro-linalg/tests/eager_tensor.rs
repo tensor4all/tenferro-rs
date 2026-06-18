@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -15,7 +15,6 @@ fn test_ctx() -> Arc<EagerRuntime> {
 
 fn ad_test_ctx() -> Arc<EagerRuntime> {
     let ad = AdContext::builder()
-        .with_core_rules()
         .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
         .build()
         .unwrap();
@@ -63,7 +62,7 @@ fn well_conditioned_4x4() -> Vec<f64> {
 #[test]
 fn svd_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
         test_ctx(),
     );
     let (u, s, vt) = tenferro_linalg::eager_tensor::svd(&a).unwrap();
@@ -77,7 +76,7 @@ fn svd_returns_correct_shapes() {
 fn svd_singular_value_sum_backward_does_not_panic() {
     let ctx = ad_test_ctx();
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4, 4], well_conditioned_4x4()),
+        Tensor::from_vec_col_major(vec![4, 4], well_conditioned_4x4()).unwrap(),
         ctx,
     );
     let (_, s, _) = tenferro_linalg::eager_tensor::svd(&a).unwrap();
@@ -85,13 +84,13 @@ fn svd_singular_value_sum_backward_does_not_panic() {
 
     loss.backward().unwrap();
 
-    assert!(a.grad().is_some());
+    assert!(a.grad().unwrap().is_some());
 }
 
 #[test]
 fn qr_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
         test_ctx(),
     );
     let (q, r) = tenferro_linalg::eager_tensor::qr(&a).unwrap();
@@ -103,7 +102,7 @@ fn qr_returns_correct_shapes() {
 #[test]
 fn cholesky_of_identity() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
         test_ctx(),
     );
     let l = tenferro_linalg::eager_tensor::cholesky(&a).unwrap();
@@ -115,7 +114,7 @@ fn cholesky_of_identity() {
 #[test]
 fn lu_returns_expected_factors_for_swap_matrix() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]).unwrap(),
         test_ctx(),
     );
     let (p, l, u, parity) = tenferro_linalg::eager_tensor::lu(&a).unwrap();
@@ -134,11 +133,11 @@ fn lu_returns_expected_factors_for_swap_matrix() {
 #[test]
 fn full_piv_lu_solve_returns_expected_solution() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
         test_ctx(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]),
+        Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]).unwrap(),
         test_ctx(),
     );
     let x = tenferro_linalg::eager_tensor::full_piv_lu_solve(&a, &b).unwrap();
@@ -150,11 +149,11 @@ fn full_piv_lu_solve_returns_expected_solution() {
 #[test]
 fn solve_returns_expected_solution() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
         test_ctx(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]),
+        Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
         test_ctx(),
     );
     let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
@@ -170,18 +169,19 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
         Tensor::from_vec_col_major(
             vec![2, 2, 2],
             vec![2.0_f64, 0.0, 0.0, 4.0, 3.0, 0.0, 0.0, 5.0],
-        ),
+        )
+        .unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 1, 2], vec![4.0_f64, 8.0, 6.0, 10.0]),
+        Tensor::from_vec_col_major(vec![2, 1, 2], vec![4.0_f64, 8.0, 6.0, 10.0]).unwrap(),
         ctx,
     );
 
     let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
     let loss = x.reduce_sum(&[0, 1, 2]).unwrap();
     let _ = loss.backward().unwrap();
-    let grad = a.grad().unwrap();
+    let grad = a.grad().unwrap().unwrap();
 
     assert_eq!(grad.shape(), &[2, 2, 2]);
     assert_close_slice(
@@ -194,7 +194,7 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
 #[test]
 fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
         test_ctx(),
     );
     let (values, vectors) = tenferro_linalg::eager_tensor::eig(&a).unwrap();
@@ -223,9 +223,9 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
         return;
     }
 
-    let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]);
-    let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]);
-    let upload_backend = CubeclBackend::new(0).unwrap();
+    let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]).unwrap();
+    let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]).unwrap();
+    let upload_backend = CudaBackend::new(0).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let ctx = EagerRuntime::with_cuda_backend(upload_backend);
@@ -234,7 +234,7 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
 
-    let download_backend = CubeclBackend::new(0).unwrap();
+    let download_backend = CudaBackend::new(0).unwrap();
     let x_host = download_tensor(download_backend.runtime(), x.data()).unwrap();
     assert_eq!(x_host.shape(), &[2, 1]);
     assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);

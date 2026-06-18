@@ -24,11 +24,11 @@ fn test_ctx() -> Arc<EagerRuntime> {
 fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -42,14 +42,16 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
 fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3, 4], (1..=24).map(f64::from).collect::<Vec<_>>()),
+        Tensor::from_vec_col_major(vec![2, 3, 4], (1..=24).map(f64::from).collect::<Vec<_>>())
+            .unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(
             vec![3, 4, 2],
             (1..=24).map(|value| f64::from(value) * 0.5).collect(),
-        ),
+        )
+        .unwrap(),
         ctx.clone(),
     );
 
@@ -63,11 +65,11 @@ fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
 fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -89,11 +91,11 @@ fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
 fn eager_tensor_tensordot_rejects_shape_mismatch() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]),
+        Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap(),
         ctx.clone(),
     );
 
@@ -109,11 +111,11 @@ fn eager_tensor_tensordot_rejects_shape_mismatch() {
 fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
     );
 
@@ -136,11 +138,11 @@ fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
 fn eager_tensor_einsum_integer_subscripts_match_string_path() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
@@ -155,11 +157,11 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
 fn eager_tensor_einsum_backward_populates_input_grads() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -167,8 +169,8 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
-    let grad_a = a.grad().unwrap();
-    let grad_b = b.grad().unwrap();
+    let grad_a = a.grad().unwrap().unwrap();
+    let grad_b = b.grad().unwrap().unwrap();
 
     assert_eq!(grad_a.shape(), &[2, 3]);
     assert_eq!(grad_b.shape(), &[3, 2]);
@@ -180,11 +182,11 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
 fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -192,11 +194,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
-        f64_data(a.grad().unwrap().as_ref()),
+        f64_data(a.grad().unwrap().unwrap().as_ref()),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().as_ref()),
+        f64_data(b.grad().unwrap().unwrap().as_ref()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 
@@ -204,11 +206,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
-        f64_data(a.grad().unwrap().as_ref()),
+        f64_data(a.grad().unwrap().unwrap().as_ref()),
         &[10.0, 10.0, 14.0, 14.0, 18.0, 18.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().as_ref()),
+        f64_data(b.grad().unwrap().unwrap().as_ref()),
         &[6.0, 14.0, 22.0, 6.0, 14.0, 22.0]
     );
 }
@@ -217,11 +219,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
 fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -229,21 +231,21 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
-    ctx.clear_grads();
+    ctx.clear_grads().unwrap();
 
-    assert!(a.grad().is_none());
-    assert!(b.grad().is_none());
+    assert!(a.grad().unwrap().is_none());
+    assert!(b.grad().unwrap().is_none());
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(
-        f64_data(a.grad().unwrap().as_ref()),
+        f64_data(a.grad().unwrap().unwrap().as_ref()),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().as_ref()),
+        f64_data(b.grad().unwrap().unwrap().as_ref()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 }

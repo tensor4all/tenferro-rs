@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-labelledby="tf-arch-title tf-arch-desc">
   <title id="tf-arch-title">tenferro-rs architecture overview</title>
-  <desc id="tf-arch-desc">Four-layer crate stack with user entry points on top, external foundations on the left, CPU and GPU backends in layer two, and operation-family crates on the right all plugging into the same ExtensionOp registry of tenferro-runtime.</desc>
+  <desc id="tf-arch-desc">Four-layer crate stack with user entry points on top, external foundations on the left, CPU and GPU backends in layer two, tenferro-xla as a StableHLO/PJRT peer executor in layer three, and operation-family crates on the right all plugging into the same ExtensionOp registry of tenferro-runtime.</desc>
   <defs>
     <marker id="arr" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 9 3.5 L 0 7 z" fill="#334155"/>
@@ -50,6 +50,8 @@
   <text x="400" y="250" class="sub">trace → compile → execute</text>
   <rect x="556" y="224" width="96" height="30" rx="5" class="fam"/>
   <text x="604" y="243" class="sub" style="font-weight:700">ExtensionOp</text>
+  <rect x="556" y="258" width="96" height="18" rx="5" class="box"/>
+  <text x="604" y="271" class="sub" style="font-weight:700;font-size:10px">tenferro-xla</text>
 
   <line x1="460" y1="282" x2="460" y2="304" class="dep"/>
 

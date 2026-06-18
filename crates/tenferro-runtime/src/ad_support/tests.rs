@@ -7,16 +7,16 @@ use tenferro_tensor::{DType, Tensor};
 
 use crate::sym_dim::SymDim;
 
-use super::{fresh_input_key, tensor_from_parts, TracedTensorParts};
+use super::{allocate_input_key, tensor_from_parts, TracedTensorParts};
 
 #[test]
 fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
-    let input_key = fresh_input_key();
+    let input_key = allocate_input_key();
     let mut builder = GraphBuilder::new();
     let val = builder.add_input(input_key.clone());
     builder.set_outputs(vec![val]);
     let graph = Arc::new(builder.build());
-    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]));
+    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
     let inputs_map = Arc::new(HashMap::from([(input_key, Arc::clone(&data))]));
     let parts = TracedTensorParts {
         rank: 1,
@@ -42,12 +42,12 @@ fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
 
 #[test]
 fn tensor_from_parts_preserves_summary_fields() {
-    let input_key = fresh_input_key();
+    let input_key = allocate_input_key();
     let mut builder = GraphBuilder::new();
     let val = builder.add_input(input_key.clone());
     builder.set_outputs(vec![val]);
     let graph = Arc::new(builder.build());
-    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]));
+    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
     let inputs_map = Arc::new(HashMap::from([(input_key.clone(), Arc::clone(&data))]));
     let parts = TracedTensorParts {
         rank: 1,

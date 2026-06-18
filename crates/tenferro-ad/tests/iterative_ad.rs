@@ -25,12 +25,12 @@ const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
 
 fn f64_scalar(val: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]).unwrap())
 }
 
 fn get_f64_scalar(t: &Tensor) -> f64 {
     match t {
-        Tensor::F64(inner) => inner.host_data()[0],
+        Tensor::F64(inner) => inner.host_data().unwrap()[0],
         _ => panic!("expected F64"),
     }
 }
@@ -91,7 +91,7 @@ fn fixed_point_traced(
 
     for iter in 1..=max_iter {
         // Build graph: x_new = a * cos(x)
-        let x_new = a * &x.cos();
+        let x_new = (a * &x.cos()).unwrap();
 
         // Convergence check — eval() must NOT break the graph
         let x_check = x_new.clone();
@@ -212,7 +212,7 @@ fn graph_size_grows_linearly() {
         let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
         let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5));
         for _ in 0..k {
-            x = &a * &x.cos();
+            x = (&a * &x.cos()).unwrap();
         }
         total_ops(x.graph())
     }

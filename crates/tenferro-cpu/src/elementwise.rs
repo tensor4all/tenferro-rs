@@ -164,7 +164,9 @@ fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
 where
     T: Copy + Clone + Zero,
 {
+    // Invariant: scalar shape `[]` always requires exactly one value.
     TypedTensor::from_vec_col_major(vec![], vec![Complex::new(scalar, T::zero())])
+        .expect("scalar complex tensor has a valid compact shape")
 }
 
 fn complex_scalar_tensor_from_tensor<T>(
@@ -201,8 +203,8 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
 /// use tenferro_cpu::add;
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let out = add(&a, &b)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -379,8 +381,8 @@ pub(crate) fn add_read_with_pool(
 /// use tenferro_cpu::mul;
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0])?;
 /// let out = mul(&a, &b)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[8.0, 15.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1114,7 +1116,7 @@ struct LazyOuterProductStrideSpec<'a> {
 }
 
 fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Result<Vec<isize>> {
-    let base_strides = col_major_strides(spec.base_shape);
+    let base_strides = col_major_strides(spec.base_shape)?;
     let mut logical_strides = vec![None; spec.output_shape.len()];
     let mut base_axis = 0usize;
 
@@ -1324,6 +1326,42 @@ where
             rhs: rhs_shape.to_vec(),
         });
     }
+    let output_rank = lhs_shape.len();
+    let lhs_is_scalar = lhs.shape().is_empty() && lhs_dims.is_empty();
+    let rhs_is_scalar = rhs.shape().is_empty() && rhs_dims.is_empty();
+    let lhs_is_full_output =
+        lhs.shape() == lhs_shape && lhs_dims.iter().copied().eq(0..output_rank);
+    let rhs_is_full_output =
+        rhs.shape() == rhs_shape && rhs_dims.iter().copied().eq(0..output_rank);
+    if lhs_is_scalar && rhs_is_scalar {
+        let lhs_scalar = typed_view_from_view("broadcast_multiply", lhs)?.get(&[]);
+        let rhs_scalar = typed_view_from_view("broadcast_multiply", rhs)?.get(&[]);
+        return filled_broadcast_multiply_tensor(buffers, lhs_shape, lhs_scalar * rhs_scalar);
+    }
+    if lhs_is_scalar && rhs_is_full_output {
+        let scalar = typed_view_from_view("broadcast_multiply", lhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("broadcast_multiply", rhs)?,
+            |x| scalar * x,
+        )
+        .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        return Ok(tensor_from_array(out));
+    }
+    if rhs_is_scalar && lhs_is_full_output {
+        let scalar = typed_view_from_view("broadcast_multiply", rhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("broadcast_multiply", lhs)?,
+            |x| x * scalar,
+        )
+        .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        return Ok(tensor_from_array(out));
+    }
 
     // SAFETY: broadcast_mul_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
@@ -1338,6 +1376,25 @@ where
     )
     .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
     Ok(tensor_from_array(out))
+}
+
+fn filled_broadcast_multiply_tensor<T>(
+    buffers: &mut BufferPool,
+    shape: &[usize],
+    fill: T,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+{
+    let len = shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| {
+            crate::Error::backend_failure("broadcast_multiply", "output shape size overflows usize")
+        })
+    })?;
+    // SAFETY: every pooled element is initialized with `fill` before tensor construction.
+    let mut data = unsafe { T::pool_acquire(buffers, len) };
+    data.fill(fill);
+    TypedTensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1438,8 +1495,8 @@ pub(crate) fn broadcast_multiply_value_with_pool(
 /// use tenferro_cpu::div;
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 15.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 5.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 15.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 5.0])?;
 /// let out = div(&a, &b)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 3.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1578,7 +1635,7 @@ pub(crate) fn div_read_with_pool(
 /// use tenferro_cpu::neg;
 /// use tenferro_tensor::Tensor;
 ///
-/// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]);
+/// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?;
 /// let out = neg(&input)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1646,7 +1703,7 @@ pub(crate) fn neg_read_with_pool(
 /// use tenferro_cpu::conj;
 /// use tenferro_tensor::Tensor;
 ///
-/// let input = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]);
+/// let input = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])?;
 /// let out = conj(&input)?;
 /// assert_eq!(out.as_slice::<Complex64>().unwrap(), &[Complex64::new(1.0, -2.0)]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1715,7 +1772,7 @@ pub(crate) fn conj_read_with_pool(
 /// use tenferro_cpu::abs;
 /// use tenferro_tensor::Tensor;
 ///
-/// let input = Tensor::from_vec_col_major(vec![2], vec![-3.0_f64, 4.0]);
+/// let input = Tensor::from_vec_col_major(vec![2], vec![-3.0_f64, 4.0])?;
 /// let out = abs(&input)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1772,7 +1829,7 @@ pub(crate) fn abs_read_with_pool(
 /// use tenferro_cpu::sign;
 /// use tenferro_tensor::Tensor;
 ///
-/// let input = Tensor::from_vec_col_major(vec![3], vec![-2.0_f64, 0.0, 3.0]);
+/// let input = Tensor::from_vec_col_major(vec![3], vec![-2.0_f64, 0.0, 3.0])?;
 /// let out = sign(&input)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 0.0, 1.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1839,8 +1896,8 @@ pub(crate) fn sign_read_with_pool(
 /// use tenferro_cpu::maximum;
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let out = maximum(&a, &b)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 5.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1919,8 +1976,8 @@ pub(crate) fn maximum_read_with_pool(
 /// use tenferro_cpu::minimum;
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let out = minimum(&a, &b)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1999,8 +2056,8 @@ pub(crate) fn minimum_read_with_pool(
 /// use tenferro_cpu::compare;
 /// use tenferro_tensor::{CompareDir, Tensor};
 ///
-/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0]);
-/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 5.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let out = compare(&a, &b, &CompareDir::Gt)?;
 /// assert_eq!(out.as_slice::<bool>().unwrap(), &[false, true]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -2105,9 +2162,9 @@ pub(crate) fn compare_read_with_pool(
 /// use tenferro_cpu::select;
 /// use tenferro_tensor::Tensor;
 ///
-/// let pred = Tensor::from_vec_col_major(vec![2], vec![true, false]);
-/// let on_true = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let on_false = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let pred = Tensor::from_vec_col_major(vec![2], vec![true, false])?;
+/// let on_true = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let on_false = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let out = select(&pred, &on_true, &on_false)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -2213,9 +2270,9 @@ pub(crate) fn select_read_with_pool(
 /// use tenferro_cpu::clamp;
 /// use tenferro_tensor::Tensor;
 ///
-/// let input = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 2.0, 8.0]);
-/// let lower = Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 0.0, 0.0]);
-/// let upper = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 5.0, 5.0]);
+/// let input = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 2.0, 8.0])?;
+/// let lower = Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 0.0, 0.0])?;
+/// let upper = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 5.0, 5.0])?;
 /// let out = clamp(&input, &lower, &upper)?;
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 2.0, 5.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())

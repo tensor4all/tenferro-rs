@@ -4,7 +4,7 @@ use tenferro_xla::lower_to_stablehlo;
 #[test]
 fn lowers_elementwise_reduce_and_static_shapes() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let y = (&x + &x).reduce_sum(&[0]);
+    let y = (&x + &x).unwrap().reduce_sum(&[0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])
@@ -26,6 +26,7 @@ fn lowers_structural_ops_and_convert() {
     let y = x
         .broadcast_in_dim(&[2, 3], &[1])
         .transpose(&[1, 0])
+        .unwrap()
         .reshape(&[6])
         .convert(DType::F64);
     let mut compiler = GraphCompiler::new();
@@ -49,15 +50,17 @@ fn lowers_structural_ops_and_convert() {
 fn lowers_unbatched_dot_general() {
     let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let product = lhs.dot_general(
-        &rhs,
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-        },
-    );
+    let product = lhs
+        .dot_general(
+            &rhs,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(
@@ -76,20 +79,24 @@ fn lowers_unbatched_dot_general() {
 
 #[test]
 fn lowers_concrete_nary_einsum_via_standard_ops() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+        .unwrap();
     let mid = TracedTensor::from_vec_col_major(
         vec![3, 4],
         vec![
             10.0_f64, 20.0, 30.0, 11.0, 21.0, 31.0, 12.0, 22.0, 32.0, 13.0, 23.0, 33.0,
         ],
-    );
+    )
+    .unwrap();
     let rhs = TracedTensor::from_vec_col_major(
         vec![4, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-    );
+    )
+    .unwrap();
     let mut compiler = GraphCompiler::new();
     let product =
-        tenferro_einsum::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il").unwrap();
+        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
+            .unwrap();
     let program = compiler.compile(&product).unwrap();
 
     let module = lower_to_stablehlo(&program).unwrap();
@@ -108,7 +115,8 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut compiler = GraphCompiler::new();
     let product =
-        tenferro_einsum::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il").unwrap();
+        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
+            .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &product,
@@ -133,15 +141,17 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
 fn batched_dot_general_transposes_stablehlo_batch_first_result() {
     let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3);
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3);
-    let product = lhs.dot_general(
-        &rhs,
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![2],
-            rhs_contracting_dims: vec![1],
-            lhs_batch_dims: vec![0],
-            rhs_batch_dims: vec![0],
-        },
-    );
+    let product = lhs
+        .dot_general(
+            &rhs,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![2],
+                rhs_contracting_dims: vec![1],
+                lhs_batch_dims: vec![0],
+                rhs_batch_dims: vec![0],
+            },
+        )
+        .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(
@@ -165,7 +175,7 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
 
 #[test]
 fn lowers_multi_output_program_and_special_scalar_constants() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let scaled_nan = x.scale_real(f64::NAN);
     let scaled_neg_inf = x.scale_real(f64::NEG_INFINITY);
     let scaled_pos_inf = x.scale_real(f64::INFINITY);
@@ -190,7 +200,7 @@ fn lowers_multi_output_program_and_special_scalar_constants() {
 
 #[test]
 fn lowers_f32_scalar_constant() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let scaled = x.scale_real(2.5);
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&scaled).unwrap();

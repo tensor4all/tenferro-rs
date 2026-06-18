@@ -31,7 +31,7 @@ tenferro-tensor
     Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, BackendSession
         │
         ├── tenferro_cpu::CpuBackend
-        └── tenferro_gpu::CubeclBackend (feature = "cuda")
+        └── tenferro_gpu::CudaBackend (feature = "cuda")
         ▲
         │
 tenferro-tensor-core
@@ -82,7 +82,7 @@ faer or BLAS/LAPACK for GEMM and linalg. `CpuBackend` stores the runtime
 provider selection for an individual backend instance. `CpuBackend::new()`
 chooses the compiled default provider: BLAS if `cpu-blas` is compiled,
 otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
-`CpuBackend::try_with_threads_and_kind` can select any provider compiled into
+`CpuBackend::with_threads_and_kind` can select any provider compiled into
 the binary. `CpuContext` stores the CPU thread count as the single source of
 truth for tenferro-owned CPU parallelism and owns the Rayon thread pool used by
 multi-thread contexts.
@@ -97,7 +97,7 @@ remains provider-owned.
 
 ## CubeCL Backend
 
-`tenferro_gpu::CubeclBackend` is the current GPU backend under the `cuda`
+`tenferro_gpu::CudaBackend` is the current GPU backend under the `cuda`
 feature. It targets NVIDIA CUDA through CubeCL/CubeCL-CUDA and uses runtime-loaded
 cuTENSOR, cuSOLVER, and cuBLAS where needed.
 
@@ -153,5 +153,5 @@ of the linalg extension backend surface, with CPU implementations under
 `crates/tenferro-linalg/src/gpu`.
 
 General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
-`CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly
+`CudaBackend::eig` returns `BackendFailure`, and callers must explicitly
 download to CPU if they want CPU `eig`.

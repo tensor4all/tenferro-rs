@@ -180,11 +180,11 @@ convert into the internal column-major buffer at construction time.
 Add explicit exports:
 
 ```rust
-typed.try_into_vec_col_major()
-typed.try_into_vec_row_major()
+typed.into_vec_col_major()
+typed.into_vec_row_major()
 
-tensor.try_into_vec_col_major::<T>()
-tensor.try_into_vec_row_major::<T>()
+tensor.into_vec_col_major::<T>()
+tensor.into_vec_row_major::<T>()
 ```
 
 If a borrowed export is added, name it `to_vec_*` or `try_to_vec_*` so ownership

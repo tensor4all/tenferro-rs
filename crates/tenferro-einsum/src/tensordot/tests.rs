@@ -44,8 +44,8 @@ fn validate_traced_contract_dims_allows_symbolic_and_rejects_concrete_mismatch()
     .unwrap();
     validate_traced_contract_dims(&lhs, &rhs, &config).unwrap();
 
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let err = validate_traced_contract_dims(&lhs, &rhs, &config).unwrap_err();
     assert!(err.to_string().contains("contracted dimensions differ"));
 }

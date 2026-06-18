@@ -80,6 +80,8 @@ impl ExtensionOp for TestExtension {
     }
 
     fn eager_execute(&self, _inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![Tensor::from_vec_col_major(vec![], vec![1.0_f64])])
+        Ok(vec![
+            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()
+        ])
     }
 }

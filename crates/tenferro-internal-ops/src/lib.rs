@@ -33,8 +33,7 @@ pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
 pub use ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 pub use ext_op::{
-    is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
-    register_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
+    linearize_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
     ExtensionRegistryError, ExtensionRuleSet,
 };
 pub use shape_extent::ShapeExtent;

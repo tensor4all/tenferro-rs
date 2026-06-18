@@ -7,7 +7,7 @@ use tenferro_runtime::traced::TracedTensor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn assert_panic_contains(config: DotGeneralConfig, expected_substring: &str) {
@@ -16,7 +16,7 @@ fn assert_panic_contains(config: DotGeneralConfig, expected_substring: &str) {
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let _ = a.dot_general(&b, config);
+        let _ = a.dot_general(&b, config).unwrap();
     }));
     match result {
         Err(panic_payload) => {
@@ -77,7 +77,7 @@ fn traced_dot_general_accepts_valid_config() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let c = a.dot_general(&b, config);
+    let c = a.dot_general(&b, config).unwrap();
     let mut engine = tenferro_runtime::GraphExecutor::new(CpuBackend::new());
     let result = c.run_with(&mut engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();
@@ -236,7 +236,7 @@ fn traced_dot_general_accepts_batched_valid_config() {
         lhs_batch_dims: vec![0, 2],
         rhs_batch_dims: vec![1, 2],
     };
-    let c = a.dot_general(&b, config);
+    let c = a.dot_general(&b, config).unwrap();
     let mut engine = tenferro_runtime::GraphExecutor::new(CpuBackend::new());
     let result = c.run_with(&mut engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();

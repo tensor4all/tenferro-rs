@@ -104,7 +104,7 @@ CPU execution is handled by `CpuBackend`:
 
 ## CubeCL/CUDA Execution
 
-When a compiled program is evaluated with `CubeclBackend`, the same graph-level
+When a compiled program is evaluated with `CudaBackend`, the same graph-level
 ops run on GPU if supported:
 
 - `dot_general` can route through CubeCL/CUDA and cuTENSOR/cuBLAS-backed paths,
@@ -112,7 +112,7 @@ ops run on GPU if supported:
 - unsupported dtypes or operations return `BackendFailure`.
 
 There is no current separate direct `CudaBackend` contraction pipeline. Future
-GPU contraction improvements should extend `CubeclBackend` and preserve the
+GPU contraction improvements should extend `CudaBackend` and preserve the
 explicit placement policy described in [gpu-backend-design.md](./gpu-backend-design.md).
 
 ## Planner Safety

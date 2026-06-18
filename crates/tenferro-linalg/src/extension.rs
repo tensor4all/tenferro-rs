@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOpTrait};
-use tenferro_tensor::{DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor};
+use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
+use tenferro_tensor::{
+    DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRead,
+};
 
 use crate::backend::LinalgBackend;
 
@@ -174,7 +176,7 @@ fn execute_cuda_eager_linalg(
     inputs: &[&Tensor],
     device_ordinal: usize,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut backend = tenferro_gpu::CubeclBackend::new(device_ordinal)?;
+    let mut backend = tenferro_gpu::CudaBackend::new(device_ordinal)?;
     execute_linalg(op, inputs, &mut backend)
 }
 
@@ -194,7 +196,7 @@ fn execute_cuda_eager_linalg(
     ))
 }
 
-impl ExtensionOpTrait for LinalgExtensionOp {
+impl ExtensionOp for LinalgExtensionOp {
     fn family_id(&self) -> &'static str {
         LINALG_EXTENSION_FAMILY_ID
     }
@@ -238,14 +240,14 @@ impl ExtensionOpTrait for LinalgExtensionOp {
         }
     }
 
-    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other
             .as_any()
             .downcast_ref::<Self>()
             .is_some_and(|that| self == that)
     }
 
-    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
         Arc::new(self.clone())
     }
 
@@ -336,11 +338,27 @@ fn execute_linalg_extension<B: LinalgBackend + 'static>(
     execute_linalg(op.op(), inputs, ctx.backend_mut())
 }
 
+fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // Linalg backends currently operate on compact tensors; materialization is
+    // explicit here so borrowed views cannot silently bypass backend errors.
+    let materialized_inputs: Vec<Tensor> = inputs
+        .iter()
+        .map(TensorRead::to_tensor)
+        .collect::<tenferro_tensor::Result<_>>()?;
+    let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+    execute_linalg_extension(op, &input_refs, ctx)
+}
+
 define_extension_runtime! {
     runtime = LinalgRuntime,
     family_id = LINALG_EXTENSION_FAMILY_ID,
     op_type = LinalgExtensionOp,
     execute = execute_linalg_extension,
+    execute_reads = execute_linalg_extension_reads,
     register_fn = register_runtime,
     backend_bound = LinalgBackend,
 }

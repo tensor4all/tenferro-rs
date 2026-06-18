@@ -3,17 +3,21 @@ use support::RunTraced;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::GraphExecutor;
-use tenferro_runtime::{Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{SymDim, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
     match tensor {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         other => panic!("expected f64 tensor, got {other:?}"),
     }
+}
+
+fn sym_size(input: &TracedTensor, axis: usize) -> SymDim {
+    input.sym_size(axis).unwrap()
 }
 
 #[test]
@@ -22,8 +26,8 @@ fn reshape_sym_uses_symbolic_input_axes() {
         vec![2, 3, 4],
         (1..=24).map(|value| value as f64).collect(),
     ));
-    let rows = x.sym_size(0) * x.sym_size(1);
-    let cols = x.sym_size(2);
+    let rows = sym_size(&x, 0) * sym_size(&x, 1);
+    let cols = sym_size(&x, 2);
     let y = x.reshape_sym(&[rows, cols]).unwrap();
 
     assert_eq!(y.rank, 2);
@@ -45,8 +49,8 @@ fn reshape_sym_supports_mixed_usize_arithmetic() {
     ));
     let y = x
         .reshape_sym(&[
-            2usize * x.sym_size(0).max(1usize),
-            (x.sym_size(1) * x.sym_size(2).min(4usize)) / 2usize,
+            2usize * sym_size(&x, 0).max(1usize),
+            (sym_size(&x, 1) * sym_size(&x, 2).min(4usize)) / 2usize,
         ])
         .unwrap();
 
@@ -72,7 +76,7 @@ fn reshape_sym_rejects_symbolic_dims_from_another_tensor() {
         (1..=6).rev().map(|v| v as f64).collect(),
     ));
 
-    let err = match b.reshape_sym(&[a.sym_size(0), b.sym_size(1)]) {
+    let err = match b.reshape_sym(&[sym_size(&a, 0), sym_size(&b, 1)]) {
         Ok(_) => panic!("reshape_sym should reject symbolic dimensions from another tensor"),
         Err(err) => err,
     };
@@ -89,8 +93,8 @@ fn sym_dim_sub_and_div_operators() {
     ));
     // reshape [12] -> [dim0 - 2, dim0 / 2] = [10, 6]... that doesn't multiply to 12
     // Instead: reshape [12] -> [dim0 / 4, dim0 / 3] = [3, 4]
-    let a = x.sym_size(0) / 4usize;
-    let b = x.sym_size(0) / 3usize;
+    let a = sym_size(&x, 0) / 4usize;
+    let b = sym_size(&x, 0) / 3usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -105,8 +109,8 @@ fn sym_dim_sub_operator() {
         (1..=6).map(|v| v as f64).collect(),
     ));
     // reshape [6] -> [dim0 - 4, dim0 - 3] = [2, 3]
-    let a = x.sym_size(0) - 4usize;
-    let b = x.sym_size(0) - 3usize;
+    let a = sym_size(&x, 0) - 4usize;
+    let b = sym_size(&x, 0) - 3usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -122,8 +126,8 @@ fn sym_dim_usize_lhs_operators() {
     ));
     // 12usize / dim0 = 2, dim0 + 0usize = 6 -- but need product = 6
     // Use: 3usize + (dim0 - dim0) = 3, dim0 - 4usize = 2 => [3, 2]
-    let a = 3usize + (x.sym_size(0) - x.sym_size(0));
-    let b = x.sym_size(0) - 4usize;
+    let a = 3usize + (sym_size(&x, 0) - sym_size(&x, 0));
+    let b = sym_size(&x, 0) - 4usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -139,8 +143,8 @@ fn sym_dim_usize_sub_and_div_lhs() {
         (1..=6).map(|v| v as f64).collect(),
     ));
     // 5usize - dim0 = 3, 6usize / dim1 = 2 => [3, 2]
-    let a = 5usize - x.sym_size(0);
-    let b = 6usize / x.sym_size(1);
+    let a = 5usize - sym_size(&x, 0);
+    let b = 6usize / sym_size(&x, 1);
     let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -155,8 +159,8 @@ fn sym_dim_min_max_methods() {
         (1..=6).map(|v| v as f64).collect(),
     ));
     // min(dim0, dim1) = 2, max(dim0, dim1) = 3 => [2, 3]
-    let a = x.sym_size(0).min(x.sym_size(1));
-    let b = x.sym_size(0).max(x.sym_size(1));
+    let a = sym_size(&x, 0).min(sym_size(&x, 1));
+    let b = sym_size(&x, 0).max(sym_size(&x, 1));
     let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -171,7 +175,7 @@ fn sym_dim_min_max_methods() {
 fn reshape_sym_graph_reuse_with_different_shapes() {
     // Helper: build a flatten graph from a 2-D input tensor.
     fn build_flatten(input: &TracedTensor) -> TracedTensor {
-        let total = input.sym_size(0) * input.sym_size(1);
+        let total = sym_size(input, 0) * sym_size(input, 1);
         input.reshape_sym(&[total]).unwrap()
     }
 

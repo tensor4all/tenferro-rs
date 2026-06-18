@@ -36,11 +36,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = TracedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    )?;
     let b = TracedTensor::from_vec_col_major(
         vec![3, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    )?;
 
     let mut compiler = GraphCompiler::new();
     let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")?;
@@ -50,8 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(executor.run(&program)?.shape(), &[2, 2]);
 
     let ctx = EagerRuntime::new();
-    let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
-    let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]));
+    let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
+    let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?);
     let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij")?;
     assert_eq!(outer.data().shape(), &[2, 3]);
 
@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
-    );
+    )?;
     let outputs = LinalgBackend::full_piv_lu(&mut backend, &a)?;
     let p = &outputs[0];
     let l = &outputs[1];
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parity_value = parity.as_slice::<f64>().unwrap()[0];
     assert!(parity_value == 1.0 || parity_value == -1.0);
 
-    let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]);
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
     let x = LinalgBackend::full_piv_lu_solve(&mut backend, &a, &b, false)?;
     assert_eq!(x.shape(), &[2, 1]);
 
@@ -121,26 +121,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut x = TypedTensor::<f64>::from_vec_col_major(
         vec![2, 2],
         vec![1.0, 2.0, 3.0, 4.0],
-    );
-    *x.get_mut(&[0, 1]) = 5.0;
-    assert_eq!(x.try_get(&[1, 1]), Some(&4.0));
+    )?;
+    *x.get_mut(&[0, 1])? = 5.0;
+    assert_eq!(*x.get(&[1, 1])?, 4.0);
 
     let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major(
         [2, 2],
         vec![1.0, 2.0, 3.0, 4.0],
-    );
+    )?;
     assert_eq!(static_rank.rank(), 2);
 
     let mut backend = CpuBackend::new();
-    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
-    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]);
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0])?;
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0])?;
     let sum = typed_tensor::add(&lhs, &rhs, &mut backend)?;
     let product = typed_tensor::mul(&lhs, &rhs, &mut backend)?;
     let mask = typed_tensor::compare(&sum, &product, CompareDir::Lt, &mut backend)?;
-    assert_eq!(mask.as_slice(), &[false, true, true]);
+    assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new();
-    let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]));
+    let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     assert_eq!(tracked.data().shape(), &[1]);
 
     Ok(())
@@ -156,7 +156,7 @@ use tenferro_fft::{traced_tensor, FftNorm};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ad = AdContext::builder().with_core_rules().build()?;
+    let _ad = AdContext::builder().build()?;
     let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
@@ -165,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(3.0, 0.0),
             Complex64::new(4.0, 0.0),
         ],
-    );
+    )?;
     let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();

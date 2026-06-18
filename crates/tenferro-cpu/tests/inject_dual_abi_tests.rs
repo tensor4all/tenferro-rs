@@ -9,7 +9,7 @@ use tenferro_cpu::inject::{
     LapackProviderPtrSet, ProviderAbi, ProviderRegistrationError,
 };
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -204,14 +204,10 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     DGEMM_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![1.0, 3.0, 2.0, 4.0],
-    ));
-    let b = Tensor::F64(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![5.0, 7.0, 6.0, 8.0],
-    ));
+    let a =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap());
+    let b =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap());
 
     let mut backend = CpuBackend::new();
     let c = backend.dot_general(
@@ -227,7 +223,7 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     assert_eq!(DGEMM_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[19.0, 43.0, 22.0, 50.0]),
+        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0]),
         _ => panic!("expected f64 tensor"),
     }
 }

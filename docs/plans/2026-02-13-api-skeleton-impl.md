@@ -745,7 +745,7 @@ strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
 //! # Examples
 //!
 //! ```ignore
-//! use tenferro_einsum::{einsum, Subscripts};
+//! use tenferro_einsum::{traced_tensor::einsum, Subscripts};
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::Device;
 //!

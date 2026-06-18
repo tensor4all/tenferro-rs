@@ -82,7 +82,7 @@ fn index_select_config(
     let indices = Tensor::I64(TypedTensor::from_vec_col_major(
         vec![positions.len(), 1],
         index_data,
-    ));
+    )?);
 
     let config = GatherConfig {
         offset_dims,
@@ -126,7 +126,7 @@ impl TracedTensor {
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::from_tensor_concrete_shape(
-    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]),
+    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
     /// );
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
@@ -162,8 +162,8 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
-    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]));
-    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]));
+    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap());
+    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap());
     /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&stacked).unwrap();
@@ -253,7 +253,9 @@ fn apply_nary_concatenate(
             out_dtype,
             out_shape.iter().copied().map(SymDim::from).collect(),
         ),
-    );
+    )
+    // Stack builds a fresh graph output after validating all concrete shapes.
+    .expect("fresh stack output metadata registration failed");
 
     let mut inputs_map = HashMap::new();
     let mut extra_roots = Vec::new();

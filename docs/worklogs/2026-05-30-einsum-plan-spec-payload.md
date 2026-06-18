@@ -57,7 +57,7 @@ operands.
   policies through `EinsumOptimize`; exposing an additional plan-spec type would
   add API weight without a current caller need.
 - **No exact `ctx.shape_of(Local(ct))` dependency in transpose rules.** The
-  current `tidu::try_transpose` path creates cotangent seed locals before their
+  current `tidu::linear_transpose` path creates cotangent seed locals before their
   metadata is registered. The einsum AD rule instead uses the extension output
   shape hint that traced and eager construction now attach.
 - **No broad cache redesign.** The change only extends einsum-specific cache

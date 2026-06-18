@@ -88,8 +88,8 @@ fn assert_c32_dot_general_with_conj_matches_cpu(
 ) {
     let lhs_len = lhs_shape.iter().product();
     let rhs_len = rhs_shape.iter().product();
-    let lhs = Tensor::from_vec_col_major(lhs_shape.clone(), c32_values(lhs_len, 0.25));
-    let rhs = Tensor::from_vec_col_major(rhs_shape.clone(), c32_values(rhs_len, -0.75));
+    let lhs = Tensor::from_vec_col_major(lhs_shape.clone(), c32_values(lhs_len, 0.25)).unwrap();
+    let rhs = Tensor::from_vec_col_major(rhs_shape.clone(), c32_values(rhs_len, -0.75)).unwrap();
     let config = dot_general_config_for_shapes(&lhs_shape, &rhs_shape);
 
     let mut cpu = CpuBackend::new();
@@ -192,8 +192,10 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
     }
 
     let mut backend = WebGpuBackend::new_default().unwrap();
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -227,8 +229,10 @@ fn webgpu_dot_general_runs_rank2_f32_matmul_when_adapter_available() {
     }
 
     let mut backend = WebGpuBackend::new_default().unwrap();
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -261,13 +265,15 @@ fn webgpu_dot_general_supports_batched_f32_contract_shape_when_adapter_available
         vec![
             1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0, 10.0, 40.0, 20.0, 50.0, 30.0, 60.0,
         ],
-    );
+    )
+    .unwrap();
     let rhs = Tensor::from_vec_col_major(
         vec![3, 2, 2],
         vec![
             7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0, 70.0, 90.0, 110.0, 80.0, 100.0, 120.0,
         ],
-    );
+    )
+    .unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -301,8 +307,8 @@ fn webgpu_dot_general_packs_noncontiguous_lhs_free_axes_when_adapter_available()
         1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0, 10.0, 40.0, 20.0, 50.0, 30.0, 60.0,
     ];
     let rhs_data = vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0];
-    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone());
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], rhs_data.clone());
+    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -358,8 +364,8 @@ fn webgpu_dot_general_supports_batched_c32_contract_shape_when_adapter_available
         Complex32::new(100.0, 0.5),
         Complex32::new(120.0, -0.25),
     ];
-    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone());
-    let rhs = Tensor::from_vec_col_major(vec![3, 2, 2], rhs_data.clone());
+    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -392,8 +398,8 @@ fn webgpu_dot_general_rejects_f64_and_c64_without_cpu_fallback_when_adapter_avai
         rhs_batch_dims: vec![],
     };
 
-    let lhs_f64 = Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]);
-    let rhs_f64 = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]);
+    let lhs_f64 = Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap();
+    let rhs_f64 = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
     let lhs_f64 = backend.upload_host_tensor(&lhs_f64).unwrap();
     let rhs_f64 = backend.upload_host_tensor(&rhs_f64).unwrap();
     let err = backend
@@ -404,8 +410,8 @@ fn webgpu_dot_general_rejects_f64_and_c64_without_cpu_fallback_when_adapter_avai
         "unexpected f64 error: {err}"
     );
 
-    let lhs_c64 = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.5)]);
-    let rhs_c64 = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(2.0, -0.25)]);
+    let lhs_c64 = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.5)]).unwrap();
+    let rhs_c64 = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(2.0, -0.25)]).unwrap();
     let lhs_c64 = backend.upload_host_tensor(&lhs_c64).unwrap();
     let rhs_c64 = backend.upload_host_tensor(&rhs_c64).unwrap();
     let err = backend
@@ -436,8 +442,8 @@ fn webgpu_dot_general_runs_rank2_c32_matmul_when_adapter_available() {
         Complex32::new(7.0, 1.0),
         Complex32::new(8.0, -0.75),
     ];
-    let lhs = Tensor::from_vec_col_major(vec![2, 2], lhs_data.clone());
-    let rhs = Tensor::from_vec_col_major(vec![2, 2], rhs_data.clone());
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], rhs_data.clone()).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],

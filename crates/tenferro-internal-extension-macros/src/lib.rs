@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token, Visibility};
+use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token};
 
 #[derive(Debug, Default)]
 struct ExtensionArgs {
@@ -29,15 +29,9 @@ struct RuntimeArgs {
     family_id: Path,
     op_type: Path,
     execute: Path,
-    execute_reads: Option<Path>,
+    execute_reads: Path,
     register_fn: Ident,
     backend_bound: Path,
-}
-
-struct RuleRegistrationArgs {
-    register_fn: Ident,
-    rule_type: Path,
-    visibility: Visibility,
 }
 
 impl Parse for ExtensionArgs {
@@ -106,46 +100,10 @@ impl Parse for RuntimeArgs {
             family_id: required(family_id, "family_id")?,
             op_type: required(op_type, "op_type")?,
             execute: required(execute, "execute")?,
-            execute_reads,
+            execute_reads: required(execute_reads, "execute_reads")?,
             register_fn: required(register_fn, "register_fn")?,
             backend_bound: backend_bound
                 .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
-        })
-    }
-}
-
-impl Parse for RuleRegistrationArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut register_fn = None;
-        let mut rule_type = None;
-        let mut visibility = None;
-
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
-                "register_fn" => register_fn = Some(input.parse()?),
-                "rule_type" => rule_type = Some(input.parse()?),
-                "visibility" => visibility = Some(input.parse()?),
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!(
-                            "unsupported define_idempotent_rule_registration argument {other:?}"
-                        ),
-                    ));
-                }
-            }
-            if input.is_empty() {
-                break;
-            }
-            input.parse::<Token![,]>()?;
-        }
-
-        Ok(Self {
-            register_fn: required(register_fn, "register_fn")?,
-            rule_type: required(rule_type, "rule_type")?,
-            visibility: visibility.unwrap_or(Visibility::Inherited),
         })
     }
 }
@@ -170,21 +128,12 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 /// The `execute` function must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[&Tensor], &mut ExtensionExecutionContext<'_, B>)`.
 ///
-/// `execute_reads` is optional. When supplied, it must have this signature:
+/// `execute_reads` is required. It must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
 #[proc_macro]
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
     expand_extension_runtime(args).into()
-}
-
-/// Generate an idempotent process-global extension AD rule registration helper.
-///
-/// The generated function returns `Ok(())` when the rule is already registered.
-#[proc_macro]
-pub fn define_idempotent_rule_registration(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as RuleRegistrationArgs);
-    expand_idempotent_rule_registration(args).into()
 }
 
 fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -231,26 +180,6 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
         register_fn,
         backend_bound,
     } = args;
-    let execute_reads_method = execute_reads.map(|execute_reads| {
-        quote! {
-            fn execute_reads(
-                &self,
-                op: &dyn tenferro_runtime::extension::ExtensionOpTrait,
-                inputs: &[tenferro_tensor::TensorRead<'_>],
-                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
-            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
-                let op = op
-                    .as_any()
-                    .downcast_ref::<#op_type>()
-                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                        op: "extension_runtime",
-                        message: format!("payload type mismatch for {}", #family_id),
-                    })?;
-                #execute_reads(op, inputs, ctx)
-            }
-        }
-    });
-
     quote! {
         #[derive(Debug, Default)]
         pub(crate) struct #runtime;
@@ -264,7 +193,7 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
 
             fn execute(
                 &self,
-                op: &dyn tenferro_runtime::extension::ExtensionOpTrait,
+                op: &dyn tenferro_runtime::extension::ExtensionOp,
                 inputs: &[&tenferro_tensor::Tensor],
                 ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
             ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
@@ -278,7 +207,21 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                 #execute(op, inputs, ctx)
             }
 
-            #execute_reads_method
+            fn execute_reads(
+                &self,
+                op: &dyn tenferro_runtime::extension::ExtensionOp,
+                inputs: &[tenferro_tensor::TensorRead<'_>],
+                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
+            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
+                let op = op
+                    .as_any()
+                    .downcast_ref::<#op_type>()
+                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                        op: "extension_runtime",
+                        message: format!("payload type mismatch for {}", #family_id),
+                    })?;
+                #execute_reads(op, inputs, ctx)
+            }
         }
 
         pub fn #register_fn<B: #backend_bound + 'static>(
@@ -288,26 +231,6 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
             tenferro_runtime::extension::ExtensionRuntimeRegistryError,
         > {
             executor.registry_mut().register(std::sync::Arc::new(#runtime))
-        }
-    }
-}
-
-fn expand_idempotent_rule_registration(args: RuleRegistrationArgs) -> proc_macro2::TokenStream {
-    let RuleRegistrationArgs {
-        register_fn,
-        rule_type,
-        visibility,
-    } = args;
-
-    quote! {
-        #visibility fn #register_fn() -> std::result::Result<
-            (),
-            tenferro_ops::ExtensionRegistryError,
-        > {
-            match tenferro_ops::register_extension_rule(std::sync::Arc::new(#rule_type)) {
-                Ok(()) | Err(tenferro_ops::ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
-                Err(err) => Err(err),
-            }
         }
     }
 }

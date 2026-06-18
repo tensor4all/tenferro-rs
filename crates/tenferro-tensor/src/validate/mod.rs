@@ -6,7 +6,7 @@
 //! use tenferro_tensor::validate::validate_nonsingular_u;
 //! use tenferro_tensor::{Tensor, TypedTensor};
 //!
-//! let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+//! let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
 //! assert!(validate_nonsingular_u(&t).is_ok());
 //! ```
 
@@ -66,7 +66,7 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 /// use tenferro_tensor::validate::check_singular_diagonal;
 /// use tenferro_tensor::TypedTensor;
 ///
-/// let t = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]);
+/// let t = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]).unwrap();
 /// assert!(check_singular_diagonal(&t).is_ok());
 /// ```
 pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
@@ -85,8 +85,9 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     let batch_total: usize = t.shape()[2..].iter().product();
     let batch_total = batch_total.max(1);
     let slice_size = rows * cols;
+    let data = t.host_data()?;
     for batch_idx in 0..batch_total {
-        let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+        let batch = &data[batch_idx * slice_size..(batch_idx + 1) * slice_size];
         for i in 0..n {
             let diag = batch[i + i * rows];
             if diag.is_singular_or_nonfinite() {
@@ -122,7 +123,7 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
 /// use tenferro_tensor::validate::validate_nonsingular_u;
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
 /// assert!(validate_nonsingular_u(&t).is_ok());
 /// ```
 pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {

@@ -26,8 +26,8 @@ use crate::traced::TracedTensor;
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = &x + &x;
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let y = (&x + &x).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
 ///
@@ -106,7 +106,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -132,7 +132,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphExecutor, Tensor, TensorValue};
     ///
-    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.reclaim_value_outputs(vec![TensorValue::from_tensor(tensor)]);
     /// ```
@@ -204,7 +204,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -227,8 +227,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let x = TracedTensor::from_vec_col_major(
     ///     vec![2, 3],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    /// );
-    /// let y = x.transpose(&[1, 0]);
+    /// )
+    /// .unwrap();
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     ///
@@ -237,7 +238,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(value.shape(), &[3, 2]);
     /// assert_eq!(
-    ///     value.to_tensor().as_slice::<f64>().unwrap(),
+    ///     value.to_tensor().unwrap().as_slice::<f64>().unwrap(),
     ///     &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     /// );
     /// ```
@@ -254,7 +255,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let y = x.neg();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
@@ -274,8 +275,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let y = x.transpose(&[1, 0]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&y]).unwrap();
     ///
@@ -301,12 +302,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    /// let y = &x + &x;
+    /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
     ///     .unwrap();
-    /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// let out = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
@@ -329,17 +330,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    /// let y = x.transpose(&[1, 0]);
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
     ///     .unwrap();
-    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let value = executor.run_value_with_inputs(&program, &[(&x, &bound)]).unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
-    /// assert_eq!(value.to_tensor().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// assert_eq!(value.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
     pub fn run_value_with_inputs(
         &mut self,
@@ -365,7 +366,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// };
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    /// let y = &x + &x;
+    /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
@@ -399,7 +400,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// };
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    /// let y = x.transpose(&[1, 0]);
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
@@ -433,12 +434,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    /// let sum = &x + &x;
+    /// let sum = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&sum, &[(&x, DType::F64, &[2])])
     ///     .unwrap();
-    /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// let outputs = executor.run_many_with_inputs(&program, &[(&x, &bound)]).unwrap();
     /// assert_eq!(outputs.len(), 1);
@@ -462,12 +463,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    /// let y = x.transpose(&[1, 0]);
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
     ///     .unwrap();
-    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let outputs = executor
@@ -500,7 +501,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// };
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    /// let y = &x + &x;
+    /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
@@ -534,7 +535,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// };
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    /// let y = x.transpose(&[1, 0]);
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
@@ -570,7 +571,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -601,8 +602,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let y = x.transpose(&[1, 0]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -636,7 +637,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -663,15 +664,15 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TensorValue, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let y = x.transpose(&[1, 0]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let value = executor.run_value(&program).unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
-    /// assert_eq!(value.to_tensor().shape(), &[2, 2]);
+    /// assert_eq!(value.to_tensor().unwrap().shape(), &[2, 2]);
     /// ```
     pub fn eval_exec_ir_non_consuming_values(
         &mut self,
@@ -1153,17 +1154,33 @@ fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
 }
 
 fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+    // Invariant: executor deferred zeros are derived from already-validated tensor shapes.
     match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        DType::F32 => {
+            Tensor::F32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::F64 => {
+            Tensor::F64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::I32 => {
+            Tensor::I32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::I64 => {
+            Tensor::I64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
         DType::Bool => {
             let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; len]))
+            Tensor::Bool(
+                TypedTensor::from_vec_col_major(shape, vec![false; len])
+                    .expect("validated bool default tensor shape"),
+            )
         }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+        DType::C32 => {
+            Tensor::C32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::C64 => {
+            Tensor::C64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
     }
 }
 

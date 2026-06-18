@@ -13,7 +13,7 @@ reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CubeclBackend` |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CudaBackend` |
 
 CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
 can run supported operations on CUDA tensors when data is explicitly uploaded
@@ -44,18 +44,23 @@ use tenferro_runtime::{Tensor, TypedTensor};
 
 fn main() {
     let typed =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    assert_eq!(typed.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
+    assert_eq!(typed.as_slice().unwrap(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
-    let dynamic = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    assert_eq!(dynamic.as_slice::<f64>().unwrap(), typed.as_slice());
+    let dynamic =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+    assert_eq!(
+        dynamic.as_slice::<f64>().unwrap(),
+        typed.as_slice().unwrap()
+    );
 }
 ```
 <!-- end-snippet-source -->
 
-Use `from_vec_row_major` for data copied from PyTorch, NumPy, JAX, or C-style
-examples. Use `from_vec_col_major` when the flat buffer is already in tenferro's
-physical order.
+Use `from_vec_col_major` for tensor construction. Data copied from PyTorch,
+NumPy, JAX, or C-style examples must be explicitly reordered at the boundary
+before entering tenferro.
 
 ## Direct Tensor Execution
 
@@ -102,7 +107,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 ```
 
 ## Traced Graph Execution

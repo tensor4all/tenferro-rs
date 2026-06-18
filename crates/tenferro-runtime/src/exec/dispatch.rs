@@ -319,7 +319,7 @@ fn execute_shape_of_host<B: TensorBackend>(
     let host = Tensor::F64(tenferro_tensor::TypedTensor::from_vec_col_major(
         vec![],
         vec![input.shape()[*axis] as f64],
-    ));
+    )?);
     slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.upload_host_tensor(&host)?));
     Ok(())
 }

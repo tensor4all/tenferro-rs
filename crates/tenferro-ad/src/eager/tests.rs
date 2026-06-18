@@ -94,20 +94,20 @@ fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
     }));
     assert!(poisoned.is_err());
 
-    assert!(ctx.try_clear_extension_caches().is_err());
-    assert!(ctx.try_cache_stats().is_err());
-    assert!(ctx.try_extension_cache_limits().is_err());
+    assert!(ctx.clear_extension_caches().is_err());
+    assert!(ctx.cache_stats().is_err());
+    assert!(ctx.extension_cache_limits().is_err());
     assert!(ctx
-        .try_set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
+        .set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
         .is_err());
     assert!(ctx.with_extension_caches_mut(|_| ()).is_err());
 
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.clear_extension_caches();
-        ctx.clear_caches();
+        let _ = ctx.clear_extension_caches();
+        let _ = ctx.clear_caches();
         let _ = ctx.cache_stats();
         let _ = ctx.extension_cache_limits();
-        ctx.set_extension_cache_limits(ExtensionCacheLimits::default());
+        let _ = ctx.set_extension_cache_limits(ExtensionCacheLimits::default());
     }))
     .is_ok());
 }
@@ -133,7 +133,7 @@ fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
 fn eager_index_select_reports_poisoned_backend_lock() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         Arc::clone(&ctx),
     );
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -154,7 +154,7 @@ fn eager_index_select_reports_poisoned_backend_lock() {
 fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]),
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx.clone(),
     );
     let poisoned_slot = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -163,11 +163,11 @@ fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
     }));
     assert!(poisoned_slot.is_err());
 
-    assert!(x.try_grad().is_err());
-    assert!(x.try_clear_grad().is_err());
+    assert!(x.grad().is_err());
+    assert!(x.clear_grad().is_err());
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert!(x.grad().is_none());
-        x.clear_grad();
+        let _ = x.grad();
+        let _ = x.clear_grad();
     }))
     .is_ok());
 
@@ -177,9 +177,9 @@ fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
     }));
     assert!(poisoned_registry.is_err());
 
-    assert!(ctx.try_clear_grads().is_err());
+    assert!(ctx.clear_grads().is_err());
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.clear_grads();
+        let _ = ctx.clear_grads();
     }))
     .is_ok());
 }
@@ -274,12 +274,26 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.eager_execute(inputs)
     }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
 }
 
 #[test]
 fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
     let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let reads = [TensorRead::from_tensor(&input)];
     let mut backend = CpuBackend::new();
     let mut extension_executor = ExtensionExecutor::<CpuBackend>::new();
@@ -311,7 +325,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     .expect("register read-path fallback runtime");
 
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
     );
     let x_t = x.transpose(&[1, 0]).unwrap();
@@ -346,7 +360,7 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
     let user = TensorInputKey::User { id: 7 };
     let base_key = ValueKey::Input(user.clone());
     let tangent_key = ValueKey::Input(user.tangent_of(11));
-    let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]));
+    let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap());
     let initial_data = HashMap::from([(base_key.clone(), Arc::clone(&base))]);
 
     assert_eq!(missing_tangent_base_key(&base_key), None);
@@ -355,8 +369,8 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
         Some(base_key.clone())
     );
     assert_eq!(
-        eager_forward_input_metadata(&tangent_key, &initial_data).shape,
-        vec![SymDim::from(2usize)]
+        eager_forward_input_metadata(&tangent_key, &initial_data).exact_shape(),
+        Some(vec![SymDim::from(2usize)])
     );
 
     let mut all_values = HashMap::new();
@@ -369,11 +383,13 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
 fn standard_graph_op_executes_untracked_outputs_without_trace() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
     );
-    let rhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+        ctx,
+    );
 
     let outputs =
         EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
@@ -390,11 +406,13 @@ fn standard_graph_op_executes_untracked_outputs_without_trace() {
 fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
     );
-    let rhs =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+    let rhs = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+        ctx,
+    );
 
     let mut outputs =
         EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
@@ -406,8 +424,14 @@ fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
     assert_eq!(loss.debug_trace_saved_value_count(), Some(5));
 
     loss.backward().expect("backward through recorded graph");
-    assert_eq!(lhs.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
-    assert_eq!(rhs.grad().unwrap().as_slice::<f64>().unwrap(), &[7.0, 10.0]);
+    assert_eq!(
+        lhs.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[3.0, 4.0]
+    );
+    assert_eq!(
+        rhs.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[7.0, 10.0]
+    );
 }
 
 #[test]
@@ -426,10 +450,14 @@ fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
 
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let lhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
-    let rhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        lhs_ctx,
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        rhs_ctx,
+    );
 
     let err = match EagerTensor::standard_graph_op(&[&lhs, &rhs], |_| {
         panic!("cross-context inputs should fail before graph construction")
@@ -444,16 +472,16 @@ fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
 fn zero_like_tensor_covers_non_f64_dtypes() {
     let mut backend = CpuBackend::new();
     let cases = [
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f32]),
-        Tensor::from_vec_col_major(vec![1], vec![1_i32]),
-        Tensor::from_vec_col_major(vec![1], vec![1_i64]),
-        Tensor::from_vec_col_major(vec![2], vec![true, false]),
-        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(1.0, -1.0)]),
-        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex64::new(1.0, -1.0)]),
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+        Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(1.0, -1.0)]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex64::new(1.0, -1.0)]).unwrap(),
     ];
 
     for input in cases {
-        let zero = zero_like_tensor(&input, &mut backend);
+        let zero = zero_like_tensor(&input, &mut backend).unwrap();
         assert_eq!(zero.shape(), input.shape());
     }
 }
@@ -461,8 +489,8 @@ fn zero_like_tensor_covers_non_f64_dtypes() {
 #[test]
 fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
     let mut backend = EagerBackend::cpu(CpuBackend::new());
-    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap();
 
     let out = backend
         .execute_broadcast_multiply(
@@ -487,7 +515,7 @@ fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
 fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
     );
     let x_t = x.transpose(&[1, 0]).unwrap();

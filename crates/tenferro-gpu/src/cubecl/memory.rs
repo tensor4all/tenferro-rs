@@ -2,14 +2,14 @@
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
-use cubecl_cuda::CudaRuntime;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 
 use super::dispatch;
-use crate::cubecl::runtime::CubeclRuntime;
+use crate::cubecl::runtime::CudaRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
+    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
     TypedTensor,
 };
 
@@ -18,12 +18,12 @@ use crate::types::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{upload_tensor, CubeclRuntime};
+/// use tenferro_gpu::{upload_tensor, CudaRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
-/// let _upload: fn(&CubeclRuntime, &Tensor) -> Result<Tensor> = upload_tensor;
+/// let _upload: fn(&CudaRuntime, &Tensor) -> Result<Tensor> = upload_tensor;
 /// ```
-pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
+pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     let client = rt.client();
     match tensor {
         Tensor::F64(t) => upload_typed::<f64>(client, rt.device_ordinal(), t).map(Tensor::F64),
@@ -45,12 +45,12 @@ pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tenso
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{download_tensor, CubeclRuntime};
+/// use tenferro_gpu::{download_tensor, CudaRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
-/// let _download: fn(&CubeclRuntime, &Tensor) -> Result<Tensor> = download_tensor;
+/// let _download: fn(&CudaRuntime, &Tensor) -> Result<Tensor> = download_tensor;
 /// ```
-pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
+pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     ensure_tensor_resident_on_runtime(rt, tensor, "download")?;
     match tensor {
         Tensor::F64(t) => download_typed::<f64>(rt, t).map(Tensor::F64),
@@ -68,12 +68,12 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{device_ptr, CubeclRuntime};
+/// use tenferro_gpu::{device_ptr, CudaRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
-/// let _device_ptr: fn(&CubeclRuntime, &Tensor) -> Result<u64> = device_ptr;
+/// let _device_ptr: fn(&CudaRuntime, &Tensor) -> Result<u64> = device_ptr;
 /// ```
-pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {
+pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {
     ensure_tensor_resident_on_runtime(rt, tensor, "device_ptr")?;
     let handle = cubecl_handle(tensor)?;
     let resource = rt
@@ -84,7 +84,7 @@ pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {
 }
 
 fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
-    client: &ComputeClient<CudaRuntime>,
+    client: &ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
@@ -102,21 +102,21 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     };
 
     let handle = client.create_from_slice(T::as_bytes(host_data));
-    Ok(TypedTensor::from_buffer_col_major(
+    TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
         Placement {
             memory_kind: MemoryKind::Device,
-            device: Some(ComputeDevice {
+            device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
-    ))
+    )
 }
 
 fn download_typed<T: CubeElement + Clone + 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let handle = match typed.buffer() {
@@ -130,10 +130,7 @@ fn download_typed<T: CubeElement + Clone + 'static>(
     };
 
     if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        ));
+        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
     }
 
     rt.synchronize()?;
@@ -142,14 +139,11 @@ fn download_typed<T: CubeElement + Clone + 'static>(
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = T::from_bytes(&bytes).to_vec();
-    Ok(TypedTensor::from_vec_col_major(
-        typed.shape().to_vec(),
-        data,
-    ))
+    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
 }
 
 fn upload_bool(
-    client: &ComputeClient<CudaRuntime>,
+    client: &ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
@@ -168,23 +162,20 @@ fn upload_bool(
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
     let handle = client.create_from_slice(&bytes);
-    Ok(TypedTensor::from_buffer_col_major(
+    TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
         Placement {
             memory_kind: MemoryKind::Device,
-            device: Some(ComputeDevice {
+            device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
-    ))
+    )
 }
 
-fn download_bool(
-    rt: &CubeclRuntime,
-    typed: &TypedTensor<bool>,
-) -> crate::Result<TypedTensor<bool>> {
+fn download_bool(rt: &CudaRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
     let handle = match typed.buffer() {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
@@ -196,10 +187,7 @@ fn download_bool(
     };
 
     if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        ));
+        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
     }
 
     rt.synchronize()?;
@@ -208,14 +196,11 @@ fn download_bool(
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = bytes.iter().map(|&byte| byte != 0).collect();
-    Ok(TypedTensor::from_vec_col_major(
-        typed.shape().to_vec(),
-        data,
-    ))
+    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
 }
 
 fn ensure_tensor_resident_on_runtime(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &Tensor,
     op: &'static str,
 ) -> crate::Result<()> {

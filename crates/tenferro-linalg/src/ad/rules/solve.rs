@@ -1,7 +1,10 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::ad::context::ShapeGuardContext;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::extension::LinalgOp;
 
@@ -55,7 +58,7 @@ pub(crate) fn linearize_triangular_solve(
     tangent_in: &[Option<LocalValueId>],
     flags: TriangularSolveFlags,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     // Equation: op(A) @ X = B  (left_side=true)
     //       or  X @ op(A) = B  (left_side=false)
     // where op = identity (transpose_a=false) or transpose (transpose_a=true).
@@ -65,19 +68,16 @@ pub(crate) fn linearize_triangular_solve(
     //
     // When tangent_in[0] (dA) is present, we compute the correction:
     //   -d(op(A)) @ X  or  -X @ d(op(A))
-    let lhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .len();
-    let rhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[1].clone()))
-        .len();
-    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
-        return vec![None];
-    }
+    let lhs_ref = ValueRef::External(primal_in[0].clone());
+    let rhs_ref = ValueRef::External(primal_in[1].clone());
+    let lhs_rank = ctx.rank_of(&lhs_ref)?;
+    let rhs_rank = ctx.rank_of(&rhs_ref)?;
+    validate_matrix_operands("triangular_solve", ADRuleKind::Jvp, lhs_rank, rhs_rank)?;
+    validate_square_matrix_input("triangular_solve", ADRuleKind::Jvp, &lhs_ref, ctx)?;
     let rank = lhs_rank;
     let rhs_tangent = triangular_solve_rhs_tangent(builder, primal_out, tangent_in, flags, rank);
     let Some(rhs_tangent) = rhs_tangent else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let out = builder.add_operation(
@@ -90,7 +90,7 @@ pub(crate) fn linearize_triangular_solve(
             active_mask: vec![false, true],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 #[derive(Clone, Copy)]
@@ -112,16 +112,13 @@ fn linearize_linear_solve(
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
     kind: LinearSolveOp,
-) -> Vec<Option<LocalValueId>> {
-    let lhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .len();
-    let rhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[1].clone()))
-        .len();
-    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
-        return vec![None];
-    }
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let lhs_ref = ValueRef::External(primal_in[0].clone());
+    let rhs_ref = ValueRef::External(primal_in[1].clone());
+    let lhs_rank = ctx.rank_of(&lhs_ref)?;
+    let rhs_rank = ctx.rank_of(&rhs_ref)?;
+    validate_matrix_operands(kind.op_name(), ADRuleKind::Jvp, lhs_rank, rhs_rank)?;
+    validate_square_matrix_input(kind.op_name(), ADRuleKind::Jvp, &lhs_ref, ctx)?;
     let rank = lhs_rank;
     let mut rhs_tangent = tangent_in[1];
 
@@ -142,7 +139,7 @@ fn linearize_linear_solve(
     }
 
     let Some(rhs_tangent) = rhs_tangent else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let out = builder.add_operation(
@@ -155,7 +152,7 @@ fn linearize_linear_solve(
             active_mask: vec![false, true],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 pub(crate) fn linearize_lu_solve_prepared(
@@ -166,21 +163,18 @@ pub(crate) fn linearize_lu_solve_prepared(
     transpose_a: bool,
     conjugate_a: bool,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
-    let lhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .len();
-    let rhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[3].clone()))
-        .len();
-    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
-        return vec![None];
-    }
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let lhs_ref = ValueRef::External(primal_in[0].clone());
+    let rhs_ref = ValueRef::External(primal_in[3].clone());
+    let lhs_rank = ctx.rank_of(&lhs_ref)?;
+    let rhs_rank = ctx.rank_of(&rhs_ref)?;
+    validate_matrix_operands("lu_solve_prepared", ADRuleKind::Jvp, lhs_rank, rhs_rank)?;
+    validate_square_matrix_input("lu_solve_prepared", ADRuleKind::Jvp, &lhs_ref, ctx)?;
     let rank = lhs_rank;
     let mut rhs_tangent = tangent_in[3];
 
     if let Some(da) = tangent_in[0] {
-        let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+        let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
         let d_op_a = match (transpose_a, conjugate_a) {
             (false, false) => da,
             (true, false) => transpose_matrix_linear(builder, da, rank),
@@ -198,7 +192,7 @@ pub(crate) fn linearize_lu_solve_prepared(
     }
 
     let Some(rhs_tangent) = rhs_tangent else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let out = builder.add_operation(
@@ -216,7 +210,7 @@ pub(crate) fn linearize_lu_solve_prepared(
             active_mask: vec![false, false, false, true],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 pub(crate) fn linearize_full_piv_lu_solve(
@@ -226,7 +220,7 @@ pub(crate) fn linearize_full_piv_lu_solve(
     tangent_in: &[Option<LocalValueId>],
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     linearize_linear_solve(
         builder,
         primal_in,
@@ -236,6 +230,85 @@ pub(crate) fn linearize_full_piv_lu_solve(
         ctx,
         LinearSolveOp::FullPivLuSolve,
     )
+}
+
+fn invalid_input(op: &'static str, rule: ADRuleKind, message: impl Into<String>) -> ADRuleError {
+    ADRuleError::invalid_input(format!("{LINALG_AD_OP_PREFIX}{op}"), rule, message)
+}
+
+const LINALG_AD_OP_PREFIX: &str = "tenferro-linalg.";
+
+impl LinearSolveOp {
+    fn op_name(self) -> &'static str {
+        match self {
+            LinearSolveOp::FullPivLuSolve => "full_piv_lu_solve",
+        }
+    }
+}
+
+fn validate_matrix_operands(
+    op: &'static str,
+    rule: ADRuleKind,
+    lhs_rank: usize,
+    rhs_rank: usize,
+) -> ADRuleResult<()> {
+    if lhs_rank < 2 || rhs_rank < 2 {
+        return Err(invalid_input(
+            op,
+            rule,
+            format!("expected matrix operands with rank >= 2, got ranks {lhs_rank} and {rhs_rank}"),
+        ));
+    }
+    if lhs_rank != rhs_rank {
+        return Err(invalid_input(
+            op,
+            rule,
+            format!("expected matrix operands with matching ranks, got {lhs_rank} and {rhs_rank}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_square_matrix_input(
+    op: &'static str,
+    rule: ADRuleKind,
+    input: &ValueRef<StdTensorOp>,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<()> {
+    let extents = ctx.extents_of(input)?;
+    let (Some(rows), Some(cols)) = (
+        exact_constant_extent(&extents[0]),
+        exact_constant_extent(&extents[1]),
+    ) else {
+        return Ok(());
+    };
+    let (rows_size, cols_size) = tenferro_ops::ad::context::resolve_and_guard(
+        &DimExpr::Const(rows),
+        &DimExpr::Const(cols),
+        ctx,
+    )
+    .map_err(|err| {
+        invalid_input(
+            op,
+            rule,
+            format!("invalid matrix dimension expression: {err}"),
+        )
+    })?;
+    if rows_size != cols_size {
+        return Err(invalid_input(
+            op,
+            rule,
+            format!("expected square matrix operand, got {rows_size}x{cols_size}"),
+        ));
+    }
+    Ok(())
+}
+
+fn exact_constant_extent(extent: &ShapeExtent<tenferro_ops::SymDim>) -> Option<usize> {
+    match extent {
+        ShapeExtent::Exact(dim) => dim.constant_value(),
+        ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => None,
+    }
 }
 
 fn triangular_solve_rhs_tangent(
@@ -280,17 +353,21 @@ pub(crate) fn transpose_triangular_solve(
     mode: &OperationRole,
     flags: TriangularSolveFlags,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
     let OperationRole::Linearized { active_mask } = mode else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
 
     let mut result = vec![None, None];
     if active_mask[0] || active_mask[1] {
-        let dtype = ctx.dtype_of(&inputs[0]);
+        let rank = ctx.rank_of(&inputs[0])?;
+        let rhs_rank = ctx.rank_of(&inputs[1])?;
+        validate_matrix_operands("triangular_solve", ADRuleKind::Transpose, rank, rhs_rank)?;
+        validate_square_matrix_input("triangular_solve", ADRuleKind::Transpose, &inputs[0], ctx)?;
+        let dtype = ctx.dtype_of(&inputs[0])?;
         let conjugated_a = conjugate_primal_if_dtype_complex(builder, inputs[0].clone(), dtype);
         let out = builder.add_operation(
             flags.transposed().std_op(),
@@ -301,7 +378,6 @@ pub(crate) fn transpose_triangular_solve(
         );
         let rhs_cotangent = out[0];
         if active_mask[0] {
-            let rank = ctx.shape_of(&inputs[0]).len();
             let solution = builder.add_operation(
                 linalg_std_op(LinalgOp::TriangularSolve {
                     left_side: flags.left_side,
@@ -334,7 +410,7 @@ pub(crate) fn transpose_triangular_solve(
         }
     }
 
-    result
+    Ok(result)
 }
 
 fn transpose_linear_solve(
@@ -345,17 +421,21 @@ fn transpose_linear_solve(
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
     kind: LinearSolveOp,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
     let OperationRole::Linearized { active_mask } = mode else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
 
     let mut result = vec![None, None];
     if active_mask[0] || active_mask[1] {
-        let dtype = ctx.dtype_of(&inputs[0]);
+        let rank = ctx.rank_of(&inputs[0])?;
+        let rhs_rank = ctx.rank_of(&inputs[1])?;
+        validate_matrix_operands(kind.op_name(), ADRuleKind::Transpose, rank, rhs_rank)?;
+        validate_square_matrix_input(kind.op_name(), ADRuleKind::Transpose, &inputs[0], ctx)?;
+        let dtype = ctx.dtype_of(&inputs[0])?;
         let conjugated_a = conjugate_primal_if_dtype_complex(builder, inputs[0].clone(), dtype);
         let out = builder.add_operation(
             linear_solve_op(kind, !transpose_a),
@@ -366,7 +446,6 @@ fn transpose_linear_solve(
         );
         let rhs_cotangent = out[0];
         if active_mask[0] {
-            let rank = ctx.shape_of(&inputs[0]).len();
             let solution = builder.add_operation(
                 linear_solve_op(kind, transpose_a),
                 inputs.to_vec(),
@@ -387,7 +466,7 @@ fn transpose_linear_solve(
         }
     }
 
-    result
+    Ok(result)
 }
 
 pub(crate) fn transpose_lu_solve_prepared(
@@ -437,7 +516,7 @@ pub(crate) fn transpose_full_piv_lu_solve(
     mode: &OperationRole,
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     transpose_linear_solve(
         builder,
         cotangent_out,

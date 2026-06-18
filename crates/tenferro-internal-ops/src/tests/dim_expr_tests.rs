@@ -4,7 +4,7 @@ use crate::dim_expr::{DimExpr, DimExprEvalError};
 
 #[test]
 fn test_const_eval() {
-    assert_eq!(DimExpr::Const(42).eval(&[]), 42);
+    assert_eq!(DimExpr::Const(42).eval(&[]).unwrap(), 42);
 }
 
 #[test]
@@ -13,7 +13,7 @@ fn test_input_dim_eval() {
         input_idx: 0,
         axis: 1,
     };
-    assert_eq!(e.eval(&[&[3, 7, 5]]), 7);
+    assert_eq!(e.eval(&[&[3, 7, 5]]).unwrap(), 7);
 }
 
 #[test]
@@ -29,19 +29,29 @@ fn test_arithmetic() {
             axis: 1,
         },
     );
-    assert_eq!(e.eval(shapes), 12);
-    assert_eq!(DimExpr::add(e.clone(), DimExpr::Const(3)).eval(shapes), 15);
-    assert_eq!(DimExpr::floor_div(e, DimExpr::Const(4)).eval(shapes), 3);
+    assert_eq!(e.eval(shapes).unwrap(), 12);
+    assert_eq!(
+        DimExpr::add(e.clone(), DimExpr::Const(3))
+            .eval(shapes)
+            .unwrap(),
+        15
+    );
+    assert_eq!(
+        DimExpr::floor_div(e, DimExpr::Const(4))
+            .eval(shapes)
+            .unwrap(),
+        3
+    );
 }
 
 #[test]
-fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
+fn eval_reports_bad_input_refs_and_arithmetic_errors() {
     let input = DimExpr::InputDim {
         input_idx: 0,
         axis: 1,
     };
     assert!(matches!(
-        input.try_eval(&[&[3]]),
+        input.eval(&[&[3]]),
         Err(DimExprEvalError::AxisOutOfBounds {
             input_idx: 0,
             axis: 1,
@@ -54,7 +64,7 @@ fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
         axis: 0,
     };
     assert!(matches!(
-        missing.try_eval(&[&[3]]),
+        missing.eval(&[&[3]]),
         Err(DimExprEvalError::InputOutOfBounds {
             input_idx: 2,
             input_count: 1
@@ -63,7 +73,7 @@ fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
 
     let add = DimExpr::add(DimExpr::Const(usize::MAX), DimExpr::Const(1));
     assert!(matches!(
-        add.try_eval(&[]),
+        add.eval(&[]),
         Err(DimExprEvalError::AddOverflow {
             lhs: usize::MAX,
             rhs: 1
@@ -72,7 +82,7 @@ fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
 
     let mul = DimExpr::mul(DimExpr::Const(usize::MAX), DimExpr::Const(2));
     assert!(matches!(
-        mul.try_eval(&[]),
+        mul.eval(&[]),
         Err(DimExprEvalError::MulOverflow {
             lhs: usize::MAX,
             rhs: 2
@@ -81,41 +91,47 @@ fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
 
     let sub = DimExpr::sub(DimExpr::Const(2), DimExpr::Const(5));
     assert!(matches!(
-        sub.try_eval(&[]),
+        sub.eval(&[]),
         Err(DimExprEvalError::SubUnderflow { lhs: 2, rhs: 5 })
     ));
 
     let div = DimExpr::floor_div(DimExpr::Const(8), DimExpr::Const(0));
     assert!(matches!(
-        div.try_eval(&[]),
+        div.eval(&[]),
         Err(DimExprEvalError::FloorDivByZero { lhs: 8, rhs: 0 })
     ));
 }
 
 #[test]
-#[should_panic(expected = "DimExpr::Sub underflow")]
-fn test_sub_underflow_panics_instead_of_wrapping() {
+fn sub_underflow_returns_error_instead_of_wrapping() {
     let expr = DimExpr::sub(DimExpr::Const(2), DimExpr::Const(5));
-    let _ = expr.eval(&[]);
+    assert!(matches!(
+        expr.eval(&[]),
+        Err(DimExprEvalError::SubUnderflow { lhs: 2, rhs: 5 })
+    ));
 }
 
 #[test]
-#[should_panic(expected = "DimExpr::FloorDiv divide by zero")]
-fn floor_div_zero_const_divisor_panics_with_clear_message() {
+fn floor_div_zero_const_divisor_returns_error() {
     let expr = DimExpr::floor_div(DimExpr::Const(8), DimExpr::Const(0));
-    let _ = expr.eval(&[]);
+    assert!(matches!(
+        expr.eval(&[]),
+        Err(DimExprEvalError::FloorDivByZero { lhs: 8, rhs: 0 })
+    ));
 }
 
 #[test]
-#[should_panic(expected = "DimExpr::FloorDiv divide by zero")]
-fn floor_div_zero_shape_derived_divisor_panics_with_clear_message() {
+fn floor_div_zero_shape_derived_divisor_returns_error() {
     let axis = DimExpr::InputDim {
         input_idx: 0,
         axis: 0,
     };
     let zero = DimExpr::sub(axis.clone(), axis);
     let expr = DimExpr::floor_div(DimExpr::Const(8), zero);
-    let _ = expr.eval(&[&[4]]);
+    assert!(matches!(
+        expr.eval(&[&[4]]),
+        Err(DimExprEvalError::FloorDivByZero { lhs: 8, rhs: 0 })
+    ));
 }
 
 #[test]
@@ -131,7 +147,7 @@ fn test_min_max() {
             axis: 1,
         },
     );
-    assert_eq!(e_min.eval(shapes), 3);
+    assert_eq!(e_min.eval(shapes).unwrap(), 3);
     let e_max = DimExpr::max(
         DimExpr::InputDim {
             input_idx: 0,
@@ -142,7 +158,7 @@ fn test_min_max() {
             axis: 1,
         },
     );
-    assert_eq!(e_max.eval(shapes), 7);
+    assert_eq!(e_max.eval(shapes).unwrap(), 7);
 }
 
 #[test]
@@ -302,11 +318,7 @@ fn test_small_helpers_cover_false_and_empty_paths() {
         axis: 0,
     }
     .is_const());
-    assert_eq!(DimExpr::eval_all(&[], &[]), Vec::<usize>::new());
-    assert_eq!(
-        DimExpr::try_eval_all(&[], &[]).unwrap(),
-        Vec::<usize>::new()
-    );
+    assert_eq!(DimExpr::eval_all(&[], &[]).unwrap(), Vec::<usize>::new());
     assert_eq!(DimExpr::remap_all(&[], 0, 1), Vec::<DimExpr>::new());
     assert_eq!(DimExpr::max_input_idx_all(&[DimExpr::Const(1)]), None);
     assert_eq!(DimExpr::from(&DimExpr::Const(9)), DimExpr::Const(9));

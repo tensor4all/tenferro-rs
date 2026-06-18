@@ -42,8 +42,8 @@ struct InputDescriptor {
 /// ```
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = &x + &x;
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let y = (&x + &x).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
 /// assert_eq!(program.output_count(), 1);
@@ -119,7 +119,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.input_count(), 1);
@@ -135,7 +135,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let y = x.neg();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
@@ -559,7 +559,7 @@ fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
 
 fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Tensor) -> bool {
     match (lhs.as_slice::<T>(), rhs.as_slice::<T>()) {
-        (Some(lhs), Some(rhs)) => lhs == rhs,
+        (Ok(lhs), Ok(rhs)) => lhs == rhs,
         // Backend-resident defaults cannot be inspected here; only the same
         // Arc<Tensor> is considered equivalent by `default_tensors_equivalent`.
         _ => false,
@@ -571,20 +571,33 @@ fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
 }
 
 fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+    // Invariant: compiler default zeros are derived from already-validated tensor shapes.
     match dtype {
-        DType::F32 => Tensor::F32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(tenferro_tensor::TypedTensor::zeros(shape)),
+        DType::F32 => Tensor::F32(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
+        DType::F64 => Tensor::F64(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
+        DType::I32 => Tensor::I32(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
+        DType::I64 => Tensor::I64(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
         DType::Bool => {
             let len = shape.iter().product();
-            Tensor::Bool(tenferro_tensor::TypedTensor::from_vec_col_major(
-                shape,
-                vec![false; len],
-            ))
+            Tensor::Bool(
+                tenferro_tensor::TypedTensor::from_vec_col_major(shape, vec![false; len])
+                    .expect("validated bool default tensor shape"),
+            )
         }
-        DType::C32 => Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)),
+        DType::C32 => Tensor::C32(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
+        DType::C64 => Tensor::C64(
+            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
+        ),
     }
 }
 
@@ -599,11 +612,11 @@ mod tests {
 
     #[test]
     fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
-        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
         let y1 = x.neg();
         let mut y2 = x.neg();
         let key = x.input_key().expect("concrete traced tensor has input key");
-        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]));
+        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
         let mut inputs = (*y2.inputs_map).clone();
         inputs.insert(key.clone(), replacement);
         y2.inputs_map = Arc::new(inputs);
@@ -625,16 +638,22 @@ mod tests {
                 ordinal: 0,
             }),
         };
-        let lhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
-            vec![2],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
-            placement.clone(),
-        )));
-        let rhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
-            vec![2],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
-            placement,
-        )));
+        let lhs = Arc::new(Tensor::F64(
+            TypedTensor::from_buffer_col_major(
+                vec![2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
+                placement.clone(),
+            )
+            .unwrap(),
+        ));
+        let rhs = Arc::new(Tensor::F64(
+            TypedTensor::from_buffer_col_major(
+                vec![2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
+                placement,
+            )
+            .unwrap(),
+        ));
 
         assert!(
             !default_tensors_equivalent(&lhs, &rhs),

@@ -137,7 +137,7 @@ fn solve_2d<T: LapackSolve>(
 
     let n_i32 = dim_i32(n, "solve")?;
     let b_cols_i32 = dim_i32(b_cols, "solve")?;
-    let mut lu = a.host_data().to_vec();
+    let mut lu = a.host_data()?.to_vec();
     let mut ipiv = vec![0_i32; n];
     let mut info = 0;
     T::getrf(n_i32, n_i32, &mut lu, n_i32, &mut ipiv, &mut info);
@@ -149,7 +149,7 @@ fn solve_2d<T: LapackSolve>(
         ));
     }
 
-    let mut rhs = b.host_data().to_vec();
+    let mut rhs = b.host_data()?.to_vec();
     let mut info = 0;
     T::getrs(
         if transpose_a { b'T' } else { b'N' },
@@ -164,7 +164,7 @@ fn solve_2d<T: LapackSolve>(
     );
     check_lapack_info("solve", "getrs", info)?;
 
-    Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
+    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
 }
 
 pub(crate) fn solve<T: LapackSolve>(
@@ -190,11 +190,7 @@ pub(crate) fn solve<T: LapackSolve>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b,
-        ));
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
 
     batched_binary_result("solve", buffers, a, b, |buffers, a, b| {

@@ -30,6 +30,30 @@ fn typed_tensor_storage_fields_are_accessor_based() {
 }
 
 #[test]
+fn tensor_views_do_not_expose_legacy_physical_slice_names() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(crate_dir.join("src/types.rs"))
+        .expect("tenferro-tensor types source must be readable");
+
+    assert!(
+        !source.contains("as_physical_slice"),
+        "typed tensor views must use explicit host_storage accessors, not legacy physical-slice names"
+    );
+}
+
+#[test]
+fn tensor_types_do_not_expose_row_major_compatibility_apis() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(crate_dir.join("src/types.rs"))
+        .expect("tenferro-tensor types source must be readable");
+
+    assert!(
+        !source.contains("from_vec_row_major") && !source.contains("into_vec_row_major"),
+        "tensor public API must stay column-major only; row-major conversion belongs outside tenferro"
+    );
+}
+
+#[test]
 fn elementwise_fusion_ir_is_not_top_level_raw_api() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let lib = fs::read_to_string(crate_dir.join("src/lib.rs"))

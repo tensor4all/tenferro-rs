@@ -36,7 +36,7 @@ macro_rules! impl_real_svd {
                 let n_i32 = dim_i32(n, "svd")?;
                 let k_i32 = dim_i32(k, "svd")?;
 
-                let mut a = input.host_data().to_vec();
+                let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
                 let mut u = vec![0.0 as $scalar; m * k];
                 let mut vt = vec![0.0 as $scalar; k * n];
@@ -60,9 +60,9 @@ macro_rules! impl_real_svd {
                 check_lapack_info("svd", $routine, info)?;
 
                 Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input),
-                    tensor_from_vec_with_template(vec![k], s, input),
-                    tensor_from_vec_with_template(vec![k, n], vt, input),
+                    tensor_from_vec_with_template(vec![m, k], u, input)?,
+                    tensor_from_vec_with_template(vec![k], s, input)?,
+                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
                 ])
             }
 
@@ -75,7 +75,7 @@ macro_rules! impl_real_svd {
                 let m_i32 = dim_i32(m, "svd_values")?;
                 let n_i32 = dim_i32(n, "svd_values")?;
 
-                let mut a = input.host_data().to_vec();
+                let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
@@ -120,7 +120,7 @@ macro_rules! impl_real_svd {
                 }
                 check_lapack_info("svd_values", $routine, info)?;
 
-                Ok(tensor_from_vec_with_template(vec![k], s, input))
+                tensor_from_vec_with_template(vec![k], s, input)
             }
         }
     };
@@ -141,7 +141,7 @@ macro_rules! impl_complex_svd {
                 let n_i32 = dim_i32(n, "svd")?;
                 let k_i32 = dim_i32(k, "svd")?;
 
-                let mut a = input.host_data().to_vec();
+                let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
                 let mut u = vec![<$complex>::new(0.0, 0.0); m * k];
                 let mut vt = vec![<$complex>::new(0.0, 0.0); k * n];
@@ -166,15 +166,15 @@ macro_rules! impl_complex_svd {
                 check_lapack_info("svd", $routine, info)?;
 
                 Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], u, input),
+                    tensor_from_vec_with_template(vec![m, k], u, input)?,
                     tensor_from_vec_with_template(
                         vec![k],
                         s.into_iter()
                             .map(|value| <$complex>::new(value, 0.0))
                             .collect(),
                         input,
-                    ),
-                    tensor_from_vec_with_template(vec![k, n], vt, input),
+                    )?,
+                    tensor_from_vec_with_template(vec![k, n], vt, input)?,
                 ])
             }
 
@@ -187,7 +187,7 @@ macro_rules! impl_complex_svd {
                 let m_i32 = dim_i32(m, "svd_values")?;
                 let n_i32 = dim_i32(n, "svd_values")?;
 
-                let mut a = input.host_data().to_vec();
+                let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
@@ -235,7 +235,7 @@ macro_rules! impl_complex_svd {
                 }
                 check_lapack_info("svd_values", $routine, info)?;
 
-                Ok(tensor_from_vec_with_template(vec![k], s, input))
+                tensor_from_vec_with_template(vec![k], s, input)
             }
         }
     };
@@ -267,17 +267,17 @@ pub(crate) fn svd<T: LapackSvd>(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 vector_with_batch_shape(k, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(k, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
         ]);
     }
     batched_multi("svd", buffers, input, svd_2d)
@@ -297,11 +297,11 @@ pub(crate) fn svd_values<T: LapackSvd>(
     if has_zero_dim(input.shape()) {
         let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
         let k = matrix_shape[0].min(matrix_shape[1]);
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             vector_with_batch_shape(k, batch_shape),
             Vec::new(),
             input,
-        ));
+        );
     }
 
     let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
@@ -318,15 +318,11 @@ pub(crate) fn svd_values<T: LapackSvd>(
         let end = start + slice_size;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
+            input.host_data()?[start..end].to_vec(),
             input,
-        );
+        )?;
         let values = svd_values_2d(buffers, &batch_input)?;
-        data.extend_from_slice(values.host_data());
+        data.extend_from_slice(values.host_data()?);
     }
-    Ok(tensor_from_vec_with_template(
-        vector_with_batch_shape(k, batch_shape),
-        data,
-        input,
-    ))
+    tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), data, input)
 }

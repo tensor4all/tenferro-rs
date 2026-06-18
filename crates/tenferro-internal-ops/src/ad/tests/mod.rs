@@ -36,19 +36,19 @@ fn meta(dtype: DType, shape: &[usize]) -> TensorMeta {
 
 #[test]
 fn resolve_dim_const() {
-    assert_eq!(resolve_dim(&DimExpr::Const(7)), 7);
+    assert_eq!(resolve_dim(&DimExpr::Const(7)).unwrap(), 7);
 }
 
 #[test]
 fn resolve_dim_const_expr() {
     let expr = DimExpr::min(DimExpr::Const(3), DimExpr::Const(5));
-    assert_eq!(resolve_dim(&expr), 3);
+    assert_eq!(resolve_dim(&expr).unwrap(), 3);
 }
 
 #[test]
 fn resolve_and_guard_records_greater() {
     let mut ctx = ShapeGuardContext::default();
-    let (m, n) = resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
+    let (m, n) = resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx).unwrap();
     assert_eq!((m, n), (5, 3));
     assert_eq!(
         ctx.guards(),
@@ -63,7 +63,7 @@ fn resolve_and_guard_records_greater() {
 #[test]
 fn resolve_and_guard_records_less() {
     let mut ctx = ShapeGuardContext::default();
-    let (m, n) = resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
+    let (m, n) = resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx).unwrap();
     assert_eq!((m, n), (2, 4));
     assert_eq!(ctx.guards()[0].ordering, Ordering::Less);
 }
@@ -71,7 +71,7 @@ fn resolve_and_guard_records_less() {
 #[test]
 fn resolve_and_guard_records_equal() {
     let mut ctx = ShapeGuardContext::default();
-    let (m, n) = resolve_and_guard(&DimExpr::Const(3), &DimExpr::Const(3), &mut ctx);
+    let (m, n) = resolve_and_guard(&DimExpr::Const(3), &DimExpr::Const(3), &mut ctx).unwrap();
     assert_eq!((m, n), (3, 3));
     assert_eq!(ctx.guards()[0].ordering, Ordering::Equal);
 }
@@ -79,8 +79,8 @@ fn resolve_and_guard_records_equal() {
 #[test]
 fn guards_accumulate() {
     let mut ctx = ShapeGuardContext::default();
-    resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
-    resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
+    resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx).unwrap();
+    resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx).unwrap();
     assert_eq!(ctx.guards().len(), 2);
     assert_eq!(ctx.guards()[0].ordering, Ordering::Greater);
     assert_eq!(ctx.guards()[1].ordering, Ordering::Less);
@@ -89,7 +89,7 @@ fn guards_accumulate() {
 #[test]
 fn clear_guards_empties() {
     let mut ctx = ShapeGuardContext::default();
-    resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
+    resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx).unwrap();
     ctx.clear_guards();
     assert!(ctx.guards().is_empty());
 }
@@ -101,9 +101,9 @@ fn shape_and_dtype_queries_work_for_concrete_input_values() {
     ctx.insert_metadata(key.clone(), meta(DType::F64, &[2, 3]));
 
     let val = ValueRef::External(key);
-    assert_eq!(ctx.dtype_of(&val), DType::F64);
+    assert_eq!(ctx.dtype_of(&val).unwrap(), DType::F64);
     assert_eq!(
-        ctx.shape_of(&val),
+        ctx.shape_of(&val).unwrap(),
         &[SymDim::from(2usize), SymDim::from(3usize)]
     );
 }
@@ -133,7 +133,7 @@ fn shape_queries_work_for_symbolic_input_values() {
     );
 
     assert_eq!(
-        ctx.shape_of(&ValueRef::External(key)),
+        ctx.shape_of(&ValueRef::External(key)).unwrap(),
         symbolic_shape.as_slice()
     );
 }
@@ -146,28 +146,32 @@ fn metadata_exposes_exact_extents() {
     ctx.insert_metadata(key.clone(), meta.clone());
 
     let val = ValueRef::External(key);
-    assert_eq!(ctx.extents_of(&val), meta.extents());
-    assert_eq!(ctx.exact_shape_of(&val), Some(meta.shape.clone()));
+    assert_eq!(ctx.extents_of(&val).unwrap(), meta.extents());
+    assert_eq!(ctx.exact_shape_of(&val).unwrap(), meta.exact_shape());
 }
 
 #[test]
 fn metadata_exact_shape_rejects_upper_bound() {
     let key = input_key(701);
     let mut ctx = ShapeGuardContext::default();
-    let meta = TensorMeta {
-        dtype: DType::F64,
-        shape: vec![SymDim::from(4usize)],
-        extents: vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
-    };
+    let meta = TensorMeta::with_extents(
+        DType::F64,
+        vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
+    );
     ctx.insert_metadata(key.clone(), meta);
 
-    assert_eq!(ctx.exact_shape_of(&ValueRef::External(key)), None);
+    let value = ValueRef::External(key);
+    assert_eq!(ctx.exact_shape_of(&value).unwrap(), None);
+    assert!(matches!(
+        ctx.shape_of(&value),
+        Err(crate::ad::context::ShapeGuardError::NonExactShape { .. })
+    ));
 }
 
 #[test]
-fn try_metadata_of_returns_none_for_unattached_or_bad_local_values() {
+fn metadata_if_available_returns_none_for_unattached_or_bad_local_values() {
     let mut ctx = ShapeGuardContext::default();
-    assert!(ctx.try_metadata_of(&ValueRef::Local(0)).is_none());
+    assert!(ctx.metadata_if_available(&ValueRef::Local(0)).is_none());
 
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let input = builder.add_input(tensor_input(710));
@@ -175,7 +179,9 @@ fn try_metadata_of_returns_none_for_unattached_or_bad_local_values() {
     let graph = builder.build();
     ctx.attach_graph(&graph);
 
-    assert!(ctx.try_metadata_of(&ValueRef::Local(usize::MAX)).is_none());
+    assert!(ctx
+        .metadata_if_available(&ValueRef::Local(usize::MAX))
+        .is_none());
 }
 
 #[test]
@@ -198,9 +204,9 @@ fn metadata_queries_resolve_local_values_through_attached_graph() {
     ctx.insert_metadata(graph.values()[sum].key.clone(), meta(DType::F64, &[2, 3]));
 
     let local_sum = ValueRef::Local(sum);
-    assert_eq!(ctx.dtype_of(&local_sum), DType::F64);
+    assert_eq!(ctx.dtype_of(&local_sum).unwrap(), DType::F64);
     assert_eq!(
-        ctx.shape_of(&local_sum),
+        ctx.shape_of(&local_sum).unwrap(),
         &[SymDim::from(2usize), SymDim::from(3usize)]
     );
 }
@@ -279,10 +285,10 @@ fn representative_graph_values_all_have_queryable_tensor_metadata() {
 
     for local_id in 0..graph.values().len() {
         let value = ValueRef::Local(local_id);
-        let metadata = ctx.metadata_of(&value);
+        let metadata = ctx.metadata_of(&value).unwrap();
         assert_eq!(metadata.dtype, DType::F64);
         assert!(
-            !metadata.shape.is_empty() || local_id == reduce,
+            metadata.rank() > 0 || local_id == reduce,
             "missing shape metadata for local value {local_id}"
         );
     }

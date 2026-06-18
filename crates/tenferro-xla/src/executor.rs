@@ -36,7 +36,7 @@ impl fmt::Debug for XlaExecutorOptions {
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 /// use tenferro_xla::XlaExecutor;
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&x.neg()).unwrap();
 /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
@@ -168,7 +168,7 @@ impl XlaExecutor {
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     /// use tenferro_xla::XlaExecutor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();

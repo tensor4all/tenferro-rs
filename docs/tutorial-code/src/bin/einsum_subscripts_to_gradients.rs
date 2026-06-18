@@ -14,16 +14,25 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn matrix_a() -> Tensor {
-    Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+fn matrix_a() -> Result<Tensor, Box<dyn std::error::Error>> {
+    Ok(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    )?)
 }
 
-fn matrix_b() -> Tensor {
-    Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0])
+fn matrix_b() -> Result<Tensor, Box<dyn std::error::Error>> {
+    Ok(Tensor::from_vec_col_major(
+        vec![3, 2],
+        vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0],
+    )?)
 }
 
-fn matrix_c() -> TracedTensor {
-    TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+fn matrix_c() -> Result<TracedTensor, Box<dyn std::error::Error>> {
+    Ok(TracedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0_f64, 3.0, 2.0, 4.0],
+    )?)
 }
 
 fn run(tensor: &TracedTensor) -> Result<Tensor, Box<dyn std::error::Error>> {
@@ -36,8 +45,8 @@ fn run(tensor: &TracedTensor) -> Result<Tensor, Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new();
-    let a = runtime.variable_from(matrix_a());
-    let b = runtime.variable_from(matrix_b());
+    let a = runtime.variable_from(matrix_a()?);
+    let b = runtime.variable_from(matrix_b()?);
     let product = tenferro_einsum::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")?;
 
     assert_eq!(product.data().shape(), &[2, 2]);
@@ -46,9 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[58.0, 139.0, 64.0, 154.0],
     );
 
-    let a = TracedTensor::from_tensor_concrete_shape(matrix_a());
-    let b = TracedTensor::from_tensor_concrete_shape(matrix_b());
-    let c = matrix_c();
+    let a = TracedTensor::from_tensor_concrete_shape(matrix_a()?);
+    let b = TracedTensor::from_tensor_concrete_shape(matrix_b()?);
+    let c = matrix_c()?;
 
     let mut compiler = GraphCompiler::new();
     let auto = tenferro_einsum::traced_tensor::einsum_with(
@@ -81,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "ij,jk->ik",
         EinsumOptimize::Path(vec![(0, 1)]),
     )?;
-    let grad_a = y.reduce_sum(&[0, 1]).grad(&a)?;
+    let grad_a = y.reduce_sum(&[0, 1])?.grad(&a)?;
     let grad_value = run(&grad_a)?;
 
     assert_eq!(grad_value.shape(), &[2, 3]);

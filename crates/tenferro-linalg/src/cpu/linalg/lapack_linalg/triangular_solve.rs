@@ -117,7 +117,7 @@ fn solve_left<T: LapackTriangularSolve>(
         });
     }
 
-    let mut rhs = b.host_data().to_vec();
+    let mut rhs = b.host_data()?.to_vec();
     let mut info = 0;
     T::trtrs(
         if lower { b'L' } else { b'U' },
@@ -125,14 +125,14 @@ fn solve_left<T: LapackTriangularSolve>(
         if unit_diagonal { b'U' } else { b'N' },
         dim_i32(n, "triangular_solve")?,
         dim_i32(b_cols, "triangular_solve")?,
-        a.host_data(),
+        a.host_data()?,
         dim_i32(n, "triangular_solve")?,
         &mut rhs,
         dim_i32(n, "triangular_solve")?,
         &mut info,
     );
     check_lapack_info("triangular_solve", "trtrs", info)?;
-    Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
+    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
 }
 
 fn solve_right<T: LapackTriangularSolve>(
@@ -152,7 +152,7 @@ fn solve_right<T: LapackTriangularSolve>(
         });
     }
 
-    let mut rhs_t = transpose_col_major_data(b.host_data(), b_rows, n);
+    let mut rhs_t = transpose_col_major_data(b.host_data()?, b_rows, n);
     let mut info = 0;
     T::trtrs(
         if lower { b'L' } else { b'U' },
@@ -160,7 +160,7 @@ fn solve_right<T: LapackTriangularSolve>(
         if unit_diagonal { b'U' } else { b'N' },
         dim_i32(n, "triangular_solve")?,
         dim_i32(b_rows, "triangular_solve")?,
-        a.host_data(),
+        a.host_data()?,
         dim_i32(n, "triangular_solve")?,
         &mut rhs_t,
         dim_i32(n, "triangular_solve")?,
@@ -168,7 +168,7 @@ fn solve_right<T: LapackTriangularSolve>(
     );
     check_lapack_info("triangular_solve", "trtrs", info)?;
     let result = transpose_col_major_data(&rhs_t, n, b_rows);
-    Ok(tensor_from_vec_with_template(vec![b_rows, n], result, b))
+    tensor_from_vec_with_template(vec![b_rows, n], result, b)
 }
 
 fn triangular_solve_2d<T: LapackTriangularSolve>(
@@ -214,11 +214,7 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b,
-        ));
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
     batched_binary_result("triangular_solve", buffers, a, b, |buffers, a, b| {
         triangular_solve_2d(buffers, a, b, left_side, lower, transpose_a, unit_diagonal)

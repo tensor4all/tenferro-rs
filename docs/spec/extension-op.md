@@ -60,7 +60,6 @@ everything else.
 
 This document does **not** own:
 
-- compatibility global registry internals
 - cross-process graph serialization format (Section 11, Section 15)
 - per-extension semantics (those live with each extension crate)
 
@@ -169,10 +168,9 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     /// Infer output dtype and shape for each output slot.
     ///
     /// Returned vector length MUST equal `self.output_count()`. Shapes use
-    /// graph-global `SymDim` (symbolic dimensions), consistent with
-    /// `TensorMeta::shape` in `crates/tenferro-internal-ops/src/ad/context.rs`. Input
-    /// metadata is given as slices of `SymDim` / `DType`; see Section 7
-    /// for the detailed invariants.
+    /// graph-global `SymDim` (symbolic dimensions). Input metadata is given as
+    /// explicit `SymDim` / `DType` slices; callers that start from `TensorMeta`
+    /// must choose `exact_shape` or `bound_shape` deliberately.
     fn infer_output_meta(
         &self,
         input_dtypes: &[DType],
@@ -567,8 +565,9 @@ extension.
 - The returned vector MUST have length `self.output_count()`.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
-- Shapes are expressed as `Vec<SymDim>` to match
-  `TensorMeta::shape` (see `crates/tenferro-internal-ops/src/ad/context.rs:49-109`).
+- Shapes are expressed as `Vec<SymDim>`. `TensorMeta` does not expose a
+  public shape field; callers must pass an exact or bound shape
+  intentionally (see `crates/tenferro-internal-ops/src/ad/context.rs`).
   Concrete and symbolic inputs use the same representation:
   `SymDim::from(usize)` for concrete extents, symbolic placeholders for
   unknown-at-build-time dimensions.
@@ -749,28 +748,12 @@ pub enum ExtensionRegistryError {
 }
 ```
 
-### Compatibility global lookup
-
-The process-global AD rule registry and its `register_extension_rule` helper
-remain a compatibility bridge for older global lookup flows. It is not the
-primary extension AD path. Code that needs reproducible tests, multiple
-independent AD contexts, or explicit dependency ownership SHOULD use
-`ExtensionRuleSet` instead.
-
-The compatibility API exposes a rule lookup function:
-
-```rust
-pub fn lookup_extension_rule(family_id: &str) -> Option<std::sync::Arc<dyn ExtensionAdRule>>;
-```
-
-Lookup MUST NOT panic on a missing `family_id`. Callers decide how to
-handle absence (see Section 12).
-
 ### Thread safety
 
 An `ExtensionRuleSet` MUST be safe to clone and read from any thread used by AD
-graph construction. The compatibility global registry MUST also be safe to read
-from any thread; writes happen only during initialization.
+graph construction. Extension AD rule lookup MUST NOT consult hidden
+process-global or thread-local state; the active `ExtensionRuleSet` is the only
+owner of extension AD rules for a transform.
 
 ### Failure signature
 
@@ -787,8 +770,8 @@ from any thread; writes happen only during initialization.
 
 Extension AD is registered independently from the primal op. Extension crates
 implement `ExtensionAdRule` and add it to an `ExtensionRuleSet`. Rule
-signatures mirror `Primitive::try_linearize` and
-`Primitive::try_transpose_rule` and return `ADRuleResult<_>` so missing rules
+signatures mirror `Primitive::jvp_rule` and
+`Primitive::transpose_rule` and return `ADRuleResult<_>` so missing rules
 can propagate without panic:
 
 ```rust
@@ -924,7 +907,7 @@ these error types / behaviours in the listed scenarios.
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
 | AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no rule in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
-| Duplicate AD rule `family_id` in one `ExtensionRuleSet` or the compatibility global registry | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule`. |
+| Duplicate AD rule `family_id` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule`. |
 | Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |

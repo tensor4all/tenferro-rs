@@ -130,7 +130,7 @@ pub struct RecordedGraph<Op: GraphOperation> {
 ```
 
 `input_keys` is aligned with the eager input order. These keys are the `wrt`
-inputs for `try_linearize`.
+inputs for `linearize`.
 
 `output_keys` is aligned with the eager output slot order. These keys select
 which graph outputs are active when only some eager outputs receive cotangents.
@@ -195,7 +195,7 @@ linearization and for aligning returned cotangents with `input_edges`.
 
 ## Backward Flow
 
-`try_backward` remains responsible for walking the eager tape in reverse
+`backward` remains responsible for walking the eager tape in reverse
 topological order and accumulating cotangents on eager value keys. The per-node
 work becomes graph-only:
 
@@ -209,7 +209,7 @@ let cotangent_in =
 ```
 
 `RecordedGraph::linearize` resolves its graph and calls tidu's existing
-`try_linearize`:
+`linearize`:
 
 ```rust
 let selected_outputs = output_slots
@@ -217,7 +217,7 @@ let selected_outputs = output_slots
     .map(|slot| self.output_keys[*slot].clone())
     .collect::<Vec<_>>();
 
-try_linearize(
+linearize(
     &resolve(vec![self.graph.clone()]),
     &selected_outputs,
     &self.input_keys,
@@ -234,11 +234,11 @@ is required for the normal eager path.
 
 The first API-preserving step can keep the current `BackwardExecutor` method
 name, but the intended downstream implementation is whole-program execution.
-tidu already has `try_linear_transpose`, which produces a transposed graph from a
+tidu already has `linear_transpose`, which produces a transposed graph from a
 `LinearizedGraph`. The tenferro eager backward executor should move away from
-`try_linear_transpose_with_builder` for the composite path and instead:
+`linear_transpose_with_builder` for the composite path and instead:
 
-1. Build the transposed graph once with `try_linear_transpose`.
+1. Build the transposed graph once with `linear_transpose`.
 2. Bind cotangent seeds as graph inputs.
 3. Bind retained primal values as external data.
 4. Run the transposed graph with the backend executor.

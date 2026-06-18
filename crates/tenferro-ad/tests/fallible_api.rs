@@ -6,11 +6,11 @@ use tenferro_tensor::{Error as TensorError, Tensor};
 
 #[test]
 fn traced_jvp_vjp_return_errors_for_inactive_inputs() {
-    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
-    let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    let loss = &y * &y;
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let loss = (&y * &y).unwrap();
 
     let _ = loss.jvp(&x, &tangent).unwrap_err();
     let _ = loss.vjp(&x, &cotangent).unwrap_err();
@@ -20,8 +20,8 @@ fn traced_jvp_vjp_return_errors_for_inactive_inputs() {
 
 #[test]
 fn traced_jvp_vjp_return_errors_for_symbolic_seed_tensors() {
-    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    let loss = &x * &x;
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let loss = (&x * &x).unwrap();
     let tangent = TracedTensor::input_symbolic_shape(DType::F64, 0);
     let cotangent = TracedTensor::input_symbolic_shape(DType::F64, 0);
 
@@ -40,11 +40,11 @@ fn traced_jvp_vjp_return_errors_for_symbolic_seed_tensors() {
 fn eager_binary_methods_return_shape_errors() {
     let ctx = EagerRuntime::new();
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
     );
     let y = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx,
     );
 

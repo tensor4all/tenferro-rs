@@ -476,12 +476,12 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
 // ============================================================================
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_c64(t: &Tensor, idx: &[usize]) -> Complex64 {
     match t {
-        Tensor::C64(inner) => *inner.get(idx),
+        Tensor::C64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected C64"),
     }
 }
@@ -667,19 +667,19 @@ fn einsum_binary_diag_ii_jk_to_ijk() {
 fn einsum_binary_diag_iij_jk_to_ik() {
     // "iij,jk->ik" — diagonal extraction + contraction
     let a = {
-        let mut t = TypedTensor::<f64>::zeros(vec![2, 2, 3]);
-        *t.get_mut(&[0, 0, 0]) = 1.0;
-        *t.get_mut(&[1, 1, 0]) = 4.0;
-        *t.get_mut(&[0, 0, 1]) = 2.0;
-        *t.get_mut(&[1, 1, 1]) = 5.0;
-        *t.get_mut(&[0, 0, 2]) = 3.0;
-        *t.get_mut(&[1, 1, 2]) = 6.0;
+        let mut t = TypedTensor::<f64>::zeros(vec![2, 2, 3]).unwrap();
+        *t.get_mut(&[0, 0, 0]).unwrap() = 1.0;
+        *t.get_mut(&[1, 1, 0]).unwrap() = 4.0;
+        *t.get_mut(&[0, 0, 1]).unwrap() = 2.0;
+        *t.get_mut(&[1, 1, 1]).unwrap() = 5.0;
+        *t.get_mut(&[0, 0, 2]).unwrap() = 3.0;
+        *t.get_mut(&[1, 1, 2]).unwrap() = 6.0;
         Tensor::F64(t)
     };
     let b = {
-        let mut t = TypedTensor::<f64>::zeros(vec![3, 2]);
-        *t.get_mut(&[0, 0]) = 1.0;
-        *t.get_mut(&[1, 1]) = 1.0;
+        let mut t = TypedTensor::<f64>::zeros(vec![3, 2]).unwrap();
+        *t.get_mut(&[0, 0]).unwrap() = 1.0;
+        *t.get_mut(&[1, 1]).unwrap() = 1.0;
         Tensor::F64(t)
     };
 
@@ -700,16 +700,16 @@ fn einsum_binary_diag_iij_jk_to_ik() {
 fn einsum_binary_diag_ii_jj_to_ij() {
     // "ii,jj->ij" — outer product of two traces
     let a = {
-        let mut t = TypedTensor::<f64>::zeros(vec![3, 3]);
-        *t.get_mut(&[0, 0]) = 1.0;
-        *t.get_mut(&[1, 1]) = 2.0;
-        *t.get_mut(&[2, 2]) = 3.0;
+        let mut t = TypedTensor::<f64>::zeros(vec![3, 3]).unwrap();
+        *t.get_mut(&[0, 0]).unwrap() = 1.0;
+        *t.get_mut(&[1, 1]).unwrap() = 2.0;
+        *t.get_mut(&[2, 2]).unwrap() = 3.0;
         Tensor::F64(t)
     };
     let b = {
-        let mut t = TypedTensor::<f64>::zeros(vec![2, 2]);
-        *t.get_mut(&[0, 0]) = 10.0;
-        *t.get_mut(&[1, 1]) = 20.0;
+        let mut t = TypedTensor::<f64>::zeros(vec![2, 2]).unwrap();
+        *t.get_mut(&[0, 0]).unwrap() = 10.0;
+        *t.get_mut(&[1, 1]).unwrap() = 20.0;
         Tensor::F64(t)
     };
 
@@ -904,7 +904,7 @@ fn einsum_complex_trace() {
     let expected = get_c64(&a, &[0, 0]) + get_c64(&a, &[1, 1]);
     match result {
         Tensor::C64(inner) => {
-            assert_close_c64(inner.host_data()[0], expected, "complex_trace");
+            assert_close_c64(inner.host_data().unwrap()[0], expected, "complex_trace");
         }
         _ => panic!("expected C64"),
     }

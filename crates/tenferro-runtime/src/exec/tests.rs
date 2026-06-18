@@ -142,7 +142,7 @@ fn exec_instruction_single_output_metadata_stays_inline() {
 
 #[test]
 fn lazy_view_input_conversion_shares_live_owned_tensor() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let mut slots = vec![Some(ExecSlot::Owned(tensor))];
 
     let value = tensor_value_for_lazy_view(&mut slots, 0, false).unwrap();
@@ -157,10 +157,9 @@ fn lazy_view_input_conversion_shares_live_owned_tensor() {
 
 #[test]
 fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
-    let slots = [Some(ExecSlot::Owned(Tensor::from_vec_col_major(
-        vec![1],
-        vec![1.0_f64],
-    )))];
+    let slots = [Some(ExecSlot::Owned(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ))];
 
     let err = get(&slots, &[], 0).unwrap_err();
 
@@ -171,10 +170,9 @@ fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
 
 #[test]
 fn exec_accessors_reject_out_of_range_slot_without_panicking() {
-    let slots = [Some(ExecSlot::Owned(Tensor::from_vec_col_major(
-        vec![1],
-        vec![1.0_f64],
-    )))];
+    let slots = [Some(ExecSlot::Owned(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ))];
 
     let err = get(&slots, &[4], 0).unwrap_err();
 
@@ -188,8 +186,8 @@ fn initialize_exec_slots_rejects_input_count_mismatch_without_panicking() {
     let program = empty_program(1);
     let mut slots = Vec::new();
     let inputs = vec![
-        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])),
-        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])),
+        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
+        ExecSlot::Owned(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap()),
     ];
 
     let err = initialize_exec_slots_in(&program, inputs, &mut slots).unwrap_err();
@@ -203,10 +201,9 @@ fn initialize_exec_slots_rejects_input_count_mismatch_without_panicking() {
 fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
     let mut program = empty_program(1);
     program.output_slots = vec![3];
-    let mut slots = vec![Some(ExecSlot::Owned(Tensor::from_vec_col_major(
-        vec![1],
-        vec![1.0_f64],
-    )))];
+    let mut slots = vec![Some(ExecSlot::Owned(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ))];
 
     let err = collect_outputs_from(&program, &mut slots).unwrap_err();
 

@@ -251,8 +251,15 @@ symbolic shapes.
 There are two acceptable outcomes for newly touched user-reachable symbolic
 shape paths:
 
-- emit a graph using exact symbolic metadata
+- emit a graph using exact symbolic metadata or runtime shape-source
+  expressions such as `DimExpr::InputDim`
 - return an unsupported-dynamic-shape error
+
+AD rules should choose the narrowest metadata query that matches the graph they
+emit. Use rank metadata for axis-count checks and runtime shape-source
+expressions for broadcast, reshape, or dynamic gather parameters that should
+follow the actual tensor shape. Require an exact shape only when constructing a
+concrete op payload that cannot represent runtime dimensions.
 
 Current AD rule signatures are not uniformly `Result`-returning. The
 implementation should introduce one shared error channel before adding future
@@ -295,9 +302,12 @@ scalar expressions through all layers.
 3. Done: replace `transpose_scatter`'s symbolic update-window panic with a
    dynamic graph gather config.
 4. Done: add graph-facing symbolic config support for gather-like `slice_sizes`.
-5. Deferred: add structured AD construction errors for future dynamic or
+5. Done: update rank-only AD transpose/JVP paths, including contraction,
+   structural, scatter, and linalg solve rules, to use rank metadata and runtime
+   shape sources instead of exact-shape metadata.
+6. Deferred: add structured AD construction errors for future dynamic or
    unsupported shape requirements.
-6. Deferred: add exact runtime scalar extents for `DynamicTruncate` once the compiler and
+7. Deferred: add exact runtime scalar extents for `DynamicTruncate` once the compiler and
    execution layers can resolve them safely.
 
 Each step should add focused regression tests. The first tests should cover:

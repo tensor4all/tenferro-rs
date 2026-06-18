@@ -6,7 +6,7 @@
 
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
-use crate::{CompareDir, DType, DotGeneralConfig};
+use crate::{CompareDir, DType, DotGeneralConfig, Error, Result};
 
 pub use crate::traced::{TracedTensor, TracedTensorId};
 
@@ -22,7 +22,7 @@ pub use crate::traced::{TracedTensor, TracedTensorId};
 /// ```rust
 /// use tenferro_runtime::{traced_tensor, DType, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 /// let y = traced_tensor::convert(&x, DType::C64);
 /// assert_eq!(y.dtype, DType::C64);
 /// ```
@@ -36,11 +36,11 @@ pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 /// let z = tenferro_runtime::traced_tensor::add(&x, &y);
 /// ```
-pub fn add(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+pub fn add(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
     lhs.add(rhs)
 }
 
@@ -52,7 +52,7 @@ macro_rules! unary_fn {
         ///
         /// ```rust
         /// # use tenferro_runtime::TracedTensor;
-        /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
+        /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
         #[doc = concat!("let y = tenferro_runtime::traced_tensor::", stringify!($name), "(&x);")]
         /// ```
         pub fn $name(input: &TracedTensor) -> TracedTensor {
@@ -69,11 +69,11 @@ macro_rules! binary_method_fn {
         ///
         /// ```rust
         /// # use tenferro_runtime::TracedTensor;
-        /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-        /// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+        /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+        /// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
         #[doc = concat!("let z = tenferro_runtime::traced_tensor::", stringify!($name), "(&x, &y);")]
         /// ```
-        pub fn $name(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+        pub fn $name(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
             lhs.$method(rhs)
         }
     };
@@ -111,11 +111,11 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// let z = tenferro_runtime::traced_tensor::sub(&x, &y);
 /// ```
-pub fn sub(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+pub fn sub(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
     add(lhs, &neg(rhs))
 }
 
@@ -125,11 +125,11 @@ pub fn sub(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// let z = tenferro_runtime::traced_tensor::maximum(&x, &y);
 /// ```
-pub fn maximum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+pub fn maximum(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
     crate::traced::apply_broadcast_binary_op(StdTensorOp::Maximum, lhs, rhs)
 }
 
@@ -139,11 +139,11 @@ pub fn maximum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// let z = tenferro_runtime::traced_tensor::minimum(&x, &y);
 /// ```
-pub fn minimum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+pub fn minimum(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
     crate::traced::apply_broadcast_binary_op(StdTensorOp::Minimum, lhs, rhs)
 }
 
@@ -155,12 +155,12 @@ pub fn minimum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 ///
 /// ```rust
 /// # use tenferro_runtime::{CompareDir, TracedTensor};
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
-/// let z = tenferro_runtime::traced_tensor::compare(&x, &y, CompareDir::Gt);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+/// let z = tenferro_runtime::traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
 /// assert_eq!(z.dtype, tenferro_runtime::DType::Bool);
 /// ```
-pub fn compare(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> TracedTensor {
+pub fn compare(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> Result<TracedTensor> {
     crate::traced::apply_broadcast_binary_op(StdTensorOp::Compare(dir), lhs, rhs)
 }
 
@@ -172,16 +172,16 @@ pub fn compare(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> Trace
 ///
 /// ```rust
 /// # use tenferro_runtime::{CompareDir, TracedTensor};
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
-/// # let condition = tenferro_runtime::traced_tensor::compare(&x, &y, CompareDir::Gt);
-/// let z = tenferro_runtime::traced_tensor::where_select(&condition, &x, &y);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+/// # let condition = tenferro_runtime::traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+/// let z = tenferro_runtime::traced_tensor::where_select(&condition, &x, &y).unwrap();
 /// ```
 pub fn where_select(
     condition: &TracedTensor,
     on_true: &TracedTensor,
     on_false: &TracedTensor,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     crate::traced::apply_broadcast_ternary_op(StdTensorOp::Select, condition, on_true, on_false)
 }
 
@@ -191,12 +191,16 @@ pub fn where_select(
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]);
-/// # let lower = TracedTensor::from_vec_col_major(vec![], vec![0.0_f64]);
-/// # let upper = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]).unwrap();
+/// # let lower = TracedTensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
+/// # let upper = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
 /// let z = tenferro_runtime::traced_tensor::clamp(&x, &lower, &upper);
 /// ```
-pub fn clamp(input: &TracedTensor, lower: &TracedTensor, upper: &TracedTensor) -> TracedTensor {
+pub fn clamp(
+    input: &TracedTensor,
+    lower: &TracedTensor,
+    upper: &TracedTensor,
+) -> Result<TracedTensor> {
     crate::traced::apply_broadcast_ternary_op(StdTensorOp::Clamp, input, lower, upper)
 }
 
@@ -208,11 +212,21 @@ pub fn clamp(input: &TracedTensor, lower: &TracedTensor, upper: &TracedTensor) -
 ///
 /// ```rust
 /// # use tenferro_runtime::TracedTensor;
-/// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-/// # let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
-/// let c = tenferro_runtime::traced_tensor::matmul(&a, &b);
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+/// # let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+/// let c = tenferro_runtime::traced_tensor::matmul(&a, &b)?;
+/// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
-pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
+    if a.rank == 0 || b.rank == 0 {
+        return Err(Error::InvalidGraphBuild {
+            op: "traced_tensor::matmul",
+            message: format!(
+                "matmul requires rank >= 1 for both inputs, got {} and {}",
+                a.rank, b.rank
+            ),
+        });
+    }
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![a.rank - 1],
         rhs_contracting_dims: vec![0],

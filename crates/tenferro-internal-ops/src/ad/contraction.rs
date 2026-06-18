@@ -11,7 +11,6 @@ use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
-use crate::sym_dim::SymDim;
 
 pub fn linearize_dot_general(
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -20,12 +19,8 @@ pub fn linearize_dot_general(
     config: &DotGeneralConfig,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let lhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .len();
-    let rhs_rank = ctx
-        .shape_of(&ValueRef::External(primal_in[1].clone()))
-        .len();
+    let lhs_rank = ctx.rank_of(&ValueRef::External(primal_in[0].clone()))?;
+    let rhs_rank = ctx.rank_of(&ValueRef::External(primal_in[1].clone()))?;
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
         .map_err(|err| ad_rule_error(format!(
@@ -121,28 +116,27 @@ pub fn linearize_reduce_prod(
     tangent_in: &[Option<LocalValueId>],
     axes: &[usize],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(dx) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
-    let input_shape = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .to_vec();
-    let kept_dims = kept_dims(input_shape.len(), axes);
+    let input = ValueRef::External(primal_in[0].clone());
+    let input_rank = ctx.rank_of(&input)?;
+    let kept_dims = kept_dims(input_rank, axes);
     let prod_broadcast = broadcast_reduction_output(
         builder,
         ValueRef::External(primal_out[0].clone()),
-        ValueRef::External(primal_in[0].clone()),
-        &input_shape,
+        input.clone(),
+        input_rank,
         &kept_dims,
     );
-    let input_dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let input_dtype = ctx.dtype_of(&input)?;
     let coeff = reduce_prod_derivative_coeff(
         builder,
-        ValueRef::External(primal_in[0].clone()),
+        input,
         ValueRef::Local(prod_broadcast),
-        &input_shape,
+        input_rank,
         &kept_dims,
         axes,
         input_dtype,
@@ -163,7 +157,7 @@ pub fn linearize_reduce_prod(
             active_mask: vec![true],
         },
     )[0];
-    vec![Some(out)]
+    Ok(vec![Some(out)])
 }
 
 pub fn linearize_reduce_chooser(
@@ -173,28 +167,24 @@ pub fn linearize_reduce_chooser(
     tangent_in: &[Option<LocalValueId>],
     axes: &[usize],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(dx) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
-    let input_shape = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .to_vec();
-    let kept_dims = kept_dims(input_shape.len(), axes);
+    let input = ValueRef::External(primal_in[0].clone());
+    let input_rank = ctx.rank_of(&input)?;
+    let kept_dims = kept_dims(input_rank, axes);
     let answer_broadcast = broadcast_reduction_output(
         builder,
         ValueRef::External(primal_out[0].clone()),
-        ValueRef::External(primal_in[0].clone()),
-        &input_shape,
+        input.clone(),
+        input_rank,
         &kept_dims,
     );
-    let indicators = reduction_location_indicators(
-        builder,
-        ValueRef::External(primal_in[0].clone()),
-        ValueRef::Local(answer_broadcast),
-    );
-    let input_dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let indicators =
+        reduction_location_indicators(builder, input.clone(), ValueRef::Local(answer_broadcast));
+    let input_dtype = ctx.dtype_of(&input)?;
     let numeric_indicators = numeric_indicators(builder, indicators, input_dtype);
     let weighted_tangent = builder.add_operation(
         StdTensorOp::Mul,
@@ -220,7 +210,7 @@ pub fn linearize_reduce_chooser(
             active_mask: vec![true, false],
         },
     )[0];
-    vec![Some(out)]
+    Ok(vec![Some(out)])
 }
 
 pub fn transpose_dot_general(
@@ -236,8 +226,8 @@ pub fn transpose_dot_general(
         None => return Ok(vec![None, None]),
     };
 
-    let lhs_rank = ctx.shape_of(&inputs[0]).len();
-    let rhs_rank = ctx.shape_of(&inputs[1]).len();
+    let lhs_rank = ctx.rank_of(&inputs[0])?;
+    let rhs_rank = ctx.rank_of(&inputs[1])?;
     let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
     let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
     let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
@@ -269,7 +259,7 @@ pub fn transpose_dot_general(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
+        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx)?;
         let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
@@ -293,7 +283,7 @@ pub fn transpose_dot_general(
     }
 
     if active_mask[1] {
-        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
+        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx)?;
         let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
@@ -325,17 +315,15 @@ pub fn transpose_reduce_sum(
     op: &StdTensorOp,
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceSum { axes } = op else {
         unreachable!("transpose_reduce_sum expects ReduceSum");
     };
 
     match cotangent_out[0] {
         Some(ct) => {
-            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
-            let kept_dims = (0..input_shape.len())
-                .filter(|dim| !axes.contains(dim))
-                .collect::<Vec<_>>();
+            let input_rank = ctx.rank_of(&inputs[0])?;
+            let kept_dims = kept_dims(input_rank, axes);
             let cotangent = if kept_dims.is_empty() {
                 let scalar = builder.add_operation(
                     StdTensorOp::Reshape { to_shape: vec![] },
@@ -348,7 +336,7 @@ pub fn transpose_reduce_sum(
             } else {
                 ValueRef::Local(ct)
             };
-            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
+            let (shape, needs_shape_source) = runtime_shape_to_dim_expr(input_rank, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -364,9 +352,9 @@ pub fn transpose_reduce_sum(
                 op_inputs,
                 OperationRole::Linearized { active_mask },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -376,17 +364,17 @@ pub fn transpose_reduce_prod(
     inputs: &[ValueRef<StdTensorOp>],
     op: &StdTensorOp,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::ReduceProd { axes } = op else {
         unreachable!("transpose_reduce_prod expects ReduceProd");
     };
 
     match cotangent_out[0] {
         Some(ct) => {
-            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
-            let kept_dims = kept_dims(input_shape.len(), axes);
+            let input_rank = ctx.rank_of(&inputs[0])?;
+            let kept_dims = kept_dims(input_rank, axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
-            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
+            let (shape, needs_shape_source) = runtime_shape_to_dim_expr(input_rank, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -409,15 +397,15 @@ pub fn transpose_reduce_prod(
                 builder,
                 ValueRef::Local(prod),
                 inputs[0].clone(),
-                &input_shape,
+                input_rank,
                 &kept_dims,
             );
-            let input_dtype = ctx.dtype_of(&inputs[0]);
+            let input_dtype = ctx.dtype_of(&inputs[0])?;
             let coeff = reduce_prod_derivative_coeff(
                 builder,
                 inputs[0].clone(),
                 ValueRef::Local(prod_broadcast),
-                &input_shape,
+                input_rank,
                 &kept_dims,
                 axes,
                 input_dtype,
@@ -431,9 +419,9 @@ pub fn transpose_reduce_prod(
                     active_mask: vec![false, true],
                 },
             )[0];
-            vec![Some(out)]
+            Ok(vec![Some(out)])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -443,7 +431,7 @@ pub fn transpose_reduce_chooser(
     inputs: &[ValueRef<StdTensorOp>],
     op: &StdTensorOp,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let axes = match op {
         StdTensorOp::ReduceMax { axes } | StdTensorOp::ReduceMin { axes } => axes,
         _ => unreachable!("transpose_reduce_chooser expects ReduceMax or ReduceMin"),
@@ -451,10 +439,10 @@ pub fn transpose_reduce_chooser(
 
     match cotangent_out[0] {
         Some(ct) => {
-            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
-            let kept_dims = kept_dims(input_shape.len(), axes);
+            let input_rank = ctx.rank_of(&inputs[0])?;
+            let kept_dims = kept_dims(input_rank, axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
-            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
+            let (shape, needs_shape_source) = runtime_shape_to_dim_expr(input_rank, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -477,7 +465,7 @@ pub fn transpose_reduce_chooser(
                 builder,
                 ValueRef::Local(answer),
                 inputs[0].clone(),
-                &input_shape,
+                input_rank,
                 &kept_dims,
             );
             let indicators = reduction_location_indicators(
@@ -485,14 +473,14 @@ pub fn transpose_reduce_chooser(
                 inputs[0].clone(),
                 ValueRef::Local(answer_broadcast),
             );
-            let input_dtype = ctx.dtype_of(&inputs[0]);
+            let input_dtype = ctx.dtype_of(&inputs[0])?;
             let numeric_indicators = numeric_indicators(builder, indicators, input_dtype);
             let counts = reduction_location_counts(builder, numeric_indicators, axes);
             let counts_broadcast = broadcast_reduction_output(
                 builder,
                 ValueRef::Local(counts),
                 inputs[0].clone(),
-                &input_shape,
+                input_rank,
                 &kept_dims,
             );
             let weights = builder.add_operation(
@@ -512,9 +500,9 @@ pub fn transpose_reduce_chooser(
                     active_mask: vec![false, true],
                 },
             )[0];
-            vec![Some(out)]
+            Ok(vec![Some(out)])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -550,23 +538,20 @@ fn kept_dims(rank: usize, axes: &[usize]) -> Vec<usize> {
     (0..rank).filter(|dim| !axes.contains(dim)).collect()
 }
 
-/// Convert a [`SymDim`] shape to a [`DimExpr`] shape for a builder op.
+/// Build a [`DimExpr`] shape that reads a value's runtime extents.
 ///
 /// Each axis is resolved as a reference to `source_idx`'s axis so that the
-/// emitted op reads the *runtime* shape of the primal input. Folding the
-/// [`SymDim`] to a constant is not safe in general: ops such as
-/// [`StdTensorOp::DynamicTruncate`] keep a static metadata shape that does
-/// not match the runtime tensor shape, so emitting `Const(static_size)`
-/// would disagree with the runtime broadcast target.
+/// emitted op reads the *runtime* shape of the primal input. Exact metadata
+/// is intentionally not required: ops such as [`StdTensorOp::DynamicTruncate`]
+/// keep only an upper-bound static extent, and folding that bound to a
+/// constant would disagree with the runtime broadcast target.
 ///
-/// Returns `(dim_exprs, needs_shape_source)`. When `shape` is empty the
+/// Returns `(dim_exprs, needs_shape_source)`. When `rank` is zero the
 /// resulting `DimExpr` list is empty and no shape source is needed.
-fn sym_shape_to_dim_expr(shape: &[SymDim], source_idx: usize) -> (Vec<DimExpr>, bool) {
-    let needs_shape_source = !shape.is_empty();
-    let dim_exprs = shape
-        .iter()
-        .enumerate()
-        .map(|(axis, _)| DimExpr::InputDim {
+fn runtime_shape_to_dim_expr(rank: usize, source_idx: usize) -> (Vec<DimExpr>, bool) {
+    let needs_shape_source = rank != 0;
+    let dim_exprs = (0..rank)
+        .map(|axis| DimExpr::InputDim {
             input_idx: source_idx,
             axis,
         })
@@ -597,10 +582,10 @@ fn broadcast_reduction_output(
     builder: &mut dyn PrimitiveRuleBuilder,
     output: ValueRef<StdTensorOp>,
     shape_source: ValueRef<StdTensorOp>,
-    input_shape: &[SymDim],
+    input_rank: usize,
     kept_dims: &[usize],
 ) -> LocalValueId {
-    let (shape, needs_shape_source) = sym_shape_to_dim_expr(input_shape, 1);
+    let (shape, needs_shape_source) = runtime_shape_to_dim_expr(input_rank, 1);
     let inputs = if needs_shape_source {
         vec![output, shape_source]
     } else {
@@ -620,12 +605,11 @@ fn reduce_prod_derivative_coeff(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     prod_broadcast: ValueRef<StdTensorOp>,
-    input_shape: &[SymDim],
+    input_rank: usize,
     kept_dims: &[usize],
     axes: &[usize],
     dtype: DType,
 ) -> LocalValueId {
-    let input_rank = input_shape.len();
     let zero = build_zero_like(builder, dtype, input.clone(), input_rank);
     let one = build_one_like(builder, dtype, input.clone(), input_rank);
     let zero_mask = builder.add_operation(
@@ -645,7 +629,7 @@ fn reduce_prod_derivative_coeff(
         builder,
         ValueRef::Local(zero_count),
         input.clone(),
-        input_shape,
+        input_rank,
         kept_dims,
     );
     let safe_input = builder.add_operation(
@@ -668,7 +652,7 @@ fn reduce_prod_derivative_coeff(
         builder,
         ValueRef::Local(nonzero_prod),
         input.clone(),
-        input_shape,
+        input_rank,
         kept_dims,
     );
     let quotient = builder.add_operation(

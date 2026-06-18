@@ -14,7 +14,7 @@ use crate::{ContractionTree, Subscripts};
 
 #[test]
 fn tensor_value_view_paths_materialize_and_read() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let view_shape = [2usize];
     let view_data = [3.0_f64, 4.0];
     let view = TensorView::f64(&view_shape, &view_data).unwrap();
@@ -31,7 +31,7 @@ fn tensor_value_view_paths_materialize_and_read() {
     assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.tensor_read().shape(), &[2]);
     assert_eq!(
-        view_value.into_tensor().as_slice::<f64>().unwrap(),
+        view_value.into_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[3.0, 4.0]
     );
 }
@@ -58,7 +58,7 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
         .unwrap();
     let labels = result.labels;
-    let tensor = result.tensor.into_tensor();
+    let tensor = result.tensor.into_tensor().unwrap();
 
     assert_eq!(labels, vec![0, 1]);
     assert_eq!(tensor.shape(), &[2, 3]);
@@ -70,8 +70,8 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
 
 #[test]
 fn generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops() {
-    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap();
     let lhs = LabeledTensor {
         tensor: TensorValue::Borrowed(&lhs),
         labels: vec![0],
@@ -87,7 +87,7 @@ fn generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops
     };
 
     let result = binary_contract(&mut backend, lhs, rhs, &[0, 1], true).unwrap();
-    let tensor = result.tensor.into_tensor();
+    let tensor = result.tensor.into_tensor().unwrap();
 
     assert_eq!(result.labels, vec![0, 1]);
     assert_eq!(tensor.shape(), &[2, 3]);
@@ -99,8 +99,8 @@ fn generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops
 
 #[test]
 fn generic_outer_product_uses_target_order_without_final_transpose() {
-    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap();
     let lhs = LabeledTensor {
         tensor: TensorValue::Borrowed(&lhs),
         labels: vec![0],
@@ -116,7 +116,7 @@ fn generic_outer_product_uses_target_order_without_final_transpose() {
     };
 
     let result = binary_contract(&mut backend, lhs, rhs, &[1, 0], true).unwrap();
-    let tensor = result.tensor.into_tensor();
+    let tensor = result.tensor.into_tensor().unwrap();
 
     assert_eq!(result.labels, vec![1, 0]);
     assert_eq!(tensor.shape(), &[3, 2]);
@@ -128,8 +128,8 @@ fn generic_outer_product_uses_target_order_without_final_transpose() {
 
 #[test]
 fn generic_binary_contract_reduces_then_builds_dot_config() {
-    let lhs = Tensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 5], vec![2.0_f64; 15]);
+    let lhs = Tensor::from_vec_col_major(vec![2, 3, 4], vec![1.0_f64; 24]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 5], vec![2.0_f64; 15]).unwrap();
     let lhs = LabeledTensor {
         tensor: TensorValue::Borrowed(&lhs),
         labels: vec![0, 1, 9],
@@ -144,7 +144,7 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
         .unwrap();
     let labels = result.labels;
-    let tensor = result.tensor.into_tensor();
+    let tensor = result.tensor.into_tensor().unwrap();
 
     assert_eq!(labels, vec![0, 2]);
     assert_eq!(tensor.shape(), &[2, 5]);
@@ -429,15 +429,15 @@ fn generic_read_exec_reduces_single_view_input() {
 
 #[test]
 fn binary_read_fast_path_rejects_non_fast_shapes_and_labels() {
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let mut ctx = CpuBackend::new();
 
     let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
     let one_input = [TensorRead::from_tensor(&lhs)];
     assert!(try_eager_einsum_binary_read_fast(&mut ctx, &one_input, &subscripts).is_none());
 
-    let flat_rhs = Tensor::from_vec_col_major(vec![6], vec![1.0_f64; 6]);
+    let flat_rhs = Tensor::from_vec_col_major(vec![6], vec![1.0_f64; 6]).unwrap();
     let rank_mismatch = [
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&flat_rhs),

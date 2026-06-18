@@ -61,7 +61,7 @@ use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
-let ad = AdContext::builder().with_core_rules().build().unwrap();
+let ad = AdContext::builder().build().unwrap();
 let grad = ad.grad(&loss, &x).unwrap();
 
 let mut compiler = GraphCompiler::new();
@@ -119,7 +119,7 @@ let cotangent = TracedTensor::from_vec_col_major(
 
 let mut compiler = GraphCompiler::new();
 let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
-let ad = AdContext::builder().with_core_rules().build().unwrap();
+let ad = AdContext::builder().build().unwrap();
 let ct_a = ad.vjp(&y, &a, &cotangent).unwrap();
 let program = compiler.compile(&ct_a).unwrap();
 
@@ -155,7 +155,7 @@ let tangent = TracedTensor::from_vec_col_major(
 
 let mut compiler = GraphCompiler::new();
 let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
-let ad = AdContext::builder().with_core_rules().build().unwrap();
+let ad = AdContext::builder().build().unwrap();
 let dy = ad.jvp(&y, &a, &tangent).unwrap();
 let program = compiler.compile(&dy).unwrap();
 
@@ -176,7 +176,7 @@ provides the corresponding rules and the caller includes those rules in an
 `AdContext`. If an extension does not support a given AD path, tenferro reports
 that path as unsupported rather than silently returning an incorrect gradient.
 
-The process-global extension-rule registration API is retained as a
-compatibility bridge for older helpers. New code should prefer explicit context
-ownership. See [Custom Tensor Operations](custom-operations.md) for the
-extension model.
+There is no process-global extension-rule registry. Extension AD must be owned
+by an explicit `AdContext` so tests and applications cannot accidentally depend
+on hidden process state. See [Custom Tensor Operations](custom-operations.md)
+for the extension model.

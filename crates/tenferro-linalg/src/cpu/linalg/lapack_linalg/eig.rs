@@ -68,7 +68,7 @@ macro_rules! impl_eig_real_2d {
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let n_i32 = dim_i32(n, "eig")?;
-            let mut a = input.host_data().to_vec();
+            let mut a = input.host_data()?.to_vec();
             let mut values_re = vec![0.0 as $real; n];
             let mut values_im = vec![0.0 as $real; n];
             let mut vl = vec![0.0 as $real; 1];
@@ -118,8 +118,8 @@ macro_rules! impl_eig_real_2d {
             let (vectors, values) = $convert(&vectors_real, &values_re, &values_im, n);
 
             Ok(vec![
-                tensor_from_vec_with_template(vec![n], values, input),
-                tensor_from_vec_with_template(vec![n, n], vectors, input),
+                tensor_from_vec_with_template(vec![n], values, input)?,
+                tensor_from_vec_with_template(vec![n, n], vectors, input)?,
             ])
         }
     };
@@ -133,7 +133,7 @@ macro_rules! impl_eig_values_real_2d {
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let n_i32 = dim_i32(n, "eig_values")?;
-            let mut a = input.host_data().to_vec();
+            let mut a = input.host_data()?.to_vec();
             let mut values_re = vec![0.0 as $real; n];
             let mut values_im = vec![0.0 as $real; n];
             let mut vl = vec![0.0 as $real; 1];
@@ -182,7 +182,7 @@ macro_rules! impl_eig_values_real_2d {
             check_lapack_info("eig_values", $routine, info)?;
             let values = $convert(buffers, &values_re, &values_im, n);
 
-            Ok(tensor_from_vec_with_template(vec![n], values, input))
+            tensor_from_vec_with_template(vec![n], values, input)
         }
     };
 }
@@ -195,7 +195,7 @@ macro_rules! impl_eig_complex_2d {
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
             let n_i32 = dim_i32(n, "eig")?;
-            let mut a = input.host_data().to_vec();
+            let mut a = input.host_data()?.to_vec();
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
             let mut vectors = vec![<$complex>::new(0.0, 0.0); n * n];
@@ -244,8 +244,8 @@ macro_rules! impl_eig_complex_2d {
             check_lapack_info("eig", $routine, info)?;
 
             Ok(vec![
-                tensor_from_vec_with_template(vec![n], values, input),
-                tensor_from_vec_with_template(vec![n, n], vectors, input),
+                tensor_from_vec_with_template(vec![n], values, input)?,
+                tensor_from_vec_with_template(vec![n, n], vectors, input)?,
             ])
         }
     };
@@ -259,7 +259,7 @@ macro_rules! impl_eig_values_complex_2d {
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
             let n_i32 = dim_i32(n, "eig_values")?;
-            let mut a = input.host_data().to_vec();
+            let mut a = input.host_data()?.to_vec();
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
             let mut vr = vec![<$complex>::new(0.0, 0.0); 1];
@@ -307,7 +307,7 @@ macro_rules! impl_eig_values_complex_2d {
             }
             check_lapack_info("eig_values", $routine, info)?;
 
-            Ok(tensor_from_vec_with_template(vec![n], values, input))
+            tensor_from_vec_with_template(vec![n], values, input)
         }
     };
 }
@@ -419,11 +419,11 @@ fn zero_dim_eig_values_output(input: &Tensor) -> tenferro_tensor::Result<Tensor>
         Tensor::F32(_) | Tensor::C32(_) => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
             value_shape,
             Vec::new(),
-        ))),
+        )?)),
         Tensor::F64(_) | Tensor::C64(_) => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
             value_shape,
             Vec::new(),
-        ))),
+        )?)),
         _ => Err(tenferro_tensor::Error::backend_failure(
             "eig_values",
             format!("unsupported dtype {:?}", input.dtype()),

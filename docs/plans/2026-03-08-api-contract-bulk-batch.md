@@ -67,7 +67,7 @@ Keep `Neg` unchanged.
 
 **Step 2: Route all overloads through the checked helpers**
 
-Delete the panic wrapper helper usage and return the checked result directly from the trait methods.
+Delete the infallible helper usage and return the checked result directly from the trait methods.
 
 **Step 3: Update docs/examples to use `.unwrap()` where operator syntax is still shown**
 

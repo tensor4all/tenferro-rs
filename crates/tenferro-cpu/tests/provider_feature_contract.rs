@@ -115,23 +115,6 @@ fn cpu_provider_features_select_matching_source_and_einsum_provider() {
 }
 
 #[test]
-fn legacy_source_provider_features_delegate_to_public_provider_features() {
-    let manifest = manifest("tenferro-cpu");
-
-    for (legacy, replacement) in [
-        ("src-openblas", "blas-openblas"),
-        ("src-accelerate", "blas-accelerate"),
-        ("src-intel-mkl-dynamic-parallel", "blas-mkl"),
-    ] {
-        let values = feature_values(&manifest, legacy);
-        assert!(
-            values.contains(replacement),
-            "`{legacy}` should delegate to `{replacement}`, got:\n{values}"
-        );
-    }
-}
-
-#[test]
 fn public_cpu_user_crates_expose_provider_passthrough_features() {
     for crate_name in PASSTHROUGH_CRATES {
         let manifest = manifest(crate_name);

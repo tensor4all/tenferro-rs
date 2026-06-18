@@ -227,7 +227,7 @@ explicitly if unavailable.
 Recommended PR sequence:
 
 1. Create `tenferro-cubecl`, adapt the reduction family, and route
-   `CubeclBackend` reductions through the new crate.
+   `CudaBackend` reductions through the new crate.
 2. Refine reduction routines and performance if the first implementation keeps
    conservative algorithms.
 3. Add further kernel families under the established crate boundary, starting

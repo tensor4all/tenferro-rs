@@ -38,13 +38,13 @@ fn tensor_owned_export_is_zero_copy_only_for_matching_order() {
     let ptr = data.as_ptr();
     let tensor = Tensor::from_vec_row_major(vec![2, 2], data);
 
-    let (shape, out) = tensor.try_into_vec_row_major::<f64>().unwrap();
+    let (shape, out) = tensor.into_vec_row_major::<f64>().unwrap();
 
     assert_eq!(shape, vec![2, 2]);
     assert_eq!(out.as_ptr(), ptr);
 
     let mismatch = Tensor::from_vec_row_major(vec![2], vec![1.0_f64])
-        .try_into_vec_col_major::<f64>()
+        .into_vec_col_major::<f64>()
         .unwrap_err();
     assert!(mismatch.to_string().contains("memory order"));
 }

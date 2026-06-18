@@ -1,6 +1,7 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::DType;
+use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
@@ -223,7 +224,7 @@ pub(crate) fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
 }
 
 pub(crate) fn dtype_of_or_real(ctx: &mut ShapeGuardContext, val: &ValueRef<StdTensorOp>) -> DType {
-    ctx.try_metadata_of(val)
+    ctx.metadata_if_available(val)
         .map(|metadata| metadata.dtype)
         .unwrap_or(DType::F64)
 }
@@ -233,9 +234,9 @@ pub fn conjugate_primal_if_complex(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
-) -> ValueRef<StdTensorOp> {
-    let dtype = ctx.dtype_of(&input);
-    conjugate_primal_if_dtype_complex(builder, input, dtype)
+) -> ADRuleResult<ValueRef<StdTensorOp>> {
+    let dtype = ctx.dtype_of(&input)?;
+    Ok(conjugate_primal_if_dtype_complex(builder, input, dtype))
 }
 
 #[doc(hidden)]

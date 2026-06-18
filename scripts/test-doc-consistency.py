@@ -19,6 +19,8 @@ def test_architecture_svg_lists_cpu_crate_and_background() -> None:
     ET.parse(svg_path)
     assert '<rect width="100%" height="100%" fill="#ffffff"/>' in text
     assert "tenferro-cpu" in text
+    assert "tenferro-xla" in text
+    assert "StableHLO/PJRT peer executor" in text
     assert "CPU backend" in text
     assert text.index("tenferro-cpu") < text.index("faer | BLAS/LAPACK")
 

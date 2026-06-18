@@ -77,24 +77,26 @@ use tenferro_tensor::{Rank, TypedTensor};
 let mut x = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 2],
     vec![1.0, 2.0, 3.0, 4.0],
-);
+)
+.unwrap();
 assert_eq!(x.shape(), &[2, 2]);
-assert_eq!(x.get(&[1, 0]), &2.0);
+assert_eq!(*x.get(&[1, 0]).unwrap(), 2.0);
 
-*x.get_mut(&[0, 1]) = 5.0;
-assert_eq!(x.try_get(&[1, 1]), Some(&4.0));
+*x.get_mut(&[0, 1]).unwrap() = 5.0;
+assert_eq!(*x.get(&[1, 1]).unwrap(), 4.0);
 
-let sum: f64 = x.iter().copied().sum();
+let sum: f64 = x.host_data().unwrap().iter().copied().sum();
 assert_eq!(sum, 12.0);
 
 let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major(
     [2, 2],
     vec![1.0, 2.0, 3.0, 4.0],
-);
+)
+.unwrap();
 assert_eq!(static_rank.rank(), 2);
 ```
 
-The flat slice and iterator APIs expose the physical column-major host buffer.
+The flat slice and host-buffer APIs expose the physical column-major host buffer.
 They are useful for host-side inspection, small manual edits, and
 interoperability with code that expects slices. They are not backend kernels
 and they do not configure CPU parallelism.
@@ -110,8 +112,8 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 
 let mut backend = CpuBackend::new();
-let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
-let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]);
+let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
+let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap();
 
 let sum = typed_tensor::add(&x, &y, &mut backend).unwrap();
 let product = typed_tensor::mul(&x, &y, &mut backend).unwrap();
@@ -119,11 +121,11 @@ let total = typed_tensor::reduce_sum(&product, &[0], &mut backend).unwrap();
 let mask = typed_tensor::compare(&sum, &product, CompareDir::Lt, &mut backend).unwrap();
 let selected = typed_tensor::where_select(&mask, &sum, &product, &mut backend).unwrap();
 
-assert_eq!(sum.as_slice(), &[5.0, 7.0, 9.0]);
-assert_eq!(product.as_slice(), &[4.0, 10.0, 18.0]);
-assert_eq!(total.as_slice(), &[32.0]);
-assert_eq!(mask.as_slice(), &[false, true, true]);
-assert_eq!(selected.as_slice(), &[4.0, 7.0, 9.0]);
+assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
+assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
+assert_eq!(total.as_slice().unwrap(), &[32.0]);
+assert_eq!(mask.as_slice().unwrap(), &[false, true, true]);
+assert_eq!(selected.as_slice().unwrap(), &[4.0, 7.0, 9.0]);
 ```
 
 The current typed wrapper set covers:
@@ -141,33 +143,33 @@ These wrappers are a convenience layer over concrete tensor backend execution.
 For backend-resident CUDA tensors or operation families not covered by the
 typed wrappers, use the runtime-dtype `Tensor` path or the eager/traced layer
 that matches the workflow. Prefer backend-aware typed wrappers for tensor
-reductions and shape operations; reserve `iter()` and `as_slice()` for
+reductions and shape operations; reserve `host_data()` and `as_slice()` for
 host-side inspection, small assertions, or interoperability with ordinary Rust
 slice code.
 
 ## Map, Iteration, And Parallelism
 
-`TypedTensor` exposes slice-style host iteration:
+`TypedTensor` exposes explicit host-buffer access for slice-style iteration:
 
 ```rust
 use tenferro_tensor::TypedTensor;
 
-let mut x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
-for value in x.iter_mut() {
+let mut x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
+for value in x.host_data_mut().unwrap() {
     *value *= 2.0;
 }
-assert_eq!(x.as_slice(), &[2.0, 4.0, 6.0]);
+assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
 ```
 
 There is no public closure-style `TypedTensor::map` or `mapv` method in the
-current public API. For host-only transformations, use `iter`, `iter_mut`,
-`as_slice`, `host_data_mut`, or `as_physical_slice_mut`. For tensor math,
+current public API. For host-only transformations, use `host_data`,
+`host_data_mut`, `as_slice`, or `as_slice_mut`. For tensor math,
 reductions, or shape operations that should use backend execution, use typed
 wrappers or the runtime-dtype `Tensor`, `EagerTensor`, or `TracedTensor`
 operation API.
 
-Host iterators are ordinary Rust slice iterators. Backend CPU parallelism is
-controlled by the backend execution context, not by `iter()` itself. See
+Host-buffer iteration uses ordinary Rust slice iterators. Backend CPU parallelism is
+controlled by the backend execution context, not by host slice iteration. See
 [Parallelism and Caching](parallelism-and-caching.md) for CPU thread-count
 controls.
 
@@ -231,7 +233,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let y = (&x * &x).reduce_sum(&[0]).unwrap();
 
 y.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 ```
 
 ## Traced Tensor Example

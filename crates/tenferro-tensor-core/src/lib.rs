@@ -419,115 +419,6 @@ pub fn col_major_strides(shape: &[usize]) -> Result<StrideVec> {
     Ok(strides)
 }
 
-fn linear_offset_checked(shape: &[usize], indices: &[usize]) -> Option<usize> {
-    if shape.len() != indices.len() {
-        return None;
-    }
-    let mut offset = 0usize;
-    let mut stride = 1usize;
-    for (&extent, &index) in shape.iter().zip(indices) {
-        if index >= extent {
-            return None;
-        }
-        offset = offset.checked_add(index.checked_mul(stride)?)?;
-        stride = stride.checked_mul(extent)?;
-    }
-    Some(offset)
-}
-
-fn row_major_offset(shape: &[usize], indices: &[usize]) -> Option<usize> {
-    let mut offset = 0usize;
-    let mut stride = 1usize;
-    for (&extent, &index) in shape.iter().rev().zip(indices.iter().rev()) {
-        if index >= extent {
-            return None;
-        }
-        offset = offset.checked_add(index.checked_mul(stride)?)?;
-        stride = stride.checked_mul(extent)?;
-    }
-    Some(offset)
-}
-
-fn for_each_col_major_index(
-    shape: &[usize],
-    mut f: impl FnMut(&[usize]) -> Result<()>,
-) -> Result<()> {
-    if shape.is_empty() {
-        f(&[])?;
-        return Ok(());
-    }
-    if shape.contains(&0) {
-        return Ok(());
-    }
-    let mut index = vec![0usize; shape.len()];
-    loop {
-        f(&index)?;
-        let mut axis = 0usize;
-        loop {
-            index[axis] += 1;
-            if index[axis] < shape[axis] {
-                break;
-            }
-            index[axis] = 0;
-            axis += 1;
-            if axis == shape.len() {
-                return Ok(());
-            }
-        }
-    }
-}
-
-fn for_each_row_major_index(
-    shape: &[usize],
-    mut f: impl FnMut(&[usize]) -> Result<()>,
-) -> Result<()> {
-    if shape.is_empty() {
-        f(&[])?;
-        return Ok(());
-    }
-    if shape.contains(&0) {
-        return Ok(());
-    }
-    let mut index = vec![0usize; shape.len()];
-    loop {
-        f(&index)?;
-        let mut axis = shape.len();
-        loop {
-            axis -= 1;
-            index[axis] += 1;
-            if index[axis] < shape[axis] {
-                break;
-            }
-            index[axis] = 0;
-            if axis == 0 {
-                return Ok(());
-            }
-        }
-    }
-}
-
-fn row_major_to_col_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Result<Vec<T>> {
-    checked_shape_len(shape, data.len())?;
-    let mut out = Vec::with_capacity(data.len());
-    for_each_col_major_index(shape, |index| {
-        let offset = row_major_offset(shape, index).ok_or(Error::IntegerOverflow)?;
-        out.push(data[offset].clone());
-        Ok(())
-    })?;
-    Ok(out)
-}
-
-fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Result<Vec<T>> {
-    checked_shape_len(shape, data.len())?;
-    let mut out = Vec::with_capacity(data.len());
-    for_each_row_major_index(shape, |index| {
-        let offset = linear_offset_checked(shape, index).ok_or(Error::IntegerOverflow)?;
-        out.push(data[offset].clone());
-        Ok(())
-    })?;
-    Ok(out)
-}
-
 fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
     if axes.len() != rank {
         return Err(Error::InvalidPermutationLength {
@@ -732,41 +623,6 @@ impl<T> HostTensor<T> {
     }
 }
 
-impl<T: Clone> HostTensor<T> {
-    /// Create an owned tensor from row-major data by converting to column-major storage.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::HostTensor;
-    ///
-    /// let tensor = HostTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-    /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
-    /// ```
-    pub fn from_vec_row_major(shape: impl Into<ShapeVec>, data: Vec<T>) -> Result<Self> {
-        let shape = shape.into();
-        let data = row_major_to_col_major(&shape, data)?;
-        Self::from_vec_col_major(shape, data)
-    }
-
-    /// Consume this tensor into row-major data.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::HostTensor;
-    ///
-    /// let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    /// assert_eq!(tensor.into_vec_row_major()?.1, vec![1.0, 2.0, 3.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
-    /// ```
-    pub fn into_vec_row_major(self) -> Result<(ShapeVec, Vec<T>)> {
-        let data = col_major_to_row_major(&self.shape, self.data)?;
-        Ok((self.shape, data))
-    }
-}
-
 impl<'a, T> HostTensorView<'a, T> {
     /// Create a typed view from explicit metadata and validate bounds eagerly.
     ///
@@ -901,21 +757,6 @@ impl<'a, T> HostTensorView<'a, T> {
     /// ```
     pub fn is_zero_offset_col_major(&self) -> bool {
         self.offset == 0 && self.is_compact_col_major()
-    }
-
-    /// Alias for [`HostTensorView::is_compact_col_major`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::HostTensor;
-    ///
-    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
-    /// assert!(tensor.as_view().is_contiguous_col_major());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
-    /// ```
-    pub fn is_contiguous_col_major(&self) -> bool {
-        self.is_compact_col_major()
     }
 
     /// Borrow the slice-contiguous backing region for this view.
@@ -1084,26 +925,6 @@ impl Tensor {
         let shape = shape.into();
         checked_shape_len(&shape, data.len())?;
         Ok(T::into_tensor(shape, data))
-    }
-
-    /// Create a dynamic tensor from a row-major host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::Tensor;
-    ///
-    /// let tensor = Tensor::from_vec_row_major(vec![1, 2], vec![1.0_f64, 2.0])?;
-    /// assert_eq!(tensor.shape(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
-    /// ```
-    pub fn from_vec_row_major<T: TensorScalar + Clone>(
-        shape: impl Into<ShapeVec>,
-        data: Vec<T>,
-    ) -> Result<Self> {
-        let shape = shape.into();
-        let data = row_major_to_col_major(&shape, data)?;
-        Self::from_vec_col_major(shape, data)
     }
 
     /// Return the tensor dtype tag.

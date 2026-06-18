@@ -35,7 +35,8 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
                 7.0, 8.0, 9.0, //
                 10.0, 11.0, 12.0,
             ],
-        ),
+        )
+        .unwrap(),
         test_ctx(),
     );
 
@@ -76,11 +77,12 @@ fn take_block_backward_accumulates_to_source() {
                 7.0, 8.0, 9.0, //
                 10.0, 11.0, 12.0,
             ],
-        ),
+        )
+        .unwrap(),
         ctx.clone(),
     );
     let weights = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
     );
 
@@ -89,7 +91,7 @@ fn take_block_backward_accumulates_to_source() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().as_ref()),
+        f64_data(x.grad().unwrap().unwrap().as_ref()),
         &[0.0, 0.0, 0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0, 2.0, 0.0, 4.0],
         TOL,
     );

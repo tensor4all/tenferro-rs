@@ -91,7 +91,7 @@ pub trait LinalgBackend: TensorBackend {
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
-    /// );
+    /// )?;
     /// let outputs = CpuBackend::new().svd_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())

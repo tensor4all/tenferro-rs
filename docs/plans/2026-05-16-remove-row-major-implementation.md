@@ -231,7 +231,7 @@ Mention that NumPy/PyTorch row-major flat buffers must be converted before const
 Run:
 
 ```bash
-rg -n "MemoryOrder|RowMajor|from_vec_row_major|from_vec_col_major|from_vec_with_order|to_row_major|to_col_major|to_order|try_into_vec_row_major|try_into_vec_col_major|try_into_vec_with_order|row-major|row major" README.md tenferro tenferro-tensor docs/guides docs/getting-started
+rg -n "MemoryOrder|RowMajor|from_vec_row_major|from_vec_col_major|from_vec_with_order|to_row_major|to_col_major|to_order|into_vec_row_major|into_vec_col_major|try_into_vec_with_order|row-major|row major" README.md tenferro tenferro-tensor docs/guides docs/getting-started
 ```
 
 Expected: only intentional plain-English statements about external row-major formats remain; no removed API names remain in active docs or source.
@@ -310,7 +310,7 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "MemoryOrder|RowMajor|from_vec_row_major|from_vec_col_major|from_vec_with_order|to_row_major|to_col_major|to_order|try_into_vec_row_major|try_into_vec_col_major|try_into_vec_with_order" tenferro tenferro-tensor docs/guides docs/getting-started README.md
+rg -n "MemoryOrder|RowMajor|from_vec_row_major|from_vec_col_major|from_vec_with_order|to_row_major|to_col_major|to_order|into_vec_row_major|into_vec_col_major|try_into_vec_with_order" tenferro tenferro-tensor docs/guides docs/getting-started README.md
 ```
 
 Expected: no matches.

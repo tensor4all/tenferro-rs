@@ -118,10 +118,9 @@ fn runtime_input_index_vec_stays_inline_for_common_arity() {
 
 #[test]
 fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
-    let base = Arc::new(Tensor::from_vec_col_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let base = Arc::new(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    );
     let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
     let input = TensorRead::from_view(view.tensor_view());
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));

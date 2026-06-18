@@ -85,9 +85,6 @@ pub struct DeviceId {
     pub ordinal: usize,
 }
 
-/// Backwards-compatible internal alias during the crate-boundary migration.
-pub type ComputeDevice = DeviceId;
-
 /// Placement metadata for a tensor buffer.
 ///
 /// # Examples
@@ -288,13 +285,13 @@ impl<T: 'static> Buffer<T> {
 /// ```
 /// use tenferro_tensor::{Rank, Tensor, TypedTensor};
 ///
-/// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+/// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 /// assert_eq!(t.shape(), &[2, 2]);
 ///
-/// let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]);
+/// let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]).unwrap();
 /// assert_eq!(static_rank.rank(), 2);
 ///
-/// let dynamic = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+/// let dynamic = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
 /// assert_eq!(dynamic.shape(), &[2, 2]);
 /// ```
 ///
@@ -598,10 +595,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         self.layout.offset()
     }
 
-    /// Return the borrowed physical host slice backing this view.
+    /// Return the borrowed host storage backing this view.
     ///
-    /// Panics when called on a backend buffer; use [`TypedTensorView::as_slice`]
-    /// when a fallible host-inspection API is needed.
+    /// This exposes the entire backing host allocation, not just the logical
+    /// slice covered by this view. Use [`TypedTensorView::as_slice`] when the
+    /// caller needs the contiguous logical region instead.
     ///
     /// # Examples
     ///
@@ -610,13 +608,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     ///
     /// let data = [1_i32, 2];
     /// let view = TypedTensorView::from_slice(vec![2], vec![1], 0, &data)?;
-    /// assert_eq!(view.as_physical_slice(), &[1, 2]);
+    /// assert_eq!(view.host_storage()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn as_physical_slice(&self) -> &'a [T] {
+    pub fn host_storage(&self) -> crate::Result<&'a [T]> {
         match &self.buffer {
-            TensorBufferRef::Host(data) => data,
-            TensorBufferRef::Backend(_) => panic!("as_physical_slice called on backend buffer"),
+            TensorBufferRef::Host(data) => Ok(data),
+            TensorBufferRef::Backend(_) => Err(crate::Error::backend_failure(
+                "TypedTensorView::host_storage",
+                "backend buffers cannot expose host storage; download explicitly first",
+            )),
         }
     }
 
@@ -633,13 +634,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn n_elements(&self) -> usize {
-        // Compatibility panic wrapper; use `try_n_elements` for untrusted
-        // view metadata.
-        self.try_n_elements().unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    pub fn try_n_elements(&self) -> crate::Result<usize> {
-        try_shape_product(self.shape(), "TypedTensorView::try_n_elements")
+        // Invariant: public view constructors validate logical element count.
+        checked_view_element_count(self.shape(), "TypedTensorView::n_elements")
+            .expect("TypedTensorView layout shape was validated at construction")
     }
 
     /// Return layout metadata for this view.
@@ -692,10 +689,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     ///
     /// let data = [1_i32, 2, 3];
     /// let view = TypedTensorView::from_slice(vec![3], vec![-1], 2, &data)?;
-    /// assert_eq!(view.try_linear_offset(&[2]), Some(0));
+    /// assert_eq!(view.linear_offset(&[2]), Some(0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn try_linear_offset(&self, indices: &[usize]) -> Option<usize> {
+    pub fn linear_offset(&self, indices: &[usize]) -> Option<usize> {
         checked_view_offset(self.shape(), self.strides(), self.offset(), indices)
     }
 
@@ -714,27 +711,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn get(&self, indices: &[usize]) -> Option<&T> {
-        let offset = self.try_linear_offset(indices)?;
+        let offset = self.linear_offset(indices)?;
         match &self.buffer {
             TensorBufferRef::Host(data) => data.get(offset),
             TensorBufferRef::Backend(_) => None,
         }
-    }
-
-    /// Explicit alias for [`TypedTensorView::get`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensorView;
-    ///
-    /// let data = [1_i32];
-    /// let view = TypedTensorView::from_slice(vec![1], vec![1], 0, &data)?;
-    /// assert_eq!(view.try_get(&[0]), Some(&1));
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_get(&self, indices: &[usize]) -> Option<&T> {
-        self.get(indices)
     }
 
     /// Borrow the contiguous host slice covered by this view.
@@ -776,10 +757,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     ///
-    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
     /// let transposed = tensor.as_view().transpose_view([1, 0])?;
     /// let compact = transposed.to_contiguous()?;
-    /// assert_eq!(compact.as_slice(), &[1, 3, 2, 4]);
+    /// assert_eq!(compact.as_slice()?, &[1, 3, 2, 4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn to_contiguous(&self) -> crate::Result<TypedTensor<T, R>>
@@ -796,11 +777,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         )?;
         let shape = R::shape_from_vec(self.shape().to_vec().into())
             .map_err(|err| tensor_layout_error(op, err))?;
-        Ok(TypedTensor::from_buffer_col_major(
-            shape,
-            Buffer::Host(data),
-            self.placement.clone(),
-        ))
+        TypedTensor::from_buffer_col_major(shape, Buffer::Host(data), self.placement.clone())
     }
 
     /// Return a metadata-only axis permutation.
@@ -1076,7 +1053,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         self.layout.offset()
     }
 
-    /// Return the borrowed physical host slice backing this view.
+    /// Return the borrowed host storage backing this view.
+    ///
+    /// This exposes the entire backing host allocation, not just the logical
+    /// slice covered by this view. Use [`TypedTensorViewMut::as_read_only`]
+    /// with [`TypedTensorView::as_slice`] when the caller needs the contiguous
+    /// logical region instead.
     ///
     /// # Examples
     ///
@@ -1085,17 +1067,24 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// let mut data = [1_i32, 2];
     /// let view = TypedTensorViewMut::from_slice(vec![2], vec![1], 0, &mut data)?;
-    /// assert_eq!(view.as_physical_slice(), &[1, 2]);
+    /// assert_eq!(view.host_storage()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn as_physical_slice(&self) -> &[T] {
+    pub fn host_storage(&self) -> crate::Result<&[T]> {
         match &self.buffer {
-            TensorBufferRefMut::Host(data) => data,
-            TensorBufferRefMut::Backend(_) => panic!("as_physical_slice called on backend buffer"),
+            TensorBufferRefMut::Host(data) => Ok(data),
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+                "TypedTensorViewMut::host_storage",
+                "backend buffers cannot expose host storage; download explicitly first",
+            )),
         }
     }
 
-    /// Mutably borrow the physical host slice backing this view.
+    /// Mutably borrow the host storage backing this view.
+    ///
+    /// This exposes the entire backing host allocation, not just the logical
+    /// slice covered by this view. Use [`TypedTensorViewMut::copy_from_contiguous`]
+    /// or element accessors when mutating the logical region instead.
     ///
     /// # Examples
     ///
@@ -1104,16 +1093,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// let mut data = [1_i32, 2];
     /// let mut view = TypedTensorViewMut::from_slice(vec![2], vec![1], 0, &mut data)?;
-    /// view.as_physical_slice_mut()[0] = 3;
+    /// view.host_storage_mut()?[0] = 3;
     /// assert_eq!(view.get(&[0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn as_physical_slice_mut(&mut self) -> &mut [T] {
+    pub fn host_storage_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => data,
-            TensorBufferRefMut::Backend(_) => {
-                panic!("as_physical_slice_mut called on backend buffer")
-            }
+            TensorBufferRefMut::Host(data) => Ok(data),
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+                "TypedTensorViewMut::host_storage_mut",
+                "backend buffers cannot expose mutable host storage; download explicitly first",
+            )),
         }
     }
 
@@ -1130,13 +1120,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn n_elements(&self) -> usize {
-        // Compatibility panic wrapper; use `try_n_elements` for untrusted
-        // view metadata.
-        self.try_n_elements().unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    pub fn try_n_elements(&self) -> crate::Result<usize> {
-        try_shape_product(self.shape(), "TypedTensorViewMut::try_n_elements")
+        // Invariant: public mutable view constructors validate logical element count.
+        checked_view_element_count(self.shape(), "TypedTensorViewMut::n_elements")
+            .expect("TypedTensorViewMut layout shape was validated at construction")
     }
 
     /// Return layout metadata for this view.
@@ -1189,10 +1175,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// let mut data = [1_i32, 2, 3];
     /// let view = TypedTensorViewMut::from_slice(vec![3], vec![-1], 2, &mut data)?;
-    /// assert_eq!(view.try_linear_offset(&[2]), Some(0));
+    /// assert_eq!(view.linear_offset(&[2]), Some(0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn try_linear_offset(&self, indices: &[usize]) -> Option<usize> {
+    pub fn linear_offset(&self, indices: &[usize]) -> Option<usize> {
         checked_view_offset(self.shape(), self.strides(), self.offset(), indices)
     }
 
@@ -1209,7 +1195,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn get(&self, indices: &[usize]) -> Option<&T> {
-        let offset = self.try_linear_offset(indices)?;
+        let offset = self.linear_offset(indices)?;
         match &self.buffer {
             TensorBufferRefMut::Host(data) => data.get(offset),
             TensorBufferRefMut::Backend(_) => None,
@@ -1230,44 +1216,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
-        let offset = self.try_linear_offset(indices)?;
+        let offset = self.linear_offset(indices)?;
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => data.get_mut(offset),
             TensorBufferRefMut::Backend(_) => None,
         }
-    }
-
-    /// Explicit alias for [`TypedTensorViewMut::get`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensorViewMut;
-    ///
-    /// let mut data = [1_i32];
-    /// let view = TypedTensorViewMut::from_slice(vec![1], vec![1], 0, &mut data)?;
-    /// assert_eq!(view.try_get(&[0]), Some(&1));
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_get(&self, indices: &[usize]) -> Option<&T> {
-        self.get(indices)
-    }
-
-    /// Explicit alias for [`TypedTensorViewMut::get_mut`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensorViewMut;
-    ///
-    /// let mut data = [1_i32];
-    /// let mut view = TypedTensorViewMut::from_slice(vec![1], vec![1], 0, &mut data)?;
-    /// *view.try_get_mut(&[0]).unwrap() = 2;
-    /// assert_eq!(view.get(&[0]), Some(&2));
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
-        self.get_mut(indices)
     }
 
     /// Copy compact column-major host tensor values into this mutable view.
@@ -1280,10 +1233,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     ///
-    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
-    /// let src = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]).unwrap();
+    /// let src = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
     /// tensor.as_view_mut().transpose_view([1, 0])?.copy_from_contiguous(&src)?;
-    /// assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
+    /// assert_eq!(tensor.as_slice()?, &[1, 3, 2, 4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn copy_from_contiguous(&mut self, src: &TypedTensor<T, R>) -> crate::Result<()>
@@ -1723,8 +1676,9 @@ pub enum DType {
 /// ```
 /// use tenferro_tensor::TensorScalar;
 ///
-/// let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]);
-/// assert_eq!(tensor.as_slice::<f64>(), Some([1.0, 2.0].as_slice()));
+/// let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0])?;
+/// assert_eq!(tensor.as_slice::<f64>()?, [1.0, 2.0].as_slice());
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Real-valued counterpart of this scalar type.
@@ -1743,7 +1697,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn dtype() -> DType;
 
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor>;
 
     /// Borrow a typed tensor as a dtype-erased [`TensorRead`] view.
     ///
@@ -1755,45 +1709,45 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// use tenferro_tensor::{DType, TensorScalar, TypedTensor};
     ///
-    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// let read = f64::tensor_read(&tensor);
     /// assert_eq!(read.dtype(), DType::F64);
     /// assert_eq!(read.shape(), &[2]);
     /// ```
     fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_>;
 
-    /// Try to borrow the host data from a [`Tensor`].
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
+    /// Borrow the host data from a [`Tensor`].
+    fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]>;
 
-    /// Try to mutably borrow the host data from a [`Tensor`].
+    /// Mutably borrow the host data from a [`Tensor`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
-    /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-    /// <f64 as TensorScalar>::try_as_slice_mut(&mut tensor).unwrap()[0] = 3.0;
+    /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// <f64 as TensorScalar>::as_slice_mut(&mut tensor)?[0] = 3.0;
     ///
-    /// assert_eq!(tensor.as_slice::<f64>().unwrap(), &[3.0]);
+    /// assert_eq!(tensor.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]>;
+    fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]>;
 
-    /// Try to extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
-    ///
-    /// Returns `None` if the tensor dtype does not match `Self`.
+    /// Extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
-    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    /// let typed = <f64 as TensorScalar>::try_into_typed(tensor).unwrap();
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let typed = <f64 as TensorScalar>::into_typed(tensor)?;
     ///
-    /// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
+    /// assert_eq!(typed.as_slice()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>>;
+    fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>>;
 }
 
 mod private {
@@ -1808,264 +1762,69 @@ mod private {
     impl Sealed for num_complex::Complex32 {}
 }
 
-impl TensorScalar for f64 {
-    type Real = f64;
+macro_rules! impl_tensor_scalar {
+    ($ty:ty, $real:ty, $dtype:ident, $variant:ident) => {
+        impl TensorScalar for $ty {
+            type Real = $real;
 
-    fn dtype() -> DType {
-        DType::F64
-    }
+            fn dtype() -> DType {
+                DType::$dtype
+            }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
-    }
+            fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor> {
+                TypedTensor::from_vec_col_major(shape, data).map(Tensor::$variant)
+            }
 
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::F64(tensor.as_view()))
-    }
+            fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+                TensorRead::from_view(TensorView::$variant(tensor.as_view()))
+            }
 
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::F64(t) => t.try_host_data().ok(),
-            _ => None,
+            fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]> {
+                let actual = tensor.dtype();
+                match tensor {
+                    Tensor::$variant(t) => t.host_data(),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "Tensor::as_slice",
+                        lhs: Self::dtype(),
+                        rhs: actual,
+                    }),
+                }
+            }
+
+            fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]> {
+                let actual = tensor.dtype();
+                match tensor {
+                    Tensor::$variant(t) => t.host_data_mut(),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "Tensor::as_slice_mut",
+                        lhs: Self::dtype(),
+                        rhs: actual,
+                    }),
+                }
+            }
+
+            fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>> {
+                let actual = tensor.dtype();
+                match tensor {
+                    Tensor::$variant(inner) => Ok(inner),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "TensorScalar::into_typed",
+                        lhs: Self::dtype(),
+                        rhs: actual,
+                    }),
+                }
+            }
         }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::F64(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::F64(inner) => Some(inner),
-            _ => None,
-        }
-    }
+    };
 }
 
-impl TensorScalar for f32 {
-    type Real = f32;
-
-    fn dtype() -> DType {
-        DType::F32
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::F32(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::F32(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::F32(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::F32(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-
-impl TensorScalar for i64 {
-    type Real = i64;
-
-    fn dtype() -> DType {
-        DType::I64
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::I64(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::I64(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::I64(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::I64(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-
-impl TensorScalar for i32 {
-    type Real = i32;
-
-    fn dtype() -> DType {
-        DType::I32
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::I32(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::I32(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::I32(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::I32(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-
-impl TensorScalar for bool {
-    type Real = bool;
-
-    fn dtype() -> DType {
-        DType::Bool
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::Bool(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::Bool(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::Bool(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::Bool(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-
-impl TensorScalar for Complex64 {
-    type Real = f64;
-
-    fn dtype() -> DType {
-        DType::C64
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::C64(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::C64(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::C64(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::C64(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-
-impl TensorScalar for Complex32 {
-    type Real = f32;
-
-    fn dtype() -> DType {
-        DType::C32
-    }
-
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
-    }
-
-    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
-        TensorRead::from_view(TensorView::C32(tensor.as_view()))
-    }
-
-    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
-        match tensor {
-            Tensor::C32(t) => t.try_host_data().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
-        match tensor {
-            Tensor::C32(t) => t.try_host_data_mut().ok(),
-            _ => None,
-        }
-    }
-
-    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
-        match tensor {
-            Tensor::C32(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
+impl_tensor_scalar!(f64, f64, F64, F64);
+impl_tensor_scalar!(f32, f32, F32, F32);
+impl_tensor_scalar!(i64, i64, I64, I64);
+impl_tensor_scalar!(i32, i32, I32, I32);
+impl_tensor_scalar!(bool, bool, Bool, Bool);
+impl_tensor_scalar!(Complex64, f64, C64, C64);
+impl_tensor_scalar!(Complex32, f32, C32, C32);
 
 /// Dynamic tensor enum over the supported scalar types.
 ///
@@ -2078,10 +1837,10 @@ impl TensorScalar for Complex32 {
 /// ```rust
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
 /// assert_eq!(t.shape(), &[2]);
 ///
-/// let erased = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]);
+/// let erased = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
 /// assert_eq!(erased.shape().len(), 2);
 /// ```
 #[derive(Clone, Debug)]
@@ -2142,7 +1901,7 @@ pub enum TensorView<'a> {
 /// ```
 /// use tenferro_tensor::{DType, Tensor, TensorRead};
 ///
-/// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 /// let read = TensorRead::from_tensor(&tensor);
 ///
 /// assert_eq!(read.dtype(), DType::F64);
@@ -2226,12 +1985,7 @@ impl TensorOwnedView {
         TensorRead::from_view(self.tensor_view())
     }
 
-    pub fn to_tensor(&self) -> Tensor {
-        self.try_to_tensor()
-            .unwrap_or_else(|err| panic!("TensorOwnedView::to_tensor failed: {err}"))
-    }
-
-    /// Try to materialize this owned view into an owned compact tensor.
+    /// Materialize this owned view into an owned compact tensor.
     ///
     /// This returns an explicit error for backend-backed views because no
     /// backend context is available for an implicit download.
@@ -2242,14 +1996,14 @@ impl TensorOwnedView {
     /// use std::sync::Arc;
     /// use tenferro_tensor::{Tensor, TensorOwnedView};
     ///
-    /// let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
+    /// let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
     /// let view = TensorOwnedView::from_tensor(base);
-    /// let tensor = view.try_to_tensor()?;
+    /// let tensor = view.to_tensor()?;
     /// assert_eq!(tensor.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
-        self.tensor_view().try_to_tensor()
+    pub fn to_tensor(&self) -> crate::Result<Tensor> {
+        self.tensor_view().to_tensor()
     }
 
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
@@ -2386,12 +2140,7 @@ impl TensorValue {
         }
     }
 
-    pub fn to_tensor(&self) -> Tensor {
-        self.try_to_tensor()
-            .unwrap_or_else(|err| panic!("TensorValue::to_tensor failed: {err}"))
-    }
-
-    /// Try to materialize this tensor value into an owned compact tensor.
+    /// Materialize this tensor value into an owned compact tensor.
     ///
     /// Compact tensor values are cloned. Lazy host views are materialized.
     /// Backend-backed views return an explicit error instead of panicking.
@@ -2404,15 +2153,15 @@ impl TensorValue {
     /// let value = TensorValue::from_tensor(Tensor::from_vec_col_major(
     ///     vec![2],
     ///     vec![1.0_f64, 2.0],
-    /// ));
-    /// let tensor = value.try_to_tensor()?;
+    /// ).unwrap());
+    /// let tensor = value.to_tensor()?;
     /// assert_eq!(tensor.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
+    pub fn to_tensor(&self) -> crate::Result<Tensor> {
         match self {
             Self::Tensor(tensor) => Ok(tensor.as_ref().clone()),
-            Self::View(view) => view.try_to_tensor(),
+            Self::View(view) => view.to_tensor(),
         }
     }
 
@@ -2518,7 +2267,7 @@ fn typed_view_with_layout<T: 'static>(
 /// ```
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[2]);
 /// ```
@@ -2535,7 +2284,7 @@ impl From<TypedTensor<f64>> for Tensor {
 /// ```
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[2]);
 /// ```
@@ -2552,7 +2301,7 @@ impl From<TypedTensor<f32>> for Tensor {
 /// ```
 /// use tenferro_tensor::{DType, Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.dtype(), DType::I64);
 /// assert_eq!(tensor.shape(), &[2]);
@@ -2570,7 +2319,7 @@ impl From<TypedTensor<i64>> for Tensor {
 /// ```
 /// use tenferro_tensor::{DType, Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i32, 2]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.dtype(), DType::I32);
 /// assert_eq!(tensor.shape(), &[2]);
@@ -2588,7 +2337,7 @@ impl From<TypedTensor<i32>> for Tensor {
 /// ```
 /// use tenferro_tensor::{DType, Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![true, false]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.dtype(), DType::Bool);
 /// assert_eq!(tensor.shape(), &[2]);
@@ -2611,7 +2360,7 @@ impl From<TypedTensor<bool>> for Tensor {
 /// let typed = TypedTensor::from_vec_col_major(
 ///     vec![1],
 ///     vec![Complex64::new(1.0, 2.0)],
-/// );
+/// ).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[1]);
 /// ```
@@ -2633,7 +2382,7 @@ impl From<TypedTensor<Complex<f64>>> for Tensor {
 /// let typed = TypedTensor::from_vec_col_major(
 ///     vec![1],
 ///     vec![Complex32::new(1.0, 2.0)],
-/// );
+/// ).unwrap();
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[1]);
 /// ```
@@ -2789,10 +2538,6 @@ impl<'a> TensorView<'a> {
     /// an explicit device transfer before materializing backend views on the
     /// host.
     ///
-    /// # Panics
-    ///
-    /// Panics when called on a backend-backed view.
-    ///
     /// # Examples
     ///
     /// ```rust
@@ -2800,54 +2545,32 @@ impl<'a> TensorView<'a> {
     ///
     /// let data = [1.0_f64, 2.0];
     /// let view = TensorView::f64(&[2], &data)?;
-    /// let tensor = view.to_tensor();
+    /// let tensor = view.to_tensor()?;
     /// assert_eq!(tensor.dtype(), DType::F64);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn to_tensor(&self) -> Tensor {
-        self.try_to_tensor()
-            .unwrap_or_else(|err| panic!("TensorView::to_tensor failed: {err}"))
-    }
-
-    /// Try to materialize this host view into an owned tensor.
-    ///
-    /// This is the checked counterpart to [`TensorView::to_tensor`]. It clones
-    /// host view data but returns an explicit error for backend-backed views
-    /// because there is no backend context available for download.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{DType, TensorView};
-    ///
-    /// let data = [1.0_f64, 2.0];
-    /// let view = TensorView::f64(&[2], &data)?;
-    /// let tensor = view.try_to_tensor()?;
-    /// assert_eq!(tensor.dtype(), DType::F64);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
+    pub fn to_tensor(&self) -> crate::Result<Tensor> {
         match self {
             Self::F32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::F32)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::F32)
             }
             Self::F64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::F64)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::F64)
             }
             Self::I32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::I32)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::I32)
             }
             Self::I64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::I64)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::I64)
             }
             Self::Bool(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::Bool)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::Bool)
             }
             Self::C32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::C32)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::C32)
             }
             Self::C64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::try_to_tensor").map(Tensor::C64)
+                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::C64)
             }
         }
     }
@@ -2890,10 +2613,6 @@ impl<'a> TensorRead<'a> {
     /// backend-specific `TensorViewCanonicalization` method or an explicit
     /// device transfer before materializing backend views on the host.
     ///
-    /// # Panics
-    ///
-    /// Panics when called on a backend-backed view.
-    ///
     /// # Examples
     ///
     /// ```rust
@@ -2901,36 +2620,14 @@ impl<'a> TensorRead<'a> {
     ///
     /// let data = [1_i32, 2, 3];
     /// let read = TensorRead::from_view(TensorView::i32(&[3], &data)?);
-    /// let tensor = read.to_tensor();
+    /// let tensor = read.to_tensor()?;
     /// assert_eq!(tensor.shape(), &[3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn to_tensor(&self) -> Tensor {
-        self.try_to_tensor()
-            .unwrap_or_else(|err| panic!("TensorRead::to_tensor failed: {err}"))
-    }
-
-    /// Try to convert an owned tensor reference or host view into an owned tensor.
-    ///
-    /// This is the checked counterpart to [`TensorRead::to_tensor`]. It clones
-    /// owned tensor inputs and materializes host views, but returns an explicit
-    /// error for backend-backed views.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{TensorRead, TensorView};
-    ///
-    /// let data = [1_i32, 2, 3];
-    /// let read = TensorRead::from_view(TensorView::i32(&[3], &data)?);
-    /// let tensor = read.try_to_tensor()?;
-    /// assert_eq!(tensor.shape(), &[3]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_to_tensor(&self) -> crate::Result<Tensor> {
+    pub fn to_tensor(&self) -> crate::Result<Tensor> {
         match self {
             Self::Tensor(tensor) => Ok((*tensor).clone()),
-            Self::View(view) => view.try_to_tensor(),
+            Self::View(view) => view.to_tensor(),
         }
     }
 }
@@ -2940,13 +2637,12 @@ impl<'a> TensorRead<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{col_major_strides, try_col_major_strides};
+/// use tenferro_tensor::col_major_strides;
 ///
-/// assert_eq!(col_major_strides(&[2, 3]), vec![1, 2]);
-/// assert_eq!(try_col_major_strides(&[2, 3])?, vec![1, 2]);
+/// assert_eq!(col_major_strides(&[2, 3])?, vec![1, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn try_col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
+pub fn col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &extent in shape {
@@ -2963,19 +2659,6 @@ pub fn try_col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
             })?;
     }
     Ok(strides)
-}
-
-pub fn col_major_strides(shape: &[usize]) -> Vec<isize> {
-    // Compatibility panic wrapper; use `try_col_major_strides` when shape
-    // dimensions come from users or compiled graph metadata.
-    try_col_major_strides(shape).unwrap_or_else(|err| panic!("col_major_strides failed: {err}"))
-}
-
-fn linear_offset(shape: &[usize], indices: &[usize]) -> usize {
-    // Compatibility panic wrapper; public checked APIs call
-    // `try_linear_offset_for_shape` and return an explicit error.
-    try_linear_offset_for_shape(shape, indices, "linear_offset")
-        .unwrap_or_else(|err| panic!("linear_offset failed: {err}"))
 }
 
 fn try_linear_offset_for_shape(
@@ -3040,12 +2723,6 @@ fn try_checked_shape_len(shape: &[usize], data_len: usize, op: &'static str) -> 
         });
     }
     Ok(())
-}
-
-fn checked_shape_len(shape: &[usize], data_len: usize, op: &'static str) {
-    // Compatibility panic wrapper for legacy infallible constructors. New
-    // constructor code should use `try_checked_shape_len`.
-    try_checked_shape_len(shape, data_len, op).unwrap_or_else(|err| panic!("{err}"));
 }
 
 fn try_compact_layout<R: TensorRank>(
@@ -3549,111 +3226,6 @@ fn slice_axis_specs(
     Ok(slices)
 }
 
-fn row_major_offset(shape: &[usize], indices: &[usize]) -> usize {
-    let mut stride = 1usize;
-    let mut offset = 0usize;
-    for (&dim, &index) in shape.iter().rev().zip(indices.iter().rev()) {
-        offset = offset
-            .checked_add(
-                index
-                    .checked_mul(stride)
-                    .unwrap_or_else(|| panic!("row-major offset multiply overflows")),
-            )
-            .unwrap_or_else(|| panic!("row-major offset add overflows"));
-        stride = stride
-            .checked_mul(dim)
-            .unwrap_or_else(|| panic!("row-major offset stride overflows"));
-    }
-    offset
-}
-
-fn for_each_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
-    if shape.is_empty() {
-        f(&[]);
-        return;
-    }
-    if shape.contains(&0) {
-        return;
-    }
-
-    let mut index = vec![0; shape.len()];
-    loop {
-        f(&index);
-        let mut axis = 0;
-        loop {
-            index[axis] += 1;
-            if index[axis] < shape[axis] {
-                break;
-            }
-            index[axis] = 0;
-            axis += 1;
-            if axis == shape.len() {
-                return;
-            }
-        }
-    }
-}
-
-fn for_each_row_major_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
-    if shape.is_empty() {
-        f(&[]);
-        return;
-    }
-    if shape.contains(&0) {
-        return;
-    }
-
-    let mut index = vec![0; shape.len()];
-    loop {
-        f(&index);
-        let mut axis = shape.len();
-        loop {
-            axis -= 1;
-            index[axis] += 1;
-            if index[axis] < shape[axis] {
-                break;
-            }
-            index[axis] = 0;
-            if axis == 0 {
-                return;
-            }
-        }
-    }
-}
-
-fn try_row_major_to_col_major<T: Clone>(
-    shape: &[usize],
-    data: Vec<T>,
-    op: &'static str,
-) -> crate::Result<Vec<T>> {
-    try_checked_shape_len(shape, data.len(), op)?;
-    let mut out = Vec::with_capacity(data.len());
-    for_each_index(shape, |index| {
-        out.push(data[row_major_offset(shape, index)].clone());
-    });
-    Ok(out)
-}
-
-fn row_major_to_col_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
-    // Compatibility panic wrapper; use `try_row_major_to_col_major` from new
-    // fallible constructors.
-    try_row_major_to_col_major(shape, data, "from_vec_row_major")
-        .unwrap_or_else(|err| panic!("{err}"))
-}
-
-fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
-    checked_shape_len(shape, data.len(), "try_into_vec_row_major");
-    if shape.is_empty() {
-        return data;
-    }
-
-    let mut out = Vec::with_capacity(data.len());
-    for_each_row_major_index(shape, |index| {
-        out.push(data[linear_offset(shape, index)].clone());
-    });
-    out
-}
-
 pub(crate) fn materialize_typed_view_col_major<T: Clone + 'static, R: TensorRank>(
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
@@ -3665,7 +3237,7 @@ pub(crate) fn materialize_typed_view_col_major<T: Clone + 'static, R: TensorRank
         &view.buffer,
         op,
     )?;
-    Ok(TypedTensor::from_vec_col_major(view.shape().to_vec(), data))
+    TypedTensor::from_vec_col_major(view.shape().to_vec(), data)
 }
 
 pub(crate) fn default_placement() -> Placement {
@@ -3679,10 +3251,8 @@ fn typed_tensor_from_vec_col_major<T, R: TensorRank>(
     shape: impl Into<R::Shape>,
     data: Vec<T>,
     op: &'static str,
-) -> TypedTensor<T, R> {
-    // Compatibility panic wrapper; prefer
-    // `TypedTensor::try_from_vec_col_major` for user-provided shapes/data.
-    try_typed_tensor_from_vec_col_major(shape, data, op).unwrap_or_else(|err| panic!("{err}"))
+) -> crate::Result<TypedTensor<T, R>> {
+    try_typed_tensor_from_vec_col_major(shape, data, op)
 }
 
 fn try_typed_tensor_from_vec_col_major<T, R: TensorRank>(
@@ -3699,34 +3269,10 @@ fn try_typed_tensor_from_vec_col_major<T, R: TensorRank>(
     })
 }
 
-fn typed_tensor_from_vec_row_major<T: Clone, R: TensorRank>(
-    shape: impl Into<R::Shape>,
-    data: Vec<T>,
-) -> TypedTensor<T, R> {
-    // Compatibility panic wrapper; prefer
-    // `TypedTensor::try_from_vec_row_major` for user-provided shapes/data.
-    try_typed_tensor_from_vec_row_major(shape, data).unwrap_or_else(|err| panic!("{err}"))
-}
-
-fn try_typed_tensor_from_vec_row_major<T: Clone, R: TensorRank>(
-    shape: impl Into<R::Shape>,
-    data: Vec<T>,
-) -> crate::Result<TypedTensor<T, R>> {
-    let layout = try_compact_layout(shape, "from_vec_row_major")?;
-    let data = try_row_major_to_col_major(layout.shape(), data, "from_vec_row_major")?;
-    Ok(TypedTensor {
-        buffer: Buffer::Host(data),
-        layout,
-        placement: default_placement(),
-    })
-}
-
 fn typed_tensor_zeros<T: Clone + Zero, R: TensorRank>(
     shape: impl Into<R::Shape>,
-) -> TypedTensor<T, R> {
-    // Compatibility panic wrapper; prefer `TypedTensor::try_zeros` for
-    // user-provided shapes.
-    try_typed_tensor_zeros(shape).unwrap_or_else(|err| panic!("{err}"))
+) -> crate::Result<TypedTensor<T, R>> {
+    try_typed_tensor_zeros(shape)
 }
 
 fn try_typed_tensor_zeros<T: Clone + Zero, R: TensorRank>(
@@ -3743,10 +3289,8 @@ fn try_typed_tensor_zeros<T: Clone + Zero, R: TensorRank>(
 
 fn typed_tensor_ones<T: Clone + One + Zero, R: TensorRank>(
     shape: impl Into<R::Shape>,
-) -> TypedTensor<T, R> {
-    // Compatibility panic wrapper; prefer `TypedTensor::try_ones` for
-    // user-provided shapes.
-    try_typed_tensor_ones(shape).unwrap_or_else(|err| panic!("{err}"))
+) -> crate::Result<TypedTensor<T, R>> {
+    try_typed_tensor_ones(shape)
 }
 
 fn try_typed_tensor_ones<T: Clone + One + Zero, R: TensorRank>(
@@ -3765,11 +3309,8 @@ fn typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
     shape: impl Into<R::Shape>,
     buffer: Buffer<T>,
     placement: Placement,
-) -> TypedTensor<T, R> {
-    // Compatibility panic wrapper; prefer
-    // `TypedTensor::try_from_buffer_col_major` for user-provided shapes.
+) -> crate::Result<TypedTensor<T, R>> {
     try_typed_tensor_from_buffer_col_major(shape, buffer, placement)
-        .unwrap_or_else(|err| panic!("{err}"))
 }
 
 fn try_typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
@@ -3795,16 +3336,11 @@ impl<T: Clone + Zero, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
+    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
     /// assert_eq!(t.n_elements(), 6);
     /// ```
-    pub fn zeros(shape: impl Into<R::Shape>) -> Self {
+    pub fn zeros(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_zeros(shape)
-    }
-
-    /// Try to allocate a zero-filled tensor.
-    pub fn try_zeros(shape: impl Into<R::Shape>) -> crate::Result<Self> {
-        try_typed_tensor_zeros(shape)
     }
 }
 
@@ -3816,16 +3352,11 @@ impl<T: Clone + One + Zero, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::ones(vec![2]);
-    /// assert_eq!(t.host_data(), &[1.0, 1.0]);
+    /// let t = TypedTensor::<f64>::ones(vec![2]).unwrap();
+    /// assert_eq!(t.host_data().unwrap(), &[1.0, 1.0]);
     /// ```
-    pub fn ones(shape: impl Into<R::Shape>) -> Self {
+    pub fn ones(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_ones(shape)
-    }
-
-    /// Try to allocate a one-filled tensor.
-    pub fn try_ones(shape: impl Into<R::Shape>) -> crate::Result<Self> {
-        try_typed_tensor_ones(shape)
     }
 }
 
@@ -3847,22 +3378,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     ///         memory_kind: tenferro_tensor::MemoryKind::UnpinnedHost,
     ///         device: None,
     ///     },
-    /// );
+    /// )
+    /// .unwrap();
     /// assert_eq!(tensor.shape(), &[2]);
     /// ```
     pub fn from_buffer_col_major(
-        shape: impl Into<R::Shape>,
-        buffer: Buffer<T>,
-        placement: Placement,
-    ) -> Self
-    where
-        T: 'static,
-    {
-        typed_tensor_from_buffer_col_major(shape, buffer, placement)
-    }
-
-    /// Try to create a tensor from an existing buffer and compact column-major layout.
-    pub fn try_from_buffer_col_major(
         shape: impl Into<R::Shape>,
         buffer: Buffer<T>,
         placement: Placement,
@@ -3870,7 +3390,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        try_typed_tensor_from_buffer_col_major(shape, buffer, placement)
+        typed_tensor_from_buffer_col_major(shape, buffer, placement)
     }
 
     /// Convert this tensor into static rank metadata after validating its rank.
@@ -3883,7 +3403,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     ///
-    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
     /// let ranked: TypedTensor<f64, Rank<2>> = tensor.try_into_rank::<2>()?;
     /// assert_eq!(ranked.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -3908,18 +3428,13 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     /// assert_eq!(t.n_elements(), 6);
     /// ```
     pub fn n_elements(&self) -> usize {
-        // Compatibility panic wrapper; use `try_n_elements` for untrusted
-        // shape metadata.
-        self.try_n_elements().unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    /// Try to return the number of logical elements in this tensor.
-    pub fn try_n_elements(&self) -> crate::Result<usize> {
-        try_shape_product(self.shape(), "TypedTensor::try_n_elements")
+        // Invariant: owned tensor constructors validate compact shape length against buffer length.
+        try_shape_product(self.shape(), "TypedTensor::n_elements")
+            .expect("TypedTensor compact shape was validated at construction")
     }
 
     /// Tensor shape.
@@ -3929,7 +3444,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// assert_eq!(t.shape(), &[2]);
     /// ```
     pub fn shape(&self) -> &[usize] {
@@ -3943,7 +3458,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     /// assert_eq!(t.rank(), 2);
     /// ```
     pub fn rank(&self) -> usize {
@@ -3959,7 +3474,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     /// assert_eq!(t.layout().strides(), &[1, 2]);
     /// ```
     pub fn layout(&self) -> &TensorLayout<R> {
@@ -3977,7 +3492,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{Buffer, TypedTensor};
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// assert!(matches!(t.buffer(), Buffer::Host(_)));
     /// ```
     pub fn buffer(&self) -> &Buffer<T> {
@@ -3991,7 +3506,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{MemoryKind, TypedTensor};
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
     /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
     /// ```
     pub fn placement(&self) -> &Placement {
@@ -4005,7 +3520,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{MemoryKind, Placement, TypedTensor};
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
     /// t.set_placement(Placement {
     ///     memory_kind: MemoryKind::PinnedHost,
     ///     device: None,
@@ -4023,7 +3538,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::{Rank, TypedTensor};
     ///
-    /// let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]);
+    /// let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]).unwrap();
     /// let view = tensor.as_view();
     /// assert_eq!(view.strides(), &[1, 2]);
     /// ```
@@ -4049,9 +3564,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![1]);
+    /// let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![1]).unwrap();
     /// *tensor.as_view_mut().get_mut(&[0]).unwrap() = 2;
-    /// assert_eq!(tensor.as_slice(), &[2]);
+    /// assert_eq!(tensor.as_slice().unwrap(), &[2]);
     /// ```
     pub fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R>
     where
@@ -4077,7 +3592,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// assert!(t.into_layout().is_compact_col_major());
     /// ```
     pub fn into_layout(self) -> TensorLayout<R> {
@@ -4091,7 +3606,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{Buffer, TypedTensor};
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// let (buffer, layout, placement) = t.into_parts();
     /// assert!(matches!(buffer, Buffer::Host(_)));
     /// assert_eq!(layout.shape(), &[2]);
@@ -4110,37 +3625,12 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// assert_eq!(t.get(&[1, 0]), &2.0);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// assert_eq!(t.get(&[1, 0])?, &2.0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
+    pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> crate::Result<Self> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
-    }
-
-    /// Try to create a tensor from a column-major buffer.
-    pub fn try_from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> crate::Result<Self> {
-        try_typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
-    }
-
-    /// Create a tensor from a row-major buffer.
-    ///
-    /// The data is converted into tenferro's column-major physical storage.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// assert_eq!(t.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
-    /// ```
-    pub fn from_vec_row_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
-        typed_tensor_from_vec_row_major(shape, data)
-    }
-
-    /// Try to create a tensor from a row-major buffer.
-    pub fn try_from_vec_row_major(shape: impl Into<R::Shape>, data: Vec<T>) -> crate::Result<Self> {
-        try_typed_tensor_from_vec_row_major(shape, data)
     }
 
     /// Consume this tensor and return its owned column-major host buffer.
@@ -4150,42 +3640,17 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// let (shape, data) = t.try_into_vec_col_major().unwrap();
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// let (shape, data) = t.into_vec_col_major().unwrap();
     /// assert_eq!(shape, vec![2]);
     /// assert_eq!(data, vec![1.0, 2.0]);
     /// ```
-    pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let shape = self.shape().to_vec();
         match self.buffer {
             Buffer::Host(data) => Ok((shape, data)),
             Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "try_into_vec_col_major",
-                "backend buffers cannot be exported as host Vec",
-            )),
-        }
-    }
-
-    /// Consume this tensor and return an owned row-major host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
-    /// let (_, data) = t.try_into_vec_row_major().unwrap();
-    /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
-    /// ```
-    pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let shape = self.shape().to_vec();
-        match self.buffer {
-            Buffer::Host(data) => {
-                let data = col_major_to_row_major(&shape, data);
-                Ok((shape, data))
-            }
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "try_into_vec_row_major",
+                "into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
             )),
         }
@@ -4193,32 +3658,20 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
 
     /// Borrow the host buffer.
     ///
-    /// This is a compatibility panic wrapper. New runtime-facing code should
-    /// use [`TypedTensor::try_host_data`] so backend buffers report an error
-    /// instead of being mistaken for host memory.
-    ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// assert_eq!(t.host_data(), &[1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// assert_eq!(t.host_data()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn host_data(&self) -> &[T] {
-        self.try_host_data()
-            .unwrap_or_else(|err| panic!("host_data failed: {err}"))
-    }
-
-    /// Try to borrow the host buffer.
-    ///
-    /// Returns an explicit error for backend buffers. Tensor core does not
-    /// implicitly download backend-native allocations.
-    pub fn try_host_data(&self) -> crate::Result<&[T]> {
+    pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             Buffer::Host(v) => Ok(v),
             Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "TypedTensor::try_host_data",
+                "TypedTensor::host_data",
                 "backend buffers cannot be inspected as host slices; download explicitly first",
             )),
         }
@@ -4234,42 +3687,31 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// assert_eq!(t.as_slice(), &[1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// assert_eq!(t.as_slice()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn as_slice(&self) -> &[T] {
+    pub fn as_slice(&self) -> crate::Result<&[T]> {
         self.host_data()
     }
 
     /// Mutably borrow the host buffer.
-    ///
-    /// This is a compatibility panic wrapper. New runtime-facing code should
-    /// use [`TypedTensor::try_host_data_mut`] so backend buffers report an
-    /// error instead of being mistaken for host memory.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::zeros(vec![2]);
-    /// t.host_data_mut()[0] = 3.0;
-    /// assert_eq!(t.host_data(), &[3.0, 0.0]);
+    /// let mut t = TypedTensor::<f64>::zeros(vec![2]).unwrap();
+    /// t.host_data_mut()?[0] = 3.0;
+    /// assert_eq!(t.host_data()?, &[3.0, 0.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn host_data_mut(&mut self) -> &mut [T] {
-        self.try_host_data_mut()
-            .unwrap_or_else(|err| panic!("host_data_mut failed: {err}"))
-    }
-
-    /// Try to mutably borrow the host buffer.
-    ///
-    /// Returns an explicit error for backend buffers. Tensor core does not
-    /// expose host mutation for backend-native allocations.
-    pub fn try_host_data_mut(&mut self) -> crate::Result<&mut [T]> {
+    pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             Buffer::Host(v) => Ok(v),
             Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "TypedTensor::try_host_data_mut",
+                "TypedTensor::host_data_mut",
                 "backend buffers cannot be mutated as host slices; download explicitly first",
             )),
         }
@@ -4282,16 +3724,12 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
-    /// assert_eq!(t.linear_offset(&[1, 2]), 5);
+    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
+    /// assert_eq!(t.linear_offset(&[1, 2])?, 5);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn linear_offset(&self, indices: &[usize]) -> usize {
-        linear_offset(self.shape(), indices)
-    }
-
-    /// Try to compute the linear physical-buffer offset for a logical index.
-    pub fn try_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
-        try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::try_linear_offset")
+    pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
     }
 
     /// Borrow a single element by multi-index.
@@ -4301,12 +3739,18 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// assert_eq!(t.get(&[1]), &2.0);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// assert_eq!(t.get(&[1])?, &2.0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn get(&self, indices: &[usize]) -> &T {
-        let off = self.linear_offset(indices);
-        &self.host_data()[off]
+    pub fn get(&self, indices: &[usize]) -> crate::Result<&T> {
+        let off = self.linear_offset(indices)?;
+        self.host_data()?
+            .get(off)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "TypedTensor::get",
+                message: format!("linear offset {off} is outside host buffer"),
+            })
     }
 
     /// Mutably borrow a single element by multi-index.
@@ -4316,13 +3760,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::zeros(vec![1]);
-    /// *t.get_mut(&[0]) = 7.0;
-    /// assert_eq!(t.host_data(), &[7.0]);
+    /// let mut t = TypedTensor::<f64>::zeros(vec![1]).unwrap();
+    /// *t.get_mut(&[0])? = 7.0;
+    /// assert_eq!(t.host_data()?, &[7.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn get_mut(&mut self, indices: &[usize]) -> &mut T {
-        let off = self.linear_offset(indices);
-        &mut self.host_data_mut()[off]
+    pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
+        let off = self.linear_offset(indices)?;
+        self.host_data_mut()?
+            .get_mut(off)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "TypedTensor::get_mut",
+                message: format!("linear offset {off} is outside host buffer"),
+            })
     }
 }
 
@@ -4337,46 +3787,15 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     /// assert_eq!(t.shape(), &[2, 2]);
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
-    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+    pub fn from_vec_col_major<T: TensorScalar>(
+        shape: Vec<usize>,
+        data: Vec<T>,
+    ) -> crate::Result<Self> {
         T::into_tensor(shape, data)
-    }
-
-    /// Try to create a tensor from a shape and column-major flat data.
-    pub fn try_from_vec_col_major<T: TensorScalar>(
-        shape: Vec<usize>,
-        data: Vec<T>,
-    ) -> crate::Result<Self> {
-        try_checked_shape_len(&shape, data.len(), "Tensor::try_from_vec_col_major")?;
-        Ok(T::into_tensor(shape, data))
-    }
-
-    /// Create a tensor from a shape and row-major flat data.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::Tensor;
-    ///
-    /// let t = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// assert_eq!(t.shape(), &[2, 2]);
-    /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
-    /// ```
-    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        let data = row_major_to_col_major(&shape, data);
-        Self::from_vec_col_major(shape, data)
-    }
-
-    /// Try to create a tensor from a shape and row-major flat data.
-    pub fn try_from_vec_row_major<T: TensorScalar>(
-        shape: Vec<usize>,
-        data: Vec<T>,
-    ) -> crate::Result<Self> {
-        let data = try_row_major_to_col_major(&shape, data, "Tensor::try_from_vec_row_major")?;
-        Ok(T::into_tensor(shape, data))
     }
 
     /// Tensor shape.
@@ -4386,7 +3805,7 @@ impl Tensor {
     /// ```rust
     /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
     /// assert_eq!(t.shape(), &[2]);
     /// ```
     pub fn shape(&self) -> &[usize] {
@@ -4408,7 +3827,7 @@ impl Tensor {
     /// ```rust
     /// use tenferro_tensor::{DType, Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![1.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![1.0]).unwrap());
     /// assert_eq!(t.dtype(), DType::F64);
     /// ```
     pub fn dtype(&self) -> DType {
@@ -4430,7 +3849,7 @@ impl Tensor {
     /// ```rust
     /// use tenferro_tensor::{MemoryKind, Tensor};
     ///
-    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
     /// ```
     pub fn placement(&self) -> &Placement {
@@ -4452,7 +3871,7 @@ impl Tensor {
     /// ```rust
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// assert!(!t.is_backend_buffer());
     /// ```
     pub fn is_backend_buffer(&self) -> bool {
@@ -4469,19 +3888,19 @@ impl Tensor {
 
     /// Try to borrow the host data as a typed slice.
     ///
-    /// Returns `None` if the tensor dtype does not match `T`.
+    /// Returns an error if the tensor dtype does not match `T`.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]));
-    /// assert_eq!(t.as_slice::<f64>(), Some([1.0, 2.0, 3.0].as_slice()));
-    /// assert_eq!(t.as_slice::<f32>(), None);
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    /// assert_eq!(t.as_slice::<f64>().unwrap(), [1.0, 2.0, 3.0].as_slice());
+    /// assert!(t.as_slice::<f32>().is_err());
     /// ```
-    pub fn as_slice<T: TensorScalar>(&self) -> Option<&[T]> {
-        T::try_as_slice(self)
+    pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&[T]> {
+        T::as_slice(self)
     }
 
     /// Consume this tensor and return its owned column-major buffer when the
@@ -4492,37 +3911,12 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-    /// assert_eq!(t.try_into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// assert_eq!(t.into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
     /// ```
-    pub fn try_into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let actual = self.dtype();
-        let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
-            op: "try_into_vec_col_major",
-            lhs: T::dtype(),
-            rhs: actual,
-        })?;
-        typed.try_into_vec_col_major()
-    }
-
-    /// Consume this tensor and return a row-major buffer when the dtype matches.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::Tensor;
-    ///
-    /// let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-    /// assert_eq!(t.try_into_vec_row_major::<f64>().unwrap().1, vec![1.0, 2.0, 3.0, 4.0]);
-    /// ```
-    pub fn try_into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let actual = self.dtype();
-        let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
-            op: "try_into_vec_row_major",
-            lhs: T::dtype(),
-            rhs: actual,
-        })?;
-        typed.try_into_vec_row_major()
+    pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let typed = T::into_typed(self)?;
+        typed.into_vec_col_major()
     }
 }
 

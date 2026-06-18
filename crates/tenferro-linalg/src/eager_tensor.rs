@@ -26,7 +26,7 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (_u, s, _vt) = tenferro_linalg::eager_tensor::svd(&a)?;
@@ -57,7 +57,7 @@ pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (q, r) = tenferro_linalg::eager_tensor::qr(&a)?;
@@ -78,7 +78,7 @@ pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (_p, l, u, parity) = tenferro_linalg::eager_tensor::lu(&a)?;
@@ -117,7 +117,7 @@ pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, Eag
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (p, _l, _u, q, parity) = tenferro_linalg::eager_tensor::full_piv_lu(&a)?;
@@ -160,11 +160,11 @@ pub fn full_piv_lu(
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
 ///     ctx.clone(),
 /// );
 /// let b = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]),
+///     Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]).unwrap(),
 ///     ctx,
 /// );
 /// let x = tenferro_linalg::eager_tensor::full_piv_lu_solve(&a, &b)?;
@@ -187,11 +187,11 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
 ///     ctx.clone(),
 /// );
 /// let b = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]),
+///     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
 ///     ctx,
 /// );
 /// let x = tenferro_linalg::eager_tensor::solve(&a, &b)?;
@@ -234,7 +234,7 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
 /// );
 /// let l = tenferro_linalg::eager_tensor::cholesky(&a)?;
@@ -254,7 +254,7 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&a)?;
@@ -278,7 +278,7 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
 /// );
 /// let (values, vectors) = tenferro_linalg::eager_tensor::eig(&a)?;
@@ -307,11 +307,11 @@ pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]),
+///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap(),
 ///     ctx.clone(),
 /// );
 /// let b = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]),
+///     Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]).unwrap(),
 ///     ctx,
 /// );
 /// let x = tenferro_linalg::eager_tensor::triangular_solve(

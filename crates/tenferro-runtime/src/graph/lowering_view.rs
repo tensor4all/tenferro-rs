@@ -17,7 +17,7 @@ use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 /// ```
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&x.neg()).unwrap();
 /// let view = program.lowering_view();
@@ -51,7 +51,7 @@ impl<'a> GraphProgramLoweringView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert!(program.lowering_view().slot_count() >= 1);
@@ -67,7 +67,7 @@ impl<'a> GraphProgramLoweringView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.lowering_view().input_slots().len(), 1);
@@ -83,7 +83,7 @@ impl<'a> GraphProgramLoweringView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.lowering_view().output_slots().len(), 1);
@@ -99,7 +99,7 @@ impl<'a> GraphProgramLoweringView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert!(program.lowering_view().instructions().count() >= 1);
@@ -116,7 +116,7 @@ impl<'a> GraphProgramLoweringView<'a> {
 /// ```
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&x.neg()).unwrap();
 /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -150,7 +150,7 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, GraphOpView, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -185,7 +185,7 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -202,8 +202,8 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-    /// let y = &x + &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -220,7 +220,7 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -237,7 +237,7 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -256,7 +256,7 @@ impl<'a> GraphInstructionView<'a> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
@@ -276,7 +276,14 @@ impl<'a> GraphInstructionView<'a> {
         let mut shape = Vec::with_capacity(extents.len());
         for (axis, extent) in extents.iter().enumerate() {
             match extent {
-                ShapeExtent::Exact(dim) => shape.push(dim.eval(input_shapes)),
+                ShapeExtent::Exact(dim) => shape.push(dim.eval(input_shapes).map_err(|err| {
+                    GraphProgramLoweringShapeError::InvalidDimExpr {
+                        op: self.op_name(),
+                        output_index,
+                        axis,
+                        source: err,
+                    }
+                })?),
                 ShapeExtent::UpperBound(_) => {
                     return Err(GraphProgramLoweringShapeError::NonStatic {
                         op: self.op_name(),
@@ -310,7 +317,7 @@ impl<'a> GraphInstructionView<'a> {
 /// ```
 /// use tenferro_runtime::{GraphCompiler, GraphOpView, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&x.neg()).unwrap();
 /// let op = program.lowering_view().instructions().next().unwrap().op();
@@ -386,7 +393,7 @@ impl GraphOpView<'_> {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// let op = program.lowering_view().instructions().next().unwrap().op();
@@ -438,6 +445,16 @@ pub enum GraphProgramLoweringShapeError {
         output_index: usize,
         axis: usize,
         kind: &'static str,
+    },
+    /// Static shape evaluation failed for an exact dimension expression.
+    #[error(
+        "ExecOp::{op} output {output_index} axis {axis} has invalid dimension expression: {source}"
+    )]
+    InvalidDimExpr {
+        op: &'static str,
+        output_index: usize,
+        axis: usize,
+        source: tenferro_ops::dim_expr::DimExprEvalError,
     },
 }
 

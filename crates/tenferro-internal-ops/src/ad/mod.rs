@@ -117,22 +117,6 @@ pub fn linearize(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
-    match try_linearize(op, builder, primal_in, primal_out, tangent_in, ctx) {
-        Ok(tangents) => tangents,
-        Err(err) => panic!("{err}"),
-    }
-}
-
-/// Fallible forward-mode AD (JVP) for `StdTensorOp`.
-#[cfg(feature = "autodiff")]
-pub fn try_linearize(
-    op: &StdTensorOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    primal_in: &[ValueKey<StdTensorOp>],
-    primal_out: &[ValueKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValueId>],
-    ctx: &mut context::ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
         return linearize_extension_rule(
@@ -161,22 +145,6 @@ pub fn try_linearize(
 /// here.
 #[cfg(feature = "autodiff")]
 pub fn transpose_rule(
-    op: &StdTensorOp,
-    builder: &mut impl PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    mode: &OperationRole,
-    ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
-    match try_transpose_rule(op, builder, cotangent_out, inputs, mode, ctx) {
-        Ok(cotangents) => cotangents,
-        Err(err) => panic!("{err}"),
-    }
-}
-
-/// Fallible reverse-mode AD (VJP) for `StdTensorOp`.
-#[cfg(feature = "autodiff")]
-pub fn try_transpose_rule(
     op: &StdTensorOp,
     builder: &mut impl PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],

@@ -798,7 +798,7 @@ git commit -m "refactor(linalg): remove old FaerOps trait"
 
 Change:
 ```rust
-use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
+use tenferro_linalg::{traced_tensor::svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
 ```
 Add:
 ```rust

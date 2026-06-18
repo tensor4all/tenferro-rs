@@ -76,7 +76,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::from_vec_col_major(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data).unwrap()
 }
 
 fn build_fixtures(phys_dim: usize, chi: usize) -> Fixtures {
@@ -241,7 +241,7 @@ fn bench_pairwise_contraction(c: &mut Criterion) {
             let case_params = format!("{}/{}", case.name(), params);
 
             group.bench_function(BenchmarkId::new("normal_per_call", &case_params), |b| {
-                let mut backend = CpuBackend::with_threads(threads);
+                let mut backend = CpuBackend::with_threads(threads).unwrap();
                 b.iter(|| {
                     let output = run_case_normal(
                         black_box(&mut backend),
@@ -256,7 +256,7 @@ fn bench_pairwise_contraction(c: &mut Criterion) {
             group.bench_function(
                 BenchmarkId::new("cached_analysis_per_call", &case_params),
                 |b| {
-                    let mut backend = CpuBackend::with_threads(threads);
+                    let mut backend = CpuBackend::with_threads(threads).unwrap();
                     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
                     b.iter(|| {
                         let output = run_case_cached(

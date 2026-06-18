@@ -335,7 +335,7 @@ impl TensorNetworkOps for NdArray<f64> {
         _inputs: Vec<FloatTensor<Self>>,
     ) -> FloatTensor<Self> {
         // 1. Convert each input: burn_to_tenferro(input)
-        // 2. Call tenferro_einsum::einsum(subscripts, &tf_inputs)
+        // 2. Call tenferro_einsum::traced_tensor::einsum(subscripts, &tf_inputs)
         // 3. Convert result: tenferro_to_burn(result, device)
         todo!()
     }

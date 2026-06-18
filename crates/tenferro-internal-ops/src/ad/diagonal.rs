@@ -1,6 +1,7 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
+use tidu::ADRuleResult;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -9,7 +10,7 @@ pub fn linearize_extract_diag(
     tangent_in: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
@@ -20,9 +21,9 @@ pub fn linearize_extract_diag(
                     active_mask: vec![true],
                 },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -31,7 +32,7 @@ pub fn linearize_embed_diag(
     tangent_in: &[Option<LocalValueId>],
     axis_a: usize,
     axis_b: usize,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
@@ -42,9 +43,9 @@ pub fn linearize_embed_diag(
                     active_mask: vec![true],
                 },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -55,7 +56,7 @@ pub fn transpose_extract_diag(
     axis_a: usize,
     axis_b: usize,
     _ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
@@ -80,9 +81,9 @@ pub fn transpose_extract_diag(
                     active_mask: vec![true, false],
                 },
             );
-            vec![Some(padded_axis_b[0])]
+            Ok(vec![Some(padded_axis_b[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -93,7 +94,7 @@ pub fn transpose_embed_diag(
     axis_a: usize,
     axis_b: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
@@ -109,7 +110,7 @@ pub fn transpose_embed_diag(
                 },
             );
             if axis_b < axis_a {
-                let rank = ctx.shape_of(&inputs[0]).len();
+                let rank = ctx.rank_of(&inputs[0])?;
                 let mut perm: Vec<usize> = (0..rank).collect();
                 let diag_axis = perm.remove(axis_b);
                 perm.insert(axis_a, diag_axis);
@@ -120,10 +121,10 @@ pub fn transpose_embed_diag(
                         active_mask: vec![true],
                     },
                 );
-                return vec![Some(transposed[0])];
+                return Ok(vec![Some(transposed[0])]);
             }
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }

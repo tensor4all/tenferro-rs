@@ -12,10 +12,9 @@
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
 //!   `Clone + Hash + Eq + Send + Sync + 'static` (computegraph's
 //!   `GraphOperation` requirements).
-//! - AD rules are registered separately through [`ExtensionAdRule`] and
-//!   [`register_extension_rule`]. A rule may emit core [`StdTensorOp`] values
-//!   and registered `Extension` values so out-of-tree operations remain in the
-//!   same graph.
+//! - AD rules are owned by explicit [`ExtensionRuleSet`] values. A rule may
+//!   emit core [`StdTensorOp`] values and registered `Extension` values so
+//!   out-of-tree operations remain in the same graph.
 //! - Extension ops themselves do not require process-global registration.
 //!   Frontends carry them directly as `Arc<dyn ExtensionOp>`.
 
@@ -41,8 +40,6 @@ use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 #[cfg(feature = "autodiff")]
 use std::collections::HashMap;
-#[cfg(feature = "autodiff")]
-use std::sync::{OnceLock, RwLock};
 
 /// Error returned when an extension cannot expand itself into standard ops.
 ///
@@ -292,9 +289,6 @@ pub enum ExtensionRegistryError {
     /// `"<crate-name>.<op-name>.v<major>"`.
     #[error("family_id {family_id:?} does not match the namespaced format")]
     MalformedFamilyId { family_id: &'static str },
-    /// The global AD rule registry lock was poisoned by another thread.
-    #[error("extension rule registry lock poisoned")]
-    PoisonedRegistry,
 }
 
 #[cfg(feature = "autodiff")]
@@ -302,9 +296,9 @@ type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
 
 /// Explicit, owned set of extension AD rules.
 ///
-/// This is the non-global rule container used by higher-level AD contexts.
-/// The process-global registry remains available as a compatibility bridge for
-/// callers that use [`register_extension_rule`].
+/// This is the rule container used by higher-level AD contexts. Extension AD
+/// intentionally has no process-global fallback; callers must pass the rule set
+/// that their graph needs.
 #[cfg(feature = "autodiff")]
 #[derive(Clone, Default)]
 pub struct ExtensionRuleSet {
@@ -501,12 +495,6 @@ impl ExtensionRuleSet {
 }
 
 #[cfg(feature = "autodiff")]
-fn rule_registry() -> &'static RwLock<RuleMap> {
-    static REG: OnceLock<RwLock<RuleMap>> = OnceLock::new();
-    REG.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-#[cfg(feature = "autodiff")]
 fn is_valid_family_id(family_id: &str) -> bool {
     // Required shape: `<crate>.<op>.v<major>` with at least one non-empty
     // `<crate>` chunk, at least one non-empty `<op>` chunk (which may itself
@@ -564,31 +552,6 @@ fn validate_rule_insert(
     Ok(())
 }
 
-/// Register a new extension AD rule.
-///
-/// The rule's `family_id` MUST follow the reserved format
-/// `"<crate-name>.<op-name>.v<major>"`. Registering a rule does not require
-/// registering the primal op first; frontends carry the op payload directly.
-#[cfg(feature = "autodiff")]
-pub fn register_extension_rule(
-    rule: Arc<dyn ExtensionAdRule>,
-) -> Result<(), ExtensionRegistryError> {
-    let family_id = rule.family_id();
-    if !is_valid_family_id(family_id) {
-        return Err(ExtensionRegistryError::MalformedFamilyId { family_id });
-    }
-    let mut guard = rule_registry()
-        .write()
-        .map_err(|_| ExtensionRegistryError::PoisonedRegistry)?;
-    insert_rule(&mut guard, rule)
-}
-
-/// Look up an extension AD rule by `family_id`.
-#[cfg(feature = "autodiff")]
-pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
-    rule_registry().read().ok()?.get(family_id).cloned()
-}
-
 /// Emit a registered extension linearization rule.
 #[cfg(feature = "autodiff")]
 pub fn linearize_extension_rule(
@@ -599,7 +562,7 @@ pub fn linearize_extension_rule(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    match ctx.lookup_extension_rule(op.family_id()) {
+    match ctx.extension_rule_for(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
         None => Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp)),
     }
@@ -615,19 +578,13 @@ pub fn transpose_extension_rule(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    match ctx.lookup_extension_rule(op.family_id()) {
+    match ctx.extension_rule_for(op.family_id()) {
         Some(rule) => rule.transpose_rule(op, builder, cotangent_out, inputs, mode, ctx),
         None => Err(ADRuleError::unsupported(
             op.family_id(),
             ADRuleKind::Transpose,
         )),
     }
-}
-
-/// Returns `true` when an AD rule with `family_id` is currently registered.
-#[cfg(feature = "autodiff")]
-pub fn is_extension_rule_registered(family_id: &str) -> bool {
-    lookup_extension_rule(family_id).is_some()
 }
 
 /// Thin adapter that lets a generic `H: Hasher` satisfy the object-safe

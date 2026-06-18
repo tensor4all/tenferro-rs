@@ -356,7 +356,7 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major::<f64>().unwrap().1,
+        out.into_vec_row_major::<f64>().unwrap().1,
         vec![
             11.0, 21.0, 31.0, 41.0,
             12.0, 22.0, 32.0, 42.0,
@@ -570,7 +570,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     assert_eq!(out.data().shape(), &[3, 4]);
     assert_eq!(
-        out.data().clone().try_into_vec_row_major::<f64>().unwrap().1,
+        out.data().clone().into_vec_row_major::<f64>().unwrap().1,
         vec![
             11.0, 21.0, 31.0, 41.0,
             12.0, 22.0, 32.0, 42.0,
@@ -669,7 +669,7 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major::<f64>().unwrap().1,
+        out.into_vec_row_major::<f64>().unwrap().1,
         vec![
             11.0, 21.0, 31.0, 41.0,
             12.0, 22.0, 32.0, 42.0,
@@ -771,7 +771,7 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
     assert_eq!(out.shape, vec![3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major().unwrap(),
+        out.into_vec_row_major().unwrap(),
         vec![
             11.0, 21.0, 31.0, 41.0,
             12.0, 22.0, 32.0, 42.0,
@@ -948,7 +948,7 @@ git commit -m "feat: align extension traced tensor namespaces"
 Run:
 
 ```bash
-rg -n "tenferro::(linalg|einsum|fft)|tenferro_linalg::(svd|qr|cholesky|eig|eigh|solve)|tenferro_einsum::einsum|tenferro_fft::(fft|ifft|rfft|irfft)|\\.add\\(|\\.mul\\(" README.md docs tenferro*/src
+rg -n "tenferro::(linalg|einsum|fft)|tenferro_linalg::(svd|qr|cholesky|eig|eigh|solve)|tenferro_einsum::traced_tensor::einsum|tenferro_fft::(fft|ifft|rfft|irfft)|\\.add\\(|\\.mul\\(" README.md docs tenferro*/src
 ```
 
 Identify docs that should prefer canonical module free functions.

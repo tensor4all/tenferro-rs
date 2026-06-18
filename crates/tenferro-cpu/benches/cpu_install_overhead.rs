@@ -6,12 +6,12 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpu_context_entry_overhead/one_thread");
 
     group.bench_function("ctx_install_inline_empty", |b| {
-        let ctx = CpuContext::with_threads(1);
+        let ctx = CpuContext::with_threads(1).unwrap();
         b.iter(|| ctx.install(|| black_box(1usize)));
     });
 
     group.bench_function("backend_install_inline_empty", |b| {
-        let backend = CpuBackend::with_threads(1);
+        let backend = CpuBackend::with_threads(1).unwrap();
         b.iter(|| backend.install(|| black_box(1usize)));
     });
 
@@ -24,7 +24,7 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
     });
 
     group.bench_function("ctx_install_inline_with_buffer_pool", |b| {
-        let ctx = CpuContext::with_threads(1);
+        let ctx = CpuContext::with_threads(1).unwrap();
         let mut buffers = BufferPool::new();
         b.iter(|| {
             let mut taken = std::mem::take(black_box(&mut buffers));
@@ -38,7 +38,7 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
     });
 
     group.bench_function("ctx_install_inline_with_buffer_pool_and_cache", |b| {
-        let ctx = CpuContext::with_threads(1);
+        let ctx = CpuContext::with_threads(1).unwrap();
         let mut buffers = BufferPool::new();
         let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
         b.iter(|| {

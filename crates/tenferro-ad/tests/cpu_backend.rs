@@ -10,23 +10,23 @@ use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64"),
     }
 }
 
 fn get_f32_data(t: &Tensor) -> &[f32] {
     match t {
-        Tensor::F32(inner) => inner.host_data(),
+        Tensor::F32(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F32"),
     }
 }
@@ -51,7 +51,7 @@ fn test_faer_gemm_basic_f64() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -73,7 +73,7 @@ fn test_faer_gemm_basic_f32() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -103,7 +103,7 @@ fn test_faer_gemm_identity() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let tc = ta.dot_general(&ti, config);
+    let tc = ta.dot_general(&ti, config).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -144,7 +144,7 @@ fn test_batched_gemm() {
         lhs_batch_dims: vec![2],       // batch over dim 2
         rhs_batch_dims: vec![2],       // batch over dim 2
     };
-    let tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -180,16 +180,18 @@ fn test_strided_input_via_transpose_and_dot_general() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let ta_t = ta.transpose(&[1, 0]);
-    let tc = ta_t.dot_general(
-        &tb,
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-        },
-    );
+    let ta_t = ta.transpose(&[1, 0]).unwrap();
+    let tc = ta_t
+        .dot_general(
+            &tb,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
 
     let result = tc.run_with(&mut engine).unwrap();
     let data = get_f64_data(&result);
@@ -215,7 +217,7 @@ fn test_vector_dot_product() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let tc = tv.dot_general(&tw, config);
+    let tc = tv.dot_general(&tw, config).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();

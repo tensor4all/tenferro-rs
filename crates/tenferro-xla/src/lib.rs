@@ -11,8 +11,8 @@
 //! use tenferro_runtime::{GraphCompiler, TracedTensor};
 //! use tenferro_xla::lower_to_stablehlo;
 //!
-//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-//! let y = &x + &x;
+//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
 //! let module = lower_to_stablehlo(&program).unwrap();
@@ -64,7 +64,7 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 /// use tenferro_xla::lower_to_stablehlo;
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&x.neg()).unwrap();
 /// let module = lower_to_stablehlo(&program).unwrap();

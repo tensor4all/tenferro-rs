@@ -5,7 +5,7 @@ use std::fmt;
 use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
-use cubecl_cuda::{CudaDevice, CudaRuntime};
+use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
 use cudarc::driver::sys::{CUcontext, CUdevice};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 
@@ -15,7 +15,7 @@ use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 pub fn gpu_available() -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let device = CudaDevice::new(0);
-        let _ = CudaRuntime::client(&device);
+        let _ = CubeclCudaRuntime::client(&device);
     }))
     .is_ok()
 }
@@ -25,22 +25,22 @@ pub fn gpu_available() -> bool {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CubeclRuntime;
+/// use tenferro_gpu::CudaRuntime;
 ///
-/// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
-/// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
-///     CubeclRuntime::synchronize;
+/// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
+/// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
+///     CudaRuntime::synchronize;
 /// ```
-pub struct CubeclRuntime {
-    client: ComputeClient<CudaRuntime>,
+pub struct CudaRuntime {
+    client: ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
     cuda_device: CUdevice,
     cuda_context: CUcontext,
 }
 
-impl fmt::Debug for CubeclRuntime {
+impl fmt::Debug for CudaRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CubeclRuntime")
+        f.debug_struct("CudaRuntime")
             .field("device_ordinal", &self.device_ordinal)
             .finish_non_exhaustive()
     }
@@ -49,17 +49,17 @@ impl fmt::Debug for CubeclRuntime {
 // SAFETY: CUDA primary contexts and CubeCL clients are owned handles. Backend
 // methods set the context current before raw CUDA-library calls, and
 // higher-level eager execution serializes backend access through a mutex.
-unsafe impl Send for CubeclRuntime {}
+unsafe impl Send for CudaRuntime {}
 
-impl CubeclRuntime {
+impl CudaRuntime {
     /// Initialize the CubeCL CUDA runtime on the given device ordinal.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CubeclRuntime;
+    /// use tenferro_gpu::CudaRuntime;
     ///
-    /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
+    /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
     /// ```
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
@@ -95,7 +95,7 @@ impl CubeclRuntime {
             )
         })?;
         let device = CudaDevice::new(device_ordinal);
-        let client = CudaRuntime::client(&device);
+        let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
             client,
             device_ordinal,
@@ -104,7 +104,7 @@ impl CubeclRuntime {
         })
     }
 
-    pub(crate) fn client(&self) -> &ComputeClient<CudaRuntime> {
+    pub(crate) fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
         &self.client
     }
 
@@ -113,9 +113,9 @@ impl CubeclRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CubeclRuntime;
+    /// use tenferro_gpu::CudaRuntime;
     ///
-    /// let _device_ordinal: fn(&CubeclRuntime) -> usize = CubeclRuntime::device_ordinal;
+    /// let _device_ordinal: fn(&CudaRuntime) -> usize = CudaRuntime::device_ordinal;
     /// ```
     pub fn device_ordinal(&self) -> usize {
         self.device_ordinal
@@ -154,10 +154,10 @@ impl CubeclRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CubeclRuntime;
+    /// use tenferro_gpu::CudaRuntime;
     ///
-    /// let _sync: fn(&CubeclRuntime) -> tenferro_tensor::Result<()> =
-    ///     CubeclRuntime::synchronize;
+    /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
+    ///     CudaRuntime::synchronize;
     /// ```
     pub fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "cubecl_runtime_synchronize";
@@ -169,7 +169,7 @@ impl CubeclRuntime {
     }
 }
 
-impl Drop for CubeclRuntime {
+impl Drop for CudaRuntime {
     fn drop(&mut self) {
         // Drop cannot surface errors, but the runtime must not release the
         // primary context while queued kernels may still reference it.

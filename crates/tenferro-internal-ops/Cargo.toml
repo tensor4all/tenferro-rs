@@ -16,10 +16,9 @@ name = "tenferro_ops"
 [features]
 default = ["autodiff"]
 autodiff = ["dep:tidu"]
-gpu = []
-cuda = ["gpu"]
-webgpu = ["gpu"]
-rocm = ["gpu"]
+cuda = []
+webgpu = []
+rocm = []
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }
