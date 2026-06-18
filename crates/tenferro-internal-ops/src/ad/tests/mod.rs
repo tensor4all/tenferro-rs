@@ -109,6 +109,20 @@ fn shape_and_dtype_queries_work_for_concrete_input_values() {
 }
 
 #[test]
+fn global_metadata_registry_does_not_read_poisoned_inner_state_contract() {
+    let source = include_str!("../context.rs");
+
+    assert!(
+        !source.contains("into_inner()"),
+        "global AD metadata registry must fail closed on mutex poison instead of reading poisoned state"
+    );
+    assert!(
+        source.contains("MetadataRegistryError::LockPoisoned"),
+        "global AD metadata registry should expose an explicit poison error"
+    );
+}
+
+#[test]
 fn shape_queries_work_for_symbolic_input_values() {
     let mut ctx = ShapeGuardContext::default();
     let key = input_key(2);
@@ -148,6 +162,20 @@ fn metadata_exact_shape_rejects_upper_bound() {
     ctx.insert_metadata(key.clone(), meta);
 
     assert_eq!(ctx.exact_shape_of(&ValueRef::External(key)), None);
+}
+
+#[test]
+fn try_metadata_of_returns_none_for_unattached_or_bad_local_values() {
+    let mut ctx = ShapeGuardContext::default();
+    assert!(ctx.try_metadata_of(&ValueRef::Local(0)).is_none());
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let input = builder.add_input(tensor_input(710));
+    builder.set_outputs(vec![input]);
+    let graph = builder.build();
+    ctx.attach_graph(&graph);
+
+    assert!(ctx.try_metadata_of(&ValueRef::Local(usize::MAX)).is_none());
 }
 
 #[test]

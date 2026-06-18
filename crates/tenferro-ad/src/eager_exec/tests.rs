@@ -150,6 +150,73 @@ fn pad_to_match_pads_with_zeros() {
 }
 
 #[test]
+fn dynamic_truncate_invalid_axis_returns_tensor_runtime_error() {
+    let mut b = CpuBackend::new();
+    let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
+    let size = scalar(2.0);
+    let err = exec_op_on_tensors(
+        &StdTensorOp::DynamicTruncate { axis: 1 },
+        &[&x, &size],
+        &mut b,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+            op: "DynamicTruncate",
+            axis: 1,
+            rank: 1,
+        })
+    ));
+}
+
+#[test]
+fn pad_to_match_rejects_reference_axis_out_of_bounds_without_panicking() {
+    let mut b = CpuBackend::new();
+    let x = f64t(vec![2], vec![1.0, 2.0]);
+    let reference = scalar(0.0);
+    let err = exec_op_on_tensors(
+        &StdTensorOp::PadToMatch { axis: 0 },
+        &[&x, &reference],
+        &mut b,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+            op: "PadToMatch",
+            axis: 0,
+            rank: 0,
+        })
+    ));
+}
+
+#[test]
+fn eager_shape_expr_resolution_returns_error_instead_of_panicking() {
+    let mut b = CpuBackend::new();
+    let x = f64t(vec![2], vec![1.0, 2.0]);
+    let err = exec_op_on_tensors(
+        &StdTensorOp::Reshape {
+            to_shape: vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        },
+        &[&x],
+        &mut b,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("failed to resolve eager shape expression"),
+        "{err}"
+    );
+}
+
+#[test]
 fn constant_f64_parses_bytes() {
     let mut b = CpuBackend::new();
     let result = exec_op_on_tensors(

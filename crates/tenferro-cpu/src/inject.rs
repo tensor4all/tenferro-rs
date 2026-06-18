@@ -606,7 +606,11 @@ pub unsafe fn register_blas_gemm_provider_ptrs(
                     return Err(ProviderRegistrationError::NullPointer { symbol: $symbol });
                 }
                 let status = match abi {
+                    // SAFETY: Null was rejected above. The public unsafe
+                    // contract requires the pointer to match `$symbol` and ABI.
                     ProviderAbi::Lp64 => unsafe { $lp64_fn(ptr) },
+                    // SAFETY: Null was rejected above. The public unsafe
+                    // contract requires the pointer to match `$symbol` and ABI.
                     ProviderAbi::Ilp64 => unsafe { $ilp64_fn(ptr) },
                 };
                 blas_registration_status($symbol, status)?;
@@ -654,11 +658,19 @@ macro_rules! register_lapack_symbol {
         }
         let status = match $abi {
             ProviderAbi::Lp64 => {
+                // SAFETY: Null was rejected above. The public unsafe contract
+                // requires `$raw` to be a `$symbol` pointer with the LP64 ABI.
                 let f = unsafe { cast_provider_function_pointer::<$lp64_ty>($symbol, raw)? };
+                // SAFETY: `f` has the provider registration function's exact
+                // typed signature after the guarded cast above.
                 unsafe { $lp64_reg(f) }
             }
             ProviderAbi::Ilp64 => {
+                // SAFETY: Null was rejected above. The public unsafe contract
+                // requires `$raw` to be a `$symbol` pointer with the ILP64 ABI.
                 let f = unsafe { cast_provider_function_pointer::<$ilp64_ty>($symbol, raw)? };
+                // SAFETY: `f` has the provider registration function's exact
+                // typed signature after the guarded cast above.
                 unsafe { $ilp64_reg(f) }
             }
         };

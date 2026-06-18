@@ -233,6 +233,8 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
     let mut data = Vec::with_capacity(total);
     // SAFETY: test-only helper is used for outputs whose elements are fully overwritten.
     unsafe { data.set_len(total) };
+    // Invariant: `kernel_col_major_strides(shape)` and `total` describe the
+    // compact column-major array for this validated test output shape.
     StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }
 
@@ -252,6 +254,8 @@ where
     let strides = kernel_col_major_strides(shape);
     // SAFETY: callers use this only for operation outputs that fully overwrite every element.
     let data = unsafe { T::pool_acquire(buffers, total) };
+    // Invariant: callers pass validated tensor-derived or prechecked output
+    // shapes, and `strides` is their compact column-major layout.
     StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }
 

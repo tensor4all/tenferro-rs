@@ -46,9 +46,9 @@ impl fmt::Debug for CubeclRuntime {
     }
 }
 
-// CUDA primary contexts and CubeCL clients are owned handles. Backend methods
-// set the context current before raw CUDA-library calls, and higher-level eager
-// execution serializes backend access through a mutex.
+// SAFETY: CUDA primary contexts and CubeCL clients are owned handles. Backend
+// methods set the context current before raw CUDA-library calls, and
+// higher-level eager execution serializes backend access through a mutex.
 unsafe impl Send for CubeclRuntime {}
 
 impl CubeclRuntime {
@@ -62,8 +62,6 @@ impl CubeclRuntime {
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclRuntime> = CubeclRuntime::new;
     /// ```
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
-        let device = CudaDevice::new(device_ordinal);
-        let client = CudaRuntime::client(&device);
         cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
             crate::Error::backend_failure(
                 "cubecl_runtime_init",
@@ -96,6 +94,8 @@ impl CubeclRuntime {
                 format!("failed to set CUDA primary context current: {err:?}"),
             )
         })?;
+        let device = CudaDevice::new(device_ordinal);
+        let client = CudaRuntime::client(&device);
         Ok(Self {
             client,
             device_ordinal,
@@ -171,6 +171,9 @@ impl CubeclRuntime {
 
 impl Drop for CubeclRuntime {
     fn drop(&mut self) {
+        // Drop cannot surface errors, but the runtime must not release the
+        // primary context while queued kernels may still reference it.
+        let _ = self.synchronize();
         let _ = unsafe { cudarc::driver::result::primary_ctx::release(self.cuda_device) };
     }
 }

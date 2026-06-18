@@ -41,6 +41,38 @@ pub enum DimExpr {
     Max(Box<DimExpr>, Box<DimExpr>),
 }
 
+/// Error produced while evaluating a [`DimExpr`] against concrete shapes.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DimExprEvalError {
+    /// `InputDim` referenced an input that was not provided.
+    #[error(
+        "DimExpr::InputDim input index {input_idx} out of bounds for {input_count} input shapes"
+    )]
+    InputOutOfBounds {
+        input_idx: usize,
+        input_count: usize,
+    },
+    /// `InputDim` referenced an axis that does not exist on the selected input.
+    #[error("DimExpr::InputDim axis {axis} out of bounds for input {input_idx} rank {rank}")]
+    AxisOutOfBounds {
+        input_idx: usize,
+        axis: usize,
+        rank: usize,
+    },
+    /// Addition overflowed `usize`.
+    #[error("DimExpr::Add overflow: {lhs} + {rhs}")]
+    AddOverflow { lhs: usize, rhs: usize },
+    /// Subtraction would underflow `usize`.
+    #[error("DimExpr::Sub underflow: left operand {lhs} is smaller than {rhs}")]
+    SubUnderflow { lhs: usize, rhs: usize },
+    /// Multiplication overflowed `usize`.
+    #[error("DimExpr::Mul overflow: {lhs} * {rhs}")]
+    MulOverflow { lhs: usize, rhs: usize },
+    /// Floor division divisor evaluated to zero.
+    #[error("DimExpr::FloorDiv divide by zero: left operand {lhs}, divisor {rhs}")]
+    FloorDivByZero { lhs: usize, rhs: usize },
+}
+
 impl DimExpr {
     /// Evaluate the expression using actual input tensor shapes.
     ///
@@ -66,28 +98,62 @@ impl DimExpr {
     /// assert_eq!(expr.eval(&[&[5, 7]]), 7);
     /// ```
     pub fn eval(&self, input_shapes: &[&[usize]]) -> usize {
+        self.try_eval(input_shapes)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Fallibly evaluate the expression using actual input tensor shapes.
+    ///
+    /// This is the runtime-facing API. Use it when malformed symbolic shapes
+    /// are possible user input; [`Self::eval`] is retained as the compatibility
+    /// panic wrapper.
+    pub fn try_eval(&self, input_shapes: &[&[usize]]) -> Result<usize, DimExprEvalError> {
         match self {
-            Self::Const(v) => *v,
-            Self::InputDim { input_idx, axis } => input_shapes[*input_idx][*axis],
-            Self::Add(a, b) => a.eval(input_shapes) + b.eval(input_shapes),
-            Self::Sub(a, b) => {
-                let lhs = a.eval(input_shapes);
-                let rhs = b.eval(input_shapes);
-                lhs.checked_sub(rhs).unwrap_or_else(|| {
-                    panic!("DimExpr::Sub underflow: left operand {lhs} is smaller than {rhs}")
+            Self::Const(v) => Ok(*v),
+            Self::InputDim { input_idx, axis } => input_shapes
+                .get(*input_idx)
+                .ok_or(DimExprEvalError::InputOutOfBounds {
+                    input_idx: *input_idx,
+                    input_count: input_shapes.len(),
                 })
+                .and_then(|shape| {
+                    shape
+                        .get(*axis)
+                        .copied()
+                        .ok_or(DimExprEvalError::AxisOutOfBounds {
+                            input_idx: *input_idx,
+                            axis: *axis,
+                            rank: shape.len(),
+                        })
+                }),
+            Self::Add(a, b) => {
+                let lhs = a.try_eval(input_shapes)?;
+                let rhs = b.try_eval(input_shapes)?;
+                lhs.checked_add(rhs)
+                    .ok_or(DimExprEvalError::AddOverflow { lhs, rhs })
             }
-            Self::Mul(a, b) => a.eval(input_shapes) * b.eval(input_shapes),
+            Self::Sub(a, b) => {
+                let lhs = a.try_eval(input_shapes)?;
+                let rhs = b.try_eval(input_shapes)?;
+                lhs.checked_sub(rhs)
+                    .ok_or(DimExprEvalError::SubUnderflow { lhs, rhs })
+            }
+            Self::Mul(a, b) => {
+                let lhs = a.try_eval(input_shapes)?;
+                let rhs = b.try_eval(input_shapes)?;
+                lhs.checked_mul(rhs)
+                    .ok_or(DimExprEvalError::MulOverflow { lhs, rhs })
+            }
             Self::FloorDiv(a, b) => {
-                let lhs = a.eval(input_shapes);
-                let rhs = b.eval(input_shapes);
+                let lhs = a.try_eval(input_shapes)?;
+                let rhs = b.try_eval(input_shapes)?;
                 if rhs == 0 {
-                    panic!("DimExpr::FloorDiv divide by zero: left operand {lhs}, divisor {rhs}");
+                    return Err(DimExprEvalError::FloorDivByZero { lhs, rhs });
                 }
-                lhs / rhs
+                Ok(lhs / rhs)
             }
-            Self::Min(a, b) => a.eval(input_shapes).min(b.eval(input_shapes)),
-            Self::Max(a, b) => a.eval(input_shapes).max(b.eval(input_shapes)),
+            Self::Min(a, b) => Ok(a.try_eval(input_shapes)?.min(b.try_eval(input_shapes)?)),
+            Self::Max(a, b) => Ok(a.try_eval(input_shapes)?.max(b.try_eval(input_shapes)?)),
         }
     }
 
@@ -323,6 +389,14 @@ impl DimExpr {
     /// ```
     pub fn eval_all(exprs: &[Self], input_shapes: &[&[usize]]) -> Vec<usize> {
         exprs.iter().map(|e| e.eval(input_shapes)).collect()
+    }
+
+    /// Fallibly evaluate a slice of expressions against actual input shapes.
+    pub fn try_eval_all(
+        exprs: &[Self],
+        input_shapes: &[&[usize]],
+    ) -> Result<Vec<usize>, DimExprEvalError> {
+        exprs.iter().map(|e| e.try_eval(input_shapes)).collect()
     }
 
     /// Remap all `InputDim` references in a slice of expressions.

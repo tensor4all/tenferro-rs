@@ -228,20 +228,20 @@ pub fn infer_output_shapes(
                 require_input(op, input_shapes, 0)?,
                 *axis_a,
                 *axis_b,
-            )]
+            )?]
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             vec![embed_diag_shape(
                 require_input(op, input_shapes, 0)?,
                 *axis_a,
                 *axis_b,
-            )]
+            )?]
         }
         StdTensorOp::Gather(config) => vec![gather_shape(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
             config,
-        )],
+        )?],
         StdTensorOp::GatherDynamicSliceSizes {
             offset_dims,
             collapsed_slice_dims,
@@ -252,7 +252,7 @@ pub fn infer_output_shapes(
             let resolved_slice_sizes: Vec<_> = slice_sizes
                 .iter()
                 .map(|dim| resolve_dim_expr_from_shapes(dim, input_shapes))
-                .collect();
+                .collect::<Result<_>>()?;
             vec![gather_shape_from_slice_sizes(
                 require_input(op, input_shapes, 0)?,
                 require_input(op, input_shapes, 1)?,
@@ -260,22 +260,22 @@ pub fn infer_output_shapes(
                 collapsed_slice_dims,
                 *index_vector_dim,
                 &resolved_slice_sizes,
-            )]
+            )?]
         }
         StdTensorOp::Slice(config) => {
-            vec![slice_shape(require_input(op, input_shapes, 0)?, config)]
+            vec![slice_shape(require_input(op, input_shapes, 0)?, config)?]
         }
         StdTensorOp::DynamicSlice { slice_sizes } => {
             vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
         }
         StdTensorOp::DynamicUpdateSlice => vec![require_input(op, input_shapes, 0)?.to_vec()],
-        StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0)?, config)],
+        StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0)?, config)?],
         StdTensorOp::DotGeneral { config, .. } => vec![dot_general_shape(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
             config,
         )],
-        StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)],
+        StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)?],
         StdTensorOp::ShapeOf { .. } => vec![Vec::new()],
         StdTensorOp::DynamicTruncate { axis } => {
             let shape = require_input(op, input_shapes, 0)?.to_vec();
@@ -291,7 +291,7 @@ pub fn infer_output_shapes(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
             *axis,
-        )],
+        )?],
         StdTensorOp::Extension(ext) => {
             let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes)?;
             metas.into_iter().map(|(_dtype, shape)| shape).collect()
@@ -433,51 +433,55 @@ fn require_input<'a>(
     })
 }
 
-fn resolve_dim_expr_from_shapes(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> DimExpr {
+fn resolve_dim_expr_from_shapes(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> Result<DimExpr> {
     match expr {
-        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
         DimExpr::InputDim { input_idx, axis } => {
             require_input_expr(input_shapes, *input_idx, *axis)
         }
-        DimExpr::Add(a, b) => DimExpr::add(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
+        DimExpr::Add(a, b) => dim_add(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
         ),
-        DimExpr::Sub(a, b) => DimExpr::sub(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
+        DimExpr::Sub(a, b) => dim_sub(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
         ),
-        DimExpr::Mul(a, b) => DimExpr::mul(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
+        DimExpr::Mul(a, b) => dim_mul(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
         ),
-        DimExpr::FloorDiv(a, b) => DimExpr::floor_div(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
-        ),
-        DimExpr::Min(a, b) => DimExpr::min(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
-        ),
-        DimExpr::Max(a, b) => DimExpr::max(
-            resolve_dim_expr_from_shapes(a, input_shapes),
-            resolve_dim_expr_from_shapes(b, input_shapes),
-        ),
+        DimExpr::FloorDiv(a, b) => Ok(DimExpr::floor_div(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
+        )),
+        DimExpr::Min(a, b) => Ok(DimExpr::min(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
+        )),
+        DimExpr::Max(a, b) => Ok(DimExpr::max(
+            resolve_dim_expr_from_shapes(a, input_shapes)?,
+            resolve_dim_expr_from_shapes(b, input_shapes)?,
+        )),
     }
 }
 
-fn require_input_expr(input_shapes: &[&[DimExpr]], input_idx: usize, axis: usize) -> DimExpr {
+fn require_input_expr(
+    input_shapes: &[&[DimExpr]],
+    input_idx: usize,
+    axis: usize,
+) -> Result<DimExpr> {
     input_shapes
         .get(input_idx)
         .and_then(|shape| shape.get(axis))
         .cloned()
-        .unwrap_or_else(|| {
-            panic!(
-                "shape inference: InputDim({}, {}) cannot be resolved from {} input shapes",
+        .ok_or_else(|| {
+            shape_infer_error(format!(
+                "InputDim({}, {}) cannot be resolved from {} input shapes",
                 input_idx,
                 axis,
                 input_shapes.len()
-            )
+            ))
         })
 }
 
@@ -535,35 +539,44 @@ fn shape_infer_error(message: impl Into<String>) -> Error {
     }
 }
 
-fn extract_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Vec<DimExpr> {
-    assert!(
-        axis_a < input_shape.len() && axis_b < input_shape.len(),
-        "ExtractDiag axes ({axis_a}, {axis_b}) out of bounds for rank {}",
-        input_shape.len()
-    );
-    assert_ne!(axis_a, axis_b, "ExtractDiag requires distinct axes");
+fn extract_diag_shape(
+    input_shape: &[DimExpr],
+    axis_a: usize,
+    axis_b: usize,
+) -> Result<Vec<DimExpr>> {
+    if axis_a >= input_shape.len() || axis_b >= input_shape.len() {
+        return Err(shape_infer_error(format!(
+            "ExtractDiag axes ({axis_a}, {axis_b}) out of bounds for rank {}",
+            input_shape.len()
+        )));
+    }
+    if axis_a == axis_b {
+        return Err(shape_infer_error("ExtractDiag requires distinct axes"));
+    }
     let diag_output_axis = if axis_a < axis_b { axis_a } else { axis_a - 1 };
     let diag_dim = dim_min(input_shape[axis_a].clone(), input_shape[axis_b].clone());
     let mut output_shape = input_shape.to_vec();
     output_shape.remove(axis_b);
     output_shape[diag_output_axis] = diag_dim;
-    output_shape
+    Ok(output_shape)
 }
 
-fn embed_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Vec<DimExpr> {
-    assert!(
-        axis_a < input_shape.len(),
-        "EmbedDiag axis_a {axis_a} out of bounds for rank {}",
-        input_shape.len()
-    );
-    assert!(
-        axis_b <= input_shape.len(),
-        "EmbedDiag axis_b {axis_b} out of bounds for rank {}",
-        input_shape.len()
-    );
+fn embed_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Result<Vec<DimExpr>> {
+    if axis_a >= input_shape.len() {
+        return Err(shape_infer_error(format!(
+            "EmbedDiag axis_a {axis_a} out of bounds for rank {}",
+            input_shape.len()
+        )));
+    }
+    if axis_b > input_shape.len() {
+        return Err(shape_infer_error(format!(
+            "EmbedDiag axis_b {axis_b} out of bounds for rank {}",
+            input_shape.len()
+        )));
+    }
     let mut output_shape = input_shape.to_vec();
     output_shape.insert(axis_b, input_shape[axis_a].clone());
-    output_shape
+    Ok(output_shape)
 }
 
 fn dot_general_shape(
@@ -597,7 +610,7 @@ fn gather_shape(
     operand_shape: &[DimExpr],
     index_shape: &[DimExpr],
     config: &GatherConfig,
-) -> Vec<DimExpr> {
+) -> Result<Vec<DimExpr>> {
     let slice_sizes: Vec<_> = config
         .slice_sizes
         .iter()
@@ -621,12 +634,31 @@ fn gather_shape_from_slice_sizes(
     collapsed_slice_dims: &[usize],
     index_vector_dim: usize,
     slice_sizes: &[DimExpr],
-) -> Vec<DimExpr> {
-    assert_eq!(
-        slice_sizes.len(),
-        operand_shape.len(),
-        "gather: slice_sizes rank mismatch"
-    );
+) -> Result<Vec<DimExpr>> {
+    if slice_sizes.len() != operand_shape.len() {
+        return Err(shape_infer_error(format!(
+            "gather: slice_sizes rank mismatch: got {}, expected {}",
+            slice_sizes.len(),
+            operand_shape.len()
+        )));
+    }
+    if index_vector_dim > index_shape.len() {
+        return Err(shape_infer_error(format!(
+            "gather: index_vector_dim {index_vector_dim} out of bounds for index rank {}",
+            index_shape.len()
+        )));
+    }
+    ensure_unique_axes("gather", "offset_dims", offset_dims)?;
+    ensure_unique_axes("gather", "collapsed_slice_dims", collapsed_slice_dims)?;
+    if collapsed_slice_dims
+        .iter()
+        .any(|&axis| axis >= operand_shape.len())
+    {
+        return Err(shape_infer_error(format!(
+            "gather: collapsed_slice_dims {collapsed_slice_dims:?} out of bounds for operand rank {}",
+            operand_shape.len()
+        )));
+    }
 
     let batch_shape = if index_vector_dim == index_shape.len() {
         index_shape.to_vec()
@@ -641,17 +673,24 @@ fn gather_shape_from_slice_sizes(
     let window_dims: Vec<usize> = (0..operand_shape.len())
         .filter(|dim| !collapsed_slice_dims.contains(dim))
         .collect();
-    assert_eq!(
-        offset_dims.len(),
-        window_dims.len(),
-        "gather: offset_dims length mismatch"
-    );
+    if offset_dims.len() != window_dims.len() {
+        return Err(shape_infer_error(format!(
+            "gather: offset_dims length mismatch: got {}, expected {}",
+            offset_dims.len(),
+            window_dims.len()
+        )));
+    }
 
     let out_rank = batch_shape.len() + offset_dims.len();
     let mut out_shape = vec![DimExpr::Const(0); out_rank];
     let mut out_axis_to_operand_dim = vec![None; out_rank];
     for (offset_axis, &out_axis) in offset_dims.iter().enumerate() {
-        out_axis_to_operand_dim[out_axis] = Some(window_dims[offset_axis]);
+        let Some(target) = out_axis_to_operand_dim.get_mut(out_axis) else {
+            return Err(shape_infer_error(format!(
+                "gather: offset_dim {out_axis} out of bounds for output rank {out_rank}"
+            )));
+        };
+        *target = Some(window_dims[offset_axis]);
     }
 
     let mut batch_axis = 0usize;
@@ -664,141 +703,261 @@ fn gather_shape_from_slice_sizes(
         }
     }
 
-    out_shape
+    Ok(out_shape)
 }
 
-fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Vec<DimExpr> {
+fn ensure_unique_axes(op: &'static str, role: &'static str, axes: &[usize]) -> Result<()> {
+    for (idx, &axis) in axes.iter().enumerate() {
+        if axes[..idx].contains(&axis) {
+            return Err(shape_infer_error(format!(
+                "{op}: duplicate {role} axis {axis}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Result<Vec<DimExpr>> {
     let rank = input_shape.len();
-    assert_eq!(config.starts.len(), rank, "slice: starts rank mismatch");
-    assert_eq!(config.limits.len(), rank, "slice: limits rank mismatch");
-    assert_eq!(config.strides.len(), rank, "slice: strides rank mismatch");
+    if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
+        return Err(shape_infer_error(format!(
+            "slice: config rank mismatch for rank {rank}: starts={}, limits={}, strides={}",
+            config.starts.len(),
+            config.limits.len(),
+            config.strides.len()
+        )));
+    }
     (0..rank)
         .map(|axis| {
-            let span = config.limits[axis] - config.starts[axis];
-            DimExpr::Const(span.div_ceil(config.strides[axis]))
+            let span = config.limits[axis]
+                .checked_sub(config.starts[axis])
+                .ok_or_else(|| {
+                    shape_infer_error(format!(
+                        "slice: limit {} is smaller than start {} on axis {axis}",
+                        config.limits[axis], config.starts[axis]
+                    ))
+                })?;
+            if config.strides[axis] == 0 {
+                return Err(shape_infer_error(format!(
+                    "slice: stride must be non-zero on axis {axis}"
+                )));
+            }
+            Ok(DimExpr::Const(span.div_ceil(config.strides[axis])))
         })
         .collect()
 }
 
-fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Vec<DimExpr> {
+fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>> {
     let rank = input_shape.len();
-    assert_eq!(
-        config.edge_padding_low.len(),
-        rank,
-        "pad: edge_padding_low rank mismatch"
-    );
-    assert_eq!(
-        config.edge_padding_high.len(),
-        rank,
-        "pad: edge_padding_high rank mismatch"
-    );
-    assert_eq!(
-        config.interior_padding.len(),
-        rank,
-        "pad: interior_padding rank mismatch"
-    );
+    if config.edge_padding_low.len() != rank
+        || config.edge_padding_high.len() != rank
+        || config.interior_padding.len() != rank
+    {
+        return Err(shape_infer_error(format!(
+            "pad: config rank mismatch for rank {rank}: low={}, high={}, interior={}",
+            config.edge_padding_low.len(),
+            config.edge_padding_high.len(),
+            config.interior_padding.len()
+        )));
+    }
 
     input_shape
         .iter()
         .enumerate()
         .map(|(axis, dim)| {
-            assert!(
-                config.interior_padding[axis] >= 0,
-                "pad: interior padding must be non-negative on axis {axis}"
-            );
+            if config.interior_padding[axis] < 0 {
+                return Err(shape_infer_error(format!(
+                    "pad: interior padding must be non-negative on axis {axis}"
+                )));
+            }
             if let DimExpr::Const(extent) = dim {
                 let base = if *extent == 0 {
                     0
                 } else {
-                    (*extent as i64 - 1) * (config.interior_padding[axis] + 1) + 1
+                    let extent = i64::try_from(*extent).map_err(|_| {
+                        shape_infer_error(format!(
+                            "pad: input extent {extent} exceeds i64 on axis {axis}"
+                        ))
+                    })?;
+                    let stride = config.interior_padding[axis]
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            shape_infer_error(format!(
+                                "pad: interior padding overflow on axis {axis}"
+                            ))
+                        })?;
+                    extent
+                        .checked_sub(1)
+                        .and_then(|value| value.checked_mul(stride))
+                        .and_then(|value| value.checked_add(1))
+                        .ok_or_else(|| {
+                            shape_infer_error(format!(
+                                "pad: stretched extent overflow on axis {axis}"
+                            ))
+                        })?
                 };
-                let padded = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
-                DimExpr::Const(
-                    usize::try_from(padded)
-                        .expect("pad: output extent must be representable as usize"),
-                )
+                let padded = config.edge_padding_low[axis]
+                    .checked_add(config.edge_padding_high[axis])
+                    .and_then(|value| value.checked_add(base))
+                    .ok_or_else(|| {
+                        shape_infer_error(format!("pad: output extent overflow on axis {axis}"))
+                    })?;
+                Ok(DimExpr::Const(usize::try_from(padded).map_err(|_| {
+                    shape_infer_error(format!(
+                        "pad: output extent {padded} must be representable as usize on axis {axis}"
+                    ))
+                })?))
             } else if config.interior_padding[axis] == 0 {
                 add_signed(
                     dim.clone(),
-                    config.edge_padding_low[axis] + config.edge_padding_high[axis],
+                    signed_padding_sum(
+                        config.edge_padding_low[axis],
+                        config.edge_padding_high[axis],
+                        axis,
+                    )?,
                 )
             } else {
-                let stride = DimExpr::Const((config.interior_padding[axis] + 1) as usize);
+                let stride = DimExpr::Const(usize_from_nonnegative_i64(
+                    config.interior_padding[axis]
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            shape_infer_error(format!(
+                                "pad: interior padding overflow on axis {axis}"
+                            ))
+                        })?,
+                    "pad",
+                )?);
                 let stretched = dim_add(
-                    dim_mul(dim_sub(dim.clone(), DimExpr::Const(1)), stride),
+                    dim_mul(dim_sub(dim.clone(), DimExpr::Const(1))?, stride)?,
                     DimExpr::Const(1),
-                );
+                )?;
                 add_signed(
                     stretched,
-                    config.edge_padding_low[axis] + config.edge_padding_high[axis],
+                    signed_padding_sum(
+                        config.edge_padding_low[axis],
+                        config.edge_padding_high[axis],
+                        axis,
+                    )?,
                 )
             }
         })
         .collect()
 }
 
-fn add_signed(expr: DimExpr, amount: i64) -> DimExpr {
+fn add_signed(expr: DimExpr, amount: i64) -> Result<DimExpr> {
     if amount >= 0 {
-        dim_add(expr, DimExpr::Const(amount as usize))
+        dim_add(
+            expr,
+            DimExpr::Const(usize_from_nonnegative_i64(amount, "add_signed")?),
+        )
     } else {
-        dim_sub(expr, DimExpr::Const((-amount) as usize))
+        let magnitude = amount
+            .checked_neg()
+            .ok_or_else(|| shape_infer_error("add_signed: negative amount magnitude overflow"))?;
+        dim_sub(
+            expr,
+            DimExpr::Const(usize_from_nonnegative_i64(magnitude, "add_signed")?),
+        )
     }
 }
 
-fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Vec<DimExpr> {
+fn signed_padding_sum(low: i64, high: i64, axis: usize) -> Result<i64> {
+    low.checked_add(high)
+        .ok_or_else(|| shape_infer_error(format!("pad: edge padding overflow on axis {axis}")))
+}
+
+fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<DimExpr>> {
     let first = input_shapes
         .first()
         .copied()
-        .expect("concatenate expects at least one input shape");
-    assert!(axis < first.len(), "concatenate axis {axis} out of bounds");
+        .ok_or_else(|| shape_infer_error("concatenate expects at least one input shape"))?;
+    if axis >= first.len() {
+        return Err(shape_infer_error(format!(
+            "concatenate axis {axis} out of bounds for rank {}",
+            first.len()
+        )));
+    }
     let mut output_shape = first.to_vec();
-    let axis_dim = input_shapes
-        .iter()
-        .skip(1)
-        .fold(first[axis].clone(), |acc, shape| {
-            dim_add(acc, shape[axis].clone())
-        });
+    let mut axis_dim = first[axis].clone();
+    for (input_idx, shape) in input_shapes.iter().enumerate().skip(1) {
+        if shape.len() != first.len() {
+            return Err(shape_infer_error(format!(
+                "concatenate input {input_idx} rank mismatch: got {}, expected {}",
+                shape.len(),
+                first.len()
+            )));
+        }
+        for (dim_idx, (expected, actual)) in first.iter().zip(*shape).enumerate() {
+            if dim_idx != axis && actual != expected {
+                return Err(shape_infer_error(format!(
+                    "concatenate dimension mismatch on non-axis dim {dim_idx}: input {input_idx} has {actual:?}, expected {expected:?}"
+                )));
+            }
+        }
+        axis_dim = dim_add(axis_dim, shape[axis].clone())?;
+    }
     output_shape[axis] = axis_dim;
-    output_shape
+    Ok(output_shape)
 }
 
 fn pad_to_match_shape(
     input_shape: &[DimExpr],
     reference_shape: &[DimExpr],
     axis: usize,
-) -> Vec<DimExpr> {
-    assert!(
-        axis < input_shape.len(),
-        "PadToMatch input axis {axis} out of bounds"
-    );
-    assert!(
-        axis < reference_shape.len(),
-        "PadToMatch reference axis {axis} out of bounds"
-    );
+) -> Result<Vec<DimExpr>> {
+    if axis >= input_shape.len() {
+        return Err(shape_infer_error(format!(
+            "PadToMatch input axis {axis} out of bounds for rank {}",
+            input_shape.len()
+        )));
+    }
+    if axis >= reference_shape.len() {
+        return Err(shape_infer_error(format!(
+            "PadToMatch reference axis {axis} out of bounds for rank {}",
+            reference_shape.len()
+        )));
+    }
     let mut output_shape = input_shape.to_vec();
     output_shape[axis] = dim_max(input_shape[axis].clone(), reference_shape[axis].clone());
-    output_shape
+    Ok(output_shape)
 }
 
-fn dim_add(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
+fn dim_add(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => DimExpr::Const(lhs + rhs),
-        (lhs, rhs) => DimExpr::add(lhs, rhs),
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
+            lhs.checked_add(rhs).map(DimExpr::Const).ok_or_else(|| {
+                shape_infer_error(format!("dimension addition overflow: {lhs} + {rhs}"))
+            })
+        }
+        (lhs, rhs) => Ok(DimExpr::add(lhs, rhs)),
     }
 }
 
-fn dim_sub(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
+fn dim_sub(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => DimExpr::Const(lhs - rhs),
-        (lhs, rhs) => DimExpr::sub(lhs, rhs),
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
+            lhs.checked_sub(rhs).map(DimExpr::Const).ok_or_else(|| {
+                shape_infer_error(format!("dimension subtraction underflow: {lhs} - {rhs}"))
+            })
+        }
+        (lhs, rhs) => Ok(DimExpr::sub(lhs, rhs)),
     }
 }
 
-fn dim_mul(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
+fn dim_mul(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => DimExpr::Const(lhs * rhs),
-        (lhs, rhs) => DimExpr::mul(lhs, rhs),
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
+            lhs.checked_mul(rhs).map(DimExpr::Const).ok_or_else(|| {
+                shape_infer_error(format!("dimension multiplication overflow: {lhs} * {rhs}"))
+            })
+        }
+        (lhs, rhs) => Ok(DimExpr::mul(lhs, rhs)),
     }
+}
+
+fn usize_from_nonnegative_i64(value: i64, op: &'static str) -> Result<usize> {
+    usize::try_from(value)
+        .map_err(|_| shape_infer_error(format!("{op}: value {value} must fit in usize")))
 }
 
 fn dim_min(lhs: DimExpr, rhs: DimExpr) -> DimExpr {

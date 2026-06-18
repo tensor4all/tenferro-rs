@@ -512,3 +512,45 @@ fn transpose_dynamic_gather_emits_scatter_and_ignores_shape_sources() {
     assert_eq!(scatter.inputs[1], ValueRef::External(indices_key));
     assert_eq!(scatter.inputs[2], ValueRef::Local(cot));
 }
+
+#[test]
+fn transpose_scatter_returns_none_for_mismatched_update_window_dims() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(130));
+    let operand_key = input_key(131);
+    let indices_key = input_key(132);
+    let updates_key = input_key(133);
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[4, 2]),
+            (indices_key.clone(), &[1, 1]),
+            (updates_key.clone(), &[1, 2]),
+        ],
+    );
+    let op = StdTensorOp::Scatter(ScatterConfig {
+        update_window_dims: vec![0],
+        inserted_window_dims: vec![],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    });
+    let inputs = vec![
+        ValueRef::External(operand_key),
+        ValueRef::External(indices_key),
+        ValueRef::External(updates_key),
+    ];
+
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OperationRole::Linearized {
+            active_mask: vec![false, false, true],
+        },
+        &mut ctx,
+    );
+
+    assert_eq!(result, vec![None, None, None]);
+    assert!(builder.build().operations().is_empty());
+}

@@ -6,6 +6,7 @@ use omeco::{
     CodeOptimizer, EinCode as OmecoEinCode, Initializer, NestedEinsum, ScoreFunction, TreeSA,
 };
 
+use crate::cache::{saturating_sum, vec_of_vec_retained_bytes, vec_retained_bytes};
 use crate::planning::plan::{compile_step_plans, DiagPlan, GemmPlan, ReducePlan, StepPlan};
 use crate::syntax::subscripts::Subscripts;
 use crate::util::{build_size_dict, intermediate_subs};
@@ -377,76 +378,82 @@ impl ContractionTree {
     #[doc(hidden)]
     #[must_use]
     pub(crate) fn retained_bytes_for_cache_stats(&self) -> usize {
-        size_of::<Self>()
-            + subscripts_retained_bytes(&self.subscripts)
-            + self.steps.capacity() * size_of::<ContractionStep>()
-            + self.size_dict.capacity() * (size_of::<u32>() + size_of::<usize>())
-            + vec_of_vec_retained_bytes(&self.operand_subs)
-            + self.step_plans.capacity() * size_of::<StepPlan>()
-            + self
-                .step_plans
-                .iter()
-                .map(step_plan_retained_bytes)
-                .sum::<usize>()
+        saturating_sum([
+            size_of::<Self>(),
+            subscripts_retained_bytes(&self.subscripts),
+            self.steps
+                .capacity()
+                .saturating_mul(size_of::<ContractionStep>()),
+            self.size_dict
+                .capacity()
+                .saturating_mul(size_of::<u32>().saturating_add(size_of::<usize>())),
+            vec_of_vec_retained_bytes(&self.operand_subs),
+            self.step_plans
+                .capacity()
+                .saturating_mul(size_of::<StepPlan>()),
+            saturating_sum(self.step_plans.iter().map(step_plan_retained_bytes)),
+        ])
     }
 }
 
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
-}
-
-fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum::<usize>()
-}
-
 fn subscripts_retained_bytes(subscripts: &Subscripts) -> usize {
-    vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
+    saturating_sum([
+        vec_of_vec_retained_bytes(&subscripts.inputs),
+        vec_retained_bytes(&subscripts.output),
+    ])
 }
 
 fn reduce_plan_retained_bytes(plan: &ReducePlan) -> usize {
-    vec_retained_bytes(&plan.original_subs)
-        + vec_retained_bytes(&plan.kept_subs)
-        + vec_retained_bytes(&plan.out_shape)
+    saturating_sum([
+        vec_retained_bytes(&plan.original_subs),
+        vec_retained_bytes(&plan.kept_subs),
+        vec_retained_bytes(&plan.out_shape),
+    ])
 }
 
 fn diag_plan_retained_bytes(plan: &DiagPlan) -> usize {
-    vec_retained_bytes(&plan.stages)
-        + plan
-            .stages
-            .iter()
-            .map(|stage| {
-                vec_retained_bytes(&stage.axis_pairs) + vec_retained_bytes(&stage.result_subs)
-            })
-            .sum::<usize>()
-        + vec_retained_bytes(&plan.result_subs)
+    saturating_sum([
+        vec_retained_bytes(&plan.stages),
+        saturating_sum(plan.stages.iter().map(|stage| {
+            saturating_sum([
+                vec_retained_bytes(&stage.axis_pairs),
+                vec_retained_bytes(&stage.result_subs),
+            ])
+        })),
+        vec_retained_bytes(&plan.result_subs),
+    ])
 }
 
 fn gemm_plan_retained_bytes(plan: &GemmPlan) -> usize {
-    plan.reduce_a.as_ref().map_or(0, reduce_plan_retained_bytes)
-        + plan.reduce_b.as_ref().map_or(0, reduce_plan_retained_bytes)
-        + vec_retained_bytes(&plan.subs_a)
-        + vec_retained_bytes(&plan.subs_b)
-        + vec_retained_bytes(&plan.lo_modes)
-        + vec_retained_bytes(&plan.ro_modes)
-        + vec_retained_bytes(&plan.sum_modes)
-        + vec_retained_bytes(&plan.lo_sizes)
-        + vec_retained_bytes(&plan.ro_sizes)
-        + vec_retained_bytes(&plan.sum_sizes)
-        + vec_retained_bytes(&plan.batch_sizes)
-        + vec_retained_bytes(&plan.target_a)
-        + vec_retained_bytes(&plan.target_b)
-        + vec_retained_bytes(&plan.c_gemm_shape)
-        + vec_retained_bytes(&plan.expanded_shape)
-        + vec_retained_bytes(&plan.canonical_modes)
-        + vec_retained_bytes(&plan.a_gemm_shape)
-        + vec_retained_bytes(&plan.b_gemm_shape)
+    saturating_sum([
+        plan.reduce_a.as_ref().map_or(0, reduce_plan_retained_bytes),
+        plan.reduce_b.as_ref().map_or(0, reduce_plan_retained_bytes),
+        vec_retained_bytes(&plan.subs_a),
+        vec_retained_bytes(&plan.subs_b),
+        vec_retained_bytes(&plan.lo_modes),
+        vec_retained_bytes(&plan.ro_modes),
+        vec_retained_bytes(&plan.sum_modes),
+        vec_retained_bytes(&plan.lo_sizes),
+        vec_retained_bytes(&plan.ro_sizes),
+        vec_retained_bytes(&plan.sum_sizes),
+        vec_retained_bytes(&plan.batch_sizes),
+        vec_retained_bytes(&plan.target_a),
+        vec_retained_bytes(&plan.target_b),
+        vec_retained_bytes(&plan.c_gemm_shape),
+        vec_retained_bytes(&plan.expanded_shape),
+        vec_retained_bytes(&plan.canonical_modes),
+        vec_retained_bytes(&plan.a_gemm_shape),
+        vec_retained_bytes(&plan.b_gemm_shape),
+    ])
 }
 
 fn step_plan_retained_bytes(plan: &StepPlan) -> usize {
-    plan.diag_a.as_ref().map_or(0, diag_plan_retained_bytes)
-        + plan.diag_b.as_ref().map_or(0, diag_plan_retained_bytes)
-        + plan.strict_binary.as_ref().map_or(0, size_of_val)
-        + gemm_plan_retained_bytes(&plan.gemm)
+    saturating_sum([
+        plan.diag_a.as_ref().map_or(0, diag_plan_retained_bytes),
+        plan.diag_b.as_ref().map_or(0, diag_plan_retained_bytes),
+        plan.strict_binary.as_ref().map_or(0, size_of_val),
+        gemm_plan_retained_bytes(&plan.gemm),
+    ])
 }
 
 fn optimize_omeco_pairs(

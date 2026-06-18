@@ -8,9 +8,10 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
 use lru::LruCache;
+use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use super::cache::{
     compile_cache_stats, compute_cache_key, CacheKey, GraphCompilerCacheStats,
@@ -143,12 +144,17 @@ impl GraphCompiler {
     pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<GraphProgram> {
         let mut all_inputs = HashMap::new();
         for output in outputs {
-            all_inputs.extend(
-                output
-                    .inputs_map
-                    .iter()
-                    .map(|(key, tensor)| (key.clone(), tensor.clone())),
-            );
+            for (key, tensor) in output.inputs_map.iter() {
+                if let Some(existing) = all_inputs.get(key) {
+                    if !default_tensors_equivalent(existing, tensor) {
+                        return Err(Error::DuplicateBinding {
+                            input_key: format!("{:?}", key),
+                        });
+                    }
+                    continue;
+                }
+                all_inputs.insert(key.clone(), tensor.clone());
+            }
         }
         self.compile_many_with_descriptors(outputs, &HashMap::new(), &all_inputs)
     }
@@ -533,6 +539,33 @@ fn descriptor_for_input(
     })
 }
 
+fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
+    if Arc::ptr_eq(lhs, rhs) {
+        return true;
+    }
+    if lhs.dtype() != rhs.dtype() || lhs.shape() != rhs.shape() {
+        return false;
+    }
+    match lhs.dtype() {
+        DType::F32 => default_slices_equivalent::<f32>(lhs, rhs),
+        DType::F64 => default_slices_equivalent::<f64>(lhs, rhs),
+        DType::I32 => default_slices_equivalent::<i32>(lhs, rhs),
+        DType::I64 => default_slices_equivalent::<i64>(lhs, rhs),
+        DType::Bool => default_slices_equivalent::<bool>(lhs, rhs),
+        DType::C32 => default_slices_equivalent::<Complex32>(lhs, rhs),
+        DType::C64 => default_slices_equivalent::<Complex64>(lhs, rhs),
+    }
+}
+
+fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Tensor) -> bool {
+    match (lhs.as_slice::<T>(), rhs.as_slice::<T>()) {
+        (Some(lhs), Some(rhs)) => lhs == rhs,
+        // Backend-resident defaults cannot be inspected here; only the same
+        // Arc<Tensor> is considered equivalent by `default_tensors_equivalent`.
+        _ => false,
+    }
+}
+
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     key.primal_root()
 }
@@ -552,5 +585,61 @@ fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         }
         DType::C32 => Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)),
         DType::C64 => Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tenferro_tensor::{
+        Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+        TypedTensor,
+    };
+
+    #[test]
+    fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
+        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+        let y1 = x.neg();
+        let mut y2 = x.neg();
+        let key = x.input_key().expect("concrete traced tensor has input key");
+        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]));
+        let mut inputs = (*y2.inputs_map).clone();
+        inputs.insert(key.clone(), replacement);
+        y2.inputs_map = Arc::new(inputs);
+
+        let err = GraphCompiler::new().compile_many(&[&y1, &y2]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::DuplicateBinding { ref input_key } if input_key.contains(&format!("{key:?}"))
+        ));
+    }
+
+    #[test]
+    fn default_tensors_equivalent_rejects_distinct_backend_buffers() {
+        let placement = Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        };
+        let lhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
+            vec![2],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
+            placement.clone(),
+        )));
+        let rhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
+            vec![2],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
+            placement,
+        )));
+
+        assert!(
+            !default_tensors_equivalent(&lhs, &rhs),
+            "distinct backend-resident default tensors must not compare equal just because both are unreadable on host"
+        );
+        assert!(default_tensors_equivalent(&lhs, &lhs));
     }
 }

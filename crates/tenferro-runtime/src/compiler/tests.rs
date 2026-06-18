@@ -1,7 +1,8 @@
 use super::{
     algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
     conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
-    layout_chain_transpose_folding, transpose_folding, CompilerOptions, OptimizerConfig,
+    layout_chain_transpose_folding, populate_last_use, producer_index_by_slot, record_producer,
+    resolve_slot_redirect, slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::{Error, GraphExecutor};
@@ -158,6 +159,72 @@ fn compile_reports_incompatible_broadcast_as_error() {
 }
 
 #[test]
+fn resolve_slot_redirect_rejects_cycles() {
+    let err = resolve_slot_redirect(0, &[1, 0]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("redirect cycle") && message.contains("slot 0")
+    ));
+}
+
+#[test]
+fn record_producer_rejects_out_of_range_output_slot() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![0], vec![3]);
+    let mut producers = vec![None];
+
+    let err = record_producer(&mut producers, &instr).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("producer output slot 3")
+    ));
+}
+
+#[test]
+fn producer_index_by_slot_rejects_out_of_range_output_slot() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![0], vec![3]);
+    let program = make_exec_program(vec![instr], vec![0], vec![], 1);
+
+    let err = producer_index_by_slot(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("producer output slot 3")
+    ));
+}
+
+#[test]
+fn slot_use_counts_rejects_out_of_range_slots() {
+    let instr = make_exec_instr(ExecOp::Negate, vec![2], vec![0]);
+    let program = make_exec_program(vec![instr], vec![0], vec![], 1);
+
+    let err = slot_use_counts(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("use-count input slot 2")
+    ));
+}
+
+#[test]
+fn populate_last_use_rejects_out_of_range_output_slot() {
+    let mut program = make_exec_program(Vec::new(), vec![0], vec![2], 1);
+
+    let err = populate_last_use(&mut program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message.contains("last-use output slot 2")
+    ));
+}
+
+#[test]
 fn algebraic_layout_simplifier_removes_identity_transpose() {
     let transpose = make_exec_instr_with_meta(
         ExecOp::Transpose { perm: vec![0, 1] },
@@ -175,7 +242,7 @@ fn algebraic_layout_simplifier_removes_identity_transpose() {
     );
     let mut program = make_exec_program(vec![transpose, neg], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -205,7 +272,7 @@ fn algebraic_layout_simplifier_composes_adjacent_inverse_transposes() {
     );
     let mut program = make_exec_program(vec![transpose_a, transpose_b], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3, 4])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.output_slots, vec![0]);
@@ -232,12 +299,40 @@ fn algebraic_layout_simplifier_removes_identity_reshape() {
     );
     let mut program = make_exec_program(vec![reshape, neg], vec![0], vec![2], 3);
 
-    algebraic_layout_simplifier(&mut program);
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3])]).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
     assert!(matches!(program.instructions[0].op, ExecOp::Negate));
     assert_eq!(program.instructions[0].input_slots, vec![0]);
+}
+
+#[test]
+fn algebraic_layout_simplifier_keeps_rank_reducing_reshape() {
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: DimExpr::input_shape(0, 2),
+        },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let neg = make_exec_instr_with_meta(
+        ExecOp::Negate,
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let mut program = make_exec_program(vec![reshape, neg], vec![0], vec![2], 3);
+
+    algebraic_layout_simplifier(&mut program, &[dim_shape(&[2, 3, 1])]).unwrap();
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Reshape { .. }));
+    assert_eq!(program.instructions[1].input_slots, vec![1]);
 }
 
 #[test]
@@ -664,7 +759,7 @@ fn test_conj_sinking_preserves_transpose_folding_path_to_dot_conj() {
     )
     .unwrap();
     transpose_folding(&mut program);
-    dot_conj_folding(&mut program);
+    dot_conj_folding(&mut program).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -716,7 +811,7 @@ fn test_dot_conj_folding_absorbs_both_operands() {
     );
     let mut program = make_exec_program(vec![lhs_conj, rhs_conj, dot], vec![0, 1], vec![4], 5);
 
-    dot_conj_folding(&mut program);
+    dot_conj_folding(&mut program).unwrap();
     eliminate_dead_code(&mut program);
 
     assert_eq!(program.instructions.len(), 1);
@@ -730,6 +825,56 @@ fn test_dot_conj_folding_absorbs_both_operands() {
         }
         other => panic!("expected DotGeneralWithConj, got {other:?}"),
     }
+}
+
+#[test]
+fn dot_conj_folding_preserves_rank_reducing_reshape_operand() {
+    let lhs_conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![0],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[2, 3, 1])],
+    );
+    let reshape = make_exec_instr_with_meta(
+        ExecOp::Reshape {
+            shape: dim_shape(&[2, 3]),
+        },
+        vec![2],
+        vec![3],
+        DType::C64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr_with_meta(
+        ExecOp::DotGeneral(config),
+        vec![3, 1],
+        vec![4],
+        DType::C64,
+        vec![dim_shape(&[2, 4])],
+    );
+    let mut program = make_exec_program(vec![lhs_conj, reshape, dot], vec![0, 1], vec![4], 5);
+
+    dot_conj_folding(&mut program).unwrap();
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Reshape { .. }));
+    assert_eq!(program.instructions[0].input_slots, vec![0]);
+    assert_eq!(program.instructions[1].input_slots, vec![3, 1]);
+    assert!(matches!(
+        program.instructions[1].op,
+        ExecOp::DotGeneralWithConj {
+            lhs_conj: true,
+            rhs_conj: false,
+            ..
+        }
+    ));
 }
 
 #[test]

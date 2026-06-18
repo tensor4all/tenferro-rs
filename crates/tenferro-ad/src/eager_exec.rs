@@ -91,18 +91,20 @@ fn promote_binary<'a>(
     promote_binary_to_dtype(exec, a, b, promoted)
 }
 
-fn materialize_tensor_read(input: TensorRead<'_>) -> Tensor {
-    input.to_tensor()
+fn materialize_tensor_read(input: TensorRead<'_>) -> Result<Tensor> {
+    input.try_to_tensor().map_err(Error::from)
 }
 
-fn concrete_tensor_read(input: TensorRead<'_>) -> ConcreteTensorRead<'_> {
+fn concrete_tensor_read(input: TensorRead<'_>) -> Result<ConcreteTensorRead<'_>> {
     match input {
-        TensorRead::Tensor(tensor) => ConcreteTensorRead::Borrowed(tensor),
-        TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.to_tensor())),
+        TensorRead::Tensor(tensor) => Ok(ConcreteTensorRead::Borrowed(tensor)),
+        TensorRead::View(view) => Ok(ConcreteTensorRead::Owned(Box::new(
+            view.try_to_tensor().map_err(Error::from)?,
+        ))),
     }
 }
 
-fn concrete_tensor_reads<'a>(inputs: &[TensorRead<'a>]) -> Vec<ConcreteTensorRead<'a>> {
+fn concrete_tensor_reads<'a>(inputs: &[TensorRead<'a>]) -> Result<Vec<ConcreteTensorRead<'a>>> {
     inputs.iter().cloned().map(concrete_tensor_read).collect()
 }
 
@@ -112,9 +114,9 @@ fn concrete_promoted_read_to_dtype<'a>(
     promoted: DType,
 ) -> Result<ConcreteTensorRead<'a>> {
     if input.dtype() == promoted {
-        Ok(concrete_tensor_read(input))
+        concrete_tensor_read(input)
     } else {
-        let input = concrete_tensor_read(input);
+        let input = concrete_tensor_read(input)?;
         Ok(ConcreteTensorRead::Owned(Box::new(
             exec.convert(input.tensor(), promoted)
                 .map_err(Error::from)?,
@@ -130,7 +132,7 @@ fn promote_read_to_dtype<'a>(
     if input.dtype() == promoted {
         Ok(PromotedTensorRead::Borrowed(Box::new(input)))
     } else {
-        let input = concrete_tensor_read(input);
+        let input = concrete_tensor_read(input)?;
         Ok(PromotedTensorRead::Owned(Box::new(
             exec.convert(input.tensor(), promoted)
                 .map_err(Error::from)?,
@@ -251,6 +253,29 @@ fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp)
     })
 }
 
+fn axis_out_of_bounds(op: &'static str, axis: usize, rank: usize) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank })
+}
+
+fn invalid_config(op: &'static str, message: impl Into<String>) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        op,
+        message: message.into(),
+    })
+}
+
+fn pad_to_match_high_padding(target_size: usize, current_size: usize) -> Result<i64> {
+    let delta = target_size
+        .checked_sub(current_size)
+        .ok_or_else(|| invalid_config("PadToMatch", "target size is smaller than current size"))?;
+    i64::try_from(delta).map_err(|_| {
+        invalid_config(
+            "PadToMatch",
+            format!("padding width {delta} does not fit in i64"),
+        )
+    })
+}
+
 fn upload_generated_host_tensor<B: TensorBackend>(
     backend: &mut B,
     tensor: Tensor,
@@ -366,39 +391,39 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
         }
         StdTensorOp::Reshape { to_shape, .. } => {
-            let shape = resolve_tensor_read_shape_exprs(inputs, to_shape);
+            let shape = resolve_tensor_read_shape_exprs(inputs, to_shape)?;
             vec![exec.reshape_read(inputs[0].clone(), &shape)?]
         }
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            let shape = resolve_tensor_read_shape_exprs(inputs, shape);
+            let shape = resolve_tensor_read_shape_exprs(inputs, shape)?;
             vec![exec.broadcast_in_dim_read(inputs[0].clone(), &shape, dims)?]
         }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.extract_diagonal(input.tensor(), *axis_a, *axis_b)?]
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.embed_diagonal(input.tensor(), *axis_a, *axis_b)?]
         }
         StdTensorOp::Tril { k } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.tril(input.tensor(), *k)?]
         }
         StdTensorOp::Triu { k } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.triu(input.tensor(), *k)?]
         }
         StdTensorOp::Slice(config) => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.slice(input.tensor(), config)?]
         }
         StdTensorOp::Pad(config) => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.pad(input.tensor(), config)?]
         }
         StdTensorOp::Reverse { axes } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.reverse(input.tensor(), axes)?]
         }
         StdTensorOp::ReduceProd { axes, .. } => {
@@ -413,7 +438,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         StdTensorOp::Expm1 => vec![exec.expm1_read(inputs[0].clone())?],
         StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
         StdTensorOp::Convert { to, .. } => {
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.convert(input.tensor(), *to)?]
         }
         StdTensorOp::Constant { .. } => {
@@ -454,7 +479,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.concatenate(&refs, *axis)?]
         }
         StdTensorOp::Gather(config) => {
-            let tensors = concrete_tensor_reads(inputs);
+            let tensors = concrete_tensor_reads(inputs)?;
             vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), config)?]
         }
         StdTensorOp::GatherDynamicSliceSizes {
@@ -464,7 +489,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             index_vector_dim,
             slice_sizes,
         } => {
-            let slice_sizes = resolve_tensor_read_shape_exprs(inputs, slice_sizes);
+            let slice_sizes = resolve_tensor_read_shape_exprs(inputs, slice_sizes)?;
             let config = tenferro_tensor::GatherConfig {
                 offset_dims: offset_dims.clone(),
                 collapsed_slice_dims: collapsed_slice_dims.clone(),
@@ -472,7 +497,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 index_vector_dim: *index_vector_dim,
                 slice_sizes,
             };
-            let tensors = concrete_tensor_reads(inputs);
+            let tensors = concrete_tensor_reads(inputs)?;
             vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
         }
         StdTensorOp::Scatter(config) => {
@@ -480,11 +505,11 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[2].dtype());
             let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
             let updates = concrete_promoted_read_to_dtype(exec, inputs[2].clone(), operand_dtype)?;
-            let indices = concrete_tensor_read(inputs[1].clone());
+            let indices = concrete_tensor_read(inputs[1].clone())?;
             vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
         }
         StdTensorOp::DynamicSlice { slice_sizes } => {
-            let tensors = concrete_tensor_reads(inputs);
+            let tensors = concrete_tensor_reads(inputs)?;
             vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
         }
         StdTensorOp::DynamicUpdateSlice => {
@@ -492,7 +517,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[1].dtype());
             let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
             let update = concrete_promoted_read_to_dtype(exec, inputs[1].clone(), operand_dtype)?;
-            let starts = concrete_tensor_read(inputs[2].clone());
+            let starts = concrete_tensor_read(inputs[2].clone())?;
             vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), starts.tensor())?]
         }
         StdTensorOp::ShapeOf { .. } => {
@@ -504,13 +529,13 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         StdTensorOp::DynamicTruncate { axis } => {
             let input = &inputs[0];
             if *axis >= input.shape().len() {
-                return Err(Error::Internal(format!(
-                    "DynamicTruncate: axis {} out of bounds for rank {}",
-                    axis,
-                    input.shape().len()
-                )));
+                return Err(axis_out_of_bounds(
+                    "DynamicTruncate",
+                    *axis,
+                    input.shape().len(),
+                ));
             }
-            let size_tensor = concrete_tensor_read(inputs[1].clone());
+            let size_tensor = concrete_tensor_read(inputs[1].clone())?;
             let axis_extent = input.shape()[*axis];
             let size = dynamic_truncate_size(size_tensor.tensor(), axis_extent)?;
             let rank = input.shape().len();
@@ -521,33 +546,36 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 limits,
                 strides: vec![1; rank],
             };
-            let input = concrete_tensor_read(inputs[0].clone());
+            let input = concrete_tensor_read(inputs[0].clone())?;
             vec![exec.slice(input.tensor(), &config)?]
         }
         StdTensorOp::PadToMatch { axis } => {
             let input = &inputs[0];
             let reference = &inputs[1];
             if *axis >= input.shape().len() {
-                return Err(Error::Internal(format!(
-                    "PadToMatch: axis {} out of bounds for rank {}",
-                    axis,
-                    input.shape().len()
-                )));
+                return Err(axis_out_of_bounds("PadToMatch", *axis, input.shape().len()));
+            }
+            if *axis >= reference.shape().len() {
+                return Err(axis_out_of_bounds(
+                    "PadToMatch",
+                    *axis,
+                    reference.shape().len(),
+                ));
             }
             let target_size = reference.shape()[*axis];
             let current_size = input.shape()[*axis];
             if current_size >= target_size {
-                vec![materialize_tensor_read(inputs[0].clone())]
+                vec![materialize_tensor_read(inputs[0].clone())?]
             } else {
                 let rank = input.shape().len();
                 let mut high = vec![0i64; rank];
-                high[*axis] = (target_size - current_size) as i64;
+                high[*axis] = pad_to_match_high_padding(target_size, current_size)?;
                 let config = PadConfig {
                     edge_padding_low: vec![0i64; rank],
                     edge_padding_high: high,
                     interior_padding: vec![0i64; rank],
                 };
-                let input = concrete_tensor_read(inputs[0].clone());
+                let input = concrete_tensor_read(inputs[0].clone())?;
                 vec![exec.pad(input.tensor(), &config)?]
             }
         }
@@ -615,11 +643,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 vec![exec.dot_general(a.tensor(), b.tensor(), config)?]
             }
             StdTensorOp::Reshape { to_shape, .. } => {
-                let shape = resolve_tensor_shape_exprs(inputs, to_shape);
+                let shape = resolve_tensor_shape_exprs(inputs, to_shape)?;
                 vec![exec.reshape(inputs[0], &shape)?]
             }
             StdTensorOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_tensor_shape_exprs(inputs, shape);
+                let shape = resolve_tensor_shape_exprs(inputs, shape)?;
                 vec![exec.broadcast_in_dim(inputs[0], &shape, dims)?]
             }
             StdTensorOp::ExtractDiag { axis_a, axis_b } => {
@@ -675,7 +703,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 index_vector_dim,
                 slice_sizes,
             } => {
-                let slice_sizes = resolve_tensor_shape_exprs(inputs, slice_sizes);
+                let slice_sizes = resolve_tensor_shape_exprs(inputs, slice_sizes)?;
                 let config = tenferro_tensor::GatherConfig {
                     offset_dims: offset_dims.clone(),
                     collapsed_slice_dims: collapsed_slice_dims.clone(),
@@ -700,11 +728,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::DynamicTruncate { axis } => {
                 let input = inputs[0];
                 if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "DynamicTruncate: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
+                    return Err(axis_out_of_bounds(
+                        "DynamicTruncate",
+                        *axis,
+                        input.shape().len(),
+                    ));
                 }
                 let size_tensor = inputs[1];
                 let axis_extent = input.shape()[*axis];
@@ -723,11 +751,14 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let input = inputs[0];
                 let reference = inputs[1];
                 if *axis >= input.shape().len() {
-                    return Err(Error::Internal(format!(
-                        "PadToMatch: axis {} out of bounds for rank {}",
-                        axis,
-                        input.shape().len()
-                    )));
+                    return Err(axis_out_of_bounds("PadToMatch", *axis, input.shape().len()));
+                }
+                if *axis >= reference.shape().len() {
+                    return Err(axis_out_of_bounds(
+                        "PadToMatch",
+                        *axis,
+                        reference.shape().len(),
+                    ));
                 }
                 let target_size = reference.shape()[*axis];
                 let current_size = input.shape()[*axis];
@@ -736,7 +767,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 } else {
                     let rank = input.shape().len();
                     let mut high = vec![0i64; rank];
-                    high[*axis] = (target_size - current_size) as i64;
+                    high[*axis] = pad_to_match_high_padding(target_size, current_size)?;
                     let config = PadConfig {
                         edge_padding_low: vec![0i64; rank],
                         edge_padding_high: high,
@@ -753,14 +784,27 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
     })
 }
 
-fn resolve_tensor_shape_exprs(inputs: &[&Tensor], exprs: &[DimExpr]) -> Vec<usize> {
+fn resolve_tensor_shape_exprs(inputs: &[&Tensor], exprs: &[DimExpr]) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::eval_all(exprs, &input_shapes)
+    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| {
+        invalid_config(
+            "eager shape expression",
+            format!("failed to resolve eager shape expression: {err}"),
+        )
+    })
 }
 
-fn resolve_tensor_read_shape_exprs(inputs: &[TensorRead<'_>], exprs: &[DimExpr]) -> Vec<usize> {
+fn resolve_tensor_read_shape_exprs(
+    inputs: &[TensorRead<'_>],
+    exprs: &[DimExpr],
+) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::eval_all(exprs, &input_shapes)
+    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| {
+        invalid_config(
+            "eager shape expression",
+            format!("failed to resolve eager shape expression: {err}"),
+        )
+    })
 }
 
 fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {

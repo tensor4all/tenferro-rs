@@ -170,6 +170,8 @@ impl CutensorVtable {
 }
 
 unsafe fn load_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
+    // SAFETY: `name` is a NUL-terminated cuTENSOR symbol and the requested
+    // type `T` is the exact FFI function-pointer type declared in this module.
     let symbol = lib.get::<T>(name).map_err(|err| {
         crate::Error::backend_failure(
             OP,
@@ -183,6 +185,8 @@ unsafe fn load_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
 }
 
 unsafe fn load_data_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
+    // SAFETY: cuTENSOR compute descriptors are exported as static data symbols
+    // whose value is a process-lifetime pointer-like descriptor.
     let symbol = lib.get::<*const T>(name).map_err(|err| {
         crate::Error::backend_failure(
             OP,
@@ -200,7 +204,12 @@ struct CutensorLibrary {
     vtable: CutensorVtable,
 }
 
+// SAFETY: `CutensorLibrary` keeps the dynamic library alive for the copied
+// process-wide function/data symbols, and cuTENSOR entry points are documented
+// as thread-safe when each call receives its explicit handle/descriptor state.
 unsafe impl Send for CutensorLibrary {}
+// SAFETY: See the `Send` rationale; shared references only expose immutable
+// vtable/data-symbol access and call into cuTENSOR with explicit raw handles.
 unsafe impl Sync for CutensorLibrary {}
 
 impl CutensorLibrary {
@@ -230,10 +239,14 @@ impl CutensorLibrary {
     }
 
     fn status_message(&self, status: CutensorStatus) -> String {
+        // SAFETY: `cutensorGetErrorString` returns either null or a stable
+        // NUL-terminated string owned by the loaded cuTENSOR library.
         let ptr = unsafe { (self.vtable.get_error_string)(status) };
         if ptr.is_null() {
             return format!("status code {status}");
         }
+        // SAFETY: Null was checked above and cuTENSOR owns a valid
+        // NUL-terminated status string for the library lifetime.
         unsafe { CStr::from_ptr(ptr) }
             .to_string_lossy()
             .into_owned()
@@ -263,6 +276,8 @@ pub(crate) struct CutensorHandle {
     raw: CutensorHandleRaw,
 }
 
+// SAFETY: The handle is an opaque cuTENSOR handle used through FFI calls that
+// take `&self`; higher-level backend access serializes mutable use.
 unsafe impl Send for CutensorHandle {}
 
 impl CutensorHandle {

@@ -208,6 +208,24 @@ fn extension_executor_rejects_runtime_output_count_mismatch() {
 }
 
 #[test]
+fn extension_executor_rejects_input_count_mismatch_before_runtime_call() {
+    let family = "runtime.input-count.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(IdentityRuntime { family }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+    let mut backend = CpuBackend::new();
+
+    let err = executor
+        .execute(&mut backend, &IdentityRuntimeOp { family }, &[])
+        .expect_err("input count mismatch should error before runtime call");
+
+    let message = err.to_string();
+    assert!(message.contains("expects 1 inputs, got 0"), "{message}");
+}
+
+#[test]
 fn extension_executor_rejects_read_runtime_output_count_mismatch() {
     let family = "runtime.read-output-count.v1";
     let mut registry = ExtensionRegistry::<CpuBackend>::new();
@@ -233,6 +251,24 @@ fn extension_executor_rejects_read_runtime_output_count_mismatch() {
     );
     assert!(message.contains("returned 2 outputs"), "{message}");
     assert!(message.contains("declared 1 outputs"), "{message}");
+}
+
+#[test]
+fn extension_executor_rejects_read_input_count_mismatch_before_runtime_call() {
+    let family = "runtime.read-input-count.v1";
+    let mut registry = ExtensionRegistry::<CpuBackend>::new();
+    registry
+        .register(Arc::new(IdentityRuntime { family }))
+        .expect("runtime registration");
+    let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
+    let mut backend = CpuBackend::new();
+
+    let err = executor
+        .execute_reads(&mut backend, &IdentityRuntimeOp { family }, &[])
+        .expect_err("read input count mismatch should error before runtime call");
+
+    let message = err.to_string();
+    assert!(message.contains("expects 1 inputs, got 0"), "{message}");
 }
 
 #[test]

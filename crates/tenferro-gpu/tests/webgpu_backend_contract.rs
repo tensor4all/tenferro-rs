@@ -24,3 +24,20 @@ fn webgpu_transfer_helpers_are_provider_specific() {
     let _upload: fn(&WebGpuRuntime, &Tensor) -> Result<Tensor> = upload_webgpu_tensor;
     let _download: fn(&WebGpuRuntime, &Tensor) -> Result<Tensor> = download_webgpu_tensor;
 }
+
+#[test]
+fn webgpu_download_checks_runtime_residency_before_reading_backend_handle() {
+    let source = include_str!("../src/webgpu/memory.rs");
+
+    let residency_check = source
+        .find("ensure_resident_on_runtime(rt, typed, \"webgpu_download\")?;")
+        .expect("download helpers must validate runtime residency");
+    let backend_read = source
+        .find(".read_one(handle)")
+        .expect("download helpers should read through the WebGPU client");
+
+    assert!(
+        residency_check < backend_read,
+        "WebGPU download must reject non-resident buffers before reading from a runtime handle"
+    );
+}

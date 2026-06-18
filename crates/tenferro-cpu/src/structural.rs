@@ -397,6 +397,7 @@ where
     let permuted = src
         .permute(perm)
         .map_err(|err| crate::Error::backend_failure("transpose", err))?;
+    checked_shape_product("transpose", "output shape", permuted.dims())?;
     // SAFETY: copy_into overwrites every output element.
     let out = make_out(permuted.dims());
     copy_view_to_array("transpose", out, &permuted)
@@ -455,6 +456,7 @@ pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync>(
     dims: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
+        // SAFETY: broadcast materialization writes every output element before returning.
         typed_array_uninit(shape)
     })
 }
@@ -520,6 +522,7 @@ where
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
         .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
+    checked_shape_product("broadcast_in_dim", "output shape", shape)?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = make_out(shape);
     copy_into(&mut out.view_mut(), &broadcast)

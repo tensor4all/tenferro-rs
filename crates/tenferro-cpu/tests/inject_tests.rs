@@ -78,12 +78,12 @@ unsafe extern "C" fn test_dgemm(
                 let av = match transa {
                     'N' | 'n' => unsafe { *a.add(i + p * lda) },
                     'T' | 't' | 'C' | 'c' => unsafe { *a.add(p + i * lda) },
-                    _ => panic!("unexpected transa flag {transa}"),
+                    _ => return,
                 };
                 let bv = match transb {
                     'N' | 'n' => unsafe { *b.add(p + j * ldb) },
                     'T' | 't' | 'C' | 'c' => unsafe { *b.add(j + p * ldb) },
-                    _ => panic!("unexpected transb flag {transb}"),
+                    _ => return,
                 };
                 sum += av * bv;
             }

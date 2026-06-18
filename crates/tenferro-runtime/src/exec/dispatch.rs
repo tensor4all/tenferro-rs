@@ -404,7 +404,7 @@ fn execute_constant_host<B: TensorBackend>(
     let ExecOp::Constant { dtype, bytes } = &inst.op else {
         return Err(host_dispatch_mismatch(HostDispatchKey::Constant, &inst.op));
     };
-    let host = constant_tensor(*dtype, bytes);
+    let host = constant_tensor(*dtype, bytes)?;
     slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.upload_host_tensor(&host)?));
     Ok(())
 }

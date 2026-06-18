@@ -501,6 +501,8 @@ pub(super) fn matmul_linear(
 }
 
 pub(super) fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
+    // Private invariant: AD rule entries validate matrix rank before reaching
+    // graph helpers, so this assert catches internal rule bugs only.
     assert!(rank >= 2, "matrix_multiply_config expects rank >= 2");
     let batch_dims: Vec<usize> = (2..rank).collect();
     DotGeneralConfig {
@@ -512,6 +514,8 @@ pub(super) fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
 }
 
 pub(super) fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
+    // Private invariant: AD rule entries validate matrix rank before reaching
+    // graph helpers, so this assert catches internal rule bugs only.
     assert!(rank >= 2, "matrix_transpose_perm expects rank >= 2");
     let mut perm: Vec<usize> = (0..rank).collect();
     perm.swap(0, 1);
@@ -522,6 +526,8 @@ pub(super) fn matrix_shape_parts<'a>(
     shape: &'a [DimExpr],
     op: &str,
 ) -> (&'a DimExpr, &'a DimExpr, &'a [DimExpr]) {
+    // Private invariant: callers use `primal_matrix_input_shape` before
+    // destructuring matrix shapes from metadata.
     assert!(shape.len() >= 2, "{op}: expected rank >= 2");
     (&shape[0], &shape[1], &shape[2..])
 }

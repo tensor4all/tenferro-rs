@@ -54,7 +54,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOpTrait};
+use tenferro_runtime::extension::{try_apply, ExtensionExecutionContext, ExtensionOpTrait};
 use tenferro_runtime::{Error, Result, TracedTensor};
 use tenferro_tensor::{
     DType, DeviceKind, MemoryKind, Placement, Tensor, TensorBackend, TypedTensor,
@@ -213,67 +213,51 @@ impl ExtensionOpTrait for FftOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(
-            input_dtypes.len(),
-            1,
-            "tenferro-fft expects exactly one input"
-        );
-        assert_eq!(
-            input_shapes.len(),
-            1,
-            "tenferro-fft expects exactly one input shape"
-        );
-        assert!(
-            self.axis < input_shapes[0].len(),
-            "tenferro-fft axis {} out of bounds for rank {}",
-            self.axis,
-            input_shapes[0].len()
-        );
+        // Public FFT constructors validate dtype/axis/n before building this
+        // op. The extension trait is non-fallible, so direct invalid trait
+        // calls return an output-count mismatch sentinel instead of panicking.
+        let [input_dtype] = input_dtypes else {
+            return Vec::new();
+        };
+        let [input_shape] = input_shapes else {
+            return Vec::new();
+        };
+        if self.axis >= input_shape.len() {
+            return Vec::new();
+        }
 
-        let mut out_shape = input_shapes[0].to_vec();
+        let mut out_shape = input_shape.to_vec();
         let output_dtype = match self.kind {
             FftKind::C2C { .. } => {
-                assert!(
-                    matches!(input_dtypes[0], DType::C32 | DType::C64),
-                    "fft/ifft expect C32 or C64 input for complex-to-complex transforms; got {:?}",
-                    input_dtypes[0]
-                );
-                input_dtypes[0]
+                if !matches!(input_dtype, DType::C32 | DType::C64) {
+                    return Vec::new();
+                }
+                *input_dtype
             }
             FftKind::R2C { onesided } => {
-                assert!(
-                    matches!(input_dtypes[0], DType::F32 | DType::F64),
-                    "rfft expects F32 or F64 input; got {:?}",
-                    input_dtypes[0]
-                );
-                let len = transform_len_dim(self.n, &input_shapes[0][self.axis]);
+                let len = transform_len_dim(self.n, &input_shape[self.axis]);
                 out_shape[self.axis] = if onesided { len / 2usize + 1usize } else { len };
-                match input_dtypes[0] {
+                match input_dtype {
                     DType::F32 => DType::C32,
                     DType::F64 => DType::C64,
-                    _ => unreachable!(),
+                    _ => return Vec::new(),
                 }
             }
             FftKind::C2R => {
-                assert!(
-                    matches!(input_dtypes[0], DType::C32 | DType::C64),
-                    "irfft expects C32 or C64 input; got {:?}",
-                    input_dtypes[0]
-                );
                 out_shape[self.axis] = match self.n {
                     Some(n) => SymDim::from(n),
-                    None => (input_shapes[0][self.axis].clone() - 1usize) * 2usize,
+                    None => (input_shape[self.axis].clone() - 1usize) * 2usize,
                 };
-                match input_dtypes[0] {
+                match input_dtype {
                     DType::C32 => DType::F32,
                     DType::C64 => DType::F64,
-                    _ => unreachable!(),
+                    _ => return Vec::new(),
                 }
             }
         };
 
         if matches!(self.kind, FftKind::C2C { .. }) {
-            out_shape[self.axis] = transform_len_dim(self.n, &input_shapes[0][self.axis]);
+            out_shape[self.axis] = transform_len_dim(self.n, &input_shape[self.axis]);
         }
 
         vec![(output_dtype, out_shape)]
@@ -658,7 +642,7 @@ fn apply_unary_fft(
     validate_n(op_name, n)?;
     let axis = normalize_axis(op_name, axis, input.rank)?;
     let op = Arc::new(FftOp::new(kind, axis, n, norm));
-    let mut outputs = apply(op, &[input]);
+    let mut outputs = try_apply(op, &[input])?;
     outputs
         .pop()
         .ok_or_else(|| Error::Internal("FFT extension declares exactly one output".into()))
@@ -843,7 +827,7 @@ where
     } else {
         planner.plan_fft_inverse(fft_len)
     };
-    let scale: T = scale_for(norm, forward, fft_len);
+    let scale: T = scale_for(norm, forward, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
@@ -886,7 +870,7 @@ where
     let mut output = uninit_output_vec(out_shape.iter().product());
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_forward(fft_len);
-    let scale: T = scale_for(norm, true, fft_len);
+    let scale: T = scale_for(norm, true, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
@@ -928,7 +912,7 @@ where
     let mut output = uninit_output_vec(out_shape.iter().product());
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_inverse(out_axis_len);
-    let scale: T = scale_for(norm, false, out_axis_len);
+    let scale: T = scale_for(norm, false, out_axis_len)?;
     let mut lane = vec![Complex::zero(); out_axis_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
@@ -954,16 +938,19 @@ where
     Ok(unsafe { assume_init_output_vec(output) })
 }
 
-fn scale_for<T>(norm: FftNorm, forward: bool, n: usize) -> T
+fn scale_for<T>(norm: FftNorm, forward: bool, n: usize) -> tenferro_tensor::Result<T>
 where
     T: Float + FromPrimitive,
 {
-    let len = T::from_usize(n).expect("FFT length must convert to scalar");
-    match (norm, forward) {
+    let len = T::from_usize(n).ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+        op: "tenferro_fft::scale_for",
+        message: format!("FFT length {n} cannot be represented as scalar"),
+    })?;
+    Ok(match (norm, forward) {
         (FftNorm::Backward, true) | (FftNorm::Forward, false) => T::one(),
         (FftNorm::Backward, false) | (FftNorm::Forward, true) => T::one() / len,
         (FftNorm::Ortho, _) => T::one() / len.sqrt(),
-    }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1007,5 +994,25 @@ fn for_axis_lane(
                 in_axis_len,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fft_infer_output_meta_rejects_invalid_trait_inputs_without_panicking() {
+        let op = FftOp::new(FftKind::R2C { onesided: true }, 0, None, FftNorm::Backward);
+        let shape = [SymDim::from(4usize)];
+
+        assert!(op.infer_output_meta(&[], &[&shape]).is_empty());
+        assert!(op.infer_output_meta(&[DType::F64], &[]).is_empty());
+        assert!(op.infer_output_meta(&[DType::I64], &[&shape]).is_empty());
+
+        let bad_axis = FftOp::new(FftKind::C2C { forward: true }, 2, None, FftNorm::Backward);
+        assert!(bad_axis
+            .infer_output_meta(&[DType::C64], &[&shape])
+            .is_empty());
     }
 }

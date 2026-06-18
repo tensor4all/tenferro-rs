@@ -304,7 +304,7 @@ implications can be reviewed first.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy and
 the supported AI-assisted issue-intake and collaborator bug-fix PR workflows
-across Codex CLI, Claude Code, and OpenCode.
+across Codex CLI, Claude Code, OpenCode, and Kimi CLI.
 
 See [GOVERNANCE.md](GOVERNANCE.md) for maintainer roles, merge authority, and
 the project-direction decision model. Maintainers are listed in

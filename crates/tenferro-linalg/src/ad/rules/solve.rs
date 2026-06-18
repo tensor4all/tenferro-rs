@@ -71,14 +71,9 @@ pub(crate) fn linearize_triangular_solve(
     let rhs_rank = ctx
         .shape_of(&ValueRef::External(primal_in[1].clone()))
         .len();
-    assert!(
-        lhs_rank >= 2 && rhs_rank >= 2,
-        "linearize_triangular_solve: expected matrix operands"
-    );
-    assert_eq!(
-        lhs_rank, rhs_rank,
-        "linearize_triangular_solve: rank mismatch between lhs and rhs"
-    );
+    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
+        return vec![None];
+    }
     let rank = lhs_rank;
     let rhs_tangent = triangular_solve_rhs_tangent(builder, primal_out, tangent_in, flags, rank);
     let Some(rhs_tangent) = rhs_tangent else {
@@ -109,12 +104,6 @@ fn linear_solve_op(kind: LinearSolveOp, transpose_a: bool) -> StdTensorOp {
     }
 }
 
-fn linear_solve_op_name(kind: LinearSolveOp) -> &'static str {
-    match kind {
-        LinearSolveOp::FullPivLuSolve => "linearize_full_piv_lu_solve",
-    }
-}
-
 fn linearize_linear_solve(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
@@ -130,15 +119,9 @@ fn linearize_linear_solve(
     let rhs_rank = ctx
         .shape_of(&ValueRef::External(primal_in[1].clone()))
         .len();
-    let op_name = linear_solve_op_name(kind);
-    assert!(
-        lhs_rank >= 2 && rhs_rank >= 2,
-        "{op_name}: expected matrix operands"
-    );
-    assert_eq!(
-        lhs_rank, rhs_rank,
-        "{op_name}: rank mismatch between lhs and rhs"
-    );
+    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
+        return vec![None];
+    }
     let rank = lhs_rank;
     let mut rhs_tangent = tangent_in[1];
 
@@ -190,14 +173,9 @@ pub(crate) fn linearize_lu_solve_prepared(
     let rhs_rank = ctx
         .shape_of(&ValueRef::External(primal_in[3].clone()))
         .len();
-    assert!(
-        lhs_rank >= 2 && rhs_rank >= 2,
-        "linearize_lu_solve_prepared: expected matrix operands"
-    );
-    assert_eq!(
-        lhs_rank, rhs_rank,
-        "linearize_lu_solve_prepared: rank mismatch between lhs and rhs"
-    );
+    if lhs_rank < 2 || rhs_rank < 2 || lhs_rank != rhs_rank {
+        return vec![None];
+    }
     let rank = lhs_rank;
     let mut rhs_tangent = tangent_in[3];
 

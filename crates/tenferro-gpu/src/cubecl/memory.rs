@@ -6,6 +6,7 @@ use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 
+use super::dispatch;
 use crate::cubecl::runtime::CubeclRuntime;
 use crate::types::{
     Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
@@ -50,15 +51,15 @@ pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tenso
 /// let _download: fn(&CubeclRuntime, &Tensor) -> Result<Tensor> = download_tensor;
 /// ```
 pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
-    let client = rt.client();
+    ensure_tensor_resident_on_runtime(rt, tensor, "download")?;
     match tensor {
-        Tensor::F64(t) => download_typed::<f64>(client, t).map(Tensor::F64),
-        Tensor::F32(t) => download_typed::<f32>(client, t).map(Tensor::F32),
-        Tensor::I32(t) => download_typed::<i32>(client, t).map(Tensor::I32),
-        Tensor::I64(t) => download_typed::<i64>(client, t).map(Tensor::I64),
-        Tensor::Bool(t) => download_bool(client, t).map(Tensor::Bool),
-        Tensor::C64(t) => download_typed::<Complex64>(client, t).map(Tensor::C64),
-        Tensor::C32(t) => download_typed::<Complex32>(client, t).map(Tensor::C32),
+        Tensor::F64(t) => download_typed::<f64>(rt, t).map(Tensor::F64),
+        Tensor::F32(t) => download_typed::<f32>(rt, t).map(Tensor::F32),
+        Tensor::I32(t) => download_typed::<i32>(rt, t).map(Tensor::I32),
+        Tensor::I64(t) => download_typed::<i64>(rt, t).map(Tensor::I64),
+        Tensor::Bool(t) => download_bool(rt, t).map(Tensor::Bool),
+        Tensor::C64(t) => download_typed::<Complex64>(rt, t).map(Tensor::C64),
+        Tensor::C32(t) => download_typed::<Complex32>(rt, t).map(Tensor::C32),
     }
 }
 
@@ -73,6 +74,7 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
 /// let _device_ptr: fn(&CubeclRuntime, &Tensor) -> Result<u64> = device_ptr;
 /// ```
 pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {
+    ensure_tensor_resident_on_runtime(rt, tensor, "device_ptr")?;
     let handle = cubecl_handle(tensor)?;
     let resource = rt
         .client()
@@ -114,7 +116,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
 }
 
 fn download_typed<T: CubeElement + Clone + 'static>(
-    client: &ComputeClient<CudaRuntime>,
+    rt: &CubeclRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let handle = match typed.buffer() {
@@ -134,7 +136,9 @@ fn download_typed<T: CubeElement + Clone + 'static>(
         ));
     }
 
-    let bytes = client
+    rt.synchronize()?;
+    let bytes = rt
+        .client()
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = T::from_bytes(&bytes).to_vec();
@@ -178,7 +182,7 @@ fn upload_bool(
 }
 
 fn download_bool(
-    client: &ComputeClient<CudaRuntime>,
+    rt: &CubeclRuntime,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let handle = match typed.buffer() {
@@ -198,7 +202,9 @@ fn download_bool(
         ));
     }
 
-    let bytes = client
+    rt.synchronize()?;
+    let bytes = rt
+        .client()
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = bytes.iter().map(|&byte| byte != 0).collect();
@@ -206,6 +212,22 @@ fn download_bool(
         typed.shape().to_vec(),
         data,
     ))
+}
+
+fn ensure_tensor_resident_on_runtime(
+    rt: &CubeclRuntime,
+    tensor: &Tensor,
+    op: &'static str,
+) -> crate::Result<()> {
+    match tensor {
+        Tensor::F64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::F32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::I32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::I64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::Bool(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::C64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+        Tensor::C32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
+    }
 }
 
 fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl_runtime::server::Handle> {

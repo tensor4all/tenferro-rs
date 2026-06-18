@@ -22,8 +22,17 @@ pub(crate) struct StrictBinaryLoweringPlan {
     pub(crate) k: usize,
 }
 
-fn product(dims: &[usize]) -> usize {
-    dims.iter().product::<usize>().max(1)
+fn product(dims: &[usize], label: &'static str) -> crate::Result<usize> {
+    if dims.is_empty() {
+        return Ok(1);
+    }
+    dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "dimension product overflow while fusing {label} dimensions {dims:?}"
+            ))
+        })
+    })
 }
 
 fn positions_if_unique(labels: &[u32]) -> Option<HashMap<u32, usize>> {
@@ -132,9 +141,9 @@ fn compile_strict_binary_lowering_plan_from_parts(
         return Ok(None);
     }
 
-    let m = product(&lhs_free_dims);
-    let k = product(&contract_dims);
-    let n = product(&rhs_free_dims);
+    let m = product(&lhs_free_dims, "left-free")?;
+    let k = product(&contract_dims, "contracted")?;
+    let n = product(&rhs_free_dims, "right-free")?;
 
     let lhs_matrix_dims = vec![m, k];
     let rhs_matrix_dims = vec![k, n];

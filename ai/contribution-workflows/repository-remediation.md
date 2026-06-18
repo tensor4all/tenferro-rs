@@ -94,6 +94,12 @@ item stale and remove it from the active fix queue. If a small docs-only
 follow-up remains, rewrite the finding to that concrete docs path instead of
 preserving the broader historical issue text.
 
+If the finding is a false positive because an intentional invariant is not
+obvious, do not silently skip it. Record the reason in the issue, PR body, or
+classification ledger, and add a narrow source comment, rustdoc note, or
+source-contract test when that would prevent future humans or agents from
+misidentifying the same code as a bug.
+
 ### Design Gate
 
 Do not implement directly when a finding requires any of the following:
@@ -173,6 +179,9 @@ must tell the user:
 
 - the concrete rule text or summary;
 - why it would help future automated fixes;
+- which existing rule section it overlaps with, and whether the update should
+  merge, tighten, relocate, or replace an existing rule instead of adding a new
+  standalone rule;
 - whether it changes agent authority or only clarifies existing behavior;
 - any tradeoff or risk.
 
@@ -189,6 +198,9 @@ session, the agent may apply rule improvements that make future automatic
 resolution safer or more precise. Such updates must stay within the user's
 approved objective, must not silently expand project policy, and must be
 committed as their own coherent review unit or clearly separated in the PR.
+Before adding a new audit or repository rule, inventory nearby existing rules
+and merge overlapping guidance when possible. Prefer one sharper general rule
+over multiple narrow bullets that future agents must reconcile.
 
 ## Category-Specific Fix Rules
 

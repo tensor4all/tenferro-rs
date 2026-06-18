@@ -122,6 +122,16 @@ rules from `tensor4all-agent-rules`.
   appropriate document under `docs/design/` in the same PR. Use work logs for
   session-level rationale and design docs for decisions future implementation
   and review should continue to follow.
+- When a bug report or audit finding is a false positive because of an
+  intentional invariant, record the evidence in the issue or PR ledger and add
+  a nearby source comment, rustdoc note, or source-contract test when that
+  invariant is not obvious from the code. Do not just skip the finding; leave
+  enough context that later humans and AI agents do not rediscover the same
+  non-bug as suspicious.
+- Before adding a new audit or repository rule, inventory nearby existing rules
+  and merge, tighten, or relocate overlapping guidance when possible. Prefer
+  one sharper general rule over many narrow bullets that future agents must
+  reconcile.
 
 ## External Contribution Intake
 

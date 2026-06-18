@@ -65,6 +65,14 @@ fn primal_input_shape(
     }
 }
 
+fn primal_matrix_input_shape(
+    ctx: &mut ShapeGuardContext,
+    primal_in: &[ValueKey<StdTensorOp>],
+) -> Option<Vec<DimExpr>> {
+    let input_shape = primal_input_shape(ctx, primal_in);
+    (input_shape.len() >= 2).then_some(input_shape)
+}
+
 fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
     StdTensorOp::Extension(Arc::new(LinalgExtensionOp::new(op)))
 }
@@ -80,7 +88,9 @@ pub(crate) fn linearize_lu(
         return vec![None, None, None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None, None, None];
+    };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
@@ -186,14 +196,15 @@ pub(crate) fn linearize_full_piv_lu(
         return vec![None, None, None, None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None, None, None, None];
+    };
     let input_shape = input_shape.as_slice();
     let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
     let (rows_size, cols_size) = resolve_and_guard(rows, cols, ctx);
-    assert_eq!(
-        rows_size, cols_size,
-        "linearize_full_piv_lu: expected square matrix"
-    );
+    if rows_size != cols_size {
+        return vec![None, None, None, None, None];
+    }
 
     let rank = input_shape.len();
     let p = ValueRef::External(primal_out[0].clone());
@@ -267,7 +278,9 @@ pub(crate) fn linearize_eig(
         return vec![None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None];
+    };
     let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
     let v = ValueRef::External(primal_out[1].clone());
@@ -313,7 +326,9 @@ pub(crate) fn linearize_eig_values(
         return vec![None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None];
+    };
     let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
     let eig_outputs = builder.add_operation(
@@ -365,7 +380,9 @@ pub(crate) fn linearize_svd(
         return vec![None, None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None, None];
+    };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
@@ -537,7 +554,9 @@ pub(crate) fn linearize_svd_values(
         return vec![None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None];
+    };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
@@ -579,7 +598,9 @@ pub(crate) fn linearize_eigh(
         return vec![None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None];
+    };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
@@ -649,7 +670,9 @@ pub(crate) fn linearize_eigh_values(
         return vec![None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None];
+    };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
@@ -690,7 +713,9 @@ pub(crate) fn linearize_cholesky(
         return vec![None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None];
+    };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
@@ -756,7 +781,9 @@ pub(crate) fn linearize_qr(
         return vec![None, None];
     };
 
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+        return vec![None, None];
+    };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);

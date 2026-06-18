@@ -37,8 +37,9 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
-    einsum_subscripts_retained_bytes, EINSUM_EXTENSION_FAMILY_ID,
-    EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE, EINSUM_RUNTIME_PLANS_CACHE,
+    einsum_subscripts_retained_bytes, saturating_sum, vec_of_vec_retained_bytes,
+    vec_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE,
+    EINSUM_RUNTIME_PLANS_CACHE,
 };
 #[cfg(test)]
 use crate::optimize::default_auto_options;
@@ -209,37 +210,25 @@ impl ExtensionOp for EinsumExtensionOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(
-            input_shapes.len(),
-            self.subscripts.inputs.len(),
-            "einsum extension subscripts expect {} inputs, got {}",
-            self.subscripts.inputs.len(),
-            input_shapes.len()
-        );
-        assert_eq!(
-            input_dtypes.len(),
-            input_shapes.len(),
-            "einsum extension expects dtype and shape arity to match"
-        );
+        if input_shapes.len() != self.subscripts.inputs.len()
+            || input_dtypes.len() != input_shapes.len()
+        {
+            return Vec::new();
+        }
 
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
         for (labels, shape) in self.subscripts.inputs.iter().zip(input_shapes.iter()) {
-            assert_eq!(
-                labels.len(),
-                shape.len(),
-                "einsum extension input rank mismatch: labels={}, shape={}",
-                labels.len(),
-                shape.len()
-            );
+            if labels.len() != shape.len() {
+                return Vec::new();
+            }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
                 if let Some(existing) = label_dims.get(&label) {
                     if let (Some(lhs), Some(rhs)) =
                         (existing.constant_value(), dim.constant_value())
                     {
-                        assert_eq!(
-                            lhs, rhs,
-                            "einsum extension label {label} has inconsistent concrete sizes {lhs} vs {rhs}"
-                        );
+                        if lhs != rhs {
+                            return Vec::new();
+                        }
                     }
                 } else {
                     label_dims.insert(label, dim.clone());
@@ -253,13 +242,13 @@ impl ExtensionOp for EinsumExtensionOp {
                 .subscripts
                 .output
                 .iter()
-                .map(|label| {
-                    label_dims.get(label).cloned().unwrap_or_else(|| {
-                        panic!("unknown size for label {label} in einsum extension output")
-                    })
-                })
-                .collect(),
+                .map(|label| label_dims.get(label).cloned())
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default(),
         };
+        if output_shape.len() != self.subscripts.output.len() {
+            return Vec::new();
+        }
         vec![(promote_dtypes(input_dtypes.iter().copied()), output_shape)]
     }
 
@@ -463,14 +452,18 @@ impl ExtensionAdRule for EinsumAdRule {
             );
             let mut cotangent = out[0];
             if vjp_output_labels != input_labels[active_idx] {
-                cotangent = broadcast_einsum_vjp_to_input_shape(
+                let Some(remapped) = broadcast_einsum_vjp_to_input_shape(
                     builder,
                     cotangent,
                     &vjp_output_labels,
                     &input_labels[active_idx],
                     inputs[active_idx].clone(),
                     &output_shape_hint,
-                );
+                ) else {
+                    result.push(None);
+                    continue;
+                };
+                cotangent = remapped;
             }
             result.push(Some(cotangent));
         }
@@ -834,13 +827,13 @@ fn broadcast_einsum_vjp_to_input_shape(
     input_labels: &[u32],
     shape_source: ValueRef<StdTensorOp>,
     input_shape: &[SymDim],
-) -> LocalValueId {
+) -> Option<LocalValueId> {
     let shape: Vec<DimExpr> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, _)| DimExpr::InputDim { input_idx: 1, axis })
         .collect();
-    let dims = map_label_occurrences(cotangent_labels, input_labels);
+    let dims = map_label_occurrences(cotangent_labels, input_labels)?;
     let mut inputs = vec![ValueRef::Local(cotangent)];
     if !shape.is_empty() {
         inputs.push(shape_source);
@@ -852,11 +845,15 @@ fn broadcast_einsum_vjp_to_input_shape(
             active_mask: vec![true, false],
         },
     )[0];
-    project_repeated_labels_to_diagonal(builder, broadcast, input_labels)
+    Some(project_repeated_labels_to_diagonal(
+        builder,
+        broadcast,
+        input_labels,
+    ))
 }
 
 #[cfg(feature = "autodiff")]
-fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Vec<usize> {
+fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Option<Vec<usize>> {
     let mut used = vec![false; target_labels.len()];
     source_labels
         .iter()
@@ -864,10 +861,9 @@ fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Vec<us
             let axis = target_labels
                 .iter()
                 .enumerate()
-                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))
-                .unwrap_or_else(|| panic!("einsum VJP label {label} missing from input labels"));
+                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))?;
             used[axis] = true;
-            axis
+            Some(axis)
         })
         .collect()
 }
@@ -957,7 +953,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
             build_runtime_exec_program::<B>(tree.as_ref(), inputs, &shapes, compiler_options)?;
         let key_retained_bytes = runtime_exec_program_key_retained_bytes(op, inputs, &shapes);
         caches.put_with_retained_bytes(key, cached, move |cached| {
-            key_retained_bytes + cached_runtime_exec_program_retained_bytes(cached)
+            saturating_sum([
+                key_retained_bytes,
+                cached_runtime_exec_program_retained_bytes(cached),
+            ])
         });
     }
     let cached = caches
@@ -1074,14 +1073,13 @@ fn runtime_exec_program_key_retained_bytes(
     inputs: &[&Tensor],
     shapes: &[Vec<usize>],
 ) -> usize {
-    einsum_subscripts_retained_bytes(op.subscripts())
-        + shapes
-            .iter()
-            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
-            .sum::<usize>()
-        + inputs.len() * std::mem::size_of::<DType>()
-        + std::mem::size_of::<u64>()
-        + std::mem::size_of::<u64>()
+    saturating_sum([
+        einsum_subscripts_retained_bytes(op.subscripts()),
+        saturating_sum(shapes.iter().map(vec_retained_bytes)),
+        inputs.len().saturating_mul(std::mem::size_of::<DType>()),
+        std::mem::size_of::<u64>(),
+        std::mem::size_of::<u64>(),
+    ])
 }
 
 fn build_runtime_exec_program<B: TensorBackend>(
@@ -1181,41 +1179,50 @@ fn runtime_program_inputs(
 fn cached_runtime_exec_program_retained_bytes<C: RuntimeCacheControl>(
     cached: &CachedRuntimeExecProgram<C>,
 ) -> usize {
-    std::mem::size_of::<CachedRuntimeExecProgram<C>>()
-        + exec_program_retained_bytes(&cached.program)
-        + smallvec_retained_bytes(&cached.input_indices)
-        + cached.backend_cache.stats().retained_bytes
-        + std::mem::size_of_val(&cached.optimizer_fingerprint)
+    saturating_sum([
+        std::mem::size_of::<CachedRuntimeExecProgram<C>>(),
+        exec_program_retained_bytes(&cached.program),
+        smallvec_retained_bytes(&cached.input_indices),
+        cached.backend_cache.stats().retained_bytes,
+        std::mem::size_of_val(&cached.optimizer_fingerprint),
+    ])
 }
 
 fn smallvec_retained_bytes<A: smallvec::Array>(values: &SmallVec<A>) -> usize {
     if values.spilled() {
-        values.capacity() * std::mem::size_of::<A::Item>()
+        values
+            .capacity()
+            .saturating_mul(std::mem::size_of::<A::Item>())
     } else {
         0
     }
 }
 
 fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
-    std::mem::size_of::<ExecProgram>()
-        + vec_retained_bytes(&program.instructions)
-        + program
-            .instructions
-            .iter()
-            .map(exec_instruction_retained_bytes)
-            .sum::<usize>()
-        + vec_retained_bytes(&program.input_slots)
-        + vec_retained_bytes(&program.output_slots)
+    saturating_sum([
+        std::mem::size_of::<ExecProgram>(),
+        vec_retained_bytes(&program.instructions),
+        saturating_sum(
+            program
+                .instructions
+                .iter()
+                .map(exec_instruction_retained_bytes),
+        ),
+        vec_retained_bytes(&program.input_slots),
+        vec_retained_bytes(&program.output_slots),
+    ])
 }
 
 fn exec_instruction_retained_bytes(inst: &ExecInstruction) -> usize {
-    std::mem::size_of::<ExecInstruction>()
-        + exec_op_retained_bytes(&inst.op)
-        + vec_retained_bytes(&inst.input_slots)
-        + vec_retained_bytes(&inst.output_slots)
-        + vec_of_vec_retained_bytes(&inst.output_shapes)
-        + vec_of_vec_retained_bytes(&inst.output_extents)
-        + vec_retained_bytes(&inst.last_use)
+    saturating_sum([
+        std::mem::size_of::<ExecInstruction>(),
+        exec_op_retained_bytes(&inst.op),
+        vec_retained_bytes(&inst.input_slots),
+        vec_retained_bytes(&inst.output_slots),
+        vec_of_vec_retained_bytes(&inst.output_shapes),
+        vec_of_vec_retained_bytes(&inst.output_extents),
+        vec_retained_bytes(&inst.last_use),
+    ])
 }
 
 fn exec_op_retained_bytes(op: &ExecOp) -> usize {
@@ -1224,14 +1231,6 @@ fn exec_op_retained_bytes(op: &ExecOp) -> usize {
         ExecOp::Extension(extension) => std::mem::size_of_val(extension),
         _ => 0,
     }
-}
-
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * std::mem::size_of::<T>()
-}
-
-fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum()
 }
 
 fn cached_runtime_tree<B: TensorBackend>(
@@ -1254,13 +1253,12 @@ fn cached_runtime_tree<B: TensorBackend>(
     }
 
     let tree = Arc::new(build().map_err(einsum_runtime_error)?);
-    let retained_bytes = einsum_subscripts_retained_bytes(subscripts)
-        + shapes
-            .iter()
-            .map(|shape| shape.capacity() * std::mem::size_of::<usize>())
-            .sum::<usize>()
-        + std::mem::size_of::<u64>()
-        + tree.retained_bytes_for_cache_stats();
+    let retained_bytes = saturating_sum([
+        einsum_subscripts_retained_bytes(subscripts),
+        saturating_sum(shapes.iter().map(vec_retained_bytes)),
+        std::mem::size_of::<u64>(),
+        tree.retained_bytes_for_cache_stats(),
+    ]);
     ctx.caches_mut().put(key, Arc::clone(&tree), retained_bytes);
     Ok(tree)
 }

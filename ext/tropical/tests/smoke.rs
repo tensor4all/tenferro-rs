@@ -1,5 +1,5 @@
-use tenferro_einsum::Subscripts;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use tenferro_einsum::Subscripts;
 use tenferro_ext_tropical::{
     traced::{tropical_einsum_subscripts, try_tropical_dot_general_fused},
     MaxPlus, MinPlus, TropicalKind,

@@ -241,3 +241,77 @@ fn transpose_broadcast_reduces_singleton_input_axes() {
     assert_eq!(reshape.inputs[1], inputs[0]);
     assert!(reshape.outputs.contains(&cotangent_in));
 }
+
+#[test]
+fn transpose_broadcast_restores_non_monotonic_dimension_order() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(50));
+    let data_key = input_key(51);
+    let inputs = vec![ValueRef::External(data_key.clone())];
+    ctx.insert_metadata(data_key, meta(&[2, 3]));
+
+    let result = StdTensorOp::BroadcastInDim {
+        shape: vec![
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 1,
+            },
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+        ],
+        dims: vec![1, 0],
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    );
+
+    assert_eq!(result.len(), 1);
+    let cotangent_in = result[0].expect("broadcast cotangent input must be active");
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    let transpose = &graph.operations()[0];
+    assert_eq!(
+        transpose.operation,
+        StdTensorOp::Transpose { perm: vec![1, 0] }
+    );
+    assert_eq!(transpose.inputs, vec![ValueRef::Local(cotangent)]);
+    assert!(transpose.outputs.contains(&cotangent_in));
+}
+
+#[test]
+fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(60));
+    let input_key = input_key(61);
+    let inputs = vec![ValueRef::External(input_key.clone())];
+    ctx.insert_metadata(
+        input_key,
+        TensorMeta::exact(
+            DType::F64,
+            vec![SymDim::tensor_axis(100, 0), SymDim::from(2usize)],
+        ),
+    );
+
+    let result = StdTensorOp::Concatenate {
+        axis: 0,
+        input_count: 1,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    );
+
+    assert_eq!(result, vec![None]);
+    assert!(builder.build().operations().is_empty());
+}

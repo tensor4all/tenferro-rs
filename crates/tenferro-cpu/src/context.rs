@@ -87,7 +87,16 @@ impl CpuContext {
     /// let ctx = CpuContext::with_threads(2);
     /// assert_eq!(ctx.num_threads(), 2);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when `num_threads` is invalid or Rayon rejects the pool. This is
+    /// the compatibility wrapper; new runtime-facing code should use
+    /// [`CpuContext::try_with_threads`] to receive a typed error.
     pub fn with_threads(num_threads: usize) -> Self {
+        // Intentional compatibility panic wrapper. Keep `try_with_threads` as
+        // the non-panicking API so audits do not mistake this for an unhandled
+        // validation path.
         match Self::try_with_threads(num_threads) {
             Ok(ctx) => ctx,
             Err(err) => panic!("{err}"),

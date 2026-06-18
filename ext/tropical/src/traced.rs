@@ -28,14 +28,6 @@ use tenferro_runtime::{extension, DType, Error, Result, TracedTensor};
 use crate::extension::TropicalEinsumOp;
 use crate::TropicalKind;
 
-fn require_rank2(tensor: &TracedTensor, label: &str) {
-    assert_eq!(
-        tensor.rank, 2,
-        "{label}: tropical matrix composition requires rank-2 input, got rank {}",
-        tensor.rank
-    );
-}
-
 fn try_require_rank2(tensor: &TracedTensor, label: &str) -> Result<()> {
     if tensor.rank != 2 {
         return Err(Error::ContractionError(format!(
@@ -44,16 +36,6 @@ fn try_require_rank2(tensor: &TracedTensor, label: &str) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn assert_contracting_axes_compatible(a: &TracedTensor, b: &TracedTensor, label: &str) {
-    if let (Some(a_shape), Some(b_shape)) = (a.try_concrete_shape(), b.try_concrete_shape()) {
-        assert_eq!(
-            a_shape[1], b_shape[0],
-            "{label}: contracting axes must match, got a[1]={} and b[0]={}",
-            a_shape[1], b_shape[0]
-        );
-    }
 }
 
 fn try_require_contracting_axes_compatible(
@@ -72,25 +54,25 @@ fn try_require_contracting_axes_compatible(
     Ok(())
 }
 
-fn tropical_dot_general_impl(
+fn try_tropical_dot_general_impl(
     a: &TracedTensor,
     b: &TracedTensor,
     reduce: impl FnOnce(&TracedTensor) -> TracedTensor,
     label: &str,
-) -> TracedTensor {
-    require_rank2(a, &format!("{label}.a"));
-    require_rank2(b, &format!("{label}.b"));
-    assert_contracting_axes_compatible(a, b, label);
+) -> Result<TracedTensor> {
+    try_require_rank2(a, &format!("{label}.a"))?;
+    try_require_rank2(b, &format!("{label}.b"))?;
+    try_require_contracting_axes_compatible(a, b, label)?;
 
-    let m = a.axis_sym_dim(0);
-    let k = a.axis_sym_dim(1);
-    let n = b.axis_sym_dim(1);
+    let m = a.try_axis_sym_dim(0)?;
+    let k = a.try_axis_sym_dim(1)?;
+    let n = b.try_axis_sym_dim(1)?;
     let target_shape = [m, k, n];
 
-    let a_b = a.broadcast_in_dim_sym(&target_shape, &[0, 1], &[b]);
-    let b_b = b.broadcast_in_dim_sym(&target_shape, &[1, 2], &[a]);
+    let a_b = a.try_broadcast_in_dim_sym(&target_shape, &[0, 1], &[b])?;
+    let b_b = b.try_broadcast_in_dim_sym(&target_shape, &[1, 2], &[a])?;
     let sum = a_b.add(&b_b);
-    reduce(&sum)
+    Ok(reduce(&sum))
 }
 
 /// Max-plus matrix multiplication on rank-2 traced tensors.
@@ -100,8 +82,9 @@ fn tropical_dot_general_impl(
 ///
 /// # Panics
 ///
-/// Panics if either input is not rank 2. If both input shapes are concrete,
-/// also panics when the contracting axes differ.
+/// Compatibility wrapper that panics if either input is not rank 2, or if
+/// concrete contracting axes differ. Use [`try_tropical_dot_general`] on new
+/// user-facing paths.
 ///
 /// # Examples
 ///
@@ -121,7 +104,19 @@ fn tropical_dot_general_impl(
 /// ```
 #[must_use]
 pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    tropical_dot_general_impl(a, b, |sum| sum.reduce_max(&[1]), "tropical_dot_general")
+    // Intentional compatibility panic wrapper; use `try_tropical_dot_general`
+    // where invalid user shapes must be reported without unwinding.
+    try_tropical_dot_general(a, b).unwrap_or_else(|err| panic!("{err}"))
+}
+
+/// Fallible max-plus matrix multiplication on rank-2 traced tensors.
+///
+/// # Errors
+///
+/// Returns an error if either input is not rank 2 or if concrete contracting
+/// dimensions are known and incompatible.
+pub fn try_tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
+    try_tropical_dot_general_impl(a, b, |sum| sum.reduce_max(&[1]), "tropical_dot_general")
 }
 
 /// Min-plus matrix multiplication on rank-2 traced tensors.
@@ -131,8 +126,9 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> TracedTensor 
 ///
 /// # Panics
 ///
-/// Panics if either input is not rank 2. If both input shapes are concrete,
-/// also panics when the contracting axes differ.
+/// Compatibility wrapper that panics if either input is not rank 2, or if
+/// concrete contracting axes differ. Use [`try_min_plus_dot_general`] on new
+/// user-facing paths.
 ///
 /// # Examples
 ///
@@ -152,7 +148,19 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> TracedTensor 
 /// ```
 #[must_use]
 pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    tropical_dot_general_impl(a, b, |sum| sum.reduce_min(&[1]), "min_plus_dot_general")
+    // Intentional compatibility panic wrapper; use `try_min_plus_dot_general`
+    // where invalid user shapes must be reported without unwinding.
+    try_min_plus_dot_general(a, b).unwrap_or_else(|err| panic!("{err}"))
+}
+
+/// Fallible min-plus matrix multiplication on rank-2 traced tensors.
+///
+/// # Errors
+///
+/// Returns an error if either input is not rank 2 or if concrete contracting
+/// dimensions are known and incompatible.
+pub fn try_min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
+    try_tropical_dot_general_impl(a, b, |sum| sum.reduce_min(&[1]), "min_plus_dot_general")
 }
 
 /// Fused binary tropical einsum over traced tensors.
@@ -279,10 +287,7 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedT
 ///
 /// Returns an error if either input is not rank 2 or if concrete contracting
 /// dimensions are known and incompatible.
-pub fn try_tropical_dot_general_fused(
-    a: &TracedTensor,
-    b: &TracedTensor,
-) -> Result<TracedTensor> {
+pub fn try_tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     try_fused_dot_general_impl(TropicalKind::MaxPlus, a, b, "tropical_dot_general_fused")
 }
 
@@ -325,10 +330,7 @@ pub fn min_plus_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedT
 ///
 /// Returns an error if either input is not rank 2 or if concrete contracting
 /// dimensions are known and incompatible.
-pub fn try_min_plus_dot_general_fused(
-    a: &TracedTensor,
-    b: &TracedTensor,
-)-> Result<TracedTensor> {
+pub fn try_min_plus_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     try_fused_dot_general_impl(TropicalKind::MinPlus, a, b, "min_plus_dot_general_fused")
 }
 
@@ -463,4 +465,27 @@ fn validate_tropical_einsum_inputs(
 #[must_use]
 pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> TracedTensor {
     a.reduce_max(axes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compositional_dot_general_try_api_rejects_rank_mismatch() {
+        let lhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
+        let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
+
+        let err = try_tropical_dot_general(&lhs, &rhs).unwrap_err();
+        assert!(err.to_string().contains("requires rank-2 input"));
+    }
+
+    #[test]
+    fn compositional_dot_general_try_api_rejects_contracting_dim_mismatch() {
+        let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+        let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+
+        let err = try_min_plus_dot_general(&lhs, &rhs).unwrap_err();
+        assert!(err.to_string().contains("contracting axes must match"));
+    }
 }

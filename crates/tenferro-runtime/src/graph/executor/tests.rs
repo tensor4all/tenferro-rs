@@ -18,7 +18,7 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
     ));
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    assert_eq!(executor.slot_workspace.capacity(), 0);
+    assert_eq!(executor.borrowed_slot_workspace_capacity, 0);
 
     let outputs = executor
         .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
@@ -27,9 +27,9 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.slot_workspace.capacity() >= program.exec.n_slots,
+        executor.borrowed_slot_workspace_capacity >= program.exec.n_slots,
         "borrowed execution should retain reusable slot capacity; capacity={}, n_slots={}",
-        executor.slot_workspace.capacity(),
+        executor.borrowed_slot_workspace_capacity,
         program.exec.n_slots
     );
 }
@@ -55,10 +55,24 @@ fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
     assert!(matches!(outputs[0], TensorValue::View(_)));
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.slot_workspace.capacity() >= program.exec.n_slots,
+        executor.borrowed_slot_workspace_capacity >= program.exec.n_slots,
         "borrowed value execution should retain reusable slot capacity; capacity={}, n_slots={}",
-        executor.slot_workspace.capacity(),
+        executor.borrowed_slot_workspace_capacity,
         program.exec.n_slots
+    );
+}
+
+#[test]
+fn borrowed_input_workspace_does_not_retype_static_slot_vec() {
+    let source = include_str!("../executor.rs");
+
+    assert!(
+        !source.contains("Vec::from_raw_parts"),
+        "borrowed input workspace must not retype Vec allocations across ExecSlot lifetimes"
+    );
+    assert!(
+        !source.contains("BorrowedSlotWorkspace"),
+        "borrowed input execution should use a lifetime-local workspace"
     );
 }
 

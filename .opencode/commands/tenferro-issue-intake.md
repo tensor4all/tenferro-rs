@@ -1,5 +1,5 @@
 ---
-description: Create or refine a tenferro-rs GitHub issue with repository policy checks.
+description: Create or refine tenferro-rs GitHub issues for bug reports, feature requests, design discussions, documentation issues, article topics, or proposed feature PRs that must be redirected to issue intake.
 ---
 
 Use `$ARGUMENTS` as the initial user request if present.

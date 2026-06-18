@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::dim_expr::DimExpr;
+use crate::dim_expr::{DimExpr, DimExprEvalError};
 
 #[test]
 fn test_const_eval() {
@@ -32,6 +32,64 @@ fn test_arithmetic() {
     assert_eq!(e.eval(shapes), 12);
     assert_eq!(DimExpr::add(e.clone(), DimExpr::Const(3)).eval(shapes), 15);
     assert_eq!(DimExpr::floor_div(e, DimExpr::Const(4)).eval(shapes), 3);
+}
+
+#[test]
+fn try_eval_reports_bad_input_refs_and_arithmetic_errors() {
+    let input = DimExpr::InputDim {
+        input_idx: 0,
+        axis: 1,
+    };
+    assert!(matches!(
+        input.try_eval(&[&[3]]),
+        Err(DimExprEvalError::AxisOutOfBounds {
+            input_idx: 0,
+            axis: 1,
+            rank: 1
+        })
+    ));
+
+    let missing = DimExpr::InputDim {
+        input_idx: 2,
+        axis: 0,
+    };
+    assert!(matches!(
+        missing.try_eval(&[&[3]]),
+        Err(DimExprEvalError::InputOutOfBounds {
+            input_idx: 2,
+            input_count: 1
+        })
+    ));
+
+    let add = DimExpr::add(DimExpr::Const(usize::MAX), DimExpr::Const(1));
+    assert!(matches!(
+        add.try_eval(&[]),
+        Err(DimExprEvalError::AddOverflow {
+            lhs: usize::MAX,
+            rhs: 1
+        })
+    ));
+
+    let mul = DimExpr::mul(DimExpr::Const(usize::MAX), DimExpr::Const(2));
+    assert!(matches!(
+        mul.try_eval(&[]),
+        Err(DimExprEvalError::MulOverflow {
+            lhs: usize::MAX,
+            rhs: 2
+        })
+    ));
+
+    let sub = DimExpr::sub(DimExpr::Const(2), DimExpr::Const(5));
+    assert!(matches!(
+        sub.try_eval(&[]),
+        Err(DimExprEvalError::SubUnderflow { lhs: 2, rhs: 5 })
+    ));
+
+    let div = DimExpr::floor_div(DimExpr::Const(8), DimExpr::Const(0));
+    assert!(matches!(
+        div.try_eval(&[]),
+        Err(DimExprEvalError::FloorDivByZero { lhs: 8, rhs: 0 })
+    ));
 }
 
 #[test]
@@ -245,6 +303,10 @@ fn test_small_helpers_cover_false_and_empty_paths() {
     }
     .is_const());
     assert_eq!(DimExpr::eval_all(&[], &[]), Vec::<usize>::new());
+    assert_eq!(
+        DimExpr::try_eval_all(&[], &[]).unwrap(),
+        Vec::<usize>::new()
+    );
     assert_eq!(DimExpr::remap_all(&[], 0, 1), Vec::<DimExpr>::new());
     assert_eq!(DimExpr::max_input_idx_all(&[DimExpr::Const(1)]), None);
     assert_eq!(DimExpr::from(&DimExpr::Const(9)), DimExpr::Const(9));

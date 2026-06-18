@@ -26,13 +26,31 @@ pub(crate) struct ParsedEinsum {
 /// Return the retained-byte estimate for canonical subscripts.
 #[must_use]
 pub(crate) fn einsum_subscripts_retained_bytes(subscripts: &EinsumSubscripts) -> usize {
-    vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
+    saturating_sum([
+        vec_of_vec_retained_bytes(&subscripts.inputs),
+        vec_retained_bytes(&subscripts.output),
+    ])
 }
 
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
+pub(crate) fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity().saturating_mul(size_of::<T>())
 }
 
-fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum()
+pub(crate) fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
+    saturating_sum(values.iter().map(vec_retained_bytes))
+}
+
+pub(crate) fn saturating_sum(values: impl IntoIterator<Item = usize>) -> usize {
+    values.into_iter().fold(0usize, usize::saturating_add)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::saturating_sum;
+
+    #[test]
+    fn retained_byte_sums_saturate() {
+        assert_eq!(saturating_sum([usize::MAX, 1]), usize::MAX);
+        assert_eq!(saturating_sum([usize::MAX - 4, 2, 8]), usize::MAX);
+    }
 }

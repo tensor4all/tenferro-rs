@@ -177,6 +177,12 @@ fn cache_key_and_stats_cover_exec_op_payload_variants() {
     );
 }
 
+#[test]
+fn retained_byte_accounting_saturates_on_overflow() {
+    assert_eq!(saturating_sum([usize::MAX, 1]), usize::MAX);
+    assert_eq!(saturating_sum([usize::MAX - 4, 2, 8]), usize::MAX);
+}
+
 fn unary_program(op: ExecOp) -> ExecProgram {
     ExecProgram {
         instructions: vec![ExecInstruction {

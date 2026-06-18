@@ -11,8 +11,8 @@ use crate::exec::{
     execute_ffi_instruction_cached, execute_host_instruction, get_read, initialize_exec_slots_in,
     is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
-    try_execute_terminal_value_instruction, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
-    ExecSlot,
+    try_execute_terminal_value_instruction, validate_exec_program, DispatchMode, ExecInstruction,
+    ExecOp, ExecProgram, ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionPlan};
@@ -191,6 +191,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
     backend_cache: &mut B::RuntimeCache,
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
+    validate_exec_program(program, "segmented executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
     if !has_fused_segment && can_run_in_single_exec_session(program) {
         return eval_exec_ir_single_session_slots_with_workspace(
@@ -213,7 +214,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
     }
 
     let result = (|| {
-        initialize_exec_slots_in(program, inputs, slots);
+        initialize_exec_slots_in(program, inputs, slots)?;
 
         let segments = segment_exec_program(program);
         let mut inst_idx = 0usize;
@@ -315,6 +316,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
     backend_cache: &mut B::RuntimeCache,
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<TensorValue>> {
+    validate_exec_program(program, "segmented value executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
     if !has_fused_segment {
         return eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace(
@@ -328,7 +330,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
     }
 
     let result = (|| {
-        initialize_exec_slots_in(program, inputs, slots);
+        initialize_exec_slots_in(program, inputs, slots)?;
         let terminal_slots = terminal_output_slots(program);
 
         let segments = segment_exec_program(program);

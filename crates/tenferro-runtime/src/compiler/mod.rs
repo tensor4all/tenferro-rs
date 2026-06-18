@@ -411,14 +411,14 @@ fn conj_sinking_one_pass(
     let instructions = std::mem::take(&mut program.instructions);
     for mut instr in instructions {
         for slot in &mut instr.input_slots {
-            *slot = resolve_slot_redirect(*slot, &redirect);
+            *slot = resolve_slot_redirect(*slot, &redirect)?;
         }
 
         if matches!(instr.op, ExecOp::Conj) && instr.input_slots.len() == 1 {
             let input_slot = instr.input_slots[0];
             if let Some(producer) = producer_for_slot(&producer_by_slot, input_slot).cloned() {
                 if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
-                    let replacement = resolve_slot_redirect(producer.input_slots[0], &redirect);
+                    let replacement = resolve_slot_redirect(producer.input_slots[0], &redirect)?;
                     for &slot in &instr.output_slots {
                         redirect[slot] = replacement;
                     }
@@ -449,12 +449,12 @@ fn conj_sinking_one_pass(
             }
         }
 
-        record_producer(&mut producer_by_slot, &instr);
+        record_producer(&mut producer_by_slot, &instr)?;
         new_instructions.push(instr);
     }
 
     for slot in &mut program.output_slots {
-        *slot = resolve_slot_redirect(*slot, &redirect);
+        *slot = resolve_slot_redirect(*slot, &redirect)?;
     }
     program.instructions = new_instructions;
     Ok(changed)
@@ -557,13 +557,10 @@ struct ConjSinkingState<'a> {
 
 impl ConjSinkingState<'_> {
     fn ensure_conj_slot(&mut self, slot: usize) -> Result<usize> {
-        let slot = resolve_slot_redirect(slot, self.redirect);
+        let slot = resolve_slot_redirect(slot, self.redirect)?;
         if let Some(producer) = producer_for_slot(self.producer_by_slot, slot) {
             if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
-                return Ok(resolve_slot_redirect(
-                    producer.input_slots[0],
-                    self.redirect,
-                ));
+                return resolve_slot_redirect(producer.input_slots[0], self.redirect);
             }
         }
         if let Some(&conj_slot) = self.conj_cache.get(&slot) {
@@ -580,6 +577,7 @@ impl ConjSinkingState<'_> {
         *self.n_slots += 1;
         self.redirect.push(output_slot);
         self.slot_meta.push(Some(meta.clone()));
+        self.producer_by_slot.push(None);
 
         let instr = ExecInstruction {
             op: ExecOp::Conj,
@@ -590,14 +588,14 @@ impl ConjSinkingState<'_> {
             output_extents: vec![meta.extents].into(),
             last_use: Vec::new(),
         };
-        record_producer(self.producer_by_slot, &instr);
+        record_producer(self.producer_by_slot, &instr)?;
         self.new_instructions.push(instr);
         self.conj_cache.insert(slot, output_slot);
         Ok(output_slot)
     }
 }
 
-fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) {
+fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) -> Result<()> {
     let producer = ProducerInfo {
         op: instr.op.clone(),
         input_slots: instr.input_slots.clone(),
@@ -605,21 +603,33 @@ fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) 
     };
     for &slot in &instr.output_slots {
         if slot >= producer_by_slot.len() {
-            producer_by_slot.resize_with(slot + 1, || None);
+            return Err(invalid_compiled_graph(format!(
+                "producer output slot {slot} is outside producer map of length {}",
+                producer_by_slot.len()
+            )));
         }
         producer_by_slot[slot] = Some(producer.clone());
     }
+    Ok(())
 }
 
 fn producer_for_slot(producer_by_slot: &ProducerMap, slot: usize) -> Option<&ProducerInfo> {
     producer_by_slot.get(slot).and_then(Option::as_ref)
 }
 
-fn resolve_slot_redirect(mut slot: usize, redirect: &[usize]) -> usize {
+fn resolve_slot_redirect(mut slot: usize, redirect: &[usize]) -> Result<usize> {
+    let origin = slot;
+    let mut seen = vec![false; redirect.len()];
     while slot < redirect.len() && redirect[slot] != slot {
+        if seen[slot] {
+            return Err(invalid_compiled_graph(format!(
+                "redirect cycle while resolving slot {origin}: revisited slot {slot}"
+            )));
+        }
+        seen[slot] = true;
         slot = redirect[slot];
     }
-    slot
+    Ok(slot)
 }
 
 fn conj_commuting_input_indices(
@@ -666,15 +676,27 @@ fn dtype_supports_conj(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
 }
 
-pub(crate) fn populate_last_use(program: &mut ExecProgram) {
+pub(crate) fn populate_last_use(program: &mut ExecProgram) -> Result<()> {
     let mut output_slot = vec![false; program.n_slots];
     for &slot in &program.output_slots {
+        if slot >= output_slot.len() {
+            return Err(invalid_compiled_graph(format!(
+                "last-use output slot {slot} is outside slot table of length {}",
+                program.n_slots
+            )));
+        }
         output_slot[slot] = true;
     }
 
     let mut last_user: Vec<Option<usize>> = vec![None; program.n_slots];
     for (idx, instr) in program.instructions.iter().enumerate() {
         for &slot in &instr.input_slots {
+            if slot >= last_user.len() {
+                return Err(invalid_compiled_graph(format!(
+                    "last-use input slot {slot} is outside slot table of length {}",
+                    program.n_slots
+                )));
+            }
             last_user[slot] = Some(idx);
         }
     }
@@ -686,6 +708,7 @@ pub(crate) fn populate_last_use(program: &mut ExecProgram) {
             .map(|&slot| !output_slot[slot] && last_user[slot] == Some(idx))
             .collect();
     }
+    Ok(())
 }
 
 // ============================================================================
@@ -758,17 +781,25 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 // split out of the fixed compile pipeline.
 
 /// Simplify algebraically redundant layout operations in place.
-pub(crate) fn algebraic_layout_simplifier(program: &mut ExecProgram) {
+pub(crate) fn algebraic_layout_simplifier(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<()> {
     loop {
-        if !algebraic_layout_simplifier_one_pass(program) {
+        if !algebraic_layout_simplifier_one_pass(program, input_shapes)? {
             break;
         }
     }
+    Ok(())
 }
 
-fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
+fn algebraic_layout_simplifier_one_pass(
+    program: &mut ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<bool> {
     let producer_by_slot = producer_indices_by_slot(program);
-    let use_counts = slot_use_counts(program);
+    let slot_shapes = collect_slot_shapes(program, input_shapes)?;
+    let use_counts = slot_use_counts(program)?;
     let mut changed = false;
 
     for index in 0..program.instructions.len() {
@@ -789,7 +820,14 @@ fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
                 replace_slot_uses(program, from, to);
                 changed = true;
             }
-            ExecOp::Reshape { shape } if is_identity_reshape_shape(&shape) => {
+            ExecOp::Reshape { shape }
+                if is_identity_reshape_shape(
+                    &shape,
+                    slot_shapes
+                        .get(program.instructions[index].input_slots[0])
+                        .and_then(Option::as_deref),
+                ) =>
+            {
                 let from = output_slot;
                 let to = program.instructions[index].input_slots[0];
                 replace_slot_uses(program, from, to);
@@ -826,7 +864,42 @@ fn algebraic_layout_simplifier_one_pass(program: &mut ExecProgram) -> bool {
         }
     }
 
-    changed
+    Ok(changed)
+}
+
+fn collect_slot_shapes(
+    program: &ExecProgram,
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<Vec<Option<Vec<DimExpr>>>> {
+    if program.input_slots.len() != input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "algebraic_layout_simplifier input shape count {} must match input slot count {}",
+            input_shapes.len(),
+            program.input_slots.len()
+        )));
+    }
+    let mut slot_shapes = vec![None; program.n_slots];
+    for (index, &slot) in program.input_slots.iter().enumerate() {
+        let Some(shape) = slot_shapes.get_mut(slot) else {
+            return Err(invalid_compiled_graph(format!(
+                "input slot {} is outside slot table of length {}",
+                slot, program.n_slots
+            )));
+        };
+        *shape = Some(input_shapes[index].clone());
+    }
+    for instr in &program.instructions {
+        for (&slot, shape) in instr.output_slots.iter().zip(instr.output_shapes.iter()) {
+            let Some(slot_shape) = slot_shapes.get_mut(slot) else {
+                return Err(invalid_compiled_graph(format!(
+                    "output slot {} is outside slot table of length {}",
+                    slot, program.n_slots
+                )));
+            };
+            *slot_shape = Some(shape.clone());
+        }
+    }
+    Ok(slot_shapes)
 }
 
 fn is_identity_perm(perm: &[usize]) -> bool {
@@ -835,8 +908,11 @@ fn is_identity_perm(perm: &[usize]) -> bool {
         .all(|(axis, &mapped)| axis == mapped)
 }
 
-fn is_identity_reshape_shape(shape: &[DimExpr]) -> bool {
-    if shape.is_empty() {
+fn is_identity_reshape_shape(shape: &[DimExpr], input_shape: Option<&[DimExpr]>) -> bool {
+    let Some(input_shape) = input_shape else {
+        return false;
+    };
+    if shape.is_empty() || shape.len() != input_shape.len() {
         return false;
     }
     shape.iter().enumerate().all(|(axis, dim)| {
@@ -1102,9 +1178,9 @@ pub(crate) use dot_decomposer::dot_decomposer;
 // `x` and marking the DotGeneral operand as conjugated.
 
 /// Fold `Conj` inputs into `DotGeneralWithConj`.
-pub(crate) fn dot_conj_folding(program: &mut ExecProgram) {
-    let producer_by_slot = producer_index_by_slot(program);
-    let use_counts = slot_use_counts(program);
+pub(crate) fn dot_conj_folding(program: &mut ExecProgram) -> Result<()> {
+    let producer_by_slot = producer_index_by_slot(program)?;
+    let use_counts = slot_use_counts(program)?;
     let mut layout_rewrites: Vec<(usize, usize)> = Vec::new();
     let mut shape_input_rewrites: Vec<(usize, usize)> = Vec::new();
     let mut dot_updates: Vec<DotConjUpdate> = Vec::new();
@@ -1194,6 +1270,7 @@ pub(crate) fn dot_conj_folding(program: &mut ExecProgram) {
             ExecOp::DotGeneral(update.config)
         };
     }
+    Ok(())
 }
 
 struct DotConjUpdate {
@@ -1210,36 +1287,45 @@ struct DotOperandConjFold {
     shape_input_rewrite: (usize, usize),
 }
 
-fn producer_index_by_slot(program: &ExecProgram) -> Vec<Option<usize>> {
+fn producer_index_by_slot(program: &ExecProgram) -> Result<Vec<Option<usize>>> {
     let mut producer_by_slot = vec![None; program.n_slots];
     for (idx, instr) in program.instructions.iter().enumerate() {
         for &slot in &instr.output_slots {
             if slot >= producer_by_slot.len() {
-                producer_by_slot.resize(slot + 1, None);
+                return Err(invalid_compiled_graph(format!(
+                    "producer output slot {slot} is outside slot table of length {}",
+                    program.n_slots
+                )));
             }
             producer_by_slot[slot] = Some(idx);
         }
     }
-    producer_by_slot
+    Ok(producer_by_slot)
 }
 
-fn slot_use_counts(program: &ExecProgram) -> Vec<usize> {
+fn slot_use_counts(program: &ExecProgram) -> Result<Vec<usize>> {
     let mut counts = vec![0usize; program.n_slots];
     for instr in &program.instructions {
         for &slot in &instr.input_slots {
             if slot >= counts.len() {
-                counts.resize(slot + 1, 0);
+                return Err(invalid_compiled_graph(format!(
+                    "use-count input slot {slot} is outside slot table of length {}",
+                    program.n_slots
+                )));
             }
             counts[slot] += 1;
         }
     }
     for &slot in &program.output_slots {
         if slot >= counts.len() {
-            counts.resize(slot + 1, 0);
+            return Err(invalid_compiled_graph(format!(
+                "use-count output slot {slot} is outside slot table of length {}",
+                program.n_slots
+            )));
         }
         counts[slot] += 1;
     }
-    counts
+    Ok(counts)
 }
 
 fn find_dot_operand_conj_fold(
@@ -1285,6 +1371,8 @@ fn find_dot_operand_conj_fold(
 }
 
 fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
+    // These ops are transparent only for elementwise Conj movement; the Dot input
+    // remains the layout op output, so rank-changing reshapes are not bypassed.
     matches!(
         op,
         ExecOp::Transpose { .. }

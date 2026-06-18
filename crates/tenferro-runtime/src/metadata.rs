@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tenferro_ops::ad::context::{
-    lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
+    try_lookup_global_metadata, try_register_scoped_global_metadata_batch, GlobalMetadataScope,
+    TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -42,34 +43,61 @@ pub fn register_scoped_value_metadata(
     key: ValueKey<StdTensorOp>,
     meta: TensorMeta,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch([(key, meta)])
+    // Compatibility wrapper for infallible constructors; new runtime paths
+    // should call `try_register_scoped_value_metadata` and propagate errors.
+    try_register_scoped_value_metadata(key, meta).unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub fn try_register_scoped_value_metadata(
+    key: ValueKey<StdTensorOp>,
+    meta: TensorMeta,
+) -> Result<MetadataScope> {
+    try_register_scoped_global_metadata_batch([(key, meta)])
+        .map_err(|err| metadata_error(err.to_string()))
 }
 
 pub fn register_scoped_metadata_batch(
     entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(entries)
+    // Compatibility wrapper for infallible constructors; new runtime paths
+    // should call `try_register_scoped_metadata_batch` and propagate errors.
+    try_register_scoped_metadata_batch(entries).unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub fn try_register_scoped_metadata_batch(
+    entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+) -> Result<MetadataScope> {
+    try_register_scoped_global_metadata_batch(entries)
+        .map_err(|err| metadata_error(err.to_string()))
 }
 
 pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> TensorMeta {
-    lookup_global_metadata(key)
-        .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
+    // Compatibility wrapper for legacy callers that require a value; use
+    // `try_registered_meta` on any path where metadata absence is recoverable.
+    try_registered_meta(key).unwrap_or_else(|err| panic!("{err}"))
+}
+
+pub fn try_registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
+    try_lookup_global_metadata(key)
+        .map_err(|err| metadata_error(err.to_string()))?
+        .ok_or_else(|| metadata_error(format!("missing registered metadata for {:?}", key)))
 }
 
 pub fn register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
+    // Compatibility wrapper for constructors that cannot return `Result`; new
+    // graph-building paths should call `try_register_scoped_graph_metadata`.
     try_register_scoped_graph_metadata(graph, seeded).unwrap_or_else(|err| panic!("{err}"))
 }
 
-pub(crate) fn try_register_scoped_graph_metadata(
+pub fn try_register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<MetadataScope> {
-    Ok(register_scoped_global_metadata_batch(
-        graph_metadata_registrations(graph, None, seeded)?,
-    ))
+    try_register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded)?)
+        .map_err(|err| metadata_error(err.to_string()))
 }
 
 pub fn register_scoped_live_graph_metadata(
@@ -77,18 +105,23 @@ pub fn register_scoped_live_graph_metadata(
     live_values: &HashSet<LocalValueId>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
+    // Compatibility wrapper for constructors that cannot return `Result`; new
+    // graph-building paths should call `try_register_scoped_live_graph_metadata`.
     try_register_scoped_live_graph_metadata(graph, live_values, seeded)
         .unwrap_or_else(|err| panic!("{err}"))
 }
 
-pub(crate) fn try_register_scoped_live_graph_metadata(
+pub fn try_register_scoped_live_graph_metadata(
     graph: &Graph<StdTensorOp>,
     live_values: &HashSet<LocalValueId>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<MetadataScope> {
-    Ok(register_scoped_global_metadata_batch(
-        graph_metadata_registrations(graph, Some(live_values), seeded)?,
-    ))
+    try_register_scoped_global_metadata_batch(graph_metadata_registrations(
+        graph,
+        Some(live_values),
+        seeded,
+    )?)
+    .map_err(|err| metadata_error(err.to_string()))
 }
 
 pub fn metadata_scopes_with_new<'a>(
@@ -176,10 +209,11 @@ fn graph_metadata_registrations(
                     ValueRef::Local(local_id) => &graph.values()[*local_id].key,
                     ValueRef::External(key) => key,
                 };
-                known
-                    .get(key)
-                    .cloned()
-                    .or_else(|| lookup_global_metadata(key))
+                if let Some(meta) = known.get(key).cloned() {
+                    return Ok(meta);
+                }
+                try_lookup_global_metadata(key)
+                    .map_err(|err| metadata_error(err.to_string()))?
                     .ok_or_else(|| metadata_error(format!("missing input metadata for {:?}", key)))
             })
             .collect::<Result<_>>()?;

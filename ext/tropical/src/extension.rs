@@ -152,11 +152,9 @@ impl ExtensionOp for TropicalEinsumOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![infer_tropical_output_meta(
-            &self.subscripts,
-            input_dtypes,
-            input_shapes,
-        )]
+        infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes)
+            .into_iter()
+            .collect()
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -224,32 +222,26 @@ impl ExtensionOp for TropicalEinsumJvpOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(
-            input_dtypes.len(),
-            self.input_count(),
-            "tropical einsum JVP expects {} inputs, got {}",
-            self.input_count(),
-            input_dtypes.len()
-        );
-        assert_eq!(
-            input_shapes.len(),
-            self.input_count(),
-            "tropical einsum JVP expects {} input shapes, got {}",
-            self.input_count(),
-            input_shapes.len()
-        );
-        let primal =
-            infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2]);
+        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
+            return Vec::new();
+        }
+        let Some(primal) =
+            infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
+        else {
+            return Vec::new();
+        };
         for &active in &self.active_inputs {
-            let tangent_idx = 2 + self
+            let Some(position) = self
                 .active_inputs
                 .iter()
                 .position(|candidate| *candidate == active)
-                .expect("active input is present");
-            assert_eq!(
-                input_dtypes[tangent_idx], input_dtypes[active],
-                "tropical einsum JVP tangent dtype must match active primal input"
-            );
+            else {
+                return Vec::new();
+            };
+            let tangent_idx = 2 + position;
+            if active >= 2 || input_dtypes[tangent_idx] != input_dtypes[active] {
+                return Vec::new();
+            }
         }
         vec![primal]
     }
@@ -344,26 +336,17 @@ impl ExtensionOp for TropicalEinsumVjpOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> Vec<(DType, Vec<SymDim>)> {
-        assert_eq!(
-            input_dtypes.len(),
-            3,
-            "tropical einsum VJP expects lhs, rhs, and cotangent inputs"
-        );
-        assert_eq!(
-            input_shapes.len(),
-            3,
-            "tropical einsum VJP expects lhs, rhs, and cotangent shapes"
-        );
-        let _ =
-            infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2]);
-        assert!(
-            self.active_input < 2,
-            "tropical einsum VJP active input must be 0 or 1"
-        );
-        assert_eq!(
-            input_dtypes[2], input_dtypes[self.active_input],
-            "tropical einsum VJP cotangent dtype must match active input"
-        );
+        if input_dtypes.len() != 3 || input_shapes.len() != 3 || self.active_input >= 2 {
+            return Vec::new();
+        }
+        if infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
+            .is_none()
+        {
+            return Vec::new();
+        }
+        if input_dtypes[2] != input_dtypes[self.active_input] {
+            return Vec::new();
+        }
         vec![(
             input_dtypes[self.active_input],
             input_shapes[self.active_input].to_vec(),
@@ -435,9 +418,13 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
             ValueRef::External(primal_in[1].clone()),
         ];
         for &active in &active_inputs {
-            inputs.push(ValueRef::Local(
-                tangent_in[active].expect("active tangent is present"),
-            ));
+            // `active_inputs` is derived from `tangent_in.is_some()` above; keep
+            // this branch explicit so future audits do not classify it as a
+            // user-reachable unwrap.
+            let Some(tangent) = tangent_in.get(active).copied().flatten() else {
+                return Ok(vec![None]);
+            };
+            inputs.push(ValueRef::Local(tangent));
         }
         let active_mask = std::iter::repeat_n(false, 2)
             .chain(std::iter::repeat_n(true, active_inputs.len()))
@@ -603,44 +590,25 @@ fn infer_tropical_output_meta(
     subscripts: &Subscripts,
     input_dtypes: &[DType],
     input_shapes: &[&[SymDim]],
-) -> (DType, Vec<SymDim>) {
-    assert_eq!(
-        input_shapes.len(),
-        2,
-        "tropical einsum extension supports exactly two inputs, got {}",
-        input_shapes.len()
-    );
-    assert_eq!(
-        input_dtypes.len(),
-        input_shapes.len(),
-        "tropical einsum extension expects dtype and shape arity to match"
-    );
-    assert_eq!(
-        subscripts.inputs.len(),
-        2,
-        "tropical einsum subscripts must describe exactly two inputs"
-    );
-    assert_eq!(
-        input_dtypes[0], input_dtypes[1],
-        "tropical einsum input dtypes must match"
-    );
+) -> Option<(DType, Vec<SymDim>)> {
+    if input_shapes.len() != 2 || input_dtypes.len() != input_shapes.len() {
+        return None;
+    }
+    if subscripts.inputs.len() != 2 || input_dtypes[0] != input_dtypes[1] {
+        return None;
+    }
 
     let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
     for (labels, shape) in subscripts.inputs.iter().zip(input_shapes.iter()) {
-        assert_eq!(
-            labels.len(),
-            shape.len(),
-            "tropical einsum input rank mismatch: labels={}, shape={}",
-            labels.len(),
-            shape.len()
-        );
+        if labels.len() != shape.len() {
+            return None;
+        }
         for (&label, dim) in labels.iter().zip(shape.iter()) {
             if let Some(existing) = label_dims.get(&label) {
                 if let (Some(lhs), Some(rhs)) = (existing.constant_value(), dim.constant_value()) {
-                    assert_eq!(
-                        lhs, rhs,
-                        "tropical einsum label {label} has inconsistent concrete sizes {lhs} vs {rhs}"
-                    );
+                    if lhs != rhs {
+                        return None;
+                    }
                 }
             } else {
                 label_dims.insert(label, dim.clone());
@@ -650,13 +618,9 @@ fn infer_tropical_output_meta(
     let output_shape = subscripts
         .output
         .iter()
-        .map(|label| {
-            label_dims.get(label).cloned().unwrap_or_else(|| {
-                panic!("unknown size for label {label} in tropical einsum output")
-            })
-        })
-        .collect();
-    (input_dtypes[0], output_shape)
+        .map(|label| label_dims.get(label).cloned())
+        .collect::<Option<Vec<_>>>()?;
+    Some((input_dtypes[0], output_shape))
 }
 
 #[cfg(feature = "autodiff")]

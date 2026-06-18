@@ -573,6 +573,22 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
 }
 
 #[test]
+fn gpu_validate_nonsingular_synchronizes_before_host_download() {
+    let source = linalg_source();
+    let validate = source_section(
+        &source,
+        "let min_val = backend.reduce_min(&flat, &[0])?;",
+        "let is_singular = match &host_min",
+    );
+
+    assert_before(
+        validate,
+        "backend.runtime().synchronize()?;",
+        "download_tensor(backend.runtime(), &min_val)?;",
+    );
+}
+
+#[test]
 fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
     let source = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
     let lu_kernels = source_section(

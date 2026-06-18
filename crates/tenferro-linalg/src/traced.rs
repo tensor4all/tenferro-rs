@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_runtime::extension::apply;
+use tenferro_runtime::extension::try_apply;
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
@@ -41,10 +41,10 @@ pub fn svd_with_eps(
     eps: f64,
 ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     three_outputs(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
             &[a],
-        ),
+        )?,
         "svd",
     )
 }
@@ -64,7 +64,7 @@ pub fn svd_with_eps(
 /// ```
 pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a]),
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a])?,
         "qr",
     )
 }
@@ -100,10 +100,10 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps })),
             &[a],
-        ),
+        )?,
         "eigh",
     )
 }
@@ -122,7 +122,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, Traced
 /// ```
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a]),
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
         "cholesky",
     )
 }
@@ -144,7 +144,7 @@ pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
     four_outputs(
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a]),
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?,
         "lu",
     )
 }
@@ -180,7 +180,7 @@ pub fn full_piv_lu(
     TracedTensor,
 )> {
     five_outputs(
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a]),
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a])?,
         "full_piv_lu",
     )
 }
@@ -200,12 +200,12 @@ pub fn full_piv_lu(
 /// ```
 pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
                 input_dtype: a.dtype,
             })),
             &[a],
-        ),
+        )?,
         "eig",
     )
 }
@@ -225,7 +225,7 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     let mut factor_outputs =
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a]).into_iter();
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
     let (packed_lu, pivots) = match (
         factor_outputs.next(),
         factor_outputs.next(),
@@ -236,13 +236,13 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
                 transpose_a: false,
                 conjugate_a: false,
             })),
             &[a, &packed_lu, &pivots, b],
-        ),
+        )?,
         "solve",
     )
 }
@@ -262,12 +262,12 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLuSolve {
                 transpose_a: false,
             })),
             &[a, b],
-        ),
+        )?,
         "full_piv_lu_solve",
     )
 }
@@ -294,7 +294,7 @@ pub fn triangular_solve(
     unit_diagonal: bool,
 ) -> Result<TracedTensor> {
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
                 left_side,
                 lower,
@@ -302,7 +302,7 @@ pub fn triangular_solve(
                 unit_diagonal,
             })),
             &[a, b],
-        ),
+        )?,
         "triangular_solve",
     )
 }
@@ -322,7 +322,7 @@ pub fn triangular_solve(
 /// ```
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     let mut factor_outputs =
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a]).into_iter();
+        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
     let (packed_lu, parity) = match (
         factor_outputs.next(),
         factor_outputs.next(),
@@ -764,32 +764,32 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
 
 fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals { eps: 1e-12 })),
             &[a],
-        ),
+        )?,
         "svd_values",
     )
 }
 
 fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals { eps: 1e-12 })),
             &[a],
-        ),
+        )?,
         "eigh_values",
     )
 }
 
 fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        apply(
+        try_apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::EigVals {
                 input_dtype: a.dtype,
             })),
             &[a],
-        ),
+        )?,
         "eig_values",
     )
 }

@@ -139,6 +139,7 @@ fn pooled_filled_tensor<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
+    // SAFETY: the following fill writes every pooled output element.
     let mut out = pooled_uninit_tensor(buffers, shape)?;
     out.host_data_mut().fill(fill);
     Ok(out)
@@ -152,6 +153,7 @@ fn clone_host_tensor_from_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
+    // SAFETY: copy_from_slice writes every pooled output element.
     let mut out = pooled_uninit_tensor(buffers, tensor.shape().to_vec())?;
     out.host_data_mut()
         .copy_from_slice(typed_host_data(op, tensor)?);
@@ -382,6 +384,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
+    // SAFETY: the slice loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
@@ -489,6 +492,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
         segment_ends.push(segment_end);
     }
 
+    // SAFETY: the concatenate loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
@@ -536,6 +540,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
         reverse_axis[axis] = true;
     }
 
+    // SAFETY: the reverse loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, input_shape.to_vec())?;
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
@@ -908,6 +913,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
         let _ = component;
     }
 
+    // SAFETY: the gather loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; out_rank];
     let mut batch_idx = vec![0usize; batch_shape.len()];
@@ -1237,6 +1243,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     }
 
     let out_shape = slice_sizes.to_vec();
+    // SAFETY: the dynamic-slice loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     let mut out_idx = vec![0usize; out_shape.len()];
     let mut input_idx = vec![0usize; out_shape.len()];
