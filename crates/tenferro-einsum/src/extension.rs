@@ -304,6 +304,7 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
         .collect()
 }
 
+/// Return the explicit einsum extension AD rule set.
 #[cfg(feature = "autodiff")]
 pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new().with_rule(Arc::new(EinsumAdRule))

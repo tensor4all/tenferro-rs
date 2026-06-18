@@ -31,6 +31,7 @@ DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_API_URL = "https://api.deepseek.com/v1/chat/completions"
 MAX_DIFF_CHARS = 120_000
 MAX_FILE_DIFF_CHARS = 40_000
+MAX_FINDINGS_PER_CHUNK = 8
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
 )
@@ -50,6 +51,19 @@ SECRET_ASSIGNMENT = re.compile(
     r"\s*[:=]\s*)"
     r"([^\s#]+)"
 )
+SEVERITY_ALIASES = {
+    "block": "block",
+    "blocker": "block",
+    "critical": "block",
+    "error": "block",
+    "fail": "block",
+    "failure": "block",
+    "warn": "warn",
+    "warning": "warn",
+    "minor": "warn",
+    "info": "warn",
+    "informational": "warn",
+}
 STRICT_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b"
     r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
@@ -62,6 +76,7 @@ STRICT_SECRET_ASSIGNMENT = re.compile(
 ALWAYS_SECTIONS = frozenset(
     {
         "Public Surface Discipline",
+        "Public Boundary Safety Audits",
         "Work Logs And Design Records",
         "No Ad Hoc Fixes",
     }
@@ -482,12 +497,11 @@ def parse_findings(raw: Any) -> tuple[str, list[Finding]]:
         raise ValueError("findings must be a list")
 
     findings: list[Finding] = []
-    for index, item in enumerate(findings_raw):
+    for index, item in enumerate(findings_raw[:MAX_FINDINGS_PER_CHUNK]):
         if not isinstance(item, dict):
             raise ValueError(f"findings[{index}] must be an object")
-        severity = item.get("severity")
-        if severity not in {"block", "warn"}:
-            raise ValueError(f"findings[{index}].severity must be block or warn")
+        severity_raw = str(item.get("severity", "warn")).strip().lower()
+        severity = SEVERITY_ALIASES.get(severity_raw, "warn")
         line = item.get("line")
         if line is not None and not isinstance(line, int):
             raise ValueError(f"findings[{index}].line must be an integer or null")
@@ -523,6 +537,21 @@ def extract_json_payload(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("parsed JSON must be an object")
     return parsed
+
+
+def llm_response_error_finding(error: BaseException) -> Finding:
+    return Finding(
+        id="llm-review-unusable",
+        severity="block",
+        rule_section="External LLM Review",
+        file="",
+        line=None,
+        summary="External LLM review did not produce usable JSON",
+        detail=(
+            "The repository-rules review could not parse or validate the model "
+            f"response: {type(error).__name__}: {error}"
+        ),
+    )
 
 
 def filter_findings(
@@ -605,6 +634,10 @@ def review_chunk(
             "\n".join(f"- {path}" for path in changed),
             "Applicable REPOSITORY_RULES sections:",
             rules_text,
+            "Output limits:",
+            f"- Return at most {MAX_FINDINGS_PER_CHUNK} findings for this diff chunk.",
+            "- Do not split one root cause into multiple findings.",
+            "- Do not invent requirements that are not explicit in the supplied rules.",
             "Unified diff (review only added/changed lines):",
             diff_chunk,
         ]
@@ -934,16 +967,20 @@ def main(argv: list[str] | None = None) -> int:
         chunks = split_diff_chunks(redact_file_diffs(file_diffs))
         llm_findings: list[Finding] = []
         for chunk in chunks:
-            _, chunk_findings = review_chunk(
-                api_key=api_key,
-                model=args.model,
-                api_url=args.api_url,
-                system_prompt=system_prompt,
-                rules_text=rules_text,
-                changed=files,
-                diff_chunk=chunk,
-                timeout=args.timeout,
-            )
+            try:
+                _, chunk_findings = review_chunk(
+                    api_key=api_key,
+                    model=args.model,
+                    api_url=args.api_url,
+                    system_prompt=system_prompt,
+                    rules_text=rules_text,
+                    changed=files,
+                    diff_chunk=chunk,
+                    timeout=args.timeout,
+                )
+            except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+                findings.append(llm_response_error_finding(exc))
+                break
             llm_findings.extend(chunk_findings)
         findings.extend(
             filter_findings(

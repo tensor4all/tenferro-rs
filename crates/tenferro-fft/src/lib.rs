@@ -468,6 +468,7 @@ impl ExtensionAdRule for FftAdRule {
     }
 }
 
+/// Return the explicit FFT extension AD rule set.
 #[cfg(feature = "autodiff")]
 pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new().with_rule(Arc::new(FftAdRule))

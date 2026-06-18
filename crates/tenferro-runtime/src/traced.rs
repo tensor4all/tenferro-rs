@@ -605,10 +605,11 @@ impl TracedTensor {
         try_concrete_shape(self)
     }
 
-    /// Return the concrete tensor shape, panicking if any dimension is symbolic.
+    /// Return the concrete tensor shape.
     ///
-    /// This mirrors the existing traced frontend behavior for composite ops
-    /// that require concrete ranks and sizes at graph construction time.
+    /// Returns an error when a shape hint is missing or any dimension is
+    /// symbolic. Composite traced ops that require concrete sizes should
+    /// propagate this error instead of panicking.
     pub fn concrete_shape(&self) -> Result<Vec<usize>> {
         concrete_shape(self)
     }

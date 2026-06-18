@@ -59,6 +59,13 @@ instead of preserving them behind `try_*` or alias wrappers.
   the CUDA test archive or starting the `ubuntu-gpu` runner. This avoids
   spending GPU runner time on PR revisions already rejected by repository
   policy, lint, docs, coverage, or CPU tests.
+- Hardened the repository-rules review bot so malformed or schema-drifting LLM
+  responses produce a structured review finding instead of a Python traceback.
+  The prompt now caps findings per chunk and explicitly suppresses known
+  false-positive classes around compatibility shims, Rust `?` propagation,
+  doctest hidden result tails, and private-helper dead-code guesses.
+- Fixed stale `TracedTensor::concrete_shape` rustdoc that still said symbolic
+  dimensions panic even though the API now returns a typed error.
 
 ## Rule Updates
 
@@ -76,6 +83,9 @@ instead of preserving them behind `try_*` or alias wrappers.
 - `REPOSITORY_RULES.md` now records CI cost discipline: expensive GPU or
   larger-runner lanes must sit behind cheaper repository-policy and non-GPU
   checks.
+- The review-bot prompt now encodes the corresponding audit heuristics so future
+  repository-rule runs do not rediscover compatibility-shim and doctest
+  false positives as blockers.
 
 ## Verification
 
@@ -108,6 +118,11 @@ Local verification before push:
 - `cargo test --manifest-path ext/tropical/Cargo.toml --features autodiff --test tropical_ad -- --nocapture`
 - `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`
 - `/opt/homebrew/bin/python3.12 scripts/test-doc-consistency.py`
+- `python3 scripts/test-repository-rules-review.py`
+- `python3 scripts/repository-rules-review.py --base origin/main --head HEAD --output-json /tmp/review-debug-after4.json --no-dotenv`
+- `cargo check -p tenferro-runtime --all-targets`
+- `cargo check -p tenferro-einsum --features autodiff --all-targets`
+- `cargo check -p tenferro-fft --features autodiff --all-targets`
 
 No successful cloud GPU runtime check had completed at the time of this local
 verification; GPU coverage here is local source-contract tests plus CUDA feature
