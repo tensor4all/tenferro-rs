@@ -5,10 +5,10 @@ use tenferro_runtime::{DType, ExtensionCacheStore, ExtensionExecutionContext, Gr
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorValue, TypedTensor};
 
 #[cfg(feature = "cuda")]
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn scalar_extents(
@@ -139,10 +139,18 @@ fn cpu_parity_inputs() -> Vec<Tensor> {
 fn assert_tensor_eq(lhs: &Tensor, rhs: &Tensor) {
     assert_eq!(lhs.shape(), rhs.shape());
     match (lhs, rhs) {
-        (Tensor::F32(lhs), Tensor::F32(rhs)) => assert_eq!(lhs.host_data(), rhs.host_data()),
-        (Tensor::F64(lhs), Tensor::F64(rhs)) => assert_eq!(lhs.host_data(), rhs.host_data()),
-        (Tensor::C32(lhs), Tensor::C32(rhs)) => assert_eq!(lhs.host_data(), rhs.host_data()),
-        (Tensor::C64(lhs), Tensor::C64(rhs)) => assert_eq!(lhs.host_data(), rhs.host_data()),
+        (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+            assert_eq!(lhs.host_data().unwrap(), rhs.host_data().unwrap())
+        }
+        (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+            assert_eq!(lhs.host_data().unwrap(), rhs.host_data().unwrap())
+        }
+        (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+            assert_eq!(lhs.host_data().unwrap(), rhs.host_data().unwrap())
+        }
+        (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+            assert_eq!(lhs.host_data().unwrap(), rhs.host_data().unwrap())
+        }
         _ => panic!("dtype mismatch: lhs={lhs:?} rhs={rhs:?}"),
     }
 }
@@ -250,14 +258,14 @@ fn segmented_value_dispatch_preserves_terminal_lazy_broadcast_multiply_view() {
         "terminal broadcast-multiply segment should preserve a lazy output view"
     );
 
-    let output = outputs.pop().unwrap().to_tensor();
+    let output = outputs.pop().unwrap().to_tensor().unwrap();
     assert_eq!(output.shape(), &[2, 2, 4, 3]);
     let Tensor::F64(output) = output else {
         panic!("expected f64 output")
     };
     let lhs = inputs[0].as_slice::<f64>().unwrap();
     let rhs = inputs[1].as_slice::<f64>().unwrap();
-    let actual = output.host_data();
+    let actual = output.host_data().unwrap();
     for t in 0..3 {
         for o in 0..4 {
             for k in 0..2 {
@@ -368,7 +376,7 @@ fn gpu_host_boundary_inputs() -> Vec<Tensor> {
 }
 
 #[cfg(feature = "cuda")]
-fn upload_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
+fn upload_all(backend: &CudaBackend, tensors: &[Tensor]) -> Vec<Tensor> {
     tensors
         .iter()
         .map(|tensor| upload_tensor(backend.runtime(), tensor).unwrap())
@@ -376,7 +384,7 @@ fn upload_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
 }
 
 #[cfg(feature = "cuda")]
-fn download_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
+fn download_all(backend: &CudaBackend, tensors: &[Tensor]) -> Vec<Tensor> {
     tensors
         .iter()
         .map(|tensor| download_tensor(backend.runtime(), tensor).unwrap())
@@ -389,7 +397,7 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cubecl_host_boundaries() {
     let program = gpu_host_boundary_program();
     let host_inputs = gpu_host_boundary_inputs();
 
-    let mut gpu_unsegmented = CubeclBackend::new(0).unwrap();
+    let mut gpu_unsegmented = CudaBackend::new(0).unwrap();
     let unsegmented_inputs = upload_all(&gpu_unsegmented, &host_inputs);
     let mut extension_caches = ExtensionCacheStore::new();
     let mut unsegmented_context =
@@ -400,7 +408,7 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cubecl_host_boundaries() {
     drop(unsegmented_context);
     let unsegmented_host = download_all(&gpu_unsegmented, &unsegmented);
 
-    let gpu_segmented_backend = CubeclBackend::new(0).unwrap();
+    let gpu_segmented_backend = CudaBackend::new(0).unwrap();
     let segmented_inputs = upload_all(&gpu_segmented_backend, &host_inputs);
     let mut gpu_segmented = GraphExecutor::new(gpu_segmented_backend);
     let segmented = gpu_segmented

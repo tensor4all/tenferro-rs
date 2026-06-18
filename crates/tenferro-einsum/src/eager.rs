@@ -34,11 +34,11 @@ impl TensorValue<'_> {
         }
     }
 
-    fn into_tensor(self) -> Tensor {
+    fn into_tensor(self) -> Result<Tensor> {
         match self {
-            Self::Borrowed(tensor) => tensor.clone(),
+            Self::Borrowed(tensor) => Ok(tensor.clone()),
             Self::View(view) => view.to_tensor(),
-            Self::Owned(tensor) => tensor,
+            Self::Owned(tensor) => Ok(tensor),
         }
     }
 
@@ -144,7 +144,7 @@ fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
     dims: &[usize],
 ) -> Result<TypedTensorView<'a, T>> {
     let (shape, strides) = broadcast_shape_strides(&view, shape, dims)?;
-    TypedTensorView::from_slice(shape, strides, view.offset(), view.as_physical_slice())
+    TypedTensorView::from_slice(shape, strides, view.offset(), view.as_physical_slice()?)
 }
 
 fn broadcast_tensor_view<'a>(
@@ -215,10 +215,10 @@ impl LabeledTensor<'_> {
         self.tensor.tensor_read()
     }
 
-    fn tensor_cow(&self) -> Cow<'_, Tensor> {
+    fn tensor_cow(&self) -> Result<Cow<'_, Tensor>> {
         match self.tensor() {
-            Some(tensor) => Cow::Borrowed(tensor),
-            None => Cow::Owned(self.tensor_read().to_tensor()),
+            Some(tensor) => Ok(Cow::Borrowed(tensor)),
+            None => Ok(Cow::Owned(self.tensor_read().to_tensor()?)),
         }
     }
 
@@ -347,7 +347,7 @@ fn reduce_tensor<'a>(
         .filter(|(axis, _)| !reduce_set.contains(axis))
         .map(|(_, label)| *label)
         .collect();
-    let operand_tensor = operand.tensor_cow();
+    let operand_tensor = operand.tensor_cow()?;
     let tensor = exec.reduce_sum(&operand_tensor, &reduce_axes)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -374,7 +374,7 @@ fn diagonalize_repeated<'a>(
             return Ok(operand);
         };
 
-        let operand_tensor = operand.tensor_cow();
+        let operand_tensor = operand.tensor_cow()?;
         let tensor = exec.extract_diagonal(&operand_tensor, axis_a, axis_b)?;
         let mut labels = operand.labels.clone();
         labels.remove(axis_b);
@@ -406,7 +406,7 @@ fn embed_repeated<'a>(
             if output_count > current_count {
                 let axis_a = find_label_axis(&operand.labels, label)?;
                 let axis_b = axis_a + 1;
-                let operand_tensor = operand.tensor_cow();
+                let operand_tensor = operand.tensor_cow()?;
                 let tensor = exec.embed_diagonal(&operand_tensor, axis_a, axis_b)?;
                 let mut labels = operand.labels.clone();
                 labels.insert(axis_b, label);
@@ -447,7 +447,7 @@ fn transpose_to_labels<'a>(
         return Ok(operand);
     }
 
-    let operand_tensor = operand.tensor_cow();
+    let operand_tensor = operand.tensor_cow()?;
     let tensor = exec.transpose(&operand_tensor, &perm)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -513,8 +513,8 @@ fn outer_product<'a>(
         ) {
             (Some(lhs_read), Some(rhs_read)) => exec.mul_read(lhs_read?, rhs_read?)?,
             _ => {
-                let lhs_input = lhs.tensor_cow();
-                let rhs_input = rhs.tensor_cow();
+                let lhs_input = lhs.tensor_cow()?;
+                let rhs_input = rhs.tensor_cow()?;
                 let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
                 let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
                 let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
@@ -723,7 +723,7 @@ fn eager_einsum_exec_values<'a>(
         let reduced = reduce_tensor(exec, operand, &reduce_labels)?;
         let embedded = embed_repeated(exec, reduced, output_labels)?;
         let reordered = transpose_to_labels(exec, embedded, output_labels)?;
-        return Ok(reordered.tensor.into_tensor());
+        return reordered.tensor.into_tensor();
     }
 
     for step_idx in 0..tree.step_count() {
@@ -767,7 +767,7 @@ fn eager_einsum_exec_values<'a>(
     let reordered = profile_eager_einsum_section("exec.final_transpose", || {
         transpose_to_labels(exec, reduced, output_labels)
     })?;
-    Ok(reordered.tensor.into_tensor())
+    reordered.tensor.into_tensor()
 }
 
 /// Run a whole einsum contraction tree in one backend session.
@@ -835,7 +835,7 @@ fn eager_einsum_exec_binary_read_fast(
         labels: subscripts.inputs[1].clone(),
     };
     execute_binary_dot_fast_plan(exec, lhs, rhs, plan, true)
-        .map(|result| result.tensor.into_tensor())
+        .and_then(|result| result.tensor.into_tensor())
 }
 
 fn try_eager_einsum_binary_read_fast(

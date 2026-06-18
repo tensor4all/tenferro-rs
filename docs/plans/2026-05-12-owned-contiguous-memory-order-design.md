@@ -64,8 +64,8 @@ Tensor::from_vec_row_major(shape, data)
 Owned export should distinguish zero-copy extraction from layout conversion:
 
 ```rust
-tensor.try_into_vec_col_major()
-tensor.try_into_vec_row_major()
+tensor.into_vec_col_major()
+tensor.into_vec_row_major()
 tensor.to_col_major()
 tensor.to_row_major()
 ```

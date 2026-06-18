@@ -20,23 +20,23 @@ fn empty_extents(output_count: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
 }
 
 fn scalar_tensor(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn scalar_value(tensor: &Tensor) -> f64 {
     match tensor {
-        Tensor::F64(inner) => inner.host_data()[0],
+        Tensor::F64(inner) => inner.host_data().unwrap()[0],
         other => panic!("expected scalar f64 tensor, got {other:?}"),
     }
 }
 
 fn scalar_c64_value(tensor: &Tensor) -> Complex64 {
     match tensor {
-        Tensor::C64(inner) => inner.host_data()[0],
+        Tensor::C64(inner) => inner.host_data().unwrap()[0],
         other => panic!("expected scalar c64 tensor, got {other:?}"),
     }
 }
@@ -649,7 +649,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
 #[test]
 fn graph_executor_does_not_reclaim_borrowed_input_slots() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let y = (&x + &x).neg();
+    let y = (&x + &x).unwrap().neg();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])

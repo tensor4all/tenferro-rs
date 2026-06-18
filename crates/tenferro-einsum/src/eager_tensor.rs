@@ -24,9 +24,7 @@ use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
     EINSUM_EXTENSION_FAMILY_ID,
 };
-use crate::extension::{
-    ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
-};
+use crate::extension::{register_runtime, EinsumExtensionOp};
 use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, resolve_plan_spec, EinsumPlanSpec,
 };
@@ -102,7 +100,6 @@ pub fn einsum_subscripts(
         return Ok(result);
     }
 
-    ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
     if let Some(first) = inputs.first() {
         first
             .runtime()
@@ -588,7 +585,7 @@ fn try_execute_eager_broadcast_multiply_pattern(
     let rhs = slot_tensor(slots, rhs_bc.inputs[0])?;
     let lhs_shape = eval_shape_exprs(slots, &lhs_bc.inputs, lhs_shape_exprs)?;
     let rhs_shape = eval_shape_exprs(slots, &rhs_bc.inputs, rhs_shape_exprs)?;
-    let Some(output) = tenferro_ad::eager_tensor::try_backend_broadcast_multiply_untracked(
+    let Some(output) = tenferro_ad::eager_tensor::backend_broadcast_multiply_untracked(
         lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims,
     )?
     else {
@@ -611,7 +608,9 @@ fn eval_shape_exprs(
         .iter()
         .map(|tensor| tensor.shape())
         .collect::<Vec<_>>();
-    Ok(DimExpr::eval_all(shape, &input_shapes))
+    DimExpr::eval_all(shape, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
+        message: format!("invalid eager einsum shape expression: {err}"),
+    })
 }
 
 fn slot_tensor(slots: &[Option<EagerTensor>], slot: usize) -> Result<&EagerTensor> {

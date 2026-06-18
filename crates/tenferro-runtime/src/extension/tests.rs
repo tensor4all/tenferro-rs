@@ -11,18 +11,18 @@ struct TestExtension {
     inferred_outputs: usize,
 }
 
-impl ExtensionOpTrait for TestExtension {
+impl ExtensionOp for TestExtension {
     fn family_id(&self) -> &'static str {
         "test.extension"
     }
 
     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
 
-    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other.as_any().downcast_ref::<Self>().is_some()
     }
 
-    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
         Arc::new(self.clone())
     }
 
@@ -54,15 +54,15 @@ impl ExtensionOpTrait for TestExtension {
 }
 
 #[test]
-fn try_apply_returns_error_for_input_count_mismatch() {
+fn apply_returns_error_for_input_count_mismatch() {
     let op = Arc::new(TestExtension {
         input_count: 2,
         output_count: 1,
         inferred_outputs: 1,
     });
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
-    let Err(err) = try_apply(op, &[&x]) else {
+    let Err(err) = apply(op, &[&x]) else {
         panic!("input count mismatch should be an error");
     };
 
@@ -72,15 +72,15 @@ fn try_apply_returns_error_for_input_count_mismatch() {
 }
 
 #[test]
-fn try_apply_returns_error_for_output_metadata_count_mismatch() {
+fn apply_returns_error_for_output_metadata_count_mismatch() {
     let op = Arc::new(TestExtension {
         input_count: 1,
         output_count: 2,
         inferred_outputs: 1,
     });
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
-    let Err(err) = try_apply(op, &[&x]) else {
+    let Err(err) = apply(op, &[&x]) else {
         panic!("output metadata mismatch should be an error");
     };
 
@@ -113,7 +113,7 @@ fn execute_lowered_program_with_backend_cache_rejects_nested_extension_ops() {
     };
     let mut backend = tenferro_cpu::CpuBackend::new();
     let mut backend_cache = Default::default();
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 
     let err = execute_lowered_program_with_backend_cache(
         &mut backend,
@@ -130,8 +130,8 @@ fn execute_lowered_program_with_backend_cache_rejects_nested_extension_ops() {
 
 #[test]
 fn apply_expanded_graph_builds_standard_op_without_extension() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let outputs = apply_expanded_graph(
         &[&x, &y],
@@ -154,7 +154,7 @@ fn apply_expanded_graph_builds_standard_op_without_extension() {
 
 #[test]
 fn apply_expanded_graph_rejects_output_metadata_count_mismatch() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
     let result = apply_expanded_graph(&[&x], vec![], |builder, inputs| {
         Ok(builder.add_operation(StdTensorOp::Neg, inputs.to_vec(), OperationRole::Primary))

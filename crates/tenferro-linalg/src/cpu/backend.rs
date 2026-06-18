@@ -356,7 +356,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return Ok(zeros_like_tensor(b));
+            return zeros_like_tensor(b);
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -807,7 +807,7 @@ impl LinalgBackend for CpuBackend {
             });
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return Ok(zeros_like_tensor(b));
+            return zeros_like_tensor(b);
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -848,7 +848,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return Ok(zeros_like_tensor(b));
+            return zeros_like_tensor(b);
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -991,37 +991,41 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     Some(rhs_shape)
 }
 
-fn zeros_like_tensor(input: &Tensor) -> Tensor {
-    match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())),
+fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+    Ok(match input {
+        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())?),
+        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())?),
+        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())?),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())?),
         Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
             t.shape().to_vec(),
             vec![false; t.n_elements()],
-        )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
-    }
+        )?),
+        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())?),
+        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())?),
+    })
 }
 
-fn complex32_real_part_tensor(values: TypedTensor<Complex32>) -> TypedTensor<f32> {
+fn complex32_real_part_tensor(
+    values: TypedTensor<Complex32>,
+) -> tenferro_tensor::Result<TypedTensor<f32>> {
     let mut out = TypedTensor::from_vec_col_major(
         values.shape().to_vec(),
-        values.host_data().iter().map(|value| value.re).collect(),
-    );
+        values.host_data()?.iter().map(|value| value.re).collect(),
+    )?;
     out.set_placement(values.placement().clone());
-    out
+    Ok(out)
 }
 
-fn complex64_real_part_tensor(values: TypedTensor<Complex64>) -> TypedTensor<f64> {
+fn complex64_real_part_tensor(
+    values: TypedTensor<Complex64>,
+) -> tenferro_tensor::Result<TypedTensor<f64>> {
     let mut out = TypedTensor::from_vec_col_major(
         values.shape().to_vec(),
-        values.host_data().iter().map(|value| value.re).collect(),
-    );
+        values.host_data()?.iter().map(|value| value.re).collect(),
+    )?;
     out.set_placement(values.placement().clone());
-    out
+    Ok(out)
 }
 
 fn svd_output_count_error(count: usize) -> Error {
@@ -1054,7 +1058,7 @@ fn full_piv_lu_c32_outputs_to_public_tensors(
             Tensor::C32(l),
             Tensor::C32(u),
             Tensor::C32(q),
-            Tensor::F32(complex32_real_part_tensor(parity)),
+            Tensor::F32(complex32_real_part_tensor(parity)?),
         ]),
         _ => Err(full_piv_lu_output_count_error(count)),
     }
@@ -1078,7 +1082,7 @@ fn full_piv_lu_c64_outputs_to_public_tensors(
             Tensor::C64(l),
             Tensor::C64(u),
             Tensor::C64(q),
-            Tensor::F64(complex64_real_part_tensor(parity)),
+            Tensor::F64(complex64_real_part_tensor(parity)?),
         ]),
         _ => Err(full_piv_lu_output_count_error(count)),
     }
@@ -1097,7 +1101,7 @@ fn svd_c32_outputs_to_public_tensors(
     ) {
         (Some(u), Some(values), Some(vt), None) => Ok(vec![
             Tensor::C32(u),
-            Tensor::F32(complex32_real_part_tensor(values)),
+            Tensor::F32(complex32_real_part_tensor(values)?),
             Tensor::C32(vt),
         ]),
         _ => Err(svd_output_count_error(count)),
@@ -1117,7 +1121,7 @@ fn svd_c64_outputs_to_public_tensors(
     ) {
         (Some(u), Some(values), Some(vt), None) => Ok(vec![
             Tensor::C64(u),
-            Tensor::F64(complex64_real_part_tensor(values)),
+            Tensor::F64(complex64_real_part_tensor(values)?),
             Tensor::C64(vt),
         ]),
         _ => Err(svd_output_count_error(count)),
@@ -1131,7 +1135,7 @@ fn eigh_c32_outputs_to_public_tensors(
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next(), outputs.next()) {
         (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::F32(complex32_real_part_tensor(values)),
+            Tensor::F32(complex32_real_part_tensor(values)?),
             Tensor::C32(vectors),
         ]),
         _ => Err(eigh_output_count_error(count)),
@@ -1145,7 +1149,7 @@ fn eigh_c64_outputs_to_public_tensors(
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next(), outputs.next()) {
         (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::F64(complex64_real_part_tensor(values)),
+            Tensor::F64(complex64_real_part_tensor(values)?),
             Tensor::C64(vectors),
         ]),
         _ => Err(eigh_output_count_error(count)),
@@ -1201,13 +1205,15 @@ fn apply_lu_pivots_typed<T: Clone>(
     let batch_total = batch_count(&shape[2..]);
     let matrix_stride = rows * cols;
     let pivot_stride = k;
-    let mut data = Vec::with_capacity(input.host_data().len());
+    let input_data = input.host_data()?;
+    let pivot_data = pivots.host_data()?;
+    let mut data = Vec::with_capacity(input_data.len());
 
     for batch in 0..batch_total {
         let mut perm: Vec<usize> = (0..rows).collect();
         let pivot_offset = batch * pivot_stride;
         for step in 0..k {
-            let pivot_one_based = pivots.host_data()[pivot_offset + step];
+            let pivot_one_based = pivot_data[pivot_offset + step];
             if pivot_one_based <= 0 {
                 return Err(Error::backend_failure(
                     "lu_solve_prepared",
@@ -1237,12 +1243,12 @@ fn apply_lu_pivots_typed<T: Clone>(
         let batch_offset = batch * matrix_stride;
         for col in 0..cols {
             for &source_row in &row_map {
-                data.push(input.host_data()[batch_offset + source_row + col * rows].clone());
+                data.push(input_data[batch_offset + source_row + col * rows].clone());
             }
         }
     }
 
-    Ok(TypedTensor::from_vec_col_major(shape.to_vec(), data))
+    TypedTensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 fn validate_lu_solve_prepared_shapes(

@@ -141,10 +141,10 @@ fn segmented_eval_executes_single_broadcast_multiply_pairs() {
     };
     let mut backend = CpuBackend::new();
     let inputs = vec![
-        Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
-        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ];
 
     let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
@@ -168,7 +168,7 @@ fn segmented_eval_executes_reused_broadcast_multiply_pair() {
         n_slots: 3,
     };
     let mut backend = CpuBackend::new();
-    let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])];
+    let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()];
 
     let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
 

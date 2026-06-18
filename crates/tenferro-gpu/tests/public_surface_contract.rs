@@ -138,8 +138,8 @@ fn public_backend_names_are_provider_specific() {
         "WebGPU backend should have an explicit public WebGpuBackend name"
     );
     assert!(
-        lib_rs.contains("CubeclBackend"),
-        "the existing CubeclBackend compatibility name should remain while downstream users migrate"
+        !lib_rs.contains("CubeclBackend") && !lib_rs.contains("CubeclRuntime"),
+        "CubeCL implementation names should not remain as public CUDA backend aliases"
     );
 }
 

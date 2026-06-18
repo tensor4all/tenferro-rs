@@ -176,7 +176,7 @@ provides the corresponding rules and the caller includes those rules in an
 `AdContext`. If an extension does not support a given AD path, tenferro reports
 that path as unsupported rather than silently returning an incorrect gradient.
 
-The process-global extension-rule registration API is retained as a
-compatibility bridge for older helpers. New code should prefer explicit context
-ownership. See [Custom Tensor Operations](custom-operations.md) for the
-extension model.
+There is no process-global extension-rule registry. Extension AD must be owned
+by an explicit `AdContext` so tests and applications cannot accidentally depend
+on hidden process state. See [Custom Tensor Operations](custom-operations.md)
+for the extension model.

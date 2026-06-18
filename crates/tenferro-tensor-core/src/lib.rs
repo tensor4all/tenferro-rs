@@ -903,21 +903,6 @@ impl<'a, T> HostTensorView<'a, T> {
         self.offset == 0 && self.is_compact_col_major()
     }
 
-    /// Alias for [`HostTensorView::is_compact_col_major`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::HostTensor;
-    ///
-    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
-    /// assert!(tensor.as_view().is_contiguous_col_major());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
-    /// ```
-    pub fn is_contiguous_col_major(&self) -> bool {
-        self.is_compact_col_major()
-    }
-
     /// Borrow the slice-contiguous backing region for this view.
     ///
     /// # Examples

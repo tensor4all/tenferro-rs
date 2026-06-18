@@ -67,11 +67,24 @@ rules from `tensor4all-agent-rules`.
   `panic`, `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or
   debug-only assertions. If an invariant is truly internal, keep it close to the
   proof; otherwise return a typed error.
+- When a bug exposes a public API design mismatch, prefer the cleanest
+  root-cause design fix by changing the canonical API contract. API
+  compatibility is not a goal unless the task explicitly requires it. Do not
+  preserve a panicking or lossy public API by adding a parallel `try_*`
+  compatibility escape; normally make the canonical operation return a typed
+  `Result`. Keep `try_*` names only when they are the intended canonical Rust
+  API, not a workaround for avoiding a cleaner API change.
+- If the cleanest fix requires reshaping `tidu` AD-transform APIs used by
+  tenferro, make that upstream API cleanup the preferred repair path and
+  optimize for the long-term clean `tidu` contract first. Do not hide a
+  tenferro bug behind lossy `tidu` error categories or local compatibility
+  shims when a clearer `tidu` contract is the root-cause fix.
 - Public cache, runtime, extension, and AD registry locks must not silently
   ignore poison by reporting empty/default state. If the method can return a
-  `Result`, return a typed poison error; if the legacy API cannot return a
-  `Result`, provide a fallible `try_*` API and make the legacy wrapper fail
-  visibly rather than fabricating success.
+  `Result`, return a typed poison error. If a non-`Result` API must remain
+  because of an explicitly approved compatibility or trait constraint, document
+  that reason near the wrapper and make failures visible rather than fabricating
+  success.
 - Public traced/eager helpers must validate rank and axis counts before
   computing output ranks or indexing shape arrays. Symbolic-shape traced values
   must not be forced through concrete-shape helpers unless the API explicitly
@@ -166,7 +179,7 @@ rules from `tensor4all-agent-rules`.
   `tenferro::linalg`, or `tenferro::fft`; users import operation crates
   directly.
 - Users import operation crates directly and register runtimes explicitly, for
-  example `tenferro_einsum::einsum` plus
+  example `tenferro_einsum::traced_tensor::einsum` plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
 - Extension runtime dispatch must fail explicitly when a runtime owner is
   available but the extension family is not registered. Do not silently fall
@@ -193,8 +206,8 @@ rules from `tensor4all-agent-rules`.
 - Extension crates depend on the runtime, tensor, AD, or GPU crate they need;
   dependency flow must not require a facade crate to depend back on them.
 - Extension AD rules should be owned by an explicit `tenferro_ad::AdContext`
-  or rule set. Process-global registration may remain only as a compatibility
-  bridge, not as the primary design for new APIs.
+  or rule set. Do not add process-global registration shims; a legacy bridge
+  may exist only when explicitly approved by the task or maintainer decision.
 
 ## Oracle Gate
 
@@ -595,7 +608,7 @@ Tests follow implementation ownership.
   device transfer behavior. Any change to those conventions must update that
   document in the same PR.
 - CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-  provided by cuSOLVER. `CubeclBackend::eig` returns `BackendFailure`; users
+  provided by cuSOLVER. `CudaBackend::eig` returns `BackendFailure`; users
   must explicitly download to CPU and compute via `CpuBackend::eig`.
 
 ## Documentation Policy

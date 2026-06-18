@@ -276,7 +276,14 @@ impl<'a> GraphInstructionView<'a> {
         let mut shape = Vec::with_capacity(extents.len());
         for (axis, extent) in extents.iter().enumerate() {
             match extent {
-                ShapeExtent::Exact(dim) => shape.push(dim.eval(input_shapes)),
+                ShapeExtent::Exact(dim) => shape.push(dim.eval(input_shapes).map_err(|err| {
+                    GraphProgramLoweringShapeError::InvalidDimExpr {
+                        op: self.op_name(),
+                        output_index,
+                        axis,
+                        source: err,
+                    }
+                })?),
                 ShapeExtent::UpperBound(_) => {
                     return Err(GraphProgramLoweringShapeError::NonStatic {
                         op: self.op_name(),
@@ -438,6 +445,16 @@ pub enum GraphProgramLoweringShapeError {
         output_index: usize,
         axis: usize,
         kind: &'static str,
+    },
+    /// Static shape evaluation failed for an exact dimension expression.
+    #[error(
+        "ExecOp::{op} output {output_index} axis {axis} has invalid dimension expression: {source}"
+    )]
+    InvalidDimExpr {
+        op: &'static str,
+        output_index: usize,
+        axis: usize,
+        source: tenferro_ops::dim_expr::DimExprEvalError,
     },
 }
 

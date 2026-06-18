@@ -20,7 +20,7 @@ fn bench_threads() -> usize {
 }
 
 fn cpu_ctx(threads: usize) -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads))
+    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap())
 }
 
 fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -28,7 +28,7 @@ fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
     let data = (0..len)
         .map(|idx| ((idx * 17 + seed * 31 + 7) % 997) as f64 / 997.0 - 0.5)
         .collect();
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -40,7 +40,7 @@ fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
             Complex64::new(re, im)
         })
         .collect();
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {

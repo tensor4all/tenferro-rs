@@ -46,12 +46,12 @@ an existing public API with materially matching semantics.
 
 Examples:
 
-- `eigh` maps to `tenferro_linalg::eigen`
-- `eigvals` maps to `tenferro_linalg::eig(...).values`
-- `eigvalsh` maps to `tenferro_linalg::eigen(...).values`
-- `svdvals` maps to `tenferro_linalg::svd(...).s`
-- `matrix_norm` and `vector_norm` map to `tenferro_linalg::norm`
-- `pinv_singular` maps to `tenferro_linalg::pinv`
+- `eigh` maps to `tenferro_linalg::traced_tensor::eigen`
+- `eigvals` maps to `tenferro_linalg::traced_tensor::eig(...).values`
+- `eigvalsh` maps to `tenferro_linalg::traced_tensor::eigen(...).values`
+- `svdvals` maps to `tenferro_linalg::traced_tensor::svd(...).s`
+- `matrix_norm` and `vector_norm` map to `tenferro_linalg::traced_tensor::norm`
+- `pinv_singular` maps to `tenferro_linalg::traced_tensor::pinv`
 
 These families should not spawn product implementation issues. They belong in
 the replay backlog.
@@ -145,7 +145,7 @@ A family counts as covered by existing public surface when:
 
 This is why `eigh` maps to `eigen`, why `svdvals` does not require a new
 `svdvals` symbol, and why `vecdot` or simple `multi_dot` chains can stay in
-the replay backlog through `tenferro_einsum::einsum`.
+the replay backlog through `tenferro_einsum::traced_tensor::einsum`.
 
 ## Issue Strategy
 

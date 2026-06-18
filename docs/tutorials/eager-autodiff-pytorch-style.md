@@ -40,8 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(grad.shape(), &[3]);
     assert_close(grad.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
-    x.clear_grad();
-    assert!(x.grad().is_none());
+    x.clear_grad().unwrap();
+    assert!(x.grad().unwrap().is_none());
 
     Ok(())
 }

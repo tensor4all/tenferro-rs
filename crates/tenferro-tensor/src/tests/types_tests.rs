@@ -1,13 +1,12 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
-    col_major_strides, flat_to_multi, materialize_typed_view_col_major, try_col_major_strides,
-    Buffer, BufferHandle, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
-    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
-    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
+    DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec,
+    Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
+    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use crate::{Error, SliceConfig};
@@ -21,20 +20,17 @@ fn tensor_scalar_roundtrip<T>(shape: Vec<usize>, data: Vec<T>)
 where
     T: TensorScalar + PartialEq + std::fmt::Debug,
 {
-    let tensor = T::into_tensor(shape.clone(), data.clone());
+    let tensor = T::into_tensor(shape.clone(), data.clone()).unwrap();
 
     assert_eq!(tensor.shape(), shape.as_slice());
-    assert_eq!(T::try_as_slice(&tensor), Some(data.as_slice()));
-    assert_eq!(tensor.as_slice::<T>(), Some(data.as_slice()));
+    assert_eq!(T::as_slice(&tensor).unwrap(), data.as_slice());
+    assert_eq!(tensor.as_slice::<T>().unwrap(), data.as_slice());
 
     let mut mutable = tensor.clone();
-    assert_eq!(
-        T::try_as_slice_mut(&mut mutable).map(|slice| &*slice),
-        Some(data.as_slice())
-    );
+    assert_eq!(T::as_slice_mut(&mut mutable).unwrap(), data.as_slice());
 
-    let typed = T::try_into_typed(tensor).unwrap();
-    assert_eq!(typed.as_slice(), data.as_slice());
+    let typed = T::into_typed(tensor).unwrap();
+    assert_eq!(typed.as_slice().unwrap(), data.as_slice());
 }
 
 macro_rules! tensor_scalar_roundtrip_test {
@@ -48,36 +44,37 @@ macro_rules! tensor_scalar_roundtrip_test {
 
 #[test]
 fn tensor_scalar_tensor_read_covers_all_variants() {
-    let f64s = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    let f64s = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
     assert_eq!(f64::tensor_read(&f64s).dtype(), DType::F64);
 
-    let f32s = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]);
+    let f32s = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
     assert_eq!(f32::tensor_read(&f32s).dtype(), DType::F32);
 
-    let i64s = TypedTensor::<i64>::from_vec_col_major(vec![1], vec![1]);
+    let i64s = TypedTensor::<i64>::from_vec_col_major(vec![1], vec![1]).unwrap();
     assert_eq!(i64::tensor_read(&i64s).dtype(), DType::I64);
 
-    let i32s = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![1]);
+    let i32s = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![1]).unwrap();
     assert_eq!(i32::tensor_read(&i32s).dtype(), DType::I32);
 
-    let bools = TypedTensor::<bool>::from_vec_col_major(vec![1], vec![true]);
+    let bools = TypedTensor::<bool>::from_vec_col_major(vec![1], vec![true]).unwrap();
     assert_eq!(bool::tensor_read(&bools).dtype(), DType::Bool);
 
     let c64s =
-        TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]);
+        TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])
+            .unwrap();
     assert_eq!(Complex64::tensor_read(&c64s).dtype(), DType::C64);
 
     let c32s =
-        TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]);
+        TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)])
+            .unwrap();
     assert_eq!(Complex32::tensor_read(&c32s).dtype(), DType::C32);
 }
 
 #[test]
 fn tensor_value_keeps_owned_transpose_as_view_until_materialized() {
-    let tensor = Arc::new(Tensor::from_vec_col_major(
-        vec![2, 3],
-        vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
-    ));
+    let tensor = Arc::new(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap(),
+    );
     let value = TensorValue::from_tensor_arc(tensor);
     let transposed = value.transpose_view([1, 0]).unwrap();
 
@@ -87,7 +84,7 @@ fn tensor_value_keeps_owned_transpose_as_view_until_materialized() {
         TensorRead::Tensor(_) => panic!("owned transpose should be exposed as a view"),
     }
 
-    let materialized = transposed.to_tensor();
+    let materialized = transposed.to_tensor().unwrap();
     assert_eq!(materialized.shape(), &[3, 2]);
     assert_eq!(
         materialized.as_slice::<f64>().unwrap(),
@@ -97,10 +94,9 @@ fn tensor_value_keeps_owned_transpose_as_view_until_materialized() {
 
 #[test]
 fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
-    let base = Arc::new(Tensor::from_vec_col_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let base = Arc::new(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    );
     let owned = TensorOwnedView::from_tensor(Arc::clone(&base));
 
     assert_eq!(owned.dtype(), DType::F64);
@@ -116,7 +112,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         other => panic!("owned view should expose TensorRead::View, got {other:?}"),
     }
     assert_eq!(
-        owned.to_tensor().as_slice::<f64>().unwrap(),
+        owned.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     );
 
@@ -124,7 +120,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
     assert_eq!(explicit.shape(), &[3, 2]);
     assert_eq!(
-        explicit.to_tensor().as_slice::<f64>().unwrap(),
+        explicit.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 
@@ -144,7 +140,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         .unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
     assert_eq!(
-        sliced.to_tensor().as_slice::<f64>().unwrap(),
+        sliced.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[3.0, 4.0, 5.0, 6.0]
     );
 
@@ -182,7 +178,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(value.shape(), &[2, 3]);
     assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
     assert_eq!(
-        value.to_tensor().as_slice::<f64>().unwrap(),
+        value.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     );
 
@@ -204,6 +200,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
             })
             .unwrap()
             .to_tensor()
+            .unwrap()
             .as_slice::<f64>()
             .unwrap(),
         &[2.0, 4.0]
@@ -219,11 +216,11 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
 
 #[test]
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
-    assert_eq!(col_major_strides(&[]), Vec::<isize>::new());
-    assert_eq!(col_major_strides(&[2, 3, 4]), vec![1, 2, 6]);
-    assert_eq!(try_col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
+    assert_eq!(col_major_strides(&[]).unwrap(), Vec::<isize>::new());
+    assert_eq!(col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
+    assert_eq!(col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
     assert!(matches!(
-        try_col_major_strides(&[usize::MAX, 2]),
+        col_major_strides(&[usize::MAX, 2]),
         Err(Error::InvalidConfig { .. })
     ));
 
@@ -279,7 +276,7 @@ fn device_model_has_first_class_webgpu_backend_kind() {
 
 #[test]
 fn default_placement_is_unpinned_host_without_device() {
-    let tensor = TypedTensor::<f64>::zeros(vec![2]);
+    let tensor = TypedTensor::<f64>::zeros(vec![2]).unwrap();
 
     assert_eq!(tensor.placement().memory_kind, MemoryKind::UnpinnedHost);
     assert_eq!(tensor.placement().device, None);
@@ -304,19 +301,20 @@ fn gpu_placement_is_metadata_only() {
 
 #[test]
 fn typed_tensor_rank_zero_access_and_mutation_work() {
-    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![], vec![7.0_f64]);
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
 
     assert_eq!(tensor.n_elements(), 1);
-    assert_eq!(tensor.linear_offset(&[]), 0);
-    assert_eq!(*tensor.get(&[]), 7.0);
+    assert_eq!(tensor.linear_offset(&[]).unwrap(), 0);
+    assert_eq!(*tensor.get(&[]).unwrap(), 7.0);
 
-    *tensor.get_mut(&[]) = 9.5;
-    assert_eq!(tensor.host_data(), &[9.5]);
+    *tensor.get_mut(&[]).unwrap() = 9.5;
+    assert_eq!(tensor.host_data().unwrap(), &[9.5]);
 }
 
 #[test]
 fn typed_tensor_static_rank_constructs_compact_layout() {
-    let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let tensor =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.layout().strides(), &[1, 2]);
     assert!(tensor.layout().is_compact_col_major());
@@ -324,7 +322,7 @@ fn typed_tensor_static_rank_constructs_compact_layout() {
 
 #[test]
 fn typed_tensor_try_into_rank_validates_rank() {
-    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
 
     let err = tensor.try_into_rank::<3>().unwrap_err();
 
@@ -351,7 +349,8 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
         vec![2, 3],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(42, 6))),
         placement.clone(),
-    );
+    )
+    .unwrap();
 
     let ranked = tensor.try_into_rank::<2>().unwrap();
 
@@ -372,7 +371,8 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
 
 #[test]
 fn typed_tensor_as_view_preserves_rank_and_layout() {
-    let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let tensor =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let view = tensor.as_view();
     assert_eq!(view.shape(), &[2, 2]);
     assert_eq!(view.strides(), &[1, 2]);
@@ -391,7 +391,8 @@ fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
                 ordinal: 0,
             }),
         },
-    );
+    )
+    .unwrap();
 
     let err = tensor.as_view().as_slice().unwrap_err();
 
@@ -424,7 +425,8 @@ fn typed_tensor_view_as_slice_rejects_non_contiguous_layout() {
 
 #[test]
 fn typed_tensor_view_transpose_is_metadata_only() {
-    let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]);
+    let tensor =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]).unwrap();
     let view = tensor.as_view().transpose_view([1, 0]).unwrap();
     assert_eq!(view.shape(), &[3, 2]);
     assert_eq!(view.strides(), &[2, 1]);
@@ -433,11 +435,12 @@ fn typed_tensor_view_transpose_is_metadata_only() {
 
 #[test]
 fn non_contiguous_host_view_to_contiguous_preserves_column_major_order() {
-    let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]);
+    let tensor =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]).unwrap();
     let view = tensor.as_view().transpose_view([1, 0]).unwrap();
     let compact = view.to_contiguous().unwrap();
     assert_eq!(compact.shape(), &[3, 2]);
-    assert_eq!(compact.as_slice(), &[1, 3, 5, 2, 4, 6]);
+    assert_eq!(compact.as_slice().unwrap(), &[1, 3, 5, 2, 4, 6]);
 }
 
 #[test]
@@ -450,12 +453,13 @@ fn non_contiguous_host_view_to_contiguous_preserves_host_placement() {
         [2, 2],
         Buffer::Host(vec![1, 2, 3, 4]),
         placement.clone(),
-    );
+    )
+    .unwrap();
     let view = tensor.as_view().transpose_view([1, 0]).unwrap();
 
     let compact = view.to_contiguous().unwrap();
 
-    assert_eq!(compact.as_slice(), &[1, 3, 2, 4]);
+    assert_eq!(compact.as_slice().unwrap(), &[1, 3, 2, 4]);
     assert_eq!(compact.placement(), &placement);
 }
 
@@ -466,7 +470,7 @@ fn non_contiguous_host_view_to_contiguous_ignores_singleton_axis_stride_overflow
 
     let compact = view.to_contiguous().unwrap();
 
-    assert_eq!(compact.as_slice(), &[20]);
+    assert_eq!(compact.as_slice().unwrap(), &[20]);
 }
 
 #[test]
@@ -481,7 +485,8 @@ fn typed_tensor_view_backend_to_contiguous_returns_backend_failure() {
                 ordinal: 0,
             }),
         },
-    );
+    )
+    .unwrap();
 
     let err = tensor.as_view().to_contiguous().unwrap_err();
 
@@ -497,20 +502,22 @@ fn typed_tensor_view_backend_to_contiguous_returns_backend_failure() {
 
 #[test]
 fn mutable_host_copy_back_writes_strided_output() {
-    let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
+    let mut tensor =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]).unwrap();
     {
         let mut out = tensor.as_view_mut().transpose_view([1, 0]).unwrap();
-        let scratch = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+        let scratch =
+            TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
         out.copy_from_contiguous(&scratch).unwrap();
     }
-    assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
+    assert_eq!(tensor.as_slice().unwrap(), &[1, 3, 2, 4]);
 }
 
 #[test]
 fn mutable_host_copy_back_ignores_singleton_axis_stride_overflow() {
     let mut data = vec![10_i32, 20];
     let mut view = TypedTensorViewMut::from_slice(vec![1], vec![isize::MAX], 1, &mut data).unwrap();
-    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![99]);
+    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![99]).unwrap();
 
     view.copy_from_contiguous(&scratch).unwrap();
 
@@ -519,8 +526,10 @@ fn mutable_host_copy_back_ignores_singleton_axis_stride_overflow() {
 
 #[test]
 fn mutable_host_copy_back_rejects_shape_mismatch() {
-    let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
-    let scratch = TypedTensor::<i32, Rank<2>>::from_vec_col_major([4, 1], vec![1, 2, 3, 4]);
+    let mut tensor =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]).unwrap();
+    let scratch =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([4, 1], vec![1, 2, 3, 4]).unwrap();
     let mut out = tensor.as_view_mut().transpose_view([1, 0]).unwrap();
 
     let err = out.copy_from_contiguous(&scratch).unwrap_err();
@@ -537,7 +546,7 @@ fn mutable_host_copy_back_rejects_shape_mismatch() {
 
 #[test]
 fn mutable_host_copy_back_rejects_backend_source() {
-    let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]);
+    let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]).unwrap();
     let scratch = TypedTensor::<i32>::from_buffer_col_major(
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(79, 2))),
@@ -548,7 +557,8 @@ fn mutable_host_copy_back_rejects_backend_source() {
                 ordinal: 0,
             }),
         },
-    );
+    )
+    .unwrap();
     let mut out = tensor.as_view_mut();
 
     let err = out.copy_from_contiguous(&scratch).unwrap_err();
@@ -575,8 +585,9 @@ fn mutable_typed_tensor_view_backend_copy_from_contiguous_returns_backend_failur
                 ordinal: 0,
             }),
         },
-    );
-    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    )
+    .unwrap();
+    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     let mut out = tensor.as_view_mut();
 
     let err = out.copy_from_contiguous(&scratch).unwrap_err();
@@ -599,7 +610,7 @@ fn mutable_typed_tensor_view_rejects_overlapping_layout() {
 
 #[test]
 fn typed_tensor_owned_layout_is_always_compact() {
-    let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]);
+    let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]).unwrap();
     assert_eq!(
         tensor.layout(),
         &TensorLayout::compact(vec![3].into()).unwrap()
@@ -607,22 +618,21 @@ fn typed_tensor_owned_layout_is_always_compact() {
 }
 
 #[test]
-fn typed_tensor_backend_buffer_layout_length_mismatch_panics() {
-    let mismatched = catch_unwind(AssertUnwindSafe(|| {
-        TypedTensor::<f64>::from_buffer_col_major(
-            vec![1],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new(9))),
-            Placement {
-                memory_kind: MemoryKind::Device,
-                device: Some(DeviceId {
-                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                    ordinal: 0,
-                }),
-            },
-        );
-    }));
+fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
+    let err = TypedTensor::<f64>::from_buffer_col_major(
+        vec![1],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(9))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    )
+    .unwrap_err();
 
-    assert!(mismatched.is_err());
+    assert!(matches!(err, Error::InvalidConfig { .. }));
 }
 
 #[test]
@@ -642,9 +652,9 @@ fn typed_tensor_static_rank_shape_conversion_reports_rank_mismatch() {
 fn tensor_owned_export_returns_column_major_buffer() {
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let ptr = data.as_ptr();
-    let tensor = Tensor::from_vec_col_major(vec![2, 2], data);
+    let tensor = Tensor::from_vec_col_major(vec![2, 2], data).unwrap();
 
-    let (shape, out) = tensor.try_into_vec_col_major::<f64>().unwrap();
+    let (shape, out) = tensor.into_vec_col_major::<f64>().unwrap();
 
     assert_eq!(shape, vec![2, 2]);
     assert_eq!(out.as_ptr(), ptr);
@@ -653,7 +663,8 @@ fn tensor_owned_export_returns_column_major_buffer() {
 #[test]
 fn tensor_owned_export_reports_dtype_mismatch() {
     let err = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])
-        .try_into_vec_col_major::<f32>()
+        .unwrap()
+        .into_vec_col_major::<f32>()
         .unwrap_err();
 
     assert!(matches!(err, Error::DTypeMismatch { .. }));
@@ -680,9 +691,10 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
                 ordinal: 0,
             }),
         },
-    );
-    let col_err = tensor.clone().try_into_vec_col_major().unwrap_err();
-    let row_err = tensor.try_into_vec_row_major().unwrap_err();
+    )
+    .unwrap();
+    let col_err = tensor.clone().into_vec_col_major().unwrap_err();
+    let row_err = tensor.into_vec_row_major().unwrap_err();
 
     assert!(matches!(col_err, Error::BackendFailure { .. }));
     assert!(col_err
@@ -715,43 +727,46 @@ fn tensor_buffer_refs_cover_backend_metadata() {
 #[test]
 fn typed_tensor_explicit_memory_order_constructors_match_logical_matrix() {
     let row =
-        TypedTensor::<f64>::from_vec_row_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        TypedTensor::<f64>::from_vec_row_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
     let col =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
 
     assert_eq!(row.shape(), &[2, 3]);
-    assert_eq!(row.as_slice(), col.as_slice());
-    assert_eq!(row.get(&[0, 0]), &1.0);
-    assert_eq!(row.get(&[1, 0]), &4.0);
-    assert_eq!(row.get(&[0, 2]), &3.0);
-    assert_eq!(row.get(&[1, 2]), &6.0);
+    assert_eq!(row.as_slice().unwrap(), col.as_slice().unwrap());
+    assert_eq!(row.get(&[0, 0]).unwrap(), &1.0);
+    assert_eq!(row.get(&[1, 0]).unwrap(), &4.0);
+    assert_eq!(row.get(&[0, 2]).unwrap(), &3.0);
+    assert_eq!(row.get(&[1, 2]).unwrap(), &6.0);
 }
 
 #[test]
 fn typed_tensor_explicit_memory_order_exports_requested_order() {
     let tensor =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
 
-    let (shape, col) = tensor.clone().try_into_vec_col_major().unwrap();
+    let (shape, col) = tensor.clone().into_vec_col_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(col, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
-    let (shape, row) = tensor.try_into_vec_row_major().unwrap();
+    let (shape, row) = tensor.into_vec_row_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(row, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
 
 #[test]
 fn tensor_explicit_memory_order_roundtrips_dynamic_dtype() {
-    let tensor = Tensor::from_vec_row_major(vec![2, 2], vec![1_i64, 2, 3, 4]);
+    let tensor = Tensor::from_vec_row_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
 
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[1, 3, 2, 4]);
     assert_eq!(
-        tensor.clone().try_into_vec_col_major::<i64>().unwrap(),
+        tensor.clone().into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
     assert_eq!(
-        tensor.try_into_vec_row_major::<i64>().unwrap(),
+        tensor.into_vec_row_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 2, 3, 4]),
     );
 }
@@ -759,108 +774,123 @@ fn tensor_explicit_memory_order_roundtrips_dynamic_dtype() {
 #[test]
 fn col_major_typed_tensor_uses_logical_indices() {
     let tensor =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
 
-    assert_eq!(*tensor.get(&[0, 2]), 3.0);
-    assert_eq!(*tensor.get(&[1, 0]), 4.0);
+    assert_eq!(*tensor.get(&[0, 2]).unwrap(), 3.0);
+    assert_eq!(*tensor.get(&[1, 0]).unwrap(), 4.0);
 }
 
 #[test]
 fn typed_tensor_linear_offsets_cover_higher_rank_shapes() {
-    let tensor = TypedTensor::<f64>::zeros(vec![2, 3, 5]);
+    let tensor = TypedTensor::<f64>::zeros(vec![2, 3, 5]).unwrap();
 
-    assert_eq!(tensor.linear_offset(&[1, 2, 4]), 1 + 2 * 2 + 4 * 2 * 3);
+    assert_eq!(
+        tensor.linear_offset(&[1, 2, 4]).unwrap(),
+        1 + 2 * 2 + 4 * 2 * 3
+    );
 }
 
 #[test]
 fn typed_tensor_iterators_follow_physical_buffer_order() {
     let tensor =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
     assert_eq!(
-        tensor.iter().copied().collect::<Vec<_>>(),
+        tensor.iter().unwrap().copied().collect::<Vec<_>>(),
         vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
     );
 
-    let mut tensor = TypedTensor::<i64>::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
-    for value in tensor.iter_mut() {
+    let mut tensor = TypedTensor::<i64>::from_vec_col_major(vec![3], vec![1_i64, 2, 3]).unwrap();
+    for value in tensor.iter_mut().unwrap() {
         *value *= 2;
     }
-    assert_eq!(tensor.as_slice(), &[2, 4, 6]);
+    assert_eq!(tensor.as_slice().unwrap(), &[2, 4, 6]);
 }
 
 #[test]
 fn tensor_iterators_are_typed_by_requested_scalar() {
-    let mut tensor = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let mut tensor = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
 
     assert_eq!(
         tensor.iter::<f64>().unwrap().copied().collect::<Vec<_>>(),
         vec![1.0, 2.0, 3.0]
     );
-    assert!(tensor.iter::<f32>().is_none());
+    assert!(tensor.iter::<f32>().is_err());
 
     for value in tensor.iter_mut::<f64>().unwrap() {
         *value += 1.0;
     }
 
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[2.0, 3.0, 4.0]);
-    assert!(tensor.as_slice_mut::<f32>().is_none());
+    assert!(tensor.as_slice_mut::<f32>().is_err());
 }
 
 #[test]
 fn typed_tensor_checked_and_unchecked_accessors_work() {
     let mut tensor =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+            .unwrap();
 
-    assert_eq!(tensor.as_physical_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    assert_eq!(tensor.try_get(&[1, 2]), Some(&6.0));
-    assert_eq!(tensor.try_get(&[2, 0]), None);
-    assert_eq!(tensor.try_get(&[0]), None);
+    assert_eq!(tensor.host_data().unwrap(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    assert_eq!(tensor.get(&[1, 2]).unwrap(), &6.0);
+    assert!(tensor.get(&[2, 0]).is_err());
+    assert!(tensor.get(&[0]).is_err());
 
-    *tensor.try_get_mut(&[0, 1]).unwrap() = 20.0;
-    assert_eq!(tensor.as_physical_slice()[2], 20.0);
+    *tensor.get_mut(&[0, 1]).unwrap() = 20.0;
+    assert_eq!(tensor.host_data().unwrap()[2], 20.0);
 
-    tensor.as_physical_slice_mut()[0] = 10.0;
-    assert_eq!(unsafe { *tensor.get_unchecked(&[0, 0]) }, 10.0);
+    tensor.host_data_mut().unwrap()[0] = 10.0;
+    assert_eq!(unsafe { *tensor.get_unchecked(&[0, 0]).unwrap() }, 10.0);
 
     unsafe {
-        *tensor.get_unchecked_mut(&[1, 0]) = 40.0;
+        *tensor.get_unchecked_mut(&[1, 0]).unwrap() = 40.0;
     }
-    assert_eq!(tensor.try_get(&[1, 0]), Some(&40.0));
+    assert_eq!(tensor.get(&[1, 0]).unwrap(), &40.0);
 }
 
 #[test]
 fn typed_tensor_rank_fixed_accessors_use_column_major_offsets() {
-    let mut col2 = TypedTensor::<i64>::from_vec_col_major(vec![2, 3], vec![1_i64, 2, 3, 4, 5, 6]);
+    let mut col2 =
+        TypedTensor::<i64>::from_vec_col_major(vec![2, 3], vec![1_i64, 2, 3, 4, 5, 6]).unwrap();
 
-    assert_eq!(col2.linear_offset2(1, 2), 5);
-    assert_eq!(*col2.get2(1, 2), 6);
-    *col2.get_mut2(0, 1) = 30;
-    assert_eq!(col2.as_physical_slice()[2], 30);
+    assert_eq!(col2.linear_offset2(1, 2).unwrap(), 5);
+    assert_eq!(*col2.get2(1, 2).unwrap(), 6);
+    *col2.get_mut2(0, 1).unwrap() = 30;
+    assert_eq!(col2.host_data().unwrap()[2], 30);
 
-    let mut col3 = TypedTensor::<i64>::from_vec_col_major(vec![2, 3, 2], (0_i64..12).collect());
+    let mut col3 =
+        TypedTensor::<i64>::from_vec_col_major(vec![2, 3, 2], (0_i64..12).collect()).unwrap();
 
-    assert_eq!(col3.linear_offset3(1, 2, 1), 11);
-    assert_eq!(*col3.get3(1, 2, 1), 11);
-    *col3.get_mut3(0, 1, 1) = 60;
-    assert_eq!(col3.as_physical_slice()[8], 60);
+    assert_eq!(col3.linear_offset3(1, 2, 1).unwrap(), 11);
+    assert_eq!(*col3.get3(1, 2, 1).unwrap(), 11);
+    *col3.get_mut3(0, 1, 1).unwrap() = 60;
+    assert_eq!(col3.host_data().unwrap()[8], 60);
 }
 
 #[test]
 fn tensor_checked_accessors_are_typed_and_use_physical_order() {
-    let mut tensor = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let mut tensor =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
 
     assert_eq!(
-        tensor.as_physical_slice::<f64>().unwrap(),
+        tensor.as_slice::<f64>().unwrap(),
         &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
     );
-    assert_eq!(tensor.linear_offset(&[1, 0]), 1);
-    assert_eq!(tensor.linear_offset2(1, 0), 1);
-    assert_eq!(tensor.try_get::<f64>(&[1, 2]), Some(&6.0));
-    assert_eq!(tensor.try_get::<f32>(&[1, 2]), None);
-    assert_eq!(tensor.try_get::<f64>(&[2, 0]), None);
+    assert_eq!(tensor.linear_offset(&[1, 0]).unwrap(), 1);
+    assert_eq!(tensor.linear_offset2(1, 0).unwrap(), 1);
+    assert_eq!(tensor.get::<f64>(&[1, 2]).unwrap(), &6.0);
+    assert!(matches!(
+        tensor.get::<f32>(&[1, 2]),
+        Err(Error::DTypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tensor.get::<f64>(&[2, 0]),
+        Err(Error::InvalidConfig { .. })
+    ));
 
-    tensor.as_physical_slice_mut::<f64>().unwrap()[0] = 10.0;
-    *tensor.try_get_mut::<f64>(&[0, 1]).unwrap() = 20.0;
+    tensor.as_slice_mut::<f64>().unwrap()[0] = 10.0;
+    *tensor.get_mut::<f64>(&[0, 1]).unwrap() = 20.0;
 
     assert_eq!(
         unsafe { *tensor.get_unchecked::<f64>(&[0, 0]).unwrap() },
@@ -871,99 +901,116 @@ fn tensor_checked_accessors_are_typed_and_use_physical_order() {
     }
 
     assert_eq!(
-        tensor.as_physical_slice::<f64>().unwrap(),
+        tensor.as_slice::<f64>().unwrap(),
         &[10.0, 40.0, 20.0, 5.0, 3.0, 6.0]
     );
 }
 
 #[test]
-fn typed_tensor_panics_cover_length_and_indexing_errors() {
-    let mismatched =
-        catch_unwind(|| TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]));
-    assert!(mismatched.is_err());
-
-    let tensor = TypedTensor::<f64>::zeros(vec![2, 3]);
-    let rank_mismatch = catch_unwind(AssertUnwindSafe(|| tensor.linear_offset(&[0])));
-    assert!(rank_mismatch.is_err());
-
-    let oob = catch_unwind(AssertUnwindSafe(|| tensor.linear_offset(&[2, 0])));
-    assert!(oob.is_err());
-}
-
-#[test]
-fn typed_tensor_try_apis_report_shape_arithmetic_errors() {
+fn typed_tensor_accessors_report_length_and_indexing_errors() {
     assert!(matches!(
-        TypedTensor::<f64>::try_from_vec_col_major(vec![usize::MAX, 2], Vec::new()),
-        Err(Error::InvalidConfig { .. })
-    ));
-    assert!(matches!(
-        TypedTensor::<f64>::try_from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
-        Err(Error::InvalidConfig { .. })
-    ));
-    assert!(matches!(
-        TypedTensor::<f64>::try_zeros(vec![usize::MAX, 2]),
-        Err(Error::InvalidConfig { .. })
-    ));
-    assert!(matches!(
-        TypedTensor::<f64>::try_ones(vec![usize::MAX, 2]),
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
         Err(Error::InvalidConfig { .. })
     ));
 
-    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
-    assert_eq!(tensor.try_n_elements().unwrap(), 6);
-    assert_eq!(tensor.try_linear_offset(&[1, 2]).unwrap(), 5);
+    let tensor = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
     assert!(matches!(
-        tensor.try_linear_offset(&[2, 0]),
+        tensor.linear_offset(&[0]),
+        Err(Error::RankMismatch { .. })
+    ));
+
+    assert!(matches!(
+        tensor.linear_offset(&[2, 0]),
         Err(Error::InvalidConfig { .. })
     ));
 }
 
 #[test]
-fn tensor_try_constructors_report_shape_arithmetic_errors() {
+fn typed_tensor_apis_report_shape_arithmetic_errors() {
     assert!(matches!(
-        Tensor::try_from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0]),
+        TypedTensor::<f64>::from_vec_col_major(vec![usize::MAX, 2], Vec::new()),
         Err(Error::InvalidConfig { .. })
     ));
     assert!(matches!(
-        Tensor::try_from_vec_row_major(vec![usize::MAX, 2], Vec::<f64>::new()),
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
         Err(Error::InvalidConfig { .. })
     ));
-}
-
-#[test]
-fn typed_tensor_ranked_try_accessors_return_none_instead_of_panicking() {
-    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
-
-    assert_eq!(tensor.try_linear_offset2(1, 2), Some(5));
-    assert_eq!(tensor.try_linear_offset2(10, 0), None);
-    assert_eq!(tensor.try_get2(10, 0), None);
-
-    let rank3 = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]);
-    assert_eq!(rank3.try_linear_offset3(1, 2, 1), Some(11));
-    assert_eq!(rank3.try_linear_offset3(1, 2, 99), None);
-    assert_eq!(rank3.try_get3(1, 2, 99), None);
-}
-
-#[test]
-fn tensor_ranked_try_linear_offsets_return_errors_instead_of_panicking() {
-    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
-
-    assert_eq!(tensor.try_linear_offset2(1, 2).unwrap(), 5);
     assert!(matches!(
-        tensor.try_linear_offset2(10, 0),
+        TypedTensor::<f64>::zeros(vec![usize::MAX, 2]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedTensor::<f64>::ones(vec![usize::MAX, 2]),
         Err(Error::InvalidConfig { .. })
     ));
 
-    let rank3 = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]);
-    assert_eq!(rank3.try_linear_offset3(1, 2, 1).unwrap(), 11);
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    assert_eq!(tensor.n_elements(), 6);
+    assert_eq!(tensor.linear_offset(&[1, 2]).unwrap(), 5);
     assert!(matches!(
-        rank3.try_linear_offset3(1, 2, 99),
+        tensor.linear_offset(&[2, 0]),
         Err(Error::InvalidConfig { .. })
     ));
 }
 
 #[test]
-fn backend_buffers_panic_when_host_access_is_requested() {
+fn tensor_constructors_report_shape_arithmetic_errors() {
+    assert!(matches!(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        Tensor::from_vec_row_major(vec![usize::MAX, 2], Vec::<f64>::new()),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn typed_tensor_ranked_accessors_return_errors_instead_of_panicking() {
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+
+    assert_eq!(tensor.linear_offset2(1, 2).unwrap(), 5);
+    assert!(matches!(
+        tensor.linear_offset2(10, 0),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        tensor.get2(10, 0),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let rank3 = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]).unwrap();
+    assert_eq!(rank3.linear_offset3(1, 2, 1).unwrap(), 11);
+    assert!(matches!(
+        rank3.linear_offset3(1, 2, 99),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        rank3.get3(1, 2, 99),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn tensor_ranked_linear_offsets_return_errors_instead_of_panicking() {
+    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
+
+    assert_eq!(tensor.linear_offset2(1, 2).unwrap(), 5);
+    assert!(matches!(
+        tensor.linear_offset2(10, 0),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let rank3 = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]).unwrap();
+    assert_eq!(rank3.linear_offset3(1, 2, 1).unwrap(), 11);
+    assert!(matches!(
+        rank3.linear_offset3(1, 2, 99),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn backend_buffers_return_errors_when_host_access_is_requested() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
         device: Some(DeviceId {
@@ -975,31 +1022,25 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         vec![1],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 1))),
         placement.clone(),
-    );
+    )
+    .unwrap();
     assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
-    assert!(tensor.try_host_data().is_err());
+    assert!(tensor.host_data().is_err());
     let erased = Tensor::F64(tensor.clone());
-    assert_eq!(erased.as_slice::<f64>(), None);
-    assert_eq!(erased.try_get::<f64>(&[0]), None);
-
-    let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
-    assert!(host_data.is_err());
+    assert!(erased.as_slice::<f64>().is_err());
+    assert!(erased.get::<f64>(&[0]).is_err());
 
     let mut mutable_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 1))),
         placement,
-    );
-    assert!(mutable_tensor.try_host_data_mut().is_err());
+    )
+    .unwrap();
+    assert!(mutable_tensor.host_data_mut().is_err());
     let mut erased_mut = Tensor::F64(mutable_tensor.clone());
-    assert_eq!(erased_mut.as_slice_mut::<f64>(), None);
-    assert_eq!(erased_mut.try_get_mut::<f64>(&[0]), None);
-
-    let host_data_mut = catch_unwind(AssertUnwindSafe(|| {
-        let _ = mutable_tensor.host_data_mut();
-    }));
-    assert!(host_data_mut.is_err());
+    assert!(erased_mut.as_slice_mut::<f64>().is_err());
+    assert!(erased_mut.get_mut::<f64>(&[0]).is_err());
 }
 
 #[test]
@@ -1014,7 +1055,8 @@ fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
             9, 6,
         ))),
         placement,
-    );
+    )
+    .unwrap();
 
     assert_eq!(tensor.shape(), &[2, 3]);
     assert_eq!(tensor.rank(), 2);
@@ -1025,18 +1067,19 @@ fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
 
 #[test]
 fn tensor_shape_and_dtype_cover_all_variants() {
-    let f32_tensor = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]));
-    let f64_tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0_f64]));
-    let i32_tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1_i32, -2]));
-    let c32_tensor = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![1],
-        vec![Complex32::new(1.0, -2.0)],
-    ));
-    let c64_tensor = Tensor::C64(TypedTensor::from_vec_col_major(
-        vec![1, 1],
-        vec![Complex64::new(-3.0, 4.0)],
-    ));
-    let bool_tensor = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]));
+    let f32_tensor =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap());
+    let f64_tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap());
+    let i32_tensor =
+        Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1_i32, -2]).unwrap());
+    let c32_tensor = Tensor::C32(
+        TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, -2.0)]).unwrap(),
+    );
+    let c64_tensor = Tensor::C64(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(-3.0, 4.0)]).unwrap(),
+    );
+    let bool_tensor =
+        Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap());
 
     assert_eq!(f32_tensor.shape(), &[2]);
     assert_eq!(f32_tensor.dtype(), DType::F32);
@@ -1098,7 +1141,7 @@ fn tensor_view_covers_dtype_shape_and_materialization() {
     for (view, dtype) in views.iter().zip(dtypes) {
         assert_eq!(view.dtype(), dtype);
         assert_eq!(view.shape(), &[2]);
-        let tensor = view.to_tensor();
+        let tensor = view.to_tensor().unwrap();
         assert_eq!(tensor.dtype(), dtype);
         assert_eq!(tensor.shape(), &[2]);
     }
@@ -1115,7 +1158,8 @@ fn typed_tensor_view_materializes_sliced_host_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&view, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[1, 4, 2, 5, 3, 6]
     );
 
@@ -1124,7 +1168,8 @@ fn typed_tensor_view_materializes_sliced_host_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&transposed, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[1, 2, 3, 4, 5, 6]
     );
 
@@ -1133,7 +1178,8 @@ fn typed_tensor_view_materializes_sliced_host_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&reversed_cols, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[3, 6, 2, 5, 1, 4]
     );
 
@@ -1143,7 +1189,8 @@ fn typed_tensor_view_materializes_sliced_host_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&every_other_col, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[1, 4, 3, 6]
     );
     assert!(view.try_reshape(&[6]).is_err());
@@ -1160,7 +1207,7 @@ fn tensor_view_covers_strided_i32_and_bool() {
         TensorView::I32(TypedTensorView::from_slice([2, 2], [2, 1], 0, &i32_data).unwrap());
     assert_eq!(i32_view.dtype(), DType::I32);
     assert_eq!(
-        i32_view.to_tensor().as_slice::<i32>().unwrap(),
+        i32_view.to_tensor().unwrap().as_slice::<i32>().unwrap(),
         &[1, 3, 2, 4]
     );
 
@@ -1169,7 +1216,7 @@ fn tensor_view_covers_strided_i32_and_bool() {
         TensorView::Bool(TypedTensorView::from_slice([3], [-1], 2, &bool_data).unwrap());
     assert_eq!(bool_view.dtype(), DType::Bool);
     assert_eq!(
-        bool_view.to_tensor().as_slice::<bool>().unwrap(),
+        bool_view.to_tensor().unwrap().as_slice::<bool>().unwrap(),
         &[true, true, false]
     );
 }
@@ -1201,7 +1248,7 @@ fn strided_tensor_view_mut_updates_sliced_host_layouts() {
     assert_eq!(view.get(&[0, 2]), Some(&30));
 
     let materialized = materialize_typed_view_col_major(&view.as_read_only(), "test").unwrap();
-    assert_eq!(materialized.as_slice(), &[1, 4, 2, 5, 30, 600]);
+    assert_eq!(materialized.as_slice().unwrap(), &[1, 4, 2, 5, 30, 600]);
 }
 
 #[test]
@@ -1219,7 +1266,7 @@ fn strided_tensor_view_mut_rejects_aliasing_layouts() {
     let mut data = [1_i32, 2, 3];
     let mut reversed = TypedTensorViewMut::from_slice([3], [-1], 2, &mut data).unwrap();
     *reversed.get_mut(&[2]).unwrap() = 10;
-    assert_eq!(reversed.as_physical_slice(), &[10, 2, 3]);
+    assert_eq!(reversed.as_physical_slice().unwrap(), &[10, 2, 3]);
 
     let mut data = [1_i32, 2];
     let singleton_zero_stride =
@@ -1242,7 +1289,7 @@ fn strided_tensor_view_mut_multi_slice_returns_option() {
         *left.get_mut(&[2]).unwrap() = 30;
         *right.get_mut(&[0]).unwrap() = 40;
     }
-    assert_eq!(view.as_physical_slice(), &[1, 2, 30, 40, 5, 6]);
+    assert_eq!(view.as_physical_slice().unwrap(), &[1, 2, 30, 40, 5, 6]);
 
     assert!(view
         .try_multi_slice_mut(
@@ -1267,7 +1314,8 @@ fn typed_tensor_view_mut_covers_i32_and_bool_strided_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&i32_view.as_read_only(), "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[1, 3, 2, 40]
     );
 
@@ -1277,7 +1325,8 @@ fn typed_tensor_view_mut_covers_i32_and_bool_strided_layouts() {
     assert_eq!(
         materialize_typed_view_col_major(&bool_view.as_read_only(), "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[true, true, true]
     );
 }
@@ -1314,7 +1363,8 @@ fn strided_tensor_view_validation_covers_error_edges() {
     assert_eq!(
         materialize_typed_view_col_major(&empty, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[] as &[i32]
     );
     assert_eq!(empty.get(&[0, 0]), None);
@@ -1337,9 +1387,9 @@ fn strided_tensor_view_validation_covers_error_edges() {
     ));
 
     let view = TypedTensorView::from_slice([3], [1], 0, &data).unwrap();
-    assert_eq!(view.try_get(&[1]), Some(&2));
-    assert_eq!(view.try_linear_offset(&[0, 0]), None);
-    assert_eq!(view.try_linear_offset(&[3]), None);
+    assert_eq!(view.get(&[1]), Some(&2));
+    assert_eq!(view.linear_offset(&[0, 0]), None);
+    assert_eq!(view.linear_offset(&[3]), None);
 
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([usize::MAX, 2], [1, 1], 0, &[]),
@@ -1404,7 +1454,8 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     assert_eq!(
         materialize_typed_view_col_major(&empty, "test")
             .unwrap()
-            .as_slice(),
+            .as_slice()
+            .unwrap(),
         &[] as &[i32]
     );
 
@@ -1440,7 +1491,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
         *high.get_mut(&[0]).unwrap() = 40;
         *low.get_mut(&[1]).unwrap() = 20;
     }
-    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3, 40, 5]);
+    assert_eq!(view.as_physical_slice().unwrap(), &[0, 1, 20, 3, 40, 5]);
 
     let mut data = [0_i32, 1, 2, 3];
     let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
@@ -1454,7 +1505,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
         assert_eq!(empty.n_elements(), 0);
         *right.get_mut(&[0]).unwrap() = 20;
     }
-    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3]);
+    assert_eq!(view.as_physical_slice().unwrap(), &[0, 1, 20, 3]);
 
     let mut data = [0_i32, 1, 2, 3];
     let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
@@ -1468,7 +1519,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
         assert_eq!(empty.n_elements(), 0);
         *left.get_mut(&[1]).unwrap() = 10;
     }
-    assert_eq!(view.as_physical_slice(), &[0, 10, 2, 3]);
+    assert_eq!(view.as_physical_slice().unwrap(), &[0, 10, 2, 3]);
 
     let mut data = [0_i32, 1, 2, 3];
     let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
@@ -1494,7 +1545,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
         *reversed_high.get_mut(&[2]).unwrap() = 30;
         *low.get_mut(&[2]).unwrap() = 20;
     }
-    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 30, 4, 5]);
+    assert_eq!(view.as_physical_slice().unwrap(), &[0, 1, 20, 30, 4, 5]);
 
     let mut data = [0_i32, 1, 2, 3, 4, 5];
     let mut view = TypedTensorViewMut::from_slice([6], [1], 0, &mut data).unwrap();
@@ -1508,14 +1559,14 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
 
 #[test]
 fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let read_tensor = TensorRead::from_tensor(&tensor);
 
     assert_eq!(read_tensor.dtype(), DType::F64);
     assert_eq!(read_tensor.shape(), &[2]);
     assert!(read_tensor.as_tensor().is_some());
     assert_eq!(
-        read_tensor.to_tensor().as_slice::<f64>().unwrap(),
+        read_tensor.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[3.0, 4.0]
     );
 
@@ -1527,7 +1578,7 @@ fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
     assert_eq!(read_view.shape(), &[2]);
     assert!(read_view.as_tensor().is_none());
     assert_eq!(
-        read_view.to_tensor().as_slice::<f64>().unwrap(),
+        read_view.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[5.0, 6.0]
     );
 }
@@ -1583,9 +1634,9 @@ tensor_scalar_roundtrip_test!(
 
 #[test]
 fn tensor_as_slice_returns_none_for_dtype_mismatch() {
-    let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]);
+    let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]).unwrap();
 
-    assert_eq!(tensor.as_slice::<f32>(), None);
+    assert!(tensor.as_slice::<f32>().is_err());
 }
 
 #[test]

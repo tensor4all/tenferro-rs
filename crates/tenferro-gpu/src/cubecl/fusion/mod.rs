@@ -5,11 +5,11 @@ mod launch;
 use classify::classify;
 
 use crate::backend::ElementwiseFusionPlan;
-use crate::cubecl::CubeclBackend;
+use crate::cubecl::CudaBackend;
 use crate::Tensor;
 
 pub(crate) fn execute_elementwise_fusion(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<Option<Vec<Tensor>>> {

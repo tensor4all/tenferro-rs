@@ -16,11 +16,9 @@ use computegraph::graph::Graph;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
-use crate::dim_expr::DimExpr;
+use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{
-    lookup_extension_rule as lookup_global_extension_rule, ExtensionAdRule, ExtensionRuleSet,
-};
+use crate::ext_op::{ExtensionAdRule, ExtensionRuleSet};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -41,6 +39,49 @@ pub enum MetadataRegistryError {
     /// A previous panic poisoned the global metadata mutex.
     #[error("AD global metadata registry lock poisoned")]
     LockPoisoned,
+}
+
+/// Error returned when shape-guard metadata cannot be resolved.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ShapeGuardError {
+    /// A local graph value was queried before a graph was attached.
+    #[error("cannot resolve local value {local_id} without an attached graph")]
+    LocalWithoutAttachedGraph {
+        /// Graph-local value id.
+        local_id: usize,
+    },
+    /// A local graph value id is outside the attached graph's value table.
+    #[error("local value {local_id} is out of bounds for the attached graph")]
+    LocalOutOfBounds {
+        /// Graph-local value id.
+        local_id: usize,
+    },
+    /// No metadata was registered for the resolved value key.
+    #[error("missing TensorMeta for {key:?}")]
+    MissingMetadata {
+        /// Resolved value key.
+        key: ValueKey<StdTensorOp>,
+    },
+    /// Metadata exists, but at least one axis is only bounded or unknown.
+    #[error("TensorMeta for {key:?} does not have an exact shape; query extents instead")]
+    NonExactShape {
+        /// Resolved value key.
+        key: ValueKey<StdTensorOp>,
+    },
+}
+
+/// Result type used by shape-guard metadata queries.
+pub type ShapeGuardResult<T> = Result<T, ShapeGuardError>;
+
+#[cfg(feature = "autodiff")]
+impl From<ShapeGuardError> for tidu::ADRuleError {
+    fn from(err: ShapeGuardError) -> Self {
+        tidu::ADRuleError::invalid_input(
+            "tenferro.shape_guard",
+            tidu::ADRuleKind::Jvp,
+            err.to_string(),
+        )
+    }
 }
 
 /// Global metadata registry.
@@ -78,10 +119,8 @@ impl Drop for GlobalMetadataScope {
 
 /// Per-value tensor metadata used by AD rules.
 ///
-/// `shape` is expressed in graph-global [`SymDim`] terms rather than op-local
-/// [`DimExpr`] references. It is retained as a compatibility bound shape; use
-/// [`TensorMeta::exact_shape`] when a caller needs proof that every dimension is
-/// exact.
+/// Shape information is stored as per-axis [`ShapeExtent`] values. Callers must
+/// explicitly choose whether they need an exact shape or only a known bound.
 ///
 /// # Examples
 ///
@@ -90,14 +129,12 @@ impl Drop for GlobalMetadataScope {
 /// use tenferro_tensor::DType;
 ///
 /// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
-/// assert_eq!(meta.shape.len(), 2);
+/// assert_eq!(meta.rank(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TensorMeta {
     /// Element dtype of the tensor value.
     pub dtype: DType,
-    /// Compatibility shape used by existing callers; not proof of exactness.
-    pub shape: Vec<SymDim>,
     /// Per-axis shape guarantees.
     pub extents: Vec<ShapeExtent<SymDim>>,
 }
@@ -116,18 +153,10 @@ impl TensorMeta {
     /// ```
     pub fn exact(dtype: DType, shape: Vec<SymDim>) -> Self {
         let extents = shape.iter().cloned().map(ShapeExtent::exact).collect();
-        Self {
-            dtype,
-            shape,
-            extents,
-        }
+        Self { dtype, extents }
     }
 
     /// Construct metadata from per-axis extents.
-    ///
-    /// The compatibility `shape` field is populated from each known bound. An
-    /// unknown extent is represented with a zero placeholder until all callers
-    /// consume extent metadata directly.
     ///
     /// # Examples
     ///
@@ -142,20 +171,12 @@ impl TensorMeta {
     /// assert_eq!(meta.exact_shape(), None);
     /// ```
     pub fn with_extents(dtype: DType, extents: Vec<ShapeExtent<SymDim>>) -> Self {
-        let shape = extents
-            .iter()
-            .map(|extent| {
-                extent
-                    .bound_expr()
-                    .cloned()
-                    .unwrap_or_else(|| SymDim::from(0usize))
-            })
-            .collect();
-        Self {
-            dtype,
-            shape,
-            extents,
-        }
+        Self { dtype, extents }
+    }
+
+    /// Return the tensor rank known by this metadata record.
+    pub fn rank(&self) -> usize {
+        self.extents.len()
     }
 
     /// Return the per-axis shape guarantees.
@@ -191,6 +212,17 @@ impl TensorMeta {
         self.extents
             .iter()
             .map(|extent| extent.as_exact().cloned())
+            .collect()
+    }
+
+    /// Return one known bound per axis when every axis has a bound.
+    ///
+    /// This is intentionally separate from [`TensorMeta::exact_shape`]: a bound
+    /// is not proof of the runtime size.
+    pub fn bound_shape(&self) -> Option<Vec<SymDim>> {
+        self.extents
+            .iter()
+            .map(|extent| extent.bound_expr().cloned())
             .collect()
     }
 }
@@ -275,8 +307,8 @@ impl ShapeGuardContext {
 
     /// Use an explicit extension AD rule set for this context.
     ///
-    /// When an explicit rule set is attached, extension AD lookup does not fall
-    /// back to the process-global compatibility registry.
+    /// Extension AD lookup is context-owned: a context without an attached rule
+    /// set has no extension AD rules.
     ///
     /// # Examples
     ///
@@ -284,7 +316,7 @@ impl ShapeGuardContext {
     /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
     ///
     /// let ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
-    /// assert!(ctx.lookup_extension_rule("example.missing.v1").is_none());
+    /// assert!(ctx.extension_rule_for("example.missing.v1").is_none());
     /// ```
     #[cfg(feature = "autodiff")]
     pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
@@ -294,15 +326,13 @@ impl ShapeGuardContext {
 
     /// Look up an extension AD rule using this context's ownership policy.
     ///
-    /// Contexts without an explicit rule set use the process-global registry as
-    /// a temporary compatibility bridge.
+    /// Contexts without an explicit rule set have no extension AD rules.
     #[doc(hidden)]
     #[cfg(feature = "autodiff")]
-    pub fn lookup_extension_rule(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
-        match &self.extension_rules {
-            Some(rules) => rules.lookup_rule(family_id),
-            None => lookup_global_extension_rule(family_id),
-        }
+    pub(crate) fn extension_rule_for(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
+        self.extension_rules
+            .as_ref()
+            .and_then(|rules| rules.lookup_rule(family_id))
     }
 
     /// Returns the guards recorded so far.
@@ -350,11 +380,18 @@ impl ShapeGuardContext {
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
-    /// let shape = ctx.shape_of(&value);
+    /// let shape = ctx.shape_of(&value).unwrap();
     /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
-    pub fn shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> &[SymDim] {
-        &self.metadata_of(val).shape
+    pub fn shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<Vec<SymDim>> {
+        let key = self.resolve_key(val)?.clone();
+        self.ensure_metadata_loaded(&key);
+        let meta = self
+            .metadata
+            .get(&key)
+            .ok_or_else(|| ShapeGuardError::MissingMetadata { key: key.clone() })?;
+        meta.exact_shape()
+            .ok_or(ShapeGuardError::NonExactShape { key })
     }
 
     /// Return per-axis shape guarantees for a value reference.
@@ -376,11 +413,14 @@ impl ShapeGuardContext {
     ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
     /// );
     ///
-    /// let extents = ctx.extents_of(&value);
+    /// let extents = ctx.extents_of(&value).unwrap();
     /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
     /// ```
-    pub fn extents_of(&mut self, val: &ValueRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
-        self.metadata_of(val).extents()
+    pub fn extents_of(
+        &mut self,
+        val: &ValueRef<StdTensorOp>,
+    ) -> ShapeGuardResult<&[ShapeExtent<SymDim>]> {
+        self.metadata_of(val).map(TensorMeta::extents)
     }
 
     /// Return the exact shape for a value reference, if all axes are exact.
@@ -402,16 +442,20 @@ impl ShapeGuardContext {
     ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
     /// );
     ///
-    /// let maybe_shape = ctx.exact_shape_of(&value);
+    /// let maybe_shape = ctx.exact_shape_of(&value).unwrap();
     /// assert_eq!(maybe_shape, None);
     /// ```
-    pub fn exact_shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<Vec<SymDim>> {
-        self.metadata_of(val).exact_shape()
+    pub fn exact_shape_of(
+        &mut self,
+        val: &ValueRef<StdTensorOp>,
+    ) -> ShapeGuardResult<Option<Vec<SymDim>>> {
+        self.metadata_of(val).map(TensorMeta::exact_shape)
     }
 
     #[doc(hidden)]
-    pub fn try_shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&[SymDim]> {
-        self.try_metadata_of(val).map(|meta| meta.shape.as_slice())
+    pub fn shape_if_available(&mut self, val: &ValueRef<StdTensorOp>) -> Option<Vec<SymDim>> {
+        self.metadata_if_available(val)
+            .and_then(TensorMeta::exact_shape)
     }
 
     /// Return the dtype metadata for a value reference.
@@ -430,11 +474,11 @@ impl ShapeGuardContext {
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
-    /// let dtype = ctx.dtype_of(&value);
+    /// let dtype = ctx.dtype_of(&value).unwrap();
     /// assert_eq!(dtype, DType::F64);
     /// ```
-    pub fn dtype_of(&mut self, val: &ValueRef<StdTensorOp>) -> DType {
-        self.metadata_of(val).dtype
+    pub fn dtype_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<DType> {
+        self.metadata_of(val).map(|meta| meta.dtype)
     }
 
     /// Return the complete metadata record for a value reference.
@@ -453,32 +497,21 @@ impl ShapeGuardContext {
     /// let mut ctx = ShapeGuardContext::default();
     /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
     ///
-    /// let meta = ctx.metadata_of(&value);
+    /// let meta = ctx.metadata_of(&value).unwrap();
     /// assert_eq!(meta.dtype, DType::F64);
     /// ```
-    pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> &TensorMeta {
-        // Compatibility panic wrapper for AD rules whose graph-local metadata
-        // invariants have already been established; use `try_metadata_of` for
-        // user-provided or partially built graph values.
-        let key = self.resolve_key(val).clone();
-        if !self.metadata.contains_key(&key) && self.use_global_registry {
-            if let Some(meta) = lookup_global_metadata(&key) {
-                self.metadata.insert(key.clone(), meta);
-            }
-        }
+    pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<&TensorMeta> {
+        let key = self.resolve_key(val)?.clone();
+        self.ensure_metadata_loaded(&key);
         self.metadata
             .get(&key)
-            .unwrap_or_else(|| panic!("ShapeGuardContext: missing TensorMeta for {:?}", key))
+            .ok_or(ShapeGuardError::MissingMetadata { key })
     }
 
     #[doc(hidden)]
-    pub fn try_metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&TensorMeta> {
-        let key = self.try_resolve_key(val)?.clone();
-        if !self.metadata.contains_key(&key) && self.use_global_registry {
-            if let Some(meta) = lookup_global_metadata(&key) {
-                self.metadata.insert(key.clone(), meta);
-            }
-        }
+    pub fn metadata_if_available(&mut self, val: &ValueRef<StdTensorOp>) -> Option<&TensorMeta> {
+        let key = self.resolve_key_if_available(val)?.clone();
+        self.ensure_metadata_loaded(&key);
         self.metadata.get(&key)
     }
 
@@ -500,7 +533,7 @@ impl ShapeGuardContext {
         self.metadata.extend(entries);
     }
 
-    fn try_resolve_key<'a>(
+    fn resolve_key_if_available<'a>(
         &'a self,
         val: &'a ValueRef<StdTensorOp>,
     ) -> Option<&'a ValueKey<StdTensorOp>> {
@@ -513,18 +546,33 @@ impl ShapeGuardContext {
         }
     }
 
-    fn resolve_key<'a>(&'a self, val: &'a ValueRef<StdTensorOp>) -> &'a ValueKey<StdTensorOp> {
-        // Compatibility panic wrapper for established graph-local invariants.
-        // `try_resolve_key` underpins fallible query paths.
-        self.try_resolve_key(val).unwrap_or_else(|| match val {
-            ValueRef::External(_) => unreachable!("external value keys are always resolvable"),
-            ValueRef::Local(local_id) if self.local_keys.is_none() => panic!(
-                "ShapeGuardContext: cannot resolve local value {local_id} without an attached graph"
-            ),
-            ValueRef::Local(local_id) => {
-                panic!("ShapeGuardContext: local value {local_id} is out of bounds")
+    fn resolve_key<'a>(
+        &'a self,
+        val: &'a ValueRef<StdTensorOp>,
+    ) -> ShapeGuardResult<&'a ValueKey<StdTensorOp>> {
+        match val {
+            ValueRef::External(key) => Ok(key),
+            ValueRef::Local(local_id) if self.local_keys.is_none() => {
+                Err(ShapeGuardError::LocalWithoutAttachedGraph {
+                    local_id: *local_id,
+                })
             }
-        })
+            ValueRef::Local(local_id) => self
+                .local_keys
+                .as_ref()
+                .and_then(|keys| keys.get(*local_id))
+                .ok_or(ShapeGuardError::LocalOutOfBounds {
+                    local_id: *local_id,
+                }),
+        }
+    }
+
+    fn ensure_metadata_loaded(&mut self, key: &ValueKey<StdTensorOp>) {
+        if !self.metadata.contains_key(key) && self.use_global_registry {
+            if let Ok(Some(meta)) = lookup_global_metadata(key) {
+                self.metadata.insert(key.clone(), meta);
+            }
+        }
     }
 }
 
@@ -541,16 +589,10 @@ impl ShapeGuardContext {
 /// use tenferro_ops::std_tensor_op::StdTensorOp;
 ///
 /// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 99 });
-/// let meta = lookup_global_metadata(&key);
+/// let meta = lookup_global_metadata(&key).unwrap();
 /// assert!(meta.is_none());
 /// ```
-pub fn lookup_global_metadata(key: &ValueKey<StdTensorOp>) -> Option<TensorMeta> {
-    try_lookup_global_metadata(key).ok().flatten()
-}
-
-/// Fallibly look up a single metadata entry from the global registry.
-#[doc(hidden)]
-pub fn try_lookup_global_metadata(
+pub fn lookup_global_metadata(
     key: &ValueKey<StdTensorOp>,
 ) -> Result<Option<TensorMeta>, MetadataRegistryError> {
     let guard = global_metadata_registry()
@@ -560,15 +602,7 @@ pub fn try_lookup_global_metadata(
 }
 
 #[doc(hidden)]
-pub fn register_scoped_global_metadata_batch<I>(entries: I) -> GlobalMetadataScope
-where
-    I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-{
-    try_register_scoped_global_metadata_batch(entries).unwrap_or_else(|err| panic!("{err}"))
-}
-
-#[doc(hidden)]
-pub fn try_register_scoped_global_metadata_batch<I>(
+pub fn register_scoped_global_metadata_batch<I>(
     entries: I,
 ) -> Result<GlobalMetadataScope, MetadataRegistryError>
 where
@@ -611,25 +645,24 @@ fn release_scoped_global_metadata(keys: &[ValueKey<StdTensorOp>]) {
 }
 
 /// Resolve a [`DimExpr`] to a concrete `usize`.
-///
-/// Currently this evaluates the expression without any input shapes, which
-/// works for `DimExpr::Const` and expressions composed entirely from constants.
-/// `DimExpr::InputDim` references will panic, which is currently a programming
-/// invariant enforced by the linalg AD callers.
 #[doc(hidden)]
-pub fn resolve_dim(dim: &DimExpr) -> usize {
+pub fn resolve_dim(dim: &DimExpr) -> Result<usize, DimExprEvalError> {
     dim.eval(&[])
 }
 
 /// Resolve matrix dimensions and record their ordering as a guard.
 #[doc(hidden)]
-pub fn resolve_and_guard(m: &DimExpr, n: &DimExpr, ctx: &mut ShapeGuardContext) -> (usize, usize) {
-    let m_size = resolve_dim(m);
-    let n_size = resolve_dim(n);
+pub fn resolve_and_guard(
+    m: &DimExpr,
+    n: &DimExpr,
+    ctx: &mut ShapeGuardContext,
+) -> Result<(usize, usize), DimExprEvalError> {
+    let m_size = resolve_dim(m)?;
+    let n_size = resolve_dim(n)?;
     ctx.guards.push(ShapeGuard {
         dim_a: m_size,
         dim_b: n_size,
         ordering: m_size.cmp(&n_size),
     });
-    (m_size, n_size)
+    Ok((m_size, n_size))
 }

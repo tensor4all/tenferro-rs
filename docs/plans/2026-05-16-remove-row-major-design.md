@@ -41,8 +41,8 @@ Remove:
   unnecessary.
 - `from_vec_row_major`, `from_vec_col_major`, and `from_vec_with_order` when
   they only exist to expose layout choice.
-- `to_row_major`, `to_col_major`, `to_order`, `try_into_vec_row_major`,
-  `try_into_vec_col_major`, and `try_into_vec_with_order`.
+- `to_row_major`, `to_col_major`, `to_order`, `into_vec_row_major`,
+  `into_vec_col_major`, and `try_into_vec_with_order`.
 - row-major behavior claims from user-facing docs.
 - row-major-specific production tests.
 

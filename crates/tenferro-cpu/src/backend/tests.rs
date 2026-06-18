@@ -53,20 +53,19 @@ fn explicit_blas_backend_kind_constructor_records_selection() {
 }
 
 #[test]
-fn try_with_threads_and_kind_records_selection_and_validates_threads() {
-    let backend =
-        CpuBackend::try_with_threads_and_kind(1, CpuBackendKind::default_compiled()).unwrap();
+fn with_threads_and_kind_records_selection_and_validates_threads() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::default_compiled()).unwrap();
     assert_eq!(backend.num_threads(), 1);
     assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
 
-    let err = match CpuBackend::try_with_threads_and_kind(0, CpuBackendKind::default_compiled()) {
+    let err = match CpuBackend::with_threads_and_kind(0, CpuBackendKind::default_compiled()) {
         Ok(_) => panic!("expected invalid thread count to fail"),
         Err(err) => err,
     };
     assert!(matches!(
         err,
         crate::Error::InvalidConfig {
-            op: "CpuBackend::try_with_threads_and_kind",
+            op: "CpuBackend::with_threads_and_kind",
             ..
         }
     ));
@@ -88,7 +87,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     ));
 
     let mut backend = CpuBackend {
-        ctx: Arc::new(CpuContext::with_threads(1)),
+        ctx: Arc::new(CpuContext::with_threads(1).unwrap()),
         buffers: BufferPool::new(),
         kind: CpuBackendKind::Blas,
     };
@@ -99,8 +98,8 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     assert_eq!(retained, 1);
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
-    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0],
         rhs_contracting_dims: vec![0],
@@ -159,7 +158,7 @@ fn cpu_session_profile_helpers_cover_current_profile_mode() {
 
 #[test]
 fn with_linalg_pool_restores_backend_pool_and_context() {
-    let mut backend = CpuBackend::with_threads(1);
+    let mut backend = CpuBackend::with_threads(1).unwrap();
 
     let len_inside_pool = backend.with_linalg_pool(|pool| {
         <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0, 3.0, 4.0]);
@@ -179,7 +178,7 @@ fn cached_faer_gemm_pool_helper_enters_owned_rayon_pool() {
     let ambient_threads = rayon::current_num_threads();
     let configured_threads = if ambient_threads == 2 { 3 } else { 2 };
     let mut backend =
-        CpuBackend::try_with_threads_and_kind(configured_threads, CpuBackendKind::Faer).unwrap();
+        CpuBackend::with_threads_and_kind(configured_threads, CpuBackendKind::Faer).unwrap();
     let mut cache = gemm::GemmAnalysisCache::default();
 
     let seen_threads =
@@ -192,8 +191,8 @@ fn cached_faer_gemm_pool_helper_enters_owned_rayon_pool() {
 fn cached_dot_dispatch_reports_dtype_mismatches() {
     let mut backend = CpuBackend::new();
     let mut cache = gemm::GemmAnalysisCache::default();
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0]));
-    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0]));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+    let rhs = Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0]).unwrap());
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0],
         rhs_contracting_dims: vec![0],
@@ -222,8 +221,6 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
 }
 
 #[test]
-fn with_threads_panics_on_invalid_thread_count() {
-    let panic = std::panic::catch_unwind(|| CpuBackend::with_threads(0));
-
-    assert!(panic.is_err());
+fn with_threads_rejects_invalid_thread_count() {
+    assert!(CpuBackend::with_threads(0).is_err());
 }

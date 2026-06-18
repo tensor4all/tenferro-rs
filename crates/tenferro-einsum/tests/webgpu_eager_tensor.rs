@@ -58,8 +58,10 @@ fn eager_tensor_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() 
 
     let runtime = WebGpuRuntime::new_default().unwrap();
     let ctx = EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone()));
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let lhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &lhs).unwrap(), ctx.clone());
     let rhs = EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx);
@@ -88,13 +90,15 @@ fn eager_tensor_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available(
         vec![
             1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0, 10.0, 40.0, 20.0, 50.0, 30.0, 60.0,
         ],
-    );
+    )
+    .unwrap();
     let rhs = Tensor::from_vec_col_major(
         vec![3, 2, 2],
         vec![
             7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0, 70.0, 90.0, 110.0, 80.0, 100.0, 120.0,
         ],
-    );
+    )
+    .unwrap();
     let lhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &lhs).unwrap(), ctx.clone());
     let rhs = EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx);
@@ -129,8 +133,8 @@ fn eager_tensor_einsum_runs_rank2_c32_matmul_on_webgpu_when_adapter_available() 
         Complex32::new(7.0, 1.0),
         Complex32::new(8.0, -0.75),
     ];
-    let lhs = Tensor::from_vec_col_major(vec![2, 2], lhs_data.clone());
-    let rhs = Tensor::from_vec_col_major(vec![2, 2], rhs_data.clone());
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], rhs_data.clone()).unwrap();
     let lhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &lhs).unwrap(), ctx.clone());
     let rhs = EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx);
@@ -153,7 +157,8 @@ fn traced_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() {
     let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3]);
     let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2]);
     let mut compiler = GraphCompiler::new();
-    let out = tenferro_einsum::einsum(&mut compiler, &[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let out =
+        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &rhs], "ij,jk->ik").unwrap();
     let program = compiler
         .compile_with_input_specs(
             &out,
@@ -161,9 +166,10 @@ fn traced_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() {
         )
         .unwrap();
     let runtime = WebGpuRuntime::new_default().unwrap();
-    let lhs_host = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let lhs_host =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
     let rhs_host =
-        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]);
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
     let lhs_gpu = upload_webgpu_tensor(&runtime, &lhs_host).unwrap();
     let rhs_gpu = upload_webgpu_tensor(&runtime, &rhs_host).unwrap();
     let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));
@@ -191,7 +197,8 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
     let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3, 2]);
     let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2, 2]);
     let mut compiler = GraphCompiler::new();
-    let out = tenferro_einsum::einsum(&mut compiler, &[&lhs, &rhs], "ikb,kjb->ijb").unwrap();
+    let out = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &rhs], "ikb,kjb->ijb")
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &out,
@@ -207,13 +214,15 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
         vec![
             1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0, 10.0, 40.0, 20.0, 50.0, 30.0, 60.0,
         ],
-    );
+    )
+    .unwrap();
     let rhs_host = Tensor::from_vec_col_major(
         vec![3, 2, 2],
         vec![
             7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0, 70.0, 90.0, 110.0, 80.0, 100.0, 120.0,
         ],
-    );
+    )
+    .unwrap();
     let lhs_gpu = upload_webgpu_tensor(&runtime, &lhs_host).unwrap();
     let rhs_gpu = upload_webgpu_tensor(&runtime, &rhs_host).unwrap();
     let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));

@@ -1,5 +1,6 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{PadConfig, SliceConfig};
+use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::is_differentiable_dtype;
@@ -24,9 +25,10 @@ fn shape_exprs_match_primal_input(
         return false;
     }
 
-    let input_shape = ctx
-        .shape_of(&ValueRef::External(primal_in[0].clone()))
-        .to_vec();
+    let Ok(input_shape) = ctx.shape_of(&ValueRef::External(primal_in[0].clone())) else {
+        return false;
+    };
+    let input_shape = input_shape.to_vec();
     if input_shape.len() != shape.len() {
         return false;
     }
@@ -250,12 +252,12 @@ pub fn linearize_concatenate(
     axis: usize,
     input_count: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if tangent_in.iter().all(Option::is_none) {
-        return vec![None];
+        return Ok(vec![None]);
     }
     if input_count == 1 {
-        return vec![tangent_in[0]];
+        return Ok(vec![tangent_in[0]]);
     }
 
     let mut inputs = Vec::with_capacity(input_count);
@@ -268,8 +270,8 @@ pub fn linearize_concatenate(
             }
             None => {
                 let anchor = ValueRef::External(primal_in[input_index].clone());
-                let meta = ctx.metadata_of(&anchor);
-                let zero = build_zero_like(builder, meta.dtype, anchor, meta.shape.len());
+                let meta = ctx.metadata_of(&anchor)?;
+                let zero = build_zero_like(builder, meta.dtype, anchor, meta.rank());
                 inputs.push(ValueRef::Local(zero));
                 active_mask.push(false);
             }
@@ -281,7 +283,7 @@ pub fn linearize_concatenate(
         inputs,
         OperationRole::Linearized { active_mask },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 pub fn linearize_reverse(
@@ -340,7 +342,7 @@ pub fn transpose_reshape(
     op: &StdTensorOp,
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Reshape { to_shape: _ } = op else {
         unreachable!("transpose_reshape expects Reshape");
     };
@@ -348,7 +350,7 @@ pub fn transpose_reshape(
     let mut result = Vec::with_capacity(inputs.len());
     let primary = match cotangent_out[0] {
         Some(ct) => {
-            let input_rank = ctx.shape_of(&inputs[0]).len();
+            let input_rank = ctx.shape_of(&inputs[0])?.len();
             let remapped_to_shape = DimExpr::input_shape(1, input_rank);
             let needs_shape_source =
                 DimExpr::max_input_idx_all(&remapped_to_shape).is_some_and(|idx| idx > 0);
@@ -374,7 +376,7 @@ pub fn transpose_reshape(
     for _ in 1..inputs.len() {
         result.push(None);
     }
-    result
+    Ok(result)
 }
 
 pub fn transpose_broadcast_in_dim(
@@ -384,7 +386,7 @@ pub fn transpose_broadcast_in_dim(
     dims: &[usize],
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let (reduce_axes, needs_input_shape_restore) =
         broadcast_transpose_reduce_axes(shape, dims, inputs, ctx);
 
@@ -417,7 +419,7 @@ pub fn transpose_broadcast_in_dim(
                 reduced
             };
             if needs_input_shape_restore {
-                let input_rank = ctx.shape_of(&inputs[0]).len();
+                let input_rank = ctx.shape_of(&inputs[0])?.len();
                 let reshaped = builder.add_operation(
                     StdTensorOp::Reshape {
                         to_shape: DimExpr::input_shape(1, input_rank),
@@ -440,7 +442,7 @@ pub fn transpose_broadcast_in_dim(
     for _ in 1..inputs.len() {
         result.push(None);
     }
-    result
+    Ok(result)
 }
 
 fn broadcast_transpose_reduce_axes(
@@ -514,7 +516,7 @@ fn collect_known_input_shapes(
 ) -> Option<Vec<Vec<SymDim>>> {
     let mut shapes = Vec::with_capacity(inputs.len());
     for input in inputs {
-        shapes.push(ctx.try_shape_of(input)?.to_vec());
+        shapes.push(ctx.shape_if_available(input)?.to_vec());
     }
     Some(shapes)
 }
@@ -600,18 +602,18 @@ pub fn transpose_slice(
     mode: &OperationRole,
     config: &SliceConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
     if !first_input_active(mode) {
-        return vec![None];
+        return Ok(vec![None]);
     }
 
-    let input_shape = ctx.shape_of(&inputs[0]);
+    let input_shape = ctx.shape_of(&inputs[0])?;
     let rank = input_shape.len();
     if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
-        return vec![None];
+        return Ok(vec![None]);
     }
 
     let mut edge_padding_low = Vec::with_capacity(rank);
@@ -619,14 +621,14 @@ pub fn transpose_slice(
     let mut interior_padding = Vec::with_capacity(rank);
 
     for axis in 0..rank {
-        let Some(input_extent) = try_static_dim(input_shape, axis) else {
-            return vec![None];
+        let Some(input_extent) = try_static_dim(&input_shape, axis) else {
+            return Ok(vec![None]);
         };
         let start = config.starts[axis];
         let limit = config.limits[axis];
         let stride = config.strides[axis];
         if stride == 0 || start > limit || limit > input_extent {
-            return vec![None];
+            return Ok(vec![None]);
         }
 
         let selected_len = if limit == start {
@@ -638,10 +640,10 @@ pub fn transpose_slice(
             0
         } else {
             let Some(covered_minus_one) = (selected_len - 1).checked_mul(stride) else {
-                return vec![None];
+                return Ok(vec![None]);
             };
             let Some(covered) = covered_minus_one.checked_add(1) else {
-                return vec![None];
+                return Ok(vec![None]);
             };
             covered
         };
@@ -652,7 +654,7 @@ pub fn transpose_slice(
             try_usize_to_i64(high),
             try_usize_to_i64(stride - 1),
         ) else {
-            return vec![None];
+            return Ok(vec![None]);
         };
         edge_padding_low.push(low);
         edge_padding_high.push(high);
@@ -670,7 +672,7 @@ pub fn transpose_slice(
             active_mask: vec![true],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 pub fn transpose_pad(
@@ -680,21 +682,21 @@ pub fn transpose_pad(
     mode: &OperationRole,
     config: &PadConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
     if !first_input_active(mode) {
-        return vec![None];
+        return Ok(vec![None]);
     }
 
-    let input_shape = ctx.shape_of(&inputs[0]);
+    let input_shape = ctx.shape_of(&inputs[0])?;
     let rank = input_shape.len();
     if config.edge_padding_low.len() != rank
         || config.edge_padding_high.len() != rank
         || config.interior_padding.len() != rank
     {
-        return vec![None];
+        return Ok(vec![None]);
     }
 
     let mut starts = Vec::with_capacity(rank);
@@ -704,15 +706,15 @@ pub fn transpose_pad(
     let mut edge_padding_high = Vec::with_capacity(rank);
 
     for axis in 0..rank {
-        let Some(input_extent) = try_static_dim(input_shape, axis) else {
-            return vec![None];
+        let Some(input_extent) = try_static_dim(&input_shape, axis) else {
+            return Ok(vec![None]);
         };
         let input_extent_i = input_extent as i128;
         let low = i128::from(config.edge_padding_low[axis]);
         let high = i128::from(config.edge_padding_high[axis]);
         let interior = i128::from(config.interior_padding[axis]);
         if interior < 0 {
-            return vec![None];
+            return Ok(vec![None]);
         }
         let stride = interior + 1;
         let base = if input_extent == 0 {
@@ -722,19 +724,19 @@ pub fn transpose_pad(
         };
         let output_extent = low + high + base;
         if output_extent < 0 {
-            return vec![None];
+            return Ok(vec![None]);
         }
 
         let first_kept = if low < 0 {
             let Some(first_kept) = try_ceil_div_i128(-low, stride) else {
-                return vec![None];
+                return Ok(vec![None]);
             };
             first_kept
         } else {
             0
         };
         let Some(first_dropped_after) = try_ceil_div_i128(output_extent - low, stride) else {
-            return vec![None];
+            return Ok(vec![None]);
         };
         let j_start = clamp_i128(first_kept, 0, input_extent_i);
         let mut j_end = clamp_i128(first_dropped_after, 0, input_extent_i);
@@ -751,7 +753,7 @@ pub fn transpose_pad(
             (empty, empty)
         };
         if !(0 <= slice_start && slice_start <= slice_limit && slice_limit <= output_extent) {
-            return vec![None];
+            return Ok(vec![None]);
         }
 
         let (Some(start), Some(limit), Some(stride), Some(low), Some(high)) = (
@@ -761,7 +763,7 @@ pub fn transpose_pad(
             try_i128_to_i64(j_start),
             try_i128_to_i64(input_extent_i - j_end),
         ) else {
-            return vec![None];
+            return Ok(vec![None]);
         };
         starts.push(start);
         limits.push(limit);
@@ -784,7 +786,7 @@ pub fn transpose_pad(
 
     if edge_padding_low.iter().all(|&pad| pad == 0) && edge_padding_high.iter().all(|&pad| pad == 0)
     {
-        return vec![Some(sliced)];
+        return Ok(vec![Some(sliced)]);
     }
 
     let out = builder.add_operation(
@@ -798,7 +800,7 @@ pub fn transpose_pad(
             active_mask: vec![true],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 pub fn transpose_reverse(
@@ -834,35 +836,35 @@ pub fn transpose_concatenate(
     axis: usize,
     input_count: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None; input_count];
+        return Ok(vec![None; input_count]);
     };
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None; input_count],
+        OperationRole::Primary => return Ok(vec![None; input_count]),
     };
 
     let mut result = vec![None; input_count];
     let mut axis_offset = 0usize;
     let mut concrete_shapes = Vec::with_capacity(input_count);
     for input in inputs.iter().take(input_count) {
-        let input_shape = ctx.shape_of(input);
+        let input_shape = ctx.shape_of(input)?;
         let rank = input_shape.len();
         if axis >= rank {
-            return vec![None; input_count];
+            return Ok(vec![None; input_count]);
         }
         let Some(concrete_shape) = input_shape
             .iter()
             .map(SymDim::constant_value)
             .collect::<Option<Vec<_>>>()
         else {
-            return vec![None; input_count];
+            return Ok(vec![None; input_count]);
         };
         concrete_shapes.push(concrete_shape);
     }
     if concrete_shapes.len() != input_count {
-        return vec![None; input_count];
+        return Ok(vec![None; input_count]);
     }
 
     for input_index in 0..input_count {
@@ -870,7 +872,7 @@ pub fn transpose_concatenate(
         let rank = input_shape.len();
         let axis_extent = input_shape[axis];
         let Some(next_axis_offset) = axis_offset.checked_add(axis_extent) else {
-            return vec![None; input_count];
+            return Ok(vec![None; input_count]);
         };
         if active_mask.get(input_index).copied().unwrap_or(false) {
             let starts = vec_with_axis(rank, axis, axis_offset, 0);
@@ -902,7 +904,7 @@ pub fn transpose_concatenate(
         axis_offset = next_axis_offset;
     }
 
-    result
+    Ok(result)
 }
 
 fn first_input_active(mode: &OperationRole) -> bool {

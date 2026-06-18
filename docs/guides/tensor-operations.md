@@ -82,7 +82,7 @@ assert_eq!(x.shape(), &[2, 2]);
 assert_eq!(x.get(&[1, 0]), &2.0);
 
 *x.get_mut(&[0, 1]) = 5.0;
-assert_eq!(x.try_get(&[1, 1]), Some(&4.0));
+assert_eq!(x.get(&[1, 1]), Some(&4.0));
 
 let sum: f64 = x.iter().copied().sum();
 assert_eq!(sum, 12.0);
@@ -161,7 +161,7 @@ assert_eq!(x.as_slice(), &[2.0, 4.0, 6.0]);
 
 There is no public closure-style `TypedTensor::map` or `mapv` method in the
 current public API. For host-only transformations, use `iter`, `iter_mut`,
-`as_slice`, `host_data_mut`, or `as_physical_slice_mut`. For tensor math,
+`as_slice`, `as_slice_mut`, `host_data`, or `host_data_mut`. For tensor math,
 reductions, or shape operations that should use backend execution, use typed
 wrappers or the runtime-dtype `Tensor`, `EagerTensor`, or `TracedTensor`
 operation API.
@@ -231,7 +231,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let y = (&x * &x).reduce_sum(&[0]).unwrap();
 
 y.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 ```
 
 ## Traced Tensor Example

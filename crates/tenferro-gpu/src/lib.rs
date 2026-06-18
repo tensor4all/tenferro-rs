@@ -33,10 +33,8 @@ mod webgpu;
 
 #[cfg(feature = "cuda")]
 pub use cubecl::{
-    device_ptr, download_tensor, gpu_available, upload_tensor, CubeclBackend, CubeclRuntime,
+    device_ptr, download_tensor, gpu_available, upload_tensor, CudaBackend, CudaRuntime,
 };
-#[cfg(feature = "cuda")]
-pub use cubecl::{CubeclBackend as CudaBackend, CubeclRuntime as CudaRuntime};
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};

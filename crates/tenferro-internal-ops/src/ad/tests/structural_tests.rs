@@ -48,13 +48,15 @@ fn linearize_reshape_reuses_dynamic_shape_sources_as_inactive_inputs() {
         ],
     };
 
-    let result = op.jvp_rule(
-        &mut builder,
-        &[data_key, shape_key.clone()],
-        &[],
-        &[Some(data_tangent), None],
-        &mut ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &[data_key, shape_key.clone()],
+            &[],
+            &[Some(data_tangent), None],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("reshape tangent output must be active");
@@ -102,7 +104,8 @@ fn transpose_reshape_returns_none_for_dynamic_shape_sources() {
         &inputs,
         &linear_mode(&[true, false]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 2);
     assert!(result[0].is_some());
@@ -145,13 +148,15 @@ fn linearize_broadcast_reuses_dynamic_shape_sources_as_inactive_inputs() {
         dims: vec![1],
     };
 
-    let result = op.jvp_rule(
-        &mut builder,
-        &[data_key, shape_key.clone()],
-        &[],
-        &[Some(data_tangent), None],
-        &mut ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &[data_key, shape_key.clone()],
+            &[],
+            &[Some(data_tangent), None],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("broadcast tangent output must be active");
@@ -195,7 +200,8 @@ fn transpose_broadcast_returns_none_for_dynamic_shape_sources() {
         &inputs,
         &linear_mode(&[true, false]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 2);
     assert!(result[0].is_some());
@@ -221,7 +227,8 @@ fn transpose_broadcast_reduces_singleton_input_axes() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 1);
     let cotangent_in = result[0].expect("broadcast cotangent input must be active");
@@ -270,7 +277,8 @@ fn transpose_broadcast_restores_non_monotonic_dimension_order() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 1);
     let cotangent_in = result[0].expect("broadcast cotangent input must be active");
@@ -310,7 +318,8 @@ fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());

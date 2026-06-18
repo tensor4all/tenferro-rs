@@ -31,7 +31,7 @@ fn dot_general_transpose_rejects_out_of_bounds_dims_without_panicking() {
     };
 
     let err = op
-        .try_linear_transpose_rule(
+        .transpose_rule(
             &mut builder,
             &[Some(cotangent)],
             &[ValueRef::External(lhs), ValueRef::External(rhs)],

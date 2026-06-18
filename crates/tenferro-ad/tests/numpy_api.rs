@@ -57,9 +57,10 @@ impl ExtensionOp for TestExtensionOp {
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
-    let lhs = TracedTensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]);
-    let rhs = TracedTensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]);
-    let y = traced_tensor::add(&lhs, &rhs);
+    let lhs = TracedTensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs =
+        TracedTensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let y = traced_tensor::add(&lhs, &rhs).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
@@ -68,25 +69,25 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major::<f64>().unwrap().1,
+        out.into_vec_row_major::<f64>().unwrap().1,
         vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
     );
 }
 
 #[test]
 fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
-    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
 
-    let _ = traced_tensor::sub(&x, &y);
-    let _ = traced_tensor::mul(&x, &y);
-    let _ = traced_tensor::div(&x, &y);
-    let _ = traced_tensor::pow(&x, &y);
-    let _ = traced_tensor::maximum(&x, &y);
-    let _ = traced_tensor::minimum(&x, &y);
-    let _ = traced_tensor::where_select(&cond, &x, &y);
-    let _ = traced_tensor::clamp(&x, &y, &x);
+    let _ = traced_tensor::sub(&x, &y).unwrap();
+    let _ = traced_tensor::mul(&x, &y).unwrap();
+    let _ = traced_tensor::div(&x, &y).unwrap();
+    let _ = traced_tensor::pow(&x, &y).unwrap();
+    let _ = traced_tensor::maximum(&x, &y).unwrap();
+    let _ = traced_tensor::minimum(&x, &y).unwrap();
+    let _ = traced_tensor::where_select(&cond, &x, &y).unwrap();
+    let _ = traced_tensor::clamp(&x, &y, &x).unwrap();
     let _ = traced_tensor::neg(&x);
     let _ = traced_tensor::abs(&x);
     let _ = traced_tensor::sign(&x);
@@ -111,14 +112,14 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
         executor.run(&program).unwrap()
     }
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
     assert_eq!(run(&x.neg()).as_slice::<f64>().unwrap(), &[-1.0, -4.0]);
     assert_eq!(run(&x.abs()).as_slice::<f64>().unwrap(), &[1.0, 4.0]);
     assert_eq!(run(&x.sign()).as_slice::<f64>().unwrap(), &[1.0, 1.0]);
     assert_eq!(run(&x.sqrt()).as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     assert_eq!(run(&x.rsqrt()).as_slice::<f64>().unwrap(), &[1.0, 0.5]);
 
-    let analytic = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]);
+    let analytic = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
     let exp = run(&analytic.exp());
     let log = run(&x.log());
     let sin = run(&analytic.sin());
@@ -137,7 +138,8 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     let z = TracedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
-    );
+    )
+    .unwrap();
     assert_eq!(
         run(&z.conj()).as_slice::<Complex64>().unwrap(),
         &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
@@ -146,12 +148,12 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
 
 #[test]
 fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
-    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
     assert_eq!(cond.dtype, DType::Bool);
 
-    let selected = traced_tensor::where_select(&cond, &x, &y);
+    let selected = traced_tensor::where_select(&cond, &x, &y).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let cond_program = compiler.compile(&cond).unwrap();
@@ -163,7 +165,7 @@ fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
     assert_eq!(cond_out.dtype(), DType::Bool);
     assert_eq!(cond_out.as_slice::<bool>().unwrap(), &[true, false]);
     assert_eq!(
-        selected_out.try_into_vec_col_major::<f64>().unwrap().1,
+        selected_out.into_vec_col_major::<f64>().unwrap().1,
         vec![2.0, 8.0]
     );
 }
@@ -172,11 +174,11 @@ fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
 fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     let ctx = EagerRuntime::new();
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]),
+        Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]),
+        Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap(),
         ctx,
     );
 
@@ -184,11 +186,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     assert_eq!(out.data().shape(), &[3, 4]);
     assert_eq!(
-        out.data()
-            .clone()
-            .try_into_vec_row_major::<f64>()
-            .unwrap()
-            .1,
+        out.data().clone().into_vec_row_major::<f64>().unwrap().1,
         vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
     );
 }
@@ -197,11 +195,13 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let ctx = EagerRuntime::new();
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]),
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),
     );
-    let y =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
+    let y = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
+        ctx,
+    );
     let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
 
     let _ = eager_tensor::sub(&x, &y).unwrap();
@@ -231,7 +231,7 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
 fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
     );
 
@@ -254,11 +254,11 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
     );
 
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
     );
     let product = eager_tensor::matmul(&a, &b).unwrap();
@@ -269,14 +269,14 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
     );
 
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]),
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         ctx.clone(),
     );
     let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]),
+        Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap(),
         ctx.clone(),
     );
-    let fused = eager_tensor::try_backend_broadcast_multiply_untracked(
+    let fused = eager_tensor::backend_broadcast_multiply_untracked(
         &lhs,
         &[2, 3],
         &[0],
@@ -293,10 +293,10 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
     );
 
     let tracked = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]),
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         ctx.clone(),
     );
-    let skipped = eager_tensor::try_backend_broadcast_multiply_untracked(
+    let skipped = eager_tensor::backend_broadcast_multiply_untracked(
         &tracked,
         &[2, 3],
         &[0],
@@ -309,7 +309,7 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let other = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         other_ctx,
     );
     let err = eager_tensor::add(&x, &other).err().unwrap();
@@ -320,11 +320,13 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
 fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let ctx = EagerRuntime::new();
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]),
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),
     );
-    let y =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
+    let y = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
+        ctx,
+    );
 
     let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
     let selected = eager_tensor::where_select(&cond, &x, &y).unwrap();
@@ -335,7 +337,7 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
         selected
             .data()
             .clone()
-            .try_into_vec_col_major::<f64>()
+            .into_vec_col_major::<f64>()
             .unwrap()
             .1,
         vec![2.0, 8.0]
@@ -345,14 +347,14 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
 #[test]
 fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let mut backend = CpuBackend::new();
-    let lhs = Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]);
-    let rhs = Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]);
+    let lhs = Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 
     let out = tenferro_runtime::tensor::add(&lhs, &rhs, &mut backend).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major::<f64>().unwrap().1,
+        out.into_vec_row_major::<f64>().unwrap().1,
         vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
     );
 }
@@ -360,8 +362,8 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 #[test]
 fn tensor_module_exposes_initial_elementwise_free_functions() {
     let mut backend = CpuBackend::new();
-    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
     let cond = tenferro_runtime::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
 
     let _ = tenferro_runtime::tensor::sub(&x, &y, &mut backend).unwrap();
@@ -390,8 +392,8 @@ fn tensor_module_exposes_initial_elementwise_free_functions() {
 #[test]
 fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let mut backend = CpuBackend::new();
-    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 
     let cond = tenferro_runtime::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
     let selected = tenferro_runtime::tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
@@ -399,7 +401,7 @@ fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
     assert_eq!(cond.dtype(), DType::Bool);
     assert_eq!(cond.as_slice::<bool>().unwrap(), &[true, false]);
     assert_eq!(
-        selected.try_into_vec_col_major::<f64>().unwrap().1,
+        selected.into_vec_col_major::<f64>().unwrap().1,
         vec![2.0, 8.0]
     );
 }
@@ -407,14 +409,15 @@ fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
 #[test]
 fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let mut backend = CpuBackend::new();
-    let lhs = TypedTensor::<f64>::from_vec_row_major(vec![3, 1], vec![1.0, 2.0, 3.0]);
-    let rhs = TypedTensor::<f64>::from_vec_row_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]);
+    let lhs = TypedTensor::<f64>::from_vec_row_major(vec![3, 1], vec![1.0, 2.0, 3.0]).unwrap();
+    let rhs =
+        TypedTensor::<f64>::from_vec_row_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
 
     let out = tenferro_runtime::typed_tensor::add(&lhs, &rhs, &mut backend).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.try_into_vec_row_major().unwrap().1,
+        out.into_vec_row_major().unwrap().1,
         vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
     );
 }
@@ -422,8 +425,8 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 #[test]
 fn typed_tensor_module_exposes_initial_elementwise_free_functions() {
     let mut backend = CpuBackend::new();
-    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
     let cond =
         tenferro_runtime::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
 
@@ -453,14 +456,14 @@ fn typed_tensor_module_exposes_initial_elementwise_free_functions() {
 #[test]
 fn typed_tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let mut backend = CpuBackend::new();
-    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 
     let cond: TypedTensor<bool> =
         tenferro_runtime::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
     let selected =
         tenferro_runtime::typed_tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
 
-    assert_eq!(cond.host_data(), &[true, false]);
-    assert_eq!(selected.try_into_vec_col_major().unwrap().1, vec![2.0, 8.0]);
+    assert_eq!(cond.host_data().unwrap(), &[true, false]);
+    assert_eq!(selected.into_vec_col_major().unwrap().1, vec![2.0, 8.0]);
 }

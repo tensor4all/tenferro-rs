@@ -9,11 +9,11 @@ use tenferro_tensor::{
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -25,17 +25,20 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 
 fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
-    Tensor::F64(TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, len))),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: 0,
-            }),
-        },
-    ))
+    Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            shape,
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, len))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -218,8 +221,8 @@ fn cpu_reduce_max_min_validate_axes_before_empty_fast_path() {
 }
 
 #[test]
-fn cpu_backend_try_with_threads_rejects_zero_without_panicking() {
-    let err = match CpuBackend::try_with_threads(0) {
+fn cpu_backend_with_threads_rejects_zero_without_panicking() {
+    let err = match CpuBackend::with_threads(0) {
         Ok(_) => panic!("zero threads should be rejected"),
         Err(err) => err,
     };
@@ -227,7 +230,7 @@ fn cpu_backend_try_with_threads_rejects_zero_without_panicking() {
     assert!(matches!(
         err,
         Error::InvalidConfig {
-            op: "CpuBackend::try_with_threads",
+            op: "CpuBackend::with_threads",
             ..
         }
     ));

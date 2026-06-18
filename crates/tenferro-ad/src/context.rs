@@ -5,8 +5,7 @@ use tenferro_runtime::{Result, TracedTensor};
 
 /// Explicit automatic-differentiation context.
 ///
-/// `AdContext` owns the extension AD rules used by traced AD transforms. It is
-/// the preferred alternative to process-global extension rule registration.
+/// `AdContext` owns the extension AD rules used by traced AD transforms.
 ///
 /// # Examples
 ///

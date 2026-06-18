@@ -40,11 +40,10 @@ rules where possible so the rule set stays usable.
 - Runtime and tensor shape arithmetic now uses fallible checked paths for
   `DimExpr` evaluation, shape inference, graph compilation, accessors, tensor
   constructors, and fused einsum dimension products.
-- Public panic surfaces now have fallible alternatives and compatibility-wrapper
-  comments where the panic API remains: tensor accessors/constructors,
-  `extension::apply`, traced symbolic axis helpers, reductions, tropical
-  composition helpers, CPU context/cache helpers, and CUDA extension cache
-  helpers.
+- Public panic surfaces now use checked `Result` APIs: tensor
+  accessors/constructors, `extension::apply`, traced symbolic axis helpers,
+  reductions, tropical composition helpers, CPU context/cache helpers, and CUDA
+  extension cache helpers.
 - AD structural/indexing/linalg rules fail closed on malformed metadata,
   symbolic non-concrete shapes, invalid rank, mismatched scatter/gather window
   metadata, non-square LU variants, and invalid extension metadata instead of

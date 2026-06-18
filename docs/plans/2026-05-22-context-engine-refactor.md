@@ -72,11 +72,11 @@ fn typed_tensor_explicit_memory_order_exports_requested_order() {
         vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
     );
 
-    let (shape, col) = tensor.clone().try_into_vec_col_major().unwrap();
+    let (shape, col) = tensor.clone().into_vec_col_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(col, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
-    let (shape, row) = tensor.try_into_vec_row_major().unwrap();
+    let (shape, row) = tensor.into_vec_row_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(row, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
@@ -90,11 +90,11 @@ fn tensor_explicit_memory_order_roundtrips_dynamic_dtype() {
 
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[1, 3, 2, 4]);
     assert_eq!(
-        tensor.clone().try_into_vec_col_major::<i64>().unwrap(),
+        tensor.clone().into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
     assert_eq!(
-        tensor.try_into_vec_row_major::<i64>().unwrap(),
+        tensor.into_vec_row_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 2, 3, 4]),
     );
 }
@@ -108,7 +108,7 @@ Run:
 cargo test -p tenferro-tensor explicit_memory_order
 ```
 
-Expected: FAIL because `from_vec_row_major`, `from_vec_col_major`, `try_into_vec_row_major`, and `try_into_vec_col_major` do not exist.
+Expected: FAIL because `from_vec_row_major`, `from_vec_col_major`, `into_vec_row_major`, and `into_vec_col_major` do not exist.
 
 **Step 3: Implement generic order conversion helpers**
 
@@ -171,7 +171,7 @@ fn row_major_to_col_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
 }
 
 fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
-    checked_shape_len(shape, data.len(), "try_into_vec_row_major");
+    checked_shape_len(shape, data.len(), "into_vec_row_major");
     if shape.is_empty() {
         return data;
     }
@@ -208,23 +208,23 @@ pub fn from_vec_row_major(shape: Vec<usize>, data: Vec<T>) -> Self {
     Self::from_vec_col_major(shape, data)
 }
 
-pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
     match self.buffer {
         Buffer::Host(data) => Ok((self.shape, data)),
         Buffer::Backend(_) => Err(crate::Error::BackendFailure {
-            op: "try_into_vec_col_major",
+            op: "into_vec_col_major",
             message: "backend buffers cannot be exported as host Vec".into(),
         }),
         #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
-            op: "try_into_vec_col_major",
+            op: "into_vec_col_major",
             message: "GPU buffers cannot be exported as host Vec".into(),
         }),
     }
 }
 
-pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-    let (shape, data) = self.try_into_vec_col_major()?;
+pub fn into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    let (shape, data) = self.into_vec_col_major()?;
     let row_major = col_major_to_row_major(&shape, data);
     Ok((shape, row_major))
 }
@@ -238,9 +238,9 @@ pub fn from_vec(shape: Vec<usize>, data: Vec<T>) -> Self {
     Self::from_vec_col_major(shape, data)
 }
 
-#[deprecated(note = "use try_into_vec_col_major or try_into_vec_row_major")]
+#[deprecated(note = "use into_vec_col_major or into_vec_row_major")]
 pub fn try_into_vec(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-    self.try_into_vec_col_major()
+    self.into_vec_col_major()
 }
 ```
 
@@ -255,24 +255,24 @@ pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> S
     T::into_tensor(shape.clone(), row_major_to_col_major(&shape, data))
 }
 
-pub fn try_into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
     let actual = self.dtype();
     let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
-        op: "try_into_vec_col_major",
+        op: "into_vec_col_major",
         lhs: T::dtype(),
         rhs: actual,
     })?;
-    typed.try_into_vec_col_major()
+    typed.into_vec_col_major()
 }
 
-pub fn try_into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+pub fn into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
     let actual = self.dtype();
     let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
-        op: "try_into_vec_row_major",
+        op: "into_vec_row_major",
         lhs: T::dtype(),
         rhs: actual,
     })?;
-    typed.try_into_vec_row_major()
+    typed.into_vec_row_major()
 }
 ```
 
@@ -331,7 +331,7 @@ fn traced_tensor_col_major_constructor_keeps_physical_order() {
 
     let compiled = traced.compile_with_inputs(&[]).unwrap();
     assert_eq!(
-        compiled.inputs[0].clone().try_into_vec_col_major::<i64>().unwrap(),
+        compiled.inputs[0].clone().into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
 }
@@ -421,9 +421,9 @@ fn eager_runtime_replaces_eager_context_public_name() {
 
     loss.backward().unwrap();
 
-    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     runtime.clear_grads();
-    assert!(x.grad().is_none());
+    assert!(x.grad().unwrap().is_none());
 }
 ```
 
@@ -1301,8 +1301,8 @@ Rules:
 
 - Use `from_vec_col_major` when existing expected slices are already column-major physical buffers.
 - Use `from_vec_row_major` only when the data is written in human row-major matrix order and expected logical values assume that.
-- Use `try_into_vec_col_major` when tests assert physical buffer order.
-- Use `try_into_vec_row_major` when docs/tests are demonstrating user-facing row-major export.
+- Use `into_vec_col_major` when tests assert physical buffer order.
+- Use `into_vec_row_major` when docs/tests are demonstrating user-facing row-major export.
 
 Most existing tests in this repository use column-major buffers; default to `_col_major` unless the test name or expected values clearly describe row-major import/export.
 

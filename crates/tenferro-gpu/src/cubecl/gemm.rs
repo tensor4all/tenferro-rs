@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl_cuda::CudaRuntime;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -13,7 +13,7 @@ use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
-use super::{CubeclBackend, CubeclRuntime};
+use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, Error, Tensor, TypedTensor};
@@ -95,7 +95,7 @@ impl Workspace {
 }
 
 pub(super) fn dot_general(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -118,7 +118,7 @@ pub(super) fn dot_general(
 }
 
 pub(super) fn dot_general_with_conj(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -147,7 +147,7 @@ pub(super) fn dot_general_with_conj(
 }
 
 fn dot_general_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -159,7 +159,7 @@ where
 }
 
 fn dot_general_typed_with_conj<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -267,11 +267,11 @@ fn cutensor_conj_op<T: CutensorScalar>(conj: bool) -> CutensorOperator {
     }
 }
 
-fn raw_stream(rt: &CubeclRuntime) -> crate::Result<CutensorCudaStream> {
+fn raw_stream(rt: &CudaRuntime) -> crate::Result<CutensorCudaStream> {
     Ok(rt.raw_cuda_stream()? as usize as CutensorCudaStream)
 }
 
-fn alloc_workspace(rt: &CubeclRuntime, workspace_size: u64) -> crate::Result<Workspace> {
+fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Workspace> {
     if workspace_size == 0 {
         return Ok(Workspace::none());
     }
@@ -293,7 +293,7 @@ fn alloc_workspace(rt: &CubeclRuntime, workspace_size: u64) -> crate::Result<Wor
 }
 
 fn typed_device_ptr<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
 ) -> crate::Result<*mut c_void> {
     ensure_resident_on_runtime(rt, tensor, OP)?;
@@ -308,7 +308,7 @@ fn typed_device_ptr<T: 'static>(
     Ok(resource.resource().ptr as usize as *mut c_void)
 }
 
-fn zero_alloc<T>(rt: &CubeclRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
+fn zero_alloc<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: CutensorScalar,
 {
@@ -320,7 +320,7 @@ where
         cube_count_for_len(output.n_elements())?,
         cube_dim_1d(),
         |client, count, dim, out| unsafe {
-            structural::fill_zero_kernel::launch_unchecked::<T, CudaRuntime>(
+            structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
                 client, count, dim, out,
             );
         },
@@ -397,9 +397,9 @@ fn build_layout<T>(
     let lhs_extents = dims_to_i64(lhs.shape())?;
     let rhs_extents = dims_to_i64(rhs.shape())?;
     let output_extents = dims_to_i64(&output_shape)?;
-    let lhs_strides = strides_to_i64(&col_major_strides(lhs.shape()))?;
-    let rhs_strides = strides_to_i64(&col_major_strides(rhs.shape()))?;
-    let output_strides = strides_to_i64(&col_major_strides(&output_shape))?;
+    let lhs_strides = strides_to_i64(&col_major_strides(lhs.shape())?)?;
+    let rhs_strides = strides_to_i64(&col_major_strides(rhs.shape())?)?;
+    let output_strides = strides_to_i64(&col_major_strides(&output_shape)?)?;
 
     Ok(DotGeneralLayout {
         lhs_modes,

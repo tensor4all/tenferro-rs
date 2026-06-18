@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_tensor::Tensor;
 
 const DIRECT_SIZES: &[(usize, usize, usize)] = &[(16, 16, 16), (32, 32, 32), (64, 32, 64)];
@@ -11,7 +11,7 @@ fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
     let data = (0..len)
         .map(|idx| ((idx * 17 + seed * 31 + 7) % 997) as f64 / 997.0 - 0.5)
         .collect();
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn consume(result: &tenferro_ext_tropical::einsum::TropicalEinsumResult) {
@@ -45,7 +45,7 @@ fn bench_direct_matmul(c: &mut Criterion) {
             |bench| {
                 bench.iter(|| {
                     let result = tropical_einsum_with_argmax(
-                        TropicalEinsumKind::MaxPlus,
+                        TropicalKind::MaxPlus,
                         &[black_box(&lhs), black_box(&rhs)],
                         "ij,jk->ik",
                     )
@@ -70,7 +70,7 @@ fn bench_permuted_fallback(c: &mut Criterion) {
             |bench| {
                 bench.iter(|| {
                     let result = tropical_einsum_with_argmax(
-                        TropicalEinsumKind::MaxPlus,
+                        TropicalKind::MaxPlus,
                         &[black_box(&lhs), black_box(&rhs)],
                         "ji,jk->ik",
                     )
@@ -95,7 +95,7 @@ fn bench_multi_contracted_fallback(c: &mut Criterion) {
             |bench| {
                 bench.iter(|| {
                     let result = tropical_einsum_with_argmax(
-                        TropicalEinsumKind::MaxPlus,
+                        TropicalKind::MaxPlus,
                         &[black_box(&lhs), black_box(&rhs)],
                         "kji,ljk->il",
                     )

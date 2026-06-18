@@ -716,7 +716,7 @@ impl EagerTensor {
             return Ok(Self::new_untracked_value_result(ctx, value));
         }
 
-        let output = Arc::new(value.try_to_tensor().map_err(Error::from)?);
+        let output = Arc::new(value.to_tensor().map_err(Error::from)?);
         let outputs = vec![Arc::clone(&output)];
         let mut recorded = record_eager_outputs(&op, &outputs, tensors)?;
         let trace = recorded.traces.pop().ok_or_else(|| {

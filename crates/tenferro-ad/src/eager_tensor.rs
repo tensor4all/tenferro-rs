@@ -242,14 +242,14 @@ pub fn apply_standard_graph(
     EagerTensor::standard_graph_op(inputs, build_graph)
 }
 
-/// Try a backend fused broadcast-multiply for untracked eager tensors.
+/// Execute a backend fused broadcast-multiply for untracked eager tensors.
 ///
 /// Returns `None` when either input participates in AD or the backend does not
 /// provide a fused implementation, so callers can fall back to ordinary eager
 /// `StdTensorOp` execution without changing gradients.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-pub fn try_backend_broadcast_multiply_untracked(
+pub fn backend_broadcast_multiply_untracked(
     lhs: &EagerTensor,
     lhs_shape: &[usize],
     lhs_dims: &[usize],

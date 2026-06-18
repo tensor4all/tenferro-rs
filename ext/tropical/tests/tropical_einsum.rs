@@ -1,13 +1,13 @@
-use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_tensor::{Error, Tensor};
 
 #[test]
 fn maxplus_matmul_uses_shared_einsum_lowering() {
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2]);
     assert_eq!(
@@ -19,11 +19,11 @@ fn maxplus_matmul_uses_shared_einsum_lowering() {
 
 #[test]
 fn output_permutation_matches_subscripts() {
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ki").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ki").unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2]);
     assert_eq!(
@@ -35,16 +35,18 @@ fn output_permutation_matches_subscripts() {
 
 #[test]
 fn rectangular_output_permutation_matches_subscripts() {
-    let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 10.0, 0.0, 2.0, 6.0]);
+    let a =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 10.0, 0.0, 2.0, 6.0]).unwrap();
     let b = Tensor::from_vec_col_major(
         vec![3, 4],
         vec![
             0.0, 1.0, 2.0, 5.0, 0.0, 1.0, -10.0, 20.0, 0.0, 3.0, 3.0, 3.0,
         ],
-    );
+    )
+    .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ki").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ki").unwrap();
 
     assert_eq!(result.output.shape(), &[4, 2]);
     assert_eq!(
@@ -56,11 +58,11 @@ fn rectangular_output_permutation_matches_subscripts() {
 
 #[test]
 fn minplus_matmul_uses_shared_einsum_lowering() {
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 4.0, 3.0, 2.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f32, 6.0, 7.0, 1.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 4.0, 3.0, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f32, 6.0, 7.0, 1.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MinPlus, &[&a, &b], "ij,jk->ik").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MinPlus, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2]);
     assert_eq!(
@@ -72,11 +74,11 @@ fn minplus_matmul_uses_shared_einsum_lowering() {
 
 #[test]
 fn ties_keep_first_winner_through_einsum() {
-    let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(result.output.as_slice::<f64>().unwrap(), &[3.0]);
     assert_eq!(result.argmax[0].indices(), &[0]);
@@ -87,14 +89,16 @@ fn batched_maxplus_matmul_supports_natural_batch_first_subscripts() {
     let a = Tensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![1.0_f64, 2.0, 4.0, 0.0, 5.0, 1.0, 0.0, 7.0],
-    );
+    )
+    .unwrap();
     let b = Tensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![0.0_f64, 3.0, 2.0, 5.0, 10.0, 4.0, 1.0, 0.0],
-    );
+    )
+    .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "bij,bjk->bik")
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "bij,bjk->bik")
             .unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2, 2]);
@@ -112,14 +116,16 @@ fn target_order_batched_maxplus_matmul_applies_requested_output_permutation() {
     let a = Tensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![1.0_f64, 4.0, 5.0, 0.0, 2.0, 0.0, 1.0, 7.0],
-    );
+    )
+    .unwrap();
     let b = Tensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![0.0_f64, 2.0, 10.0, 1.0, 3.0, 5.0, 4.0, 0.0],
-    );
+    )
+    .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ijb,jkb->bik")
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ijb,jkb->bik")
             .unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2, 2]);
@@ -132,11 +138,12 @@ fn target_order_batched_maxplus_matmul_applies_requested_output_permutation() {
 
 #[test]
 fn fallback_handles_input_permutation_and_records_argmax() {
-    let transposed_left = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 5.0, 4.0, 0.0]);
-    let right = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 10.0, 1.0]);
+    let transposed_left =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 5.0, 4.0, 0.0]).unwrap();
+    let right = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 10.0, 1.0]).unwrap();
 
     let result = tropical_einsum_with_argmax(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &[&transposed_left, &right],
         "ji,jk->ik",
     )
@@ -157,19 +164,21 @@ fn fallback_matches_reference_for_multi_contracted_permuted_labels() {
         vec![
             0.0_f64, 4.0, 1.0, 3.0, 2.0, 5.0, 6.0, 1.0, 7.0, 0.0, 8.0, 2.0,
         ],
-    );
+    )
+    .unwrap();
     let rhs = Tensor::from_vec_col_major(
         vec![2, 3, 2],
         vec![
             1.0_f64, 0.0, 2.0, 4.0, 0.0, 3.0, 5.0, 1.0, 0.0, 2.0, 4.0, 6.0,
         ],
-    );
+    )
+    .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&lhs, &rhs], "kji,ljk->il")
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "kji,ljk->il")
             .unwrap();
     let expected = reference_tropical_einsum_f64(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &lhs,
         b"kji",
         &rhs,
@@ -189,14 +198,16 @@ fn fallback_matches_reference_for_multi_contracted_permuted_labels() {
 
 #[test]
 fn fallback_matches_reference_for_minplus_output_permutation() {
-    let lhs = Tensor::from_vec_col_major(vec![3, 2], vec![4.0_f64, 1.0, 5.0, 0.0, 3.0, 2.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64, 4.0, 1.0, 5.0, 0.0, 3.0]);
+    let lhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![4.0_f64, 1.0, 5.0, 0.0, 3.0, 2.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64, 4.0, 1.0, 5.0, 0.0, 3.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MinPlus, &[&lhs, &rhs], "ji,jk->ki")
+        tropical_einsum_with_argmax(TropicalKind::MinPlus, &[&lhs, &rhs], "ji,jk->ki")
             .unwrap();
     let expected =
-        reference_tropical_einsum_f64(TropicalEinsumKind::MinPlus, &lhs, b"ji", &rhs, b"jk", b"ki");
+        reference_tropical_einsum_f64(TropicalKind::MinPlus, &lhs, b"ji", &rhs, b"jk", b"ki");
 
     assert_eq!(result.output.shape(), expected.shape);
     assert_eq!(result.output.as_slice::<f64>().unwrap(), expected.values);
@@ -205,14 +216,15 @@ fn fallback_matches_reference_for_minplus_output_permutation() {
 
 #[test]
 fn fallback_matches_reference_for_nan_and_all_nan_cells() {
-    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 1.0, f64::NAN, f64::NAN]);
-    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 0.0, f64::NAN, 2.0]);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 1.0, f64::NAN, f64::NAN]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 0.0, f64::NAN, 2.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&lhs, &rhs], "ji,jk->ik")
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "ji,jk->ik")
             .unwrap();
     let expected =
-        reference_tropical_einsum_f64(TropicalEinsumKind::MaxPlus, &lhs, b"ji", &rhs, b"jk", b"ik");
+        reference_tropical_einsum_f64(TropicalKind::MaxPlus, &lhs, b"ji", &rhs, b"jk", b"ik");
 
     assert_eq!(result.output.shape(), expected.shape);
     assert_eq!(result.output.as_slice::<f64>().unwrap(), expected.values);
@@ -221,11 +233,11 @@ fn fallback_matches_reference_for_nan_and_all_nan_cells() {
 
 #[test]
 fn fallback_ties_keep_first_contracted_winner() {
-    let transposed_left = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 1.0]);
-    let right = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f32, 2.0]);
+    let transposed_left = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 1.0]).unwrap();
+    let right = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f32, 2.0]).unwrap();
 
     let result = tropical_einsum_with_argmax(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &[&transposed_left, &right],
         "ji,jk->ik",
     )
@@ -237,11 +249,11 @@ fn fallback_ties_keep_first_contracted_winner() {
 
 #[test]
 fn multi_contracted_modes_expose_fused_winner_coordinates() {
-    let a = Tensor::from_vec_col_major(vec![1, 2, 2], vec![0.0_f64, 5.0, 3.0, 1.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2, 1], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    let a = Tensor::from_vec_col_major(vec![1, 2, 2], vec![0.0_f64, 5.0, 3.0, 1.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2, 1], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ijk,jkl->il").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ijk,jkl->il").unwrap();
     let step = &result.argmax[0];
 
     assert_eq!(result.output.as_slice::<f64>().unwrap(), &[5.0]);
@@ -253,11 +265,11 @@ fn multi_contracted_modes_expose_fused_winner_coordinates() {
 
 #[test]
 fn empty_outputs_allow_zero_sized_contracted_modes() {
-    let a = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new());
-    let b = Tensor::from_vec_col_major(vec![0, 4], Vec::<f64>::new());
+    let a = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
+    let b = Tensor::from_vec_col_major(vec![0, 4], Vec::<f64>::new()).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(result.output.shape(), &[0, 4]);
     assert!(result.output.as_slice::<f64>().unwrap().is_empty());
@@ -267,8 +279,8 @@ fn empty_outputs_allow_zero_sized_contracted_modes() {
 
 #[test]
 fn unsupported_cases_return_invalid_config() {
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
     let unsupported = [
         ("three inputs", vec![&a, &b, &a], "ij,jk,kl->il"),
@@ -279,7 +291,7 @@ fn unsupported_cases_return_invalid_config() {
     ];
 
     for (case, inputs, notation) in unsupported {
-        let err = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &inputs, notation)
+        let err = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &inputs, notation)
             .unwrap_err();
         assert!(
             matches!(
@@ -293,9 +305,9 @@ fn unsupported_cases_return_invalid_config() {
         );
     }
 
-    let int_tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]);
+    let int_tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap();
     let err = tropical_einsum_with_argmax(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &[&int_tensor, &int_tensor],
         "ij,jk->ik",
     )
@@ -308,10 +320,10 @@ fn unsupported_cases_return_invalid_config() {
         }
     ));
 
-    let zero_lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new());
-    let zero_rhs = Tensor::from_vec_col_major(vec![0, 4], Vec::<f64>::new());
+    let zero_lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap();
+    let zero_rhs = Tensor::from_vec_col_major(vec![0, 4], Vec::<f64>::new()).unwrap();
     let err = tropical_einsum_with_argmax(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &[&zero_lhs, &zero_rhs],
         "ij,jk->ik",
     )
@@ -332,7 +344,7 @@ struct ReferenceResult {
 }
 
 fn reference_tropical_einsum_f64(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     lhs: &Tensor,
     lhs_labels: &[u8],
     rhs: &Tensor,
@@ -377,8 +389,8 @@ fn reference_tropical_einsum_f64(
 
     for _ in 0..output_len {
         let mut best = match kind {
-            TropicalEinsumKind::MaxPlus => f64::NEG_INFINITY,
-            TropicalEinsumKind::MinPlus => f64::INFINITY,
+            TropicalKind::MaxPlus => f64::NEG_INFINITY,
+            TropicalKind::MinPlus => f64::INFINITY,
             _ => unreachable!("unknown tropical kind"),
         };
         let mut winner = 0_u32;
@@ -403,8 +415,8 @@ fn reference_tropical_einsum_f64(
             );
             let candidate = lhs_data[lhs_offset] + rhs_data[rhs_offset];
             let better = match kind {
-                TropicalEinsumKind::MaxPlus => !has_ordered_candidate || candidate > best,
-                TropicalEinsumKind::MinPlus => !has_ordered_candidate || candidate < best,
+                TropicalKind::MaxPlus => !has_ordered_candidate || candidate > best,
+                TropicalKind::MinPlus => !has_ordered_candidate || candidate < best,
                 _ => unreachable!("unknown tropical kind"),
             };
             if !candidate.is_nan() && better {

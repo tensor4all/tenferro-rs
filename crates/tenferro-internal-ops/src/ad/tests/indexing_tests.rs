@@ -65,7 +65,9 @@ fn linearize_gather_reuses_primal_indices_and_emits_gather() {
     let primal_in = vec![operand_key.clone(), indices_key.clone()];
     let tangent_in = [Some(operand_tangent), None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -97,7 +99,9 @@ fn linearize_gather_inactive_tangent_returns_none() {
     let primal_in = vec![operand_key, indices_key];
     let tangent_in: [Option<LocalValueId>; 2] = [None, None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -128,7 +132,9 @@ fn linearize_dynamic_gather_reuses_primal_indices_and_shape_sources() {
     let primal_in = vec![operand_key, indices_key.clone(), shape_source_key.clone()];
     let tangent_in = [Some(operand_tangent), None, None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -164,7 +170,9 @@ fn linearize_dynamic_slice_reuses_primal_starts() {
     let primal_in = vec![operand_key, starts_key.clone()];
     let tangent_in = [Some(operand_tangent), None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -200,7 +208,9 @@ fn linearize_dynamic_slice_inactive_tangent_returns_none() {
     let primal_in = vec![operand_key, starts_key];
     let tangent_in: [Option<LocalValueId>; 2] = [None, None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -219,7 +229,9 @@ fn linearize_dynamic_update_slice_reuses_primal_starts() {
     let primal_in = vec![operand_key, update_key, starts_key.clone()];
     let tangent_in = [Some(operand_tangent), Some(update_tangent), None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("output tangent must be active");
@@ -267,7 +279,8 @@ fn transpose_dynamic_slice_emits_dynamic_update_slice() {
             active_mask: vec![true, false],
         },
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert!(result[0].is_some(), "operand cotangent must be active");
     assert_eq!(result[1], None, "starts cotangent must stay None");
@@ -312,15 +325,17 @@ fn transpose_dynamic_update_slice_returns_operand_and_update_cotangents() {
         ValueRef::External(update_key),
         ValueRef::External(starts_key.clone()),
     ];
-    let result = StdTensorOp::DynamicUpdateSlice.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, true, false],
-        },
-        &mut ctx,
-    );
+    let result = StdTensorOp::DynamicUpdateSlice
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
 
     assert!(result[0].is_some(), "operand cotangent must be active");
     assert!(result[1].is_some(), "update cotangent must be active");
@@ -368,15 +383,17 @@ fn transpose_gather_emits_scatter_with_inverted_config() {
         ValueRef::External(indices_key.clone()),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert!(result[0].is_some(), "operand cotangent must be active");
     assert_eq!(result[1], None, "indices cotangent must stay None");
 
@@ -431,15 +448,17 @@ fn transpose_gather_inactive_path_returns_all_none() {
 
     let op = StdTensorOp::Gather(rank1_gather_config());
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[None],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[None],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(result, vec![None, None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -480,15 +499,17 @@ fn transpose_dynamic_gather_emits_scatter_and_ignores_shape_sources() {
         ValueRef::External(shape_source_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, false, false],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, false, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
 
     assert!(result[0].is_some(), "operand cotangent must be active");
     assert_eq!(result[1], None, "indices cotangent must stay None");
@@ -541,15 +562,17 @@ fn transpose_scatter_returns_none_for_mismatched_update_window_dims() {
         ValueRef::External(updates_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, false, true],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, false, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result, vec![None, None, None]);
     assert!(builder.build().operations().is_empty());

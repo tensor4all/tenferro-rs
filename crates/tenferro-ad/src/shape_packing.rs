@@ -68,7 +68,7 @@ fn index_select_config(
     let indices = Tensor::I64(TypedTensor::from_vec_col_major(
         vec![positions.len(), 1],
         index_data,
-    ));
+    )?);
 
     let config = GatherConfig {
         offset_dims,

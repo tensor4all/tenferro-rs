@@ -12,7 +12,7 @@ use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_scalar(val: f64) -> Tensor {
@@ -21,7 +21,7 @@ fn f64_scalar(val: f64) -> Tensor {
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64"),
     }
 }
@@ -55,6 +55,7 @@ fn matvec(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
             rhs_batch_dims: vec![],
         },
     )
+    .unwrap()
 }
 
 fn vector_dot(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
@@ -67,6 +68,7 @@ fn vector_dot(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
             rhs_batch_dims: vec![],
         },
     )
+    .unwrap()
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -82,7 +84,8 @@ fn hvp_for_scalar_cubic() {
     let x_val = 2.5_f64;
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val));
-    let y = &(&x * &x) * &x;
+    let x_squared = (&x * &x).unwrap();
+    let y = (&x_squared * &x).unwrap();
 
     let g = y.grad(&x).unwrap(); // reverse: f'(x) = 3x^2
     let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
@@ -134,7 +137,7 @@ fn hvp_for_vector_exp_sum() {
     let n = x_data.len();
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data.clone()));
-    let y = x.exp().reduce_sum(&[0]);
+    let y = x.exp().reduce_sum(&[0]).unwrap();
 
     let g = y.grad(&x).unwrap(); // shape [n]
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone()));

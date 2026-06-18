@@ -144,50 +144,15 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
 
     /// Execute the extension op on borrowed tensor reads.
     ///
-    /// Runtime implementations that can consume strided views should override
-    /// this method. The default fallback preserves compatibility with
-    /// tensor-only runtimes by materializing view reads at this explicit ABI
-    /// boundary before delegating to [`ExtensionRuntime::execute`].
+    /// Implementations that need compact tensors must materialize inputs here
+    /// explicitly. Keeping this method required prevents implicit read-path
+    /// fallbacks from hiding backend or view handling bugs.
     fn execute_reads(
         &self,
         op: &dyn ExtensionOp,
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let concrete_inputs = concrete_tensor_reads(inputs)?;
-        let input_refs: Vec<&Tensor> = concrete_inputs
-            .iter()
-            .map(ConcreteTensorRead::tensor)
-            .collect();
-        self.execute(op, &input_refs, ctx)
-    }
-}
-
-enum ConcreteTensorRead<'a> {
-    Borrowed(&'a Tensor),
-    Owned(Box<Tensor>),
-}
-
-impl ConcreteTensorRead<'_> {
-    fn tensor(&self) -> &Tensor {
-        match self {
-            Self::Borrowed(tensor) => tensor,
-            Self::Owned(tensor) => tensor.as_ref(),
-        }
-    }
-}
-
-fn concrete_tensor_reads<'a>(
-    inputs: &[TensorRead<'a>],
-) -> tenferro_tensor::Result<Vec<ConcreteTensorRead<'a>>> {
-    let mut concrete_inputs = Vec::with_capacity(inputs.len());
-    for input in inputs {
-        concrete_inputs.push(match input {
-            TensorRead::Tensor(tensor) => ConcreteTensorRead::Borrowed(tensor),
-            TensorRead::View(view) => ConcreteTensorRead::Owned(Box::new(view.try_to_tensor()?)),
-        });
-    }
-    Ok(concrete_inputs)
+    ) -> tenferro_tensor::Result<Vec<Tensor>>;
 }
 
 fn validate_runtime_output_count(
@@ -471,6 +436,20 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///         _ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
     ///     ) -> tenferro_tensor::Result<Vec<Tensor>> {
     ///         op.eager_execute(inputs)
+    ///     }
+    ///
+    ///     fn execute_reads(
+    ///         &self,
+    ///         op: &dyn ExtensionOp,
+    ///         inputs: &[TensorRead<'_>],
+    ///         ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+    ///     ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    ///         let materialized_inputs: Vec<Tensor> = inputs
+    ///             .iter()
+    ///             .map(TensorRead::to_tensor)
+    ///             .collect::<tenferro_tensor::Result<_>>()?;
+    ///         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+    ///         self.execute(op, &input_refs, ctx)
     ///     }
     /// }
     ///

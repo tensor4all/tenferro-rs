@@ -19,7 +19,7 @@ fn backend_tensor_f64(handle_id: u64, len: usize) -> Tensor {
         vec![len],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
         opaque_backend_placement(),
-    ))
+    ).unwrap())
 }
 
 fn assert_backend_download_error(result: crate::Result<Tensor>, expected_op: &'static str) {
@@ -41,7 +41,7 @@ fn cpu_backend_rejects_backend_view_without_download() {
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 2))),
         opaque_backend_placement(),
-    );
+    ).unwrap();
 
     let err = backend.to_contiguous(&tensor.as_view()).unwrap_err();
 
@@ -57,12 +57,12 @@ fn cpu_backend_rejects_backend_view_without_download() {
 #[test]
 fn cpu_backend_rejects_backend_copy_back_without_download() {
     let mut backend = crate::CpuBackend::new();
-    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 2))),
         opaque_backend_placement(),
-    );
+    ).unwrap();
 
     let err = backend
         .copy_from_contiguous(&src, &mut dst.as_view_mut())
@@ -84,11 +84,11 @@ fn cpu_dot_general_read_rejects_backend_view_without_panic() {
         vec![2, 2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(9, 4))),
         opaque_backend_placement(),
-    );
+    ).unwrap();
     let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
         vec![2, 2],
         vec![1.0, 2.0, 3.0, 4.0],
-    ));
+    ).unwrap());
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -143,7 +143,7 @@ fn cpu_reduce_read_rejects_backend_views_without_download() {
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(11, 2))),
         opaque_backend_placement(),
-    );
+    ).unwrap();
 
     assert_backend_download_error(
         backend.reduce_sum_read(
@@ -178,19 +178,19 @@ fn cpu_reduce_read_rejects_backend_views_without_download() {
 #[test]
 fn cpu_materialize_tensor_read_covers_host_tensor_and_view_dtypes() {
     let tensors = [
-        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32])),
-        Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64])),
-        Tensor::I32(TypedTensor::from_vec_col_major(vec![1], vec![1_i32])),
-        Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![1_i64])),
-        Tensor::Bool(TypedTensor::from_vec_col_major(vec![1], vec![true])),
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
+        Tensor::I32(TypedTensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap()),
+        Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()),
+        Tensor::Bool(TypedTensor::from_vec_col_major(vec![1], vec![true]).unwrap()),
         Tensor::C32(TypedTensor::from_vec_col_major(
             vec![1],
             vec![Complex32::new(1.0, 0.0)],
-        )),
+        ).unwrap()),
         Tensor::C64(TypedTensor::from_vec_col_major(
             vec![1],
             vec![Complex64::new(1.0, 0.0)],
-        )),
+        ).unwrap()),
     ];
     for tensor in &tensors {
         let materialized =

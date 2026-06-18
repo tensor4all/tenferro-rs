@@ -40,15 +40,11 @@ mod traced;
 pub mod traced_tensor;
 
 #[cfg(feature = "autodiff")]
+pub use ad::ad_rules;
+#[cfg(feature = "autodiff")]
 pub use ad::support::{
     all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdOutputSupport,
     LinalgAdRuleSupport, LinalgAdSupport,
 };
-#[cfg(feature = "autodiff")]
-pub use ad::{ad_rules, register_extension_rule};
 pub use backend::LinalgBackend;
 pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};
-pub use traced::{
-    cholesky, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu, full_piv_lu_solve,
-    inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps, triangular_solve,
-};

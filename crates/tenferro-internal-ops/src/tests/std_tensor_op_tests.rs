@@ -1,8 +1,8 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
-use crate::ext_op::{register_extension_rule, ExtensionAdRule, ExtensionOp};
+use crate::ext_op::{ExtensionAdRule, ExtensionOp};
 use crate::std_tensor_op::StdTensorOp;
-use crate::{SymDim, TensorMeta};
+use crate::{ExtensionRuleSet, SymDim, TensorMeta};
 use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use computegraph::GraphOperation;
@@ -128,13 +128,15 @@ fn run_linearize_case(
             active.then(|| builder.add_input(tensor_input_key(300 + offset as u64)))
         })
         .collect();
-    let result = op.jvp_rule(
-        &mut builder,
-        &primal_in,
-        &primal_out,
-        &tangent_in,
-        &mut ad_ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &primal_in,
+            &primal_out,
+            &tangent_in,
+            &mut ad_ctx,
+        )
+        .unwrap();
     (result, builder.build())
 }
 
@@ -171,13 +173,15 @@ fn run_transpose_case_with_input_shape(
     } else if let Some(shape) = input_shape {
         seed_uniform_ref_metadata(&mut ad_ctx, &inputs, shape);
     }
-    let result = op.transpose_rule(
-        &mut builder,
-        &[cotangent],
-        &inputs,
-        &linear_mode(active_mask),
-        &mut ad_ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[cotangent],
+            &inputs,
+            &linear_mode(active_mask),
+            &mut ad_ctx,
+        )
+        .unwrap();
     (result, cotangent, builder.build())
 }
 
@@ -215,13 +219,15 @@ fn run_transpose_case_with_input_shapes(
             ),
         );
     }
-    let result = op.transpose_rule(
-        &mut builder,
-        &[cotangent],
-        &inputs,
-        &linear_mode(active_mask),
-        &mut ad_ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[cotangent],
+            &inputs,
+            &linear_mode(active_mask),
+            &mut ad_ctx,
+        )
+        .unwrap();
     (result, cotangent, builder.build())
 }
 
@@ -438,13 +444,15 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
         ValueKey::Input(TensorInputKey::User { id: 11 }),
     ];
 
-    let result = StdTensorOp::add().jvp_rule(
-        &mut builder,
-        &primal_in,
-        &[],
-        &[Some(dx), Some(dy)],
-        &mut ad_ctx,
-    );
+    let result = StdTensorOp::add()
+        .jvp_rule(
+            &mut builder,
+            &primal_in,
+            &[],
+            &[Some(dx), Some(dy)],
+            &mut ad_ctx,
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     assert!(result[0].is_some());
@@ -469,13 +477,15 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
         ValueRef::External(ValueKey::Input(TensorInputKey::User { id: 11 })),
     ];
 
-    let result = StdTensorOp::add().transpose_rule(
-        &mut builder,
-        &[Some(ct)],
-        &inputs,
-        &OperationRole::Primary,
-        &mut ad_ctx,
-    );
+    let result = StdTensorOp::add()
+        .transpose_rule(
+            &mut builder,
+            &[Some(ct)],
+            &inputs,
+            &OperationRole::Primary,
+            &mut ad_ctx,
+        )
+        .unwrap();
 
     assert_eq!(result, vec![Some(ct), Some(ct)]);
     let graph = builder.build();
@@ -506,13 +516,15 @@ fn test_std_tensor_op_mul_transpose_skips_real_conjugates_and_keeps_complex_conj
     let cotangent = builder.add_input(tensor_input_key(401));
     let inputs = external_inputs(510, 2);
     seed_uniform_ref_metadata_with_dtype(&mut ad_ctx, &inputs, DType::C64, sym_shape(&[2]));
-    let complex_result = StdTensorOp::Mul.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &inputs,
-        &linear_mode(&[true, true]),
-        &mut ad_ctx,
-    );
+    let complex_result = StdTensorOp::Mul
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &inputs,
+            &linear_mode(&[true, true]),
+            &mut ad_ctx,
+        )
+        .unwrap();
     let complex_graph = builder.build();
 
     assert!(complex_result.iter().all(Option::is_some));
@@ -535,8 +547,9 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
         TensorMeta::exact(DType::F64, sym_shape(&[2])),
     );
     let tangent = builder.add_input(tensor_input_key(540));
-    let real_linearized =
-        StdTensorOp::Conj.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let real_linearized = StdTensorOp::Conj
+        .jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx)
+        .unwrap();
     let real_linear_graph = builder.build();
     assert_eq!(real_linearized, vec![Some(tangent)]);
     assert!(real_linear_graph.operations().is_empty());
@@ -551,13 +564,15 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
         sym_shape(&[2]),
     );
     let cotangent = builder.add_input(tensor_input_key(542));
-    let real_transposed = StdTensorOp::Conj.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &[input],
-        &linear_mode(&[true]),
-        &mut ad_ctx,
-    );
+    let real_transposed = StdTensorOp::Conj
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &[input],
+            &linear_mode(&[true]),
+            &mut ad_ctx,
+        )
+        .unwrap();
     let real_transpose_graph = builder.build();
     assert_eq!(real_transposed, vec![Some(cotangent)]);
     assert!(real_transpose_graph.operations().is_empty());
@@ -570,8 +585,9 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
         TensorMeta::exact(DType::C64, sym_shape(&[2])),
     );
     let tangent = builder.add_input(tensor_input_key(560));
-    let complex_linearized =
-        StdTensorOp::Conj.jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let complex_linearized = StdTensorOp::Conj
+        .jvp_rule(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx)
+        .unwrap();
     let complex_linear_graph = builder.build();
     assert!(complex_linearized[0].is_some());
     assert_eq!(complex_linear_graph.operations().len(), 1);
@@ -590,13 +606,15 @@ fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation(
         sym_shape(&[2]),
     );
     let cotangent = builder.add_input(tensor_input_key(562));
-    let complex_transposed = StdTensorOp::Conj.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &[input],
-        &linear_mode(&[true]),
-        &mut ad_ctx,
-    );
+    let complex_transposed = StdTensorOp::Conj
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &[input],
+            &linear_mode(&[true]),
+            &mut ad_ctx,
+        )
+        .unwrap();
     let complex_transpose_graph = builder.build();
     assert!(complex_transposed[0].is_some());
     assert_eq!(complex_transpose_graph.operations().len(), 1);
@@ -777,13 +795,15 @@ fn test_std_tensor_op_dynamic_truncate_linearize_uses_static_slice_for_narrowed_
         TensorMeta::exact(DType::F64, vec![SymDim::from(2usize)]),
     );
 
-    let result = StdTensorOp::DynamicTruncate { axis: 0 }.jvp_rule(
-        &mut builder,
-        &primal_in,
-        &primal_out,
-        &[Some(tangent), None],
-        &mut ad_ctx,
-    );
+    let result = StdTensorOp::DynamicTruncate { axis: 0 }
+        .jvp_rule(
+            &mut builder,
+            &primal_in,
+            &primal_out,
+            &[Some(tangent), None],
+            &mut ad_ctx,
+        )
+        .unwrap();
     let graph = builder.build();
 
     assert!(result[0].is_some());
@@ -1035,13 +1055,15 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(920));
-    let div_primal_mode = StdTensorOp::Div.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &external_inputs(921, 2),
-        &OperationRole::Primary,
-        &mut ad_ctx,
-    );
+    let div_primal_mode = StdTensorOp::Div
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &external_inputs(921, 2),
+            &OperationRole::Primary,
+            &mut ad_ctx,
+        )
+        .unwrap();
     assert_eq!(div_primal_mode, vec![None, None]);
     assert!(builder.build().operations().is_empty());
 
@@ -1158,13 +1180,15 @@ fn test_std_tensor_op_transpose_none_or_inactive_paths_return_none() {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let mut ad_ctx = ShapeGuardContext::default();
         let cotangent = builder.add_input(tensor_input_key(900));
-        let result = op.transpose_rule(
-            &mut builder,
-            &[Some(cotangent)],
-            &external_inputs(901, 1),
-            &OperationRole::Primary,
-            &mut ad_ctx,
-        );
+        let result = op
+            .transpose_rule(
+                &mut builder,
+                &[Some(cotangent)],
+                &external_inputs(901, 1),
+                &OperationRole::Primary,
+                &mut ad_ctx,
+            )
+            .unwrap();
         assert_eq!(result, vec![None], "unexpected inactive path for {op:?}");
         assert!(
             builder.build().operations().is_empty(),

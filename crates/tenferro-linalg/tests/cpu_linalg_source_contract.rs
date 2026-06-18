@@ -56,9 +56,9 @@ fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
     );
 
     for needle in [
-        "input.host_data()[start..end].to_vec()",
-        "a.host_data()[a_start..a_end].to_vec()",
-        "b.host_data()[b_start..b_end].to_vec()",
+        "input.host_data().unwrap()[start..end].to_vec()",
+        "a.host_data().unwrap()[a_start..a_end].to_vec()",
+        "b.host_data().unwrap()[b_start..b_end].to_vec()",
     ] {
         assert!(
             !batched_helpers.contains(needle),

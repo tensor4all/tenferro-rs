@@ -15,8 +15,6 @@ use computegraph::types::{ValueKey, ValueRef};
 use smallvec::SmallVec;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
-use tenferro_extension_macros::define_idempotent_rule_registration;
-#[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
@@ -28,6 +26,8 @@ use tenferro_ops::ext_op::{ExtensionLoweringError, ExtensionLoweringResult, Exte
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::extension::{
     ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
 };
@@ -305,10 +305,8 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
 }
 
 #[cfg(feature = "autodiff")]
-define_idempotent_rule_registration! {
-    register_fn = ensure_einsum_extension_rule_registered,
-    rule_type = EinsumAdRule,
-    visibility = pub(crate),
+pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
+    ExtensionRuleSet::new().with_rule(Arc::new(EinsumAdRule))
 }
 
 #[derive(Debug)]
@@ -383,8 +381,8 @@ impl ExtensionAdRule for EinsumAdRule {
         };
         let primal_input_shapes: Vec<Vec<SymDim>> = inputs
             .iter()
-            .map(|input| ctx.shape_of(input).to_vec())
-            .collect();
+            .map(|input| ctx.shape_of(input).map(|shape| shape.to_vec()))
+            .collect::<Result<_, _>>()?;
         let cotangent_shape = op.output_shape_hint.clone().ok_or_else(|| {
             ADRuleError::unsupported(
                 "einsum VJP requires an output shape hint for cotangent planning",
@@ -427,7 +425,7 @@ impl ExtensionAdRule for EinsumAdRule {
                     builder,
                     inputs[input_idx].clone(),
                     ctx,
-                ));
+                )?);
             }
 
             let output_shape_hint = primal_input_shapes[active_idx].clone();
@@ -1310,13 +1308,13 @@ fn conjugate_primal_if_complex(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
-) -> ValueRef<StdTensorOp> {
-    match ctx.dtype_of(&input) {
+) -> ADRuleResult<ValueRef<StdTensorOp>> {
+    Ok(match ctx.dtype_of(&input)? {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => input,
         DType::C32 | DType::C64 => ValueRef::Local(
             builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
         ),
-    }
+    })
 }
 
 fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {

@@ -8,23 +8,23 @@ use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64"),
     }
 }
 
 fn get_i64_data(t: &Tensor) -> &[i64] {
     match t {
-        Tensor::I64(inner) => inner.host_data(),
+        Tensor::I64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected I64"),
     }
 }
@@ -35,7 +35,7 @@ fn test_add() {
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let tc = &ta + &tb;
+    let tc = (&ta + &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[5.0, 7.0, 9.0]);
@@ -47,7 +47,7 @@ fn test_add_broadcast_scalar_plus_vector() {
     let vector = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(scalar);
     let tb = TracedTensor::from_tensor_concrete_shape(vector);
-    let tc = &ta + &tb;
+    let tc = (&ta + &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3]);
@@ -60,7 +60,7 @@ fn test_mul() {
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let tc = &ta * &tb;
+    let tc = (&ta * &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[4.0, 10.0, 18.0]);
@@ -72,7 +72,7 @@ fn test_mul_broadcast_column_times_row() {
     let row = f64_tensor(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(column);
     let tb = TracedTensor::from_tensor_concrete_shape(row);
-    let tc = &ta * &tb;
+    let tc = (&ta * &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3, 4]);
@@ -88,7 +88,7 @@ fn test_div_broadcast_vector_by_scalar() {
     let scalar = f64_tensor(vec![], vec![2.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(vector);
     let tb = TracedTensor::from_tensor_concrete_shape(scalar);
-    let tc = &ta / &tb;
+    let tc = (&ta / &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[1.0, 2.0, 4.0]);
@@ -125,7 +125,7 @@ fn test_scale_real_i64_rounds_factor() {
 fn test_pow_broadcast_vector_with_scalar_exponent() {
     let base = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
     let exp = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![2.0]));
-    let out = pow(&base, &exp);
+    let out = pow(&base, &exp).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = out.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3]);
@@ -146,10 +146,13 @@ fn test_neg() {
 fn traced_abs_of_complex_tensor_returns_real_tensor() {
     use num_complex::Complex64;
 
-    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(3.0, 4.0), Complex64::new(5.0, 12.0)],
-    ));
+    let x = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(3.0, 4.0), Complex64::new(5.0, 12.0)],
+        )
+        .unwrap(),
+    );
     let y = x.abs();
     assert_eq!(y.dtype, DType::F64);
 
@@ -171,7 +174,7 @@ fn test_dot_general() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
     // C = [[22, 49], [28, 64]] col-major: [22, 28, 49, 64]
@@ -183,7 +186,7 @@ fn test_broadcast_reduce() {
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let tv = TracedTensor::from_tensor_concrete_shape(v);
     let tb = tv.broadcast_in_dim(&[3, 2], &[0]);
-    let tr = tb.reduce_sum(&[1]);
+    let tr = tb.reduce_sum(&[1]).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tr.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[2.0, 4.0, 6.0]);
@@ -193,7 +196,7 @@ fn test_broadcast_reduce() {
 fn test_transpose() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = ta.transpose(&[1, 0]);
+    let tb = ta.transpose(&[1, 0]).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tb.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
@@ -213,14 +216,17 @@ fn test_reshape() {
 fn traced_index_select_keeps_indices_integer_for_complex_operand() {
     use num_complex::Complex64;
 
-    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
-        vec![3],
-        vec![
-            Complex64::new(1.0, 1.0),
-            Complex64::new(2.0, -1.0),
-            Complex64::new(3.0, 0.5),
-        ],
-    ));
+    let x = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(3.0, 0.5),
+            ],
+        )
+        .unwrap(),
+    );
     let y = x.index_select(-1, &[2, 0]).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let out = y.run_with(&mut engine).unwrap();
@@ -246,15 +252,17 @@ fn traced_stack_trailing_axis_and_index_select_feed_batched_dot_general() {
         .unwrap()
         .index_select(-1, &[1, 0])
         .unwrap();
-    let c = a.dot_general(
-        &b,
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![2],
-            rhs_batch_dims: vec![2],
-        },
-    );
+    let c = a
+        .dot_general(
+            &b,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![2],
+                rhs_batch_dims: vec![2],
+            },
+        )
+        .unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let out = c.run_with(&mut engine).unwrap();
@@ -325,10 +333,9 @@ fn traced_stack_rejects_empty_mismatched_invalid_axis_and_symbolic_shapes() {
 
 #[test]
 fn traced_stack_positive_axis_promotes_mixed_input_dtypes() {
-    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
-        vec![2],
-        vec![1.0_f32, 2.0],
-    ));
+    let a = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap(),
+    );
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, 4.0]));
 
     let out = TracedTensor::stack(&[&a, &b], 0).unwrap();
@@ -345,8 +352,8 @@ fn test_run_many_traced() {
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let sum = &ta + &tb;
-    let prod = &ta * &tb;
+    let sum = (&ta + &tb).unwrap();
+    let prod = (&ta * &tb).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let results = run_many_traced_with(&mut engine, &[&sum, &prod]).unwrap();
     assert_eq!(get_f64_data(&results[0]), &[4.0, 6.0]);
@@ -361,8 +368,8 @@ fn test_chained_ops() {
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
     let tc = TracedTensor::from_tensor_concrete_shape(c);
-    let sum = &ta + &tb;
-    let result = &sum * &tc;
+    let sum = (&ta + &tb).unwrap();
+    let result = (&sum * &tc).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let out = result.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&out), &[40.0, 120.0]);

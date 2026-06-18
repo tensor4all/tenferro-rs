@@ -235,18 +235,17 @@ fn metadata_exposes_exact_extents() {
 
     let extents = ctx.extents_of(&ValRef::External(key));
     assert_eq!(extents, meta.extents());
-    assert_eq!(ctx.exact_shape_of(&ValRef::External(key)), Some(meta.shape.clone()));
+    assert_eq!(ctx.exact_shape_of(&ValRef::External(key)), meta.exact_shape());
 }
 
 #[test]
 fn metadata_exact_shape_rejects_upper_bound() {
     let key = input_key(701);
     let mut ctx = ShapeGuardContext::default();
-    let meta = TensorMeta {
-        dtype: DType::F64,
-        shape: vec![SymDim::from(4usize)],
-        extents: vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
-    };
+    let meta = TensorMeta::with_extents(
+        DType::F64,
+        vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
+    );
     ctx.insert_metadata(key.clone(), meta);
     assert_eq!(ctx.exact_shape_of(&ValRef::External(key)), None);
 }
@@ -304,7 +303,7 @@ impl TensorMeta {
 ```
 
 The `shape` field stays temporarily for existing callers. Treat it as a
-compatibility bound shape, not proof of exactness.
+an explicit bound shape, not proof of exactness.
 
 Add `ShapeGuardContext` accessors:
 
@@ -430,11 +429,13 @@ let output_dtype = infer_output_dtype(op, &input_dtypes);
 infer_output_extents(op, &input_shape_refs)
     .into_iter()
     .map(|extents| {
-        let resolved_inputs: Vec<&[SymDim]> =
-            input_metas.iter().map(|meta| meta.shape.as_slice()).collect();
+        let resolved_inputs: Vec<Vec<SymDim>> =
+            input_metas.iter().map(|meta| meta.bound_shape().unwrap()).collect();
+        let resolved_input_refs: Vec<&[SymDim]> =
+            resolved_inputs.iter().map(Vec::as_slice).collect();
         let resolved_extents = extents
             .into_iter()
-            .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_inputs)))
+            .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_input_refs)))
             .collect();
         TensorMeta::with_extents(output_dtype, resolved_extents)
     })

@@ -43,9 +43,6 @@ blas-mkl = [
     "strided-einsum2/blas-mkl",
     "strided-einsum2/parallel",
 ]
-src-openblas = ["blas-openblas"]
-src-accelerate = ["blas-accelerate"]
-src-intel-mkl-dynamic-parallel = ["blas-mkl"]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0" }

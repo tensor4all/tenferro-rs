@@ -3,7 +3,7 @@ use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
-use crate::cubecl::{gpu_available, CubeclBackend, CubeclRuntime};
+use crate::cubecl::{gpu_available, CudaBackend, CudaRuntime};
 use crate::{Error, Tensor};
 use tenferro_tensor::TensorElementwise;
 
@@ -43,19 +43,20 @@ fn cube_count_for_len_rejects_u32_overflow() {
 }
 
 gpu_test!(test_runtime_init, {
-    let rt = CubeclRuntime::new(0);
+    let rt = CudaRuntime::new(0);
     assert!(rt.is_ok(), "CubeCL runtime should init on device 0");
 });
 
 gpu_test!(test_raw_stream_extraction, {
-    let rt = CubeclRuntime::new(0).unwrap();
+    let rt = CudaRuntime::new(0).unwrap();
     let stream_ptr = rt.raw_cuda_stream().unwrap();
     assert!(stream_ptr != 0, "Raw CUstream should be non-null");
 });
 
 gpu_test!(test_upload_download_f64, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let host =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let gpu = upload_tensor(&rt, &host).unwrap();
 
     assert_eq!(gpu.dtype(), crate::DType::F64);
@@ -69,8 +70,8 @@ gpu_test!(test_upload_download_f64, {
 });
 
 gpu_test!(test_upload_download_i64, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1_i64, -2, 3, -4, 5, -6]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1_i64, -2, 3, -4, 5, -6]).unwrap();
     let gpu = upload_tensor(&rt, &host).unwrap();
 
     assert_eq!(gpu.dtype(), crate::DType::I64);
@@ -84,8 +85,8 @@ gpu_test!(test_upload_download_i64, {
 });
 
 gpu_test!(test_upload_download_i32, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1_i32, -2, 3, -4, 5, -6]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1_i32, -2, 3, -4, 5, -6]).unwrap();
     let gpu = upload_tensor(&rt, &host).unwrap();
 
     assert_eq!(gpu.dtype(), crate::DType::I32);
@@ -99,8 +100,9 @@ gpu_test!(test_upload_download_i32, {
 });
 
 gpu_test!(test_upload_download_bool, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![2, 3], vec![true, false, true, true, false, false]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![2, 3], vec![true, false, true, true, false, false])
+        .unwrap();
     let gpu = upload_tensor(&rt, &host).unwrap();
 
     assert_eq!(gpu.dtype(), crate::DType::Bool);
@@ -114,8 +116,8 @@ gpu_test!(test_upload_download_bool, {
 });
 
 gpu_test!(test_download_empty_host_f64_rejects_before_fast_path, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new());
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap();
 
     let err = download_tensor(&rt, &host).unwrap_err();
 
@@ -123,8 +125,8 @@ gpu_test!(test_download_empty_host_f64_rejects_before_fast_path, {
 });
 
 gpu_test!(test_download_empty_host_bool_rejects_before_fast_path, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new());
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new()).unwrap();
 
     let err = download_tensor(&rt, &host).unwrap_err();
 
@@ -138,9 +140,9 @@ fn assert_download_rejects_host_tensor_before_empty_fast_path(err: Error) {
 gpu_test!(test_upload_download_c64, {
     use num_complex::Complex64;
 
-    let rt = CubeclRuntime::new(0).unwrap();
+    let rt = CudaRuntime::new(0).unwrap();
     let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)];
-    let host = Tensor::from_vec_col_major(vec![2], data.clone());
+    let host = Tensor::from_vec_col_major(vec![2], data.clone()).unwrap();
 
     let gpu = upload_tensor(&rt, &host).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
@@ -149,8 +151,8 @@ gpu_test!(test_upload_download_c64, {
 });
 
 gpu_test!(test_pointer_bridge, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
     let gpu = upload_tensor(&rt, &host).unwrap();
     let ptr = device_ptr(&rt, &gpu).unwrap();
@@ -159,10 +161,10 @@ gpu_test!(test_pointer_bridge, {
 });
 
 gpu_test!(test_backend_add_matches_cpu_reference, {
-    let mut backend = CubeclBackend::new(0).unwrap();
+    let mut backend = CudaBackend::new(0).unwrap();
     let mut cpu = tenferro_cpu::CpuBackend::new();
-    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
     let expected = cpu.add(&a, &b).unwrap();
@@ -176,7 +178,7 @@ gpu_test!(test_backend_add_matches_cpu_reference, {
 });
 
 gpu_test!(test_trivial_cube_kernel, {
-    let rt = CubeclRuntime::new(0).unwrap();
+    let rt = CudaRuntime::new(0).unwrap();
     let client = rt.client();
 
     let a_data = vec![1.0_f64, 2.0, 3.0, 4.0];
@@ -207,9 +209,9 @@ gpu_test!(test_trivial_cube_kernel, {
 gpu_test!(test_full_round_trip_all_dtypes, {
     use num_complex::{Complex32, Complex64};
 
-    let rt = CubeclRuntime::new(0).unwrap();
+    let rt = CudaRuntime::new(0).unwrap();
 
-    let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -217,7 +219,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<f64>().unwrap()
     );
 
-    let t = Tensor::from_vec_col_major(vec![3], vec![1.0_f32, 2.0, 3.0]);
+    let t = Tensor::from_vec_col_major(vec![3], vec![1.0_f32, 2.0, 3.0]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -225,7 +227,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<f32>().unwrap()
     );
 
-    let t = Tensor::from_vec_col_major(vec![3], vec![1_i64, -2, 3]);
+    let t = Tensor::from_vec_col_major(vec![3], vec![1_i64, -2, 3]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -233,7 +235,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<i64>().unwrap()
     );
 
-    let t = Tensor::from_vec_col_major(vec![3], vec![1_i32, -2, 3]);
+    let t = Tensor::from_vec_col_major(vec![3], vec![1_i32, -2, 3]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -241,7 +243,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<i32>().unwrap()
     );
 
-    let t = Tensor::from_vec_col_major(vec![4], vec![true, false, false, true]);
+    let t = Tensor::from_vec_col_major(vec![4], vec![true, false, false, true]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -252,7 +254,8 @@ gpu_test!(test_full_round_trip_all_dtypes, {
     let t = Tensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
-    );
+    )
+    .unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -263,7 +266,8 @@ gpu_test!(test_full_round_trip_all_dtypes, {
     let t = Tensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
-    );
+    )
+    .unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -273,8 +277,8 @@ gpu_test!(test_full_round_trip_all_dtypes, {
 });
 
 gpu_test!(test_pointer_and_stream_bridge, {
-    let rt = CubeclRuntime::new(0).unwrap();
-    let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let rt = CudaRuntime::new(0).unwrap();
+    let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
 
     let ptr = device_ptr(&rt, &gpu).unwrap();

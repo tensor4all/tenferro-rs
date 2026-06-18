@@ -1,7 +1,4 @@
-use super::{
-    expand_extension_family_id, expand_extension_runtime, expand_idempotent_rule_registration,
-    to_snake_case, ExtensionArgs,
-};
+use super::{expand_extension_family_id, expand_extension_runtime, to_snake_case, ExtensionArgs};
 use syn::DeriveInput;
 
 #[test]
@@ -74,6 +71,7 @@ fn extension_runtime_macro_generates_runtime_impl_and_register_function() {
         family_id = TINY_EXTENSION_FAMILY_ID,
         op_type = TinyExtensionOp,
         execute = execute_tiny_extension,
+        execute_reads = execute_tiny_extension_reads,
         register_fn = register_tiny_runtime,
     });
     let source = tokens.to_string();
@@ -83,6 +81,7 @@ fn extension_runtime_macro_generates_runtime_impl_and_register_function() {
     assert!(source.contains("ExtensionRuntime < B >"));
     assert!(source.contains("downcast_ref :: < TinyExtensionOp >"));
     assert!(source.contains("execute_tiny_extension (op , inputs , ctx)"));
+    assert!(source.contains("execute_tiny_extension_reads (op , inputs , ctx)"));
     assert!(source.contains("pub fn register_tiny_runtime"));
 }
 
@@ -93,6 +92,7 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
         family_id = LINALG_EXTENSION_FAMILY_ID,
         op_type = LinalgExtensionOp,
         execute = execute_linalg_extension,
+        execute_reads = execute_linalg_extension_reads,
         register_fn = register_runtime,
         backend_bound = crate::backend::LinalgBackend,
     });
@@ -102,7 +102,7 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
 }
 
 #[test]
-fn extension_runtime_macro_generates_optional_read_executor() {
+fn extension_runtime_macro_generates_required_read_executor() {
     let tokens = expand_extension_runtime(syn::parse_quote! {
         runtime = EinsumRuntime,
         family_id = EINSUM_EXTENSION_FAMILY_ID,
@@ -116,19 +116,4 @@ fn extension_runtime_macro_generates_optional_read_executor() {
     assert!(source.contains("fn execute_reads"));
     assert!(source.contains("TensorRead < '_ >"));
     assert!(source.contains("execute_einsum_extension_reads (op , inputs , ctx)"));
-}
-
-#[test]
-fn idempotent_rule_registration_macro_generates_duplicate_guard() {
-    let tokens = expand_idempotent_rule_registration(syn::parse_quote! {
-        register_fn = ensure_einsum_extension_rule_registered,
-        rule_type = EinsumAdRule,
-        visibility = pub(crate),
-    });
-    let source = tokens.to_string();
-
-    assert!(source.contains("pub (crate) fn ensure_einsum_extension_rule_registered"));
-    assert!(source.contains("tenferro_ops :: register_extension_rule"));
-    assert!(source.contains("std :: sync :: Arc :: new (EinsumAdRule)"));
-    assert!(source.contains("ExtensionRegistryError :: DuplicateRule"));
 }

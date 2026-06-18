@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
-use crate::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use crate::cubecl::{download_tensor, upload_tensor, CudaBackend};
 use crate::{Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 
@@ -18,44 +18,44 @@ fn cpu_backend() -> CpuBackend {
     CpuBackend::new()
 }
 
-fn gpu_backend() -> CubeclBackend {
-    CubeclBackend::new(0).unwrap()
+fn gpu_backend() -> CudaBackend {
+    CudaBackend::new(0).unwrap()
 }
 
-fn upload(backend: &CubeclBackend, tensor: &Tensor) -> Tensor {
+fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
     upload_tensor(backend.runtime(), tensor).unwrap()
 }
 
-fn download(backend: &CubeclBackend, tensor: &Tensor) -> Tensor {
+fn download(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
     download_tensor(backend.runtime(), tensor).unwrap()
 }
 
 fn tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_f64(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_i32(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
-    Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::I32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_bool(shape: Vec<usize>, data: Vec<bool>) -> Tensor {
-    Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::Bool(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_c32(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
-    Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn tensor_c64(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {

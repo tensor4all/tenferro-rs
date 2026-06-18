@@ -66,6 +66,6 @@ pub(crate) mod metadata {
     pub use tenferro_runtime::ad_support::{
         metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_graph_metadata,
         register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
-        MetadataScope,
+        GlobalMetadataScope,
     };
 }

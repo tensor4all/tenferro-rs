@@ -25,6 +25,16 @@ pub(crate) fn static_output_shape(
             axis,
             kind,
         }),
+        Err(GraphProgramLoweringShapeError::InvalidDimExpr {
+            op,
+            output_index,
+            axis,
+            source,
+        }) => Err(Error::InvalidProgram {
+            message: format!(
+                "ExecOp::{op} output {output_index} axis {axis} has invalid dimension expression: {source}"
+            ),
+        }),
     }
 }
 

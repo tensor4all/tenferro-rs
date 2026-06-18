@@ -1,25 +1,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use tenferro_runtime::extension::{try_apply, ExtensionOpTrait};
+use tenferro_runtime::extension::{apply, ExtensionOp};
 use tenferro_runtime::{DType, GraphCompiler, SymDim, Tensor, TracedTensor};
 use tenferro_xla::{lower_to_stablehlo, Error};
 
 #[derive(Clone, Debug)]
 struct RuntimeOnlyExtension;
 
-impl ExtensionOpTrait for RuntimeOnlyExtension {
+impl ExtensionOp for RuntimeOnlyExtension {
     fn family_id(&self) -> &'static str {
         "test.runtime_only.v1"
     }
 
     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
 
-    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other.as_any().downcast_ref::<Self>().is_some()
     }
 
-    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
         Arc::new(self.clone())
     }
 
@@ -51,7 +51,7 @@ impl ExtensionOpTrait for RuntimeOnlyExtension {
 #[test]
 fn rejects_i64_dtype_before_emitting_mlir() {
     let x = TracedTensor::input_symbolic_shape(DType::I64, 1);
-    let y = &x + &x;
+    let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::I64, &[2])])
@@ -72,7 +72,7 @@ fn rejects_i64_dtype_before_emitting_mlir() {
 fn rejects_dynamic_upper_bound_extents() {
     let data = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let size = TracedTensor::input_symbolic_shape(DType::F64, 0);
-    let y = data.dynamic_truncate(&size, 0);
+    let y = data.dynamic_truncate(&size, 0).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&data, DType::F64, &[4]), (&size, DType::F64, &[])])
@@ -107,7 +107,7 @@ fn rejects_unsupported_static_op() {
 #[test]
 fn rejects_extension_without_standard_op_lowering() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let outputs = try_apply(Arc::new(RuntimeOnlyExtension), &[&x]).unwrap();
+    let outputs = apply(Arc::new(RuntimeOnlyExtension), &[&x]).unwrap();
     let y = outputs.into_iter().next().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler

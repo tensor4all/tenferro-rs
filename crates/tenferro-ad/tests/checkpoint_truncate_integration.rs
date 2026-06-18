@@ -8,16 +8,16 @@ const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_scalar(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
 
 fn get_f64_scalar(tensor: &Tensor) -> f64 {
     match tensor {
-        Tensor::F64(inner) => inner.host_data()[0],
+        Tensor::F64(inner) => inner.host_data().unwrap()[0],
         other => panic!("expected F64 tensor, got {:?}", other.dtype()),
     }
 }
@@ -36,12 +36,12 @@ fn checkpoint_truncate_loop_grad() {
     let mut x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone()));
 
     for _ in 0..steps {
-        x = &a * &x;
-        x = x.dynamic_truncate(&size, 0);
+        x = (&a * &x).unwrap();
+        x = x.dynamic_truncate(&size, 0).unwrap();
         x.checkpoint(&mut compiler, &mut executor).unwrap();
     }
 
-    let loss = x.reduce_sum(&[0]);
+    let loss = x.reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&a).unwrap();
     let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
 

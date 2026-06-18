@@ -7,7 +7,7 @@ Date: 2026-06-13
 This work adds a first-class WebGPU provider path to `tenferro-gpu` while
 keeping CUDA and WebGPU as explicit additive provider features. It introduces
 `WebGpuBackend`/`WebGpuRuntime`, preserves `CudaBackend` plus the existing
-`CubeclBackend` compatibility alias, and adds `GpuBackendKind::WebGpu` for
+`CudaBackend` compatibility alias, and adds `GpuBackendKind::WebGpu` for
 placement metadata.
 
 `tenferro-ad` now accepts `WebGpuBackend` through `EagerRuntime`, and

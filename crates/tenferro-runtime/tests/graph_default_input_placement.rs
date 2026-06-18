@@ -118,8 +118,9 @@ impl BackendSessionHost for UploadRejectingBackend {}
 impl TensorBackend for UploadRejectingBackend {}
 
 fn scalar_default_program() -> tenferro_runtime::GraphProgram {
-    let scalar =
-        TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]));
+    let scalar = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+    );
     GraphCompiler::new().compile(&scalar).unwrap()
 }
 
@@ -149,7 +150,7 @@ fn explicit_scalar_binding_is_not_auto_uploaded() {
     let program = GraphCompiler::new()
         .compile_with_input_specs(&scalar, &[(&scalar, DType::F64, &[])])
         .unwrap();
-    let bound = Tensor::from_vec_col_major(vec![], vec![7.0_f64]);
+    let bound = Tensor::from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
 
     let owned = GraphExecutor::new(UploadRejectingBackend)
         .run_many_with_inputs(&program, &[(&scalar, &bound)])
@@ -164,10 +165,9 @@ fn explicit_scalar_binding_is_not_auto_uploaded() {
 
 #[test]
 fn non_scalar_default_input_is_not_auto_uploaded() {
-    let vector = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
-        vec![1],
-        vec![3.0_f64],
-    ));
+    let vector = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+    );
     let program = GraphCompiler::new().compile(&vector).unwrap();
 
     let owned = GraphExecutor::new(UploadRejectingBackend)
@@ -183,14 +183,17 @@ fn non_scalar_default_input_is_not_auto_uploaded() {
 
 #[test]
 fn backend_resident_scalar_default_input_is_not_reuploaded() {
-    let tensor = Tensor::F64(TypedTensor::from_buffer_col_major(
-        vec![],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 1))),
-        Placement {
-            memory_kind: MemoryKind::Other("test-backend".to_string()),
-            device: None,
-        },
-    ));
+    let tensor = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 1))),
+            Placement {
+                memory_kind: MemoryKind::Other("test-backend".to_string()),
+                device: None,
+            },
+        )
+        .unwrap(),
+    );
     let scalar = TracedTensor::from_tensor_concrete_shape(tensor);
     let program = GraphCompiler::new().compile(&scalar).unwrap();
 

@@ -51,7 +51,7 @@ fn cholesky_2d<T: LapackCholesky>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let n = square_matrix_dim(input, "cholesky")?;
     let n_i32 = dim_i32(n, "cholesky")?;
-    let mut factor = input.host_data().to_vec();
+    let mut factor = input.host_data()?.to_vec();
     let mut info = 0;
     T::potrf(b'L', n_i32, &mut factor, n_i32, &mut info);
     if info > 0 {
@@ -61,11 +61,7 @@ fn cholesky_2d<T: LapackCholesky>(
         ));
     }
     check_lapack_info("cholesky", "dpotrf", info)?;
-    Ok(tensor_from_vec_with_template(
-        vec![n, n],
-        lower_triangle_from_lapack(&factor, n, n),
-        input,
-    ))
+    tensor_from_vec_with_template(vec![n, n], lower_triangle_from_lapack(&factor, n, n), input)
 }
 
 pub(crate) fn cholesky<T: LapackCholesky>(
@@ -74,11 +70,11 @@ pub(crate) fn cholesky<T: LapackCholesky>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "cholesky")?;
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             matrix_with_batch_shape(n, n, batch_shape),
             Vec::new(),
             input,
-        ));
+        );
     }
     batched_single("cholesky", buffers, input, cholesky_2d)
 }

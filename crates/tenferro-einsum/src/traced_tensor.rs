@@ -1,7 +1,7 @@
 //! Traced tensor einsum operations.
 //!
 //! This module is the canonical traced tensor namespace for the einsum
-//! extension crate. Root-level re-exports remain available for compatibility.
+//! extension crate.
 
 use tenferro_runtime::error::Result;
 use tenferro_runtime::TracedTensor;
@@ -36,5 +36,5 @@ pub fn tensordot(
 ) -> Result<TracedTensor> {
     let config = crate::tensordot::dot_general_config(axes, lhs.rank, rhs.rank)?;
     crate::tensordot::validate_traced_contract_dims(lhs, rhs, &config)?;
-    Ok(lhs.dot_general(rhs, config))
+    lhs.dot_general(rhs, config)
 }

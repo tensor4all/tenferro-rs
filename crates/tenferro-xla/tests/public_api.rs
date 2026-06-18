@@ -38,7 +38,7 @@ fn xla_executor_options_debug_and_lowering_are_stable() {
     assert!(debug.contains("has_loaded_pjrt_plugin"));
     assert_eq!(XlaExecutor::default().options(), options);
 
-    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg()).unwrap();
     let module = executor.lower_to_stablehlo(&program).unwrap();

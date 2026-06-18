@@ -112,7 +112,7 @@ pub fn compile_std_to_exec_with_options(
                     let extents = exact_extents_from_shapes(&shapes);
                     (dtypes, shapes, extents)
                 } else {
-                    let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
+                    let dtype = infer_output_dtype(&instr.operation, &input_dtypes)?;
                     let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs)?;
                     let extents = infer_output_extents(&instr.operation, &input_shapes_refs)?;
                     if shapes.len() != instr.outputs.len() {

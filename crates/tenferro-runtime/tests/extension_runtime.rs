@@ -90,6 +90,20 @@ impl ExtensionRuntime<CpuBackend> for IdentityRuntime {
         assert!(ctx.caches_mut().get::<String>(&key).is_some());
         Ok(vec![inputs[0].clone()])
     }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
 }
 
 #[derive(Debug)]
@@ -112,6 +126,20 @@ impl ExtensionRuntime<CpuBackend> for WrongOutputCountRuntime {
         Ok(std::iter::repeat_with(|| inputs[0].clone())
             .take(self.return_count)
             .collect())
+    }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
     }
 }
 
@@ -169,7 +197,7 @@ fn extension_executor_executes_registered_runtime_and_manages_caches() {
     assert_eq!(executor.cache_limits().max_entries().get(), 2);
 
     let mut backend = CpuBackend::new();
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let output = executor
         .execute(&mut backend, &IdentityRuntimeOp { family }, &[&input])
         .expect("extension execution");
@@ -192,7 +220,7 @@ fn extension_executor_rejects_runtime_output_count_mismatch() {
         .expect("runtime registration");
     let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
     let mut backend = CpuBackend::new();
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 
     let err = executor
         .execute(&mut backend, &IdentityRuntimeOp { family }, &[&input])
@@ -236,7 +264,7 @@ fn extension_executor_rejects_read_runtime_output_count_mismatch() {
         }))
         .expect("runtime registration");
     let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let read = TensorRead::from_tensor(&input);
     let mut backend = CpuBackend::new();
 
@@ -279,14 +307,17 @@ fn extension_executor_read_fallback_reports_backend_view_materialization_error_w
         .register(Arc::new(IdentityRuntime { family }))
         .expect("runtime registration");
     let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
-    let base = Arc::new(Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
-        vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(91, 1))),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: None,
-        },
-    )));
+    let base = Arc::new(Tensor::F64(
+        TypedTensor::<f64>::from_buffer_col_major(
+            vec![1],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(91, 1))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: None,
+            },
+        )
+        .unwrap(),
+    ));
     let view = TensorOwnedView::from_tensor(base);
     let read = view.tensor_read();
     let mut backend = CpuBackend::new();
@@ -319,10 +350,9 @@ fn extension_executor_default_read_path_materializes_views_at_runtime_boundary()
         .expect("runtime registration");
     let mut executor = ExtensionExecutor::with_parts(registry, Default::default());
 
-    let base = Arc::new(Tensor::from_vec_col_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let base = Arc::new(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    );
     let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
     let read = TensorRead::from_view(view.tensor_view());
     let mut backend = CpuBackend::new();
@@ -344,7 +374,7 @@ fn extension_executor_default_read_path_materializes_views_at_runtime_boundary()
 fn extension_executor_reports_missing_runtime() {
     let mut executor = ExtensionExecutor::<CpuBackend>::new();
     let mut backend = CpuBackend::new();
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let err = executor
         .execute(
             &mut backend,

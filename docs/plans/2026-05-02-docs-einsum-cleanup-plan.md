@@ -92,7 +92,7 @@ Expected: PASS.
 
 **Step 1: Replace stale direct-backend design claims**
 
-Rewrite `docs/design/gpu-backend-design.md` around the current `CubeclBackend` implementation in `tenferro-tensor/src/cubecl/`, the `cubecl` feature, explicit upload/download policy, CUDA-only status, and lazy runtime loading of cuTENSOR/cuSOLVER/cuBLAS. Clearly state that ROCm is a stub and GPU benchmarking is out of scope for this batch.
+Rewrite `docs/design/gpu-backend-design.md` around the current `CudaBackend` implementation in `tenferro-tensor/src/cubecl/`, the `cubecl` feature, explicit upload/download policy, CUDA-only status, and lazy runtime loading of cuTENSOR/cuSOLVER/cuBLAS. Clearly state that ROCm is a stub and GPU benchmarking is out of scope for this batch.
 
 **Step 2: Align einsum design status**
 

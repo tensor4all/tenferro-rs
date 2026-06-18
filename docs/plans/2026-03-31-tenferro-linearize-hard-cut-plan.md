@@ -490,7 +490,7 @@ Before considering the branch complete, verify all of the following:
 
 ## Notes For Execution
 
-- If a stage exposes a large red surface, do **not** paper over it with compatibility wrappers.
+- If a stage exposes a large red surface, do **not** paper over it with temporary shims.
 - If a crate cannot be made green without reviving legacy types, stop and redesign that stage before continuing.
 - If QR/SVD block the linalg stage, land the easy single-output linalg ops first and keep QR/SVD as the last linalg subtask inside Stage C.
 - The “disable downstream crates” strategy means “do not include them in the current verification target”, not “break their source on purpose”.

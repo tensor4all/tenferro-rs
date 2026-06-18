@@ -1101,14 +1101,11 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     //                       RHS = sequential 0..20, reshaped as [4, 5].
     let lhs_data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let rhs_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
-        vec![2, 3, 4],
-        lhs_data.clone(),
-    ));
-    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
-        vec![4, 5],
-        rhs_data.clone(),
-    ));
+    let lhs = Tensor::F64(
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 4], lhs_data.clone()).unwrap(),
+    );
+    let rhs =
+        Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![4, 5], rhs_data.clone()).unwrap());
 
     let mut executor = GraphExecutor::new(CpuBackend::default());
     let mut outputs = executor
@@ -1137,7 +1134,13 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
             }
         }
     }
-    for (i, (got, want)) in typed.host_data().iter().zip(expected.iter()).enumerate() {
+    for (i, (got, want)) in typed
+        .host_data()
+        .unwrap()
+        .iter()
+        .zip(expected.iter())
+        .enumerate()
+    {
         assert!(
             (got - want).abs() < 1e-9,
             "index {i}: got {got}, expected {want}"

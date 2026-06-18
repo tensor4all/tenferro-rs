@@ -61,7 +61,7 @@ pub mod cuda {
     pub use tenferro_tensor::cubecl::{
         download_tensor,
         upload_tensor,
-        CubeclBackend as CudaBackend,
+        CudaBackend,
     };
 }
 ```

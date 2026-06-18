@@ -662,7 +662,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
 
     let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap();
     let view = tensor.as_view();
-    assert!(view.is_contiguous_col_major());
+    assert!(view.is_compact_col_major());
     assert!(matches!(
         view.transpose_view(&[0]).unwrap_err(),
         Error::InvalidPermutationLength {

@@ -1,9 +1,8 @@
 # GPU Backend Design
 
 This document is developer-facing. Public user docs describe GPU providers as
-explicit backend choices. CUDA is exposed as `tenferro_gpu::CudaBackend`, with
-`CubeclBackend` retained as a backwards-compatible CUDA alias while downstream
-users migrate. WebGPU is exposed as `tenferro_gpu::WebGpuBackend`. Backend
+explicit backend choices. CUDA is exposed as `tenferro_gpu::CudaBackend`.
+WebGPU is exposed as `tenferro_gpu::WebGpuBackend`. Backend
 features are additive provider choices: `cuda` and `webgpu` are both explicit,
 neither is enabled by default as a GPU provider, and downstream crates may
 enable either or both. Eager and operation crates should propagate the same
@@ -75,8 +74,7 @@ crates/tenferro-gpu/src/webgpu/
 ```
 
 The provider-specific public backend types are `tenferro_gpu::CudaBackend` and
-`tenferro_gpu::WebGpuBackend`. `CubeclBackend` remains a compatibility alias for
-`CudaBackend`; new code should use provider-specific names. CUDA is selected by
+`tenferro_gpu::WebGpuBackend`; CubeCL naming is an implementation detail. CUDA is selected by
 enabling the `cuda` feature, which depends on the workspace-pinned CubeCL fork
 and the CubeCL CUDA runtime. WebGPU is selected by enabling the `webgpu`
 feature, which depends on CubeCL-WGPU and the CubeK matmul provider. Enabling
@@ -121,9 +119,8 @@ use workspace dependencies or a deliberate crates.io/git dependency.
 ## Runtime And Library Loading
 
 `CudaRuntime::new(device_ordinal)` initializes CUDA and creates the CubeCL CUDA
-client for one device. `CubeclRuntime` remains a compatibility alias for
-`CudaRuntime`. GPU kernels are JIT-compiled by CubeCL, so local CUDA toolkit
-configuration matters.
+client for one device. GPU kernels are JIT-compiled by CubeCL, so local CUDA
+toolkit configuration matters.
 
 `WebGpuRuntime::new(device_ordinal)` creates a CubeCL-WGPU client for a WebGPU
 adapter. WebGPU runtime initialization must not call CUDA driver/runtime APIs,
@@ -219,10 +216,10 @@ instead. That module intentionally exposes only the bridges that cannot live in
 - byte workspaces kept alive for CUDA library calls,
 - scoped access to the CubeCL client for operation-owned kernel launches.
 
-`CubeclRuntime::client`, `CubeclRuntime::raw_cuda_stream`, `CubeclBuffer`
+`CudaRuntime::client`, `CudaRuntime::raw_cuda_stream`, `CubeclBuffer`
 fields, and raw `CubeclBuffer` constructors are not public API. Public tensor
-users should use `CubeclBackend`, `upload_tensor`, `download_tensor`,
-`device_ptr`, and `CubeclRuntime::synchronize`.
+users should use `CudaBackend`, `upload_tensor`, `download_tensor`,
+`device_ptr`, and `CudaRuntime::synchronize`.
 
 ## Kernel Metadata Contract
 
@@ -371,7 +368,7 @@ cuSOLVER rejects null U/V pointers on that path.
 
 The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
 the current CUDA operation and dtype matrix. Keep that matrix synchronized with
-the `CubeclBackend` `TensorBackend` implementation when adding or removing CUDA
+the `CudaBackend` `TensorBackend` implementation when adding or removing CUDA
 dispatch arms.
 
 General eigendecomposition (`eig`, LAPACK `dgeev` style) is not provided by

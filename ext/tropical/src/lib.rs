@@ -25,12 +25,12 @@
 //!
 //! ```
 //! use tenferro_cpu::CpuBackend;
-//! use tenferro_ext_tropical::tropical_dot_general;
+//! use tenferro_ext_tropical::traced::tropical_dot_general;
 //! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
 //! let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
-//! let out = tropical_dot_general(&a, &b);
+//! let out = tropical_dot_general(&a, &b).unwrap();
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&out).unwrap();
@@ -47,13 +47,8 @@ pub mod traced;
 
 pub use extension::register_runtime;
 #[cfg(feature = "autodiff")]
-pub use extension::{register_tropical_ad_rules, tropical_ad_rules};
+pub use extension::tropical_ad_rules;
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
-pub use traced::{
-    min_plus_dot_general, min_plus_dot_general_fused, tropical_dot_general,
-    tropical_dot_general_fused, tropical_reduce_sum, try_min_plus_dot_general,
-    try_min_plus_dot_general_fused, try_tropical_dot_general, try_tropical_dot_general_fused,
-};
 
 /// Tropical semiring flavor used by traced and future fused tropical ops.
 ///

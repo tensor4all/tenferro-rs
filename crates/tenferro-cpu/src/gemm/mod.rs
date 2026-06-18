@@ -124,7 +124,11 @@ impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     }
 
     fn strides(&self) -> SmallVec<[isize; 8]> {
-        col_major_strides(self.shape()).into_iter().collect()
+        // Invariant: owned tensors validate compact shape products at construction.
+        col_major_strides(self.shape())
+            .expect("owned tensor shape has valid column-major strides")
+            .into_iter()
+            .collect()
     }
 
     fn offset(&self) -> isize {
@@ -156,7 +160,11 @@ impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
         if self.backend_buffer().is_some() {
             None
         } else {
-            Some(self.as_physical_slice())
+            // Invariant: host tensor views validate their physical slice range at construction.
+            Some(
+                self.as_physical_slice()
+                    .expect("host tensor view has a valid physical slice"),
+            )
         }
     }
 }
@@ -642,7 +650,8 @@ where
     out_shape.extend_from_slice(&rhs_free_shapes);
     out_shape.extend_from_slice(&batch_shapes);
 
-    let out_strides: SmallVec<[isize; 8]> = col_major_strides(&out_shape).into_iter().collect();
+    let out_strides: SmallVec<[isize; 8]> =
+        col_major_strides(&out_shape).ok()?.into_iter().collect();
     let nm = lhs_free_shapes.len();
     let nn = rhs_free_shapes.len();
     let out_m_shapes = &out_shape[..nm];
@@ -932,7 +941,7 @@ where
             dims.out_shape.into_vec(),
             Buffer::Host(data),
             default_placement(),
-        )));
+        )?));
     }
 
     let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
@@ -1002,7 +1011,7 @@ where
         dims.out_shape.into_vec(),
         Buffer::Host(out_data),
         default_placement(),
-    )))
+    )?))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -1253,7 +1262,7 @@ where
             dims.out_shape.into_vec(),
             Buffer::Host(data),
             default_placement(),
-        )));
+        )?));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1326,7 +1335,7 @@ where
         dims.out_shape.into_vec(),
         Buffer::Host(out),
         default_placement(),
-    )))
+    )?))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -1356,7 +1365,7 @@ where
             dims.out_shape.into_vec(),
             Buffer::Host(data),
             default_placement(),
-        )));
+        )?));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1417,7 +1426,7 @@ where
         dims.out_shape.into_vec(),
         Buffer::Host(out),
         default_placement(),
-    )))
+    )?))
 }
 
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {

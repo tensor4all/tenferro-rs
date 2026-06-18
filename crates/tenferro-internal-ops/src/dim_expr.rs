@@ -19,7 +19,7 @@
 ///         axis: 1,
 ///     },
 /// );
-/// assert_eq!(expr.eval(&[&[3, 4]]), 12);
+/// assert_eq!(expr.eval(&[&[3, 4]]).unwrap(), 12);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DimExpr {
@@ -76,13 +76,6 @@ pub enum DimExprEvalError {
 impl DimExpr {
     /// Evaluate the expression using actual input tensor shapes.
     ///
-    /// # Panics
-    ///
-    /// Panics if an `InputDim` node references an `input_idx` that is
-    /// out of bounds for `input_shapes`, an `axis` that is out of bounds
-    /// for the corresponding shape slice, a subtraction would underflow,
-    /// or a floor-division divisor evaluates to zero.
-    ///
     /// # Examples
     ///
     /// ```rust
@@ -95,19 +88,9 @@ impl DimExpr {
     ///     },
     ///     DimExpr::Const(2),
     /// );
-    /// assert_eq!(expr.eval(&[&[5, 7]]), 7);
+    /// assert_eq!(expr.eval(&[&[5, 7]]).unwrap(), 7);
     /// ```
-    pub fn eval(&self, input_shapes: &[&[usize]]) -> usize {
-        self.try_eval(input_shapes)
-            .unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    /// Fallibly evaluate the expression using actual input tensor shapes.
-    ///
-    /// This is the runtime-facing API. Use it when malformed symbolic shapes
-    /// are possible user input; [`Self::eval`] is retained as the compatibility
-    /// panic wrapper.
-    pub fn try_eval(&self, input_shapes: &[&[usize]]) -> Result<usize, DimExprEvalError> {
+    pub fn eval(&self, input_shapes: &[&[usize]]) -> Result<usize, DimExprEvalError> {
         match self {
             Self::Const(v) => Ok(*v),
             Self::InputDim { input_idx, axis } => input_shapes
@@ -127,33 +110,33 @@ impl DimExpr {
                         })
                 }),
             Self::Add(a, b) => {
-                let lhs = a.try_eval(input_shapes)?;
-                let rhs = b.try_eval(input_shapes)?;
+                let lhs = a.eval(input_shapes)?;
+                let rhs = b.eval(input_shapes)?;
                 lhs.checked_add(rhs)
                     .ok_or(DimExprEvalError::AddOverflow { lhs, rhs })
             }
             Self::Sub(a, b) => {
-                let lhs = a.try_eval(input_shapes)?;
-                let rhs = b.try_eval(input_shapes)?;
+                let lhs = a.eval(input_shapes)?;
+                let rhs = b.eval(input_shapes)?;
                 lhs.checked_sub(rhs)
                     .ok_or(DimExprEvalError::SubUnderflow { lhs, rhs })
             }
             Self::Mul(a, b) => {
-                let lhs = a.try_eval(input_shapes)?;
-                let rhs = b.try_eval(input_shapes)?;
+                let lhs = a.eval(input_shapes)?;
+                let rhs = b.eval(input_shapes)?;
                 lhs.checked_mul(rhs)
                     .ok_or(DimExprEvalError::MulOverflow { lhs, rhs })
             }
             Self::FloorDiv(a, b) => {
-                let lhs = a.try_eval(input_shapes)?;
-                let rhs = b.try_eval(input_shapes)?;
+                let lhs = a.eval(input_shapes)?;
+                let rhs = b.eval(input_shapes)?;
                 if rhs == 0 {
                     return Err(DimExprEvalError::FloorDivByZero { lhs, rhs });
                 }
                 Ok(lhs / rhs)
             }
-            Self::Min(a, b) => Ok(a.try_eval(input_shapes)?.min(b.try_eval(input_shapes)?)),
-            Self::Max(a, b) => Ok(a.try_eval(input_shapes)?.max(b.try_eval(input_shapes)?)),
+            Self::Min(a, b) => Ok(a.eval(input_shapes)?.min(b.eval(input_shapes)?)),
+            Self::Max(a, b) => Ok(a.eval(input_shapes)?.max(b.eval(input_shapes)?)),
         }
     }
 
@@ -244,7 +227,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::add(DimExpr::Const(2), DimExpr::Const(3));
-    /// assert_eq!(expr.eval(&[]), 5);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 5);
     /// ```
     // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
     #[allow(clippy::should_implement_trait)]
@@ -260,7 +243,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::sub(DimExpr::Const(7), DimExpr::Const(2));
-    /// assert_eq!(expr.eval(&[]), 5);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 5);
     /// ```
     // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
     #[allow(clippy::should_implement_trait)]
@@ -276,7 +259,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::mul(DimExpr::Const(3), DimExpr::Const(4));
-    /// assert_eq!(expr.eval(&[]), 12);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 12);
     /// ```
     // Public constructor names mirror the DimExpr variants; operator traits are a separate API choice.
     #[allow(clippy::should_implement_trait)]
@@ -292,7 +275,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::floor_div(DimExpr::Const(9), DimExpr::Const(2));
-    /// assert_eq!(expr.eval(&[]), 4);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 4);
     /// ```
     pub fn floor_div(a: Self, b: Self) -> Self {
         Self::FloorDiv(Box::new(a), Box::new(b))
@@ -306,7 +289,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::min(DimExpr::Const(3), DimExpr::Const(5));
-    /// assert_eq!(expr.eval(&[]), 3);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 3);
     /// ```
     pub fn min(a: Self, b: Self) -> Self {
         Self::Min(Box::new(a), Box::new(b))
@@ -320,7 +303,7 @@ impl DimExpr {
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::max(DimExpr::Const(3), DimExpr::Const(5));
-    /// assert_eq!(expr.eval(&[]), 5);
+    /// assert_eq!(expr.eval(&[]).unwrap(), 5);
     /// ```
     pub fn max(a: Self, b: Self) -> Self {
         Self::Max(Box::new(a), Box::new(b))
@@ -385,18 +368,13 @@ impl DimExpr {
     ///     DimExpr::InputDim { input_idx: 0, axis: 0 },
     ///     DimExpr::Const(4),
     /// ];
-    /// assert_eq!(DimExpr::eval_all(&exprs, &[&[3, 5]]), vec![3, 4]);
+    /// assert_eq!(DimExpr::eval_all(&exprs, &[&[3, 5]]).unwrap(), vec![3, 4]);
     /// ```
-    pub fn eval_all(exprs: &[Self], input_shapes: &[&[usize]]) -> Vec<usize> {
-        exprs.iter().map(|e| e.eval(input_shapes)).collect()
-    }
-
-    /// Fallibly evaluate a slice of expressions against actual input shapes.
-    pub fn try_eval_all(
+    pub fn eval_all(
         exprs: &[Self],
         input_shapes: &[&[usize]],
     ) -> Result<Vec<usize>, DimExprEvalError> {
-        exprs.iter().map(|e| e.try_eval(input_shapes)).collect()
+        exprs.iter().map(|e| e.eval(input_shapes)).collect()
     }
 
     /// Remap all `InputDim` references in a slice of expressions.

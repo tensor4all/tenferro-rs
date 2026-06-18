@@ -4,7 +4,7 @@ use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -58,15 +58,18 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
 
 #[test]
 fn full_piv_lu_complex_parity_uses_real_counterpart_dtype() {
-    let a = Tensor::C64(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![
-            Complex64::new(0.0, 0.0),
-            Complex64::new(2.0, 1.0),
-            Complex64::new(1.0, -1.0),
-            Complex64::new(3.0, 0.0),
-        ],
-    ));
+    let a = Tensor::C64(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(0.0, 0.0),
+                Complex64::new(2.0, 1.0),
+                Complex64::new(1.0, -1.0),
+                Complex64::new(3.0, 0.0),
+            ],
+        )
+        .unwrap(),
+    );
     let mut backend = CpuBackend::new();
 
     let outputs = backend.full_piv_lu(&a).unwrap();

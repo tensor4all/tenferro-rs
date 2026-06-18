@@ -4,7 +4,7 @@
 
 **Goal:** Implement graph-invocation eager recording in tidu and use it from tenferro tracked eager einsum to collapse the backward path from per-input recomputation to one shared transposed DAG.
 
-**Architecture:** First change tidu's eager tape so every trace node stores a `RecordedGraph`, with no `Recorder::record(op, ...)` or `try_build_single_op_linear` path. Then update tenferro to record ordinary eager primitives as one-op recorded graphs and tracked eager einsum as one multi-op recorded graph. Finally publish PRs in dependency order: tidu-rs first, tenferro-rs second with the tidu rev pinned to the merged or PR commit.
+**Architecture:** First change tidu's eager tape so every trace node stores a `RecordedGraph`, with no `Recorder::record(op, ...)` or `build_single_op_linear` path. Then update tenferro to record ordinary eager primitives as one-op recorded graphs and tracked eager einsum as one multi-op recorded graph. Finally publish PRs in dependency order: tidu-rs first, tenferro-rs second with the tidu rev pinned to the merged or PR commit.
 
 **Tech Stack:** Rust, tidu, computegraph, tenferro-ad, tenferro-einsum, GitHub PRs, cargo nextest/cargo test.
 
@@ -16,7 +16,7 @@ tidu-rs:
 
 - Modify `src/eager/record.rs`: add `RecordedGraph`, replace `Recorder::record` with `Recorder::record_graph`, and move one-op graph construction into `RecordedGraph::from_primitive`.
 - Modify `src/eager/trace.rs`: store `RecordedGraph` on `TraceNode`, remove `operation` and `primal_in_keys`.
-- Modify `src/eager/backward.rs`: replace `try_build_single_op_linear` with `TraceNode::computation().try_linearize(...)`.
+- Modify `src/eager/backward.rs`: replace `build_single_op_linear` with `TraceNode::computation().linearize(...)`.
 - Modify `src/eager/mod.rs`: export `RecordedGraph`.
 - Modify `tests/eager_record_tests.rs` and `tests/eager_backward_tests.rs`: update tests to use `RecordedGraph` and add multi-op graph tests.
 - Modify `examples/eager_reverse_mode.rs`, `docs/guides/eager-integration.md`, `docs/tutorials/eager-reverse-mode.md`, and docs index pages that mention primitive recording.
@@ -108,7 +108,7 @@ pub struct RecordedGraph<Op: GraphOperation> {
 }
 ```
 
-with `new`, `from_primitive`, `as_graph`, `input_keys`, `output_keys`, and `try_linearize(output_slots, ctx)`.
+with `new`, `from_primitive`, `as_graph`, `input_keys`, `output_keys`, and `linearize(output_slots, ctx)`.
 
 The concrete one-op constructor is:
 
@@ -139,15 +139,15 @@ Downstream frontends use this helper to allocate per-invocation graph input keys
 
 `TraceNode` stores `computation: RecordedGraph<Op>`, `primal_out_keys`, `saved_data`, and `input_edges`. Remove `operation`, `primal_in_keys`, and their accessors.
 
-- [ ] **Step 4: Remove `try_build_single_op_linear`**
+- [ ] **Step 4: Remove `build_single_op_linear`**
 
-`try_backward` calls:
+`backward` calls:
 
 ```rust
-let linear = node.computation().try_linearize(&active_output_slots, ctx)?;
+let linear = node.computation().linearize(&active_output_slots, ctx)?;
 ```
 
-and no helper named `try_build_single_op_linear` remains.
+and no helper named `build_single_op_linear` remains.
 
 - [ ] **Step 5: Verify green**
 
@@ -155,7 +155,7 @@ Run:
 
 ```bash
 cargo nextest run --release --test eager_record_tests --test eager_backward_tests
-rg "try_build_single_op_linear|Recorder::record\\(" src tests examples docs
+rg "build_single_op_linear|Recorder::record\\(" src tests examples docs
 ```
 
 Expected: tests pass; search returns no production use of the removed APIs.
@@ -351,6 +351,6 @@ Open a draft PR against `main`, link issue #1060 and the tidu PR, enable auto-me
 
 ## Self-Review
 
-- Spec coverage: graph-only tidu recording, `try_build_single_op_linear` removal, tracked einsum one-node recording, conservative O(N) residual, docs update, and PR monitoring are covered.
+- Spec coverage: graph-only tidu recording, `build_single_op_linear` removal, tracked einsum one-node recording, conservative O(N) residual, docs update, and PR monitoring are covered.
 - Placeholder scan: no task depends on an unspecified file; constructor signatures may be adjusted only where the implementation task defines them.
 - Type consistency: `RecordedGraph`, `record_graph`, `EagerInput`, `EagerOutput`, and `BackwardExecutor` are used consistently across tidu and tenferro tasks.

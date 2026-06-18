@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_runtime::extension::try_apply;
+use tenferro_runtime::extension::apply;
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
@@ -41,7 +41,7 @@ pub fn svd_with_eps(
     eps: f64,
 ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     three_outputs(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
             &[a],
         )?,
@@ -64,7 +64,7 @@ pub fn svd_with_eps(
 /// ```
 pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a])?,
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a])?,
         "qr",
     )
 }
@@ -100,7 +100,7 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps })),
             &[a],
         )?,
@@ -122,7 +122,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, Traced
 /// ```
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
         "cholesky",
     )
 }
@@ -144,7 +144,7 @@ pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
     four_outputs(
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?,
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?,
         "lu",
     )
 }
@@ -180,7 +180,7 @@ pub fn full_piv_lu(
     TracedTensor,
 )> {
     five_outputs(
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a])?,
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a])?,
         "full_piv_lu",
     )
 }
@@ -200,7 +200,7 @@ pub fn full_piv_lu(
 /// ```
 pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
                 input_dtype: a.dtype,
             })),
@@ -225,7 +225,7 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     let mut factor_outputs =
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
     let (packed_lu, pivots) = match (
         factor_outputs.next(),
         factor_outputs.next(),
@@ -236,7 +236,7 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::LuSolvePrepared {
                 transpose_a: false,
                 conjugate_a: false,
@@ -262,7 +262,7 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLuSolve {
                 transpose_a: false,
             })),
@@ -294,7 +294,7 @@ pub fn triangular_solve(
     unit_diagonal: bool,
 ) -> Result<TracedTensor> {
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
                 left_side,
                 lower,
@@ -322,7 +322,7 @@ pub fn triangular_solve(
 /// ```
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     let mut factor_outputs =
-        try_apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
     let (packed_lu, parity) = match (
         factor_outputs.next(),
         factor_outputs.next(),
@@ -332,10 +332,10 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
         (Some(packed_lu), Some(_pivots), Some(parity), None) => (packed_lu, parity),
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
-    let diag_u = packed_lu.extract_diag(0, 1);
-    let sign_u = diag_u.sign().reduce_prod(&[0]);
-    let sign = &parity * &sign_u;
-    let logabsdet = diag_u.abs().log().reduce_sum(&[0]);
+    let diag_u = packed_lu.extract_diag(0, 1)?;
+    let sign_u = diag_u.sign().reduce_prod(&[0])?;
+    let sign = (&parity * &sign_u)?;
+    let logabsdet = diag_u.abs().log().reduce_sum(&[0])?;
     Ok((sign, logabsdet))
 }
 
@@ -353,7 +353,7 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
     let (sign, logabsdet) = slogdet(a)?;
-    Ok(&sign * &logabsdet.exp())
+    &sign * &logabsdet.exp()
 }
 
 /// Build a traced matrix inverse op.
@@ -371,7 +371,7 @@ pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_min_rank("inv", a.rank, 2)?;
     let shape = require_concrete_shape("inv", a)?;
-    let eye = eye_like(a, shape[0]);
+    let eye = eye_like(a, shape[0])?;
     solve(a, &eye)
 }
 
@@ -453,21 +453,21 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     require_concrete_shape("pinv_with_rtol", a)?;
     let (u, s, vt) = svd(a)?;
     let abs_s = s.abs();
-    let s_max = abs_s.reduce_max(&[0]);
-    let s_max_shape = s_max.concrete_shape();
-    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max_shape);
-    let s_shape = s.concrete_shape();
-    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape);
-    let mask = abs_s.compare(&threshold, CompareDir::Gt);
+    let s_max = abs_s.reduce_max(&[0])?;
+    let s_max_shape = s_max.concrete_shape()?;
+    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max_shape)?;
+    let s_shape = s.concrete_shape()?;
+    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold?, &s_shape)?;
+    let mask = abs_s.compare(&threshold, CompareDir::Gt)?;
     let mask = mask.convert(s.dtype);
-    let ones = ones_like(&s);
-    let denom = &s + &(&ones + &(-&mask));
-    let s_inv = &mask / &denom;
+    let ones = ones_like(&s)?;
+    let denom = (&s + &(&ones + &(-&mask))?)?;
+    let s_inv = (&mask / &denom)?;
 
-    let v = vt.conj().transpose(&matrix_transpose_perm(vt.rank));
-    let uh = u.conj().transpose(&matrix_transpose_perm(u.rank));
-    let vs = scale_matrix_columns(&v, &s_inv);
-    Ok(matmul_preserve_trailing_batch(&vs, &uh))
+    let v = vt.conj().transpose(&matrix_transpose_perm(vt.rank))?;
+    let uh = u.conj().transpose(&matrix_transpose_perm(u.rank))?;
+    let vs = scale_matrix_columns(&v, &s_inv)?;
+    matmul_preserve_trailing_batch(&vs, &uh)
 }
 
 /// Build a traced vector, matrix, or tensor norm op.
@@ -500,16 +500,16 @@ pub fn norm(
     validate_axes("norm", a.rank, &axes)?;
 
     let out = match axes.len() {
-        1 => vector_norm(a, axes[0], ord),
+        1 => vector_norm(a, axes[0], ord)?,
         2 => matrix_norm(a, &axes, ord)?,
         _ => {
             let abs = a.abs();
             match ord {
-                None => frobenius_norm(&abs, &axes),
-                Some(p) if p == f64::INFINITY => abs.reduce_max(&axes),
-                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes),
-                Some(0.0) => count_nonzero(&abs, &axes),
-                Some(p) => p_norm(&abs, &axes, p),
+                None => frobenius_norm(&abs, &axes)?,
+                Some(p) if p == f64::INFINITY => abs.reduce_max(&axes)?,
+                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes)?,
+                Some(0.0) => count_nonzero(&abs, &axes)?,
+                Some(p) => p_norm(&abs, &axes, p)?,
             }
         }
     };
@@ -599,14 +599,31 @@ fn five_outputs(
 
 fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
     match dtype {
-        DType::F64 => TracedTensor::from_vec_col_major(vec![], vec![value]),
-        DType::F32 => TracedTensor::from_vec_col_major(vec![], vec![value as f32]),
-        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32]),
-        DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64]),
-        DType::Bool => TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]),
-        DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
+        // Rank-0 scalar constants always have exactly one element.
+        DType::F64 => {
+            TracedTensor::from_vec_col_major(vec![], vec![value]).expect("scalar constant")
+        }
+        // Rank-0 scalar constants always have exactly one element.
+        DType::F32 => {
+            TracedTensor::from_vec_col_major(vec![], vec![value as f32]).expect("scalar constant")
+        }
+        // Rank-0 scalar constants always have exactly one element.
+        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32])
+            .expect("scalar constant"),
+        // Rank-0 scalar constants always have exactly one element.
+        DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64])
+            .expect("scalar constant"),
+        // Rank-0 scalar constants always have exactly one element.
+        DType::Bool => {
+            TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]).expect("scalar constant")
+        }
+        // Rank-0 scalar constants always have exactly one element.
+        DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)])
+            .expect("scalar constant"),
+        // Rank-0 scalar constants always have exactly one element.
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
+                .expect("scalar constant")
         }
     }
 }
@@ -659,37 +676,40 @@ fn one_scalar(dtype: DType) -> TracedTensor {
     scalar_real(dtype, 1.0)
 }
 
-fn ones_like(input: &TracedTensor) -> TracedTensor {
-    let shape = input.concrete_shape();
+fn ones_like(input: &TracedTensor) -> Result<TracedTensor> {
+    let shape = input.concrete_shape()?;
     broadcast_scalar(one_scalar(input.dtype), &shape)
 }
 
-fn eye_like(anchor: &TracedTensor, size: usize) -> TracedTensor {
+fn eye_like(anchor: &TracedTensor, size: usize) -> Result<TracedTensor> {
     let mut vector_shape = vec![size];
-    let anchor_shape = anchor.concrete_shape();
+    let anchor_shape = anchor.concrete_shape()?;
     vector_shape.extend_from_slice(&anchor_shape[2..]);
-    let diagonal = broadcast_scalar(one_scalar(anchor.dtype), &vector_shape);
+    let diagonal = broadcast_scalar(one_scalar(anchor.dtype), &vector_shape)?;
     diagonal.embed_diag(0, 1)
 }
 
-fn broadcast_scalar(input: TracedTensor, shape: &[usize]) -> TracedTensor {
-    let input_shape = input.concrete_shape();
+fn broadcast_scalar(input: TracedTensor, shape: &[usize]) -> Result<TracedTensor> {
+    let input_shape = input.concrete_shape()?;
     if input_shape == shape {
-        return input;
+        return Ok(input);
     }
-    input.broadcast_in_dim(shape, &[])
+    Ok(input.broadcast_in_dim(shape, &[]))
 }
 
-fn broadcast_batch_scalar_to_leading_axis(input: &TracedTensor, shape: &[usize]) -> TracedTensor {
-    let input_shape = input.concrete_shape();
+fn broadcast_batch_scalar_to_leading_axis(
+    input: &TracedTensor,
+    shape: &[usize],
+) -> Result<TracedTensor> {
+    let input_shape = input.concrete_shape()?;
     if input_shape == shape {
-        return input.clone();
+        return Ok(input.clone());
     }
     let dims: Vec<usize> = (1..shape.len()).collect();
-    input.broadcast_in_dim(shape, &dims)
+    Ok(input.broadcast_in_dim(shape, &dims))
 }
 
-fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
     let rank = lhs.rank;
     let batch_dims: Vec<usize> = (2..rank).collect();
     lhs.dot_general(
@@ -709,15 +729,15 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
     perm
 }
 
-fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let squared = abs.pow(&scalar_real(abs.dtype, 2.0));
-    squared.reduce_sum(axes).sqrt()
+fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
+    let squared = abs.pow(&scalar_real(abs.dtype, 2.0))?;
+    Ok(squared.reduce_sum(axes)?.sqrt())
 }
 
-fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> TracedTensor {
-    let power = abs.pow(&scalar_real(abs.dtype, p));
+fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
+    let power = abs.pow(&scalar_real(abs.dtype, p))?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p);
-    power.reduce_sum(axes).pow(&inv_p)
+    power.reduce_sum(axes)?.pow(&inv_p)
 }
 
 fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
@@ -729,7 +749,7 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
     eps * max_dim as f64
 }
 
-fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor {
+fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> Result<TracedTensor> {
     let abs = a.abs();
     match ord {
         None => frobenius_norm(&abs, &[axis]),
@@ -741,9 +761,9 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor 
 }
 
 fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<TracedTensor> {
-    let matrix = move_axes_to_front(a, axes);
+    let matrix = move_axes_to_front(a, axes)?;
     let abs = matrix.abs();
-    Ok(match ord {
+    match ord {
         None => frobenius_norm(&abs, &[0, 1]),
         Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
         Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(&abs, false),
@@ -759,12 +779,12 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
         }
         Some(0.0) => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
-    })
+    }
 }
 
 fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals { eps: 1e-12 })),
             &[a],
         )?,
@@ -774,7 +794,7 @@ fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
 
 fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals { eps: 1e-12 })),
             &[a],
         )?,
@@ -784,7 +804,7 @@ fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
 
 fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
-        try_apply(
+        apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::EigVals {
                 input_dtype: a.dtype,
             })),
@@ -794,9 +814,10 @@ fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
     )
 }
 
-fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> TracedTensor {
-    let matrix_shape = matrix.concrete_shape();
-    let mut scale_shape = vec![1, scale.concrete_shape()[0]];
+fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<TracedTensor> {
+    let matrix_shape = matrix.concrete_shape()?;
+    let scale_shape_input = scale.concrete_shape()?;
+    let mut scale_shape = vec![1, scale_shape_input[0]];
     scale_shape.extend_from_slice(&matrix_shape[2..]);
     let dims: Vec<usize> = (0..matrix_shape.len()).collect();
     let scale = scale
@@ -805,13 +826,13 @@ fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> TracedTe
     matrix * &scale
 }
 
-fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let mask = abs.compare(&zero_scalar(abs.dtype), CompareDir::Gt);
+fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
+    let mask = abs.compare(&zero_scalar(abs.dtype), CompareDir::Gt)?;
     mask.convert(abs.dtype).reduce_sum(axes)
 }
 
-fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
-    let row_sums = abs.reduce_sum(&[1]);
+fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
+    let row_sums = abs.reduce_sum(&[1])?;
     if take_max {
         row_sums.reduce_max(&[0])
     } else {
@@ -819,8 +840,8 @@ fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     }
 }
 
-fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
-    let col_sums = abs.reduce_sum(&[0]);
+fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
+    let col_sums = abs.reduce_sum(&[0])?;
     if take_max {
         col_sums.reduce_max(&[0])
     } else {
@@ -828,9 +849,9 @@ fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     }
 }
 
-fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> TracedTensor {
+fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     if axes.iter().enumerate().all(|(index, &axis)| index == axis) {
-        return tensor.clone();
+        return Ok(tensor.clone());
     }
 
     let mut selected = vec![false; tensor.rank];

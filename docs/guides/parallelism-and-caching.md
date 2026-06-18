@@ -34,7 +34,7 @@ configuration error if the requested provider was not compiled into the binary:
 use tenferro_cpu::CpuBackend;
 use tenferro_cpu::CpuBackendKind;
 
-let backend = CpuBackend::try_with_threads_and_kind(4, CpuBackendKind::Faer).unwrap();
+let backend = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer).unwrap();
 assert_eq!(backend.num_threads(), 4);
 assert_eq!(backend.kind(), CpuBackendKind::Faer);
 ```
@@ -48,7 +48,7 @@ parallelism policy:
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::GraphExecutor;
 
-let executor = GraphExecutor::new(CpuBackend::with_threads(4));
+let executor = GraphExecutor::new(CpuBackend::with_threads(4).unwrap());
 assert_eq!(executor.backend().num_threads(), 4);
 ```
 
@@ -151,7 +151,7 @@ use tenferro_runtime::{GraphCompiler, GraphExecutor};
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
-));
+)).unwrap();
 
 let mut compiler = GraphCompiler::new();
 compiler.set_compile_cache_capacity(NonZeroUsize::new(128).unwrap());
@@ -193,7 +193,7 @@ let mut executor = GraphExecutor::new(CpuBackend::new());
 
 compiler.clear_caches();
 executor.clear_caches();
-eager.clear_caches();
+eager.clear_caches().unwrap();
 ```
 
 For CPU executors, `clear_all_caches()` also clears the CPU buffer pool:

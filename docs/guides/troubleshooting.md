@@ -24,7 +24,7 @@ An error like `expected GPU tensor ... use upload_tensor()` means a CUDA
 backend operation received CPU data. Upload first:
 
 ```rust
-use tenferro_gpu::{upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_gpu::{upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
@@ -39,7 +39,7 @@ Host access methods read CPU memory. If a tensor lives on CUDA memory, download
 it before inspecting values:
 
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
@@ -64,8 +64,8 @@ supported scalar type.
 `Tensor::from_vec_col_major` expects tenferro's physical column-major order.
 When porting PyTorch, NumPy, or JAX examples that use row-major flat data, use
 `Tensor::from_vec_row_major` at the import boundary. If another library expects
-row-major output, export with `try_into_vec_row_major::<T>()`; use
-`try_into_vec_col_major::<T>()` when the consumer expects tenferro's physical
+row-major output, export with `into_vec_row_major::<T>()`; use
+`into_vec_col_major::<T>()` when the consumer expects tenferro's physical
 order.
 See [Memory Order](memory-order.md).
 

@@ -85,8 +85,9 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     let batch_total: usize = t.shape()[2..].iter().product();
     let batch_total = batch_total.max(1);
     let slice_size = rows * cols;
+    let data = t.host_data()?;
     for batch_idx in 0..batch_total {
-        let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+        let batch = &data[batch_idx * slice_size..(batch_idx + 1) * slice_size];
         for i in 0..n {
             let diag = batch[i + i * rows];
             if diag.is_singular_or_nonfinite() {

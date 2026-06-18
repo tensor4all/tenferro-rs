@@ -121,7 +121,10 @@ fn tensor_from_vec_with_template<T: Clone, U>(
     data: Vec<T>,
     template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
-    let mut tensor = TypedTensor::from_vec_col_major(shape, data);
+    // faer outputs are assembled from validated matrix dimensions and buffers
+    // sized by the same dimensions, so mismatch here is an internal backend bug.
+    let mut tensor =
+        TypedTensor::from_vec_col_major(shape, data).expect("faer output shape/data match");
     tensor.set_placement(template.placement().clone());
     tensor
 }
@@ -138,7 +141,11 @@ fn tensor_from_pooled_slice_with_template<T: Clone + PoolScalar, U>(
 }
 
 fn refill_tensor_from_slice<T: Copy>(tensor: &mut TypedTensor<T>, data: &[T]) {
-    tensor.host_data_mut().copy_from_slice(data);
+    // Batch scratch tensors are created as host tensors by this module.
+    tensor
+        .host_data_mut()
+        .expect("faer batch scratch tensor is host-backed")
+        .copy_from_slice(data);
 }
 
 fn col_major_vec_from_mat<T: Copy + PoolScalar>(
@@ -559,14 +566,14 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
     );
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range]);
         }
         let batch_output = op(buffers, &batch_input)?;
 
@@ -588,7 +595,7 @@ where
         }
 
         match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()),
+            Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
                 return Err(invalid_config(
                     op_name,
@@ -637,14 +644,14 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
     );
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range]);
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -680,7 +687,7 @@ where
                     rhs: out_shapes[idx].clone(),
                 });
             }
-            out_data[idx].extend_from_slice(batch_output.host_data());
+            out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
     }
 
@@ -727,14 +734,14 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
     );
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[range]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range]);
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -770,7 +777,7 @@ where
                     rhs: out_shapes[idx].clone(),
                 });
             }
-            out_data[idx].extend_from_slice(batch_output.host_data());
+            out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
     }
 
@@ -833,13 +840,13 @@ where
     let mut batch_a = tensor_from_pooled_slice_with_template(
         buffers,
         a_core_shape.to_vec(),
-        &a.host_data()[first_a_range],
+        &a.host_data()?[first_a_range],
         a,
     );
     let mut batch_b = tensor_from_pooled_slice_with_template(
         buffers,
         b_core_shape.to_vec(),
-        &b.host_data()[first_b_range],
+        &b.host_data()?[first_b_range],
         b,
     );
 
@@ -847,8 +854,8 @@ where
         if batch_idx > 0 {
             let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
             let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
-            refill_tensor_from_slice(&mut batch_a, &a.host_data()[a_range]);
-            refill_tensor_from_slice(&mut batch_b, &b.host_data()[b_range]);
+            refill_tensor_from_slice(&mut batch_a, &a.host_data()?[a_range]);
+            refill_tensor_from_slice(&mut batch_b, &b.host_data()?[b_range]);
         }
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
@@ -870,7 +877,7 @@ where
         }
 
         match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()),
+            Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
                 return Err(invalid_config(
                     op_name,
@@ -903,7 +910,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky")?;
         let mut l = Mat::zeros(n, n);
-        l.copy_from(MatRef::from_column_major_slice(input.host_data(), n, n));
+        l.copy_from(MatRef::from_column_major_slice(input.host_data()?, n, n));
         let mut mem = MemBuffer::new(
             faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<Self>(
                 n,
@@ -935,7 +942,7 @@ macro_rules! impl_faer_linalg_for_real {
         let (m, n) = matrix_dims(input, "lu")?;
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data(), m, n));
+        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, m, n));
         let mut perm = vec![0usize; m];
         let mut perm_inv = vec![0usize; m];
         let mut mem = MemBuffer::new(
@@ -989,7 +996,7 @@ macro_rules! impl_faer_linalg_for_real {
         let (m, n) = matrix_dims(input, "lu_factor")?;
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data(), m, n));
+        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, m, n));
         let mut perm = vec![0usize; m];
         let mut perm_inv = vec![0usize; m];
         let mut mem = MemBuffer::new(
@@ -1031,7 +1038,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "full_piv_lu")?;
         let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data(), n, n));
+        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, n, n));
         let mut row_perm = vec![0usize; n];
         let mut row_perm_inv = vec![0usize; n];
         let mut col_perm = vec![0usize; n];
@@ -1095,7 +1102,7 @@ macro_rules! impl_faer_linalg_for_real {
         }
 
         let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(a.host_data(), n, n));
+        lu.copy_from(MatRef::from_column_major_slice(a.host_data()?, n, n));
         let mut row_perm = vec![0usize; n];
         let mut row_perm_inv = vec![0usize; n];
         let mut col_perm = vec![0usize; n];
@@ -1125,8 +1132,8 @@ macro_rules! impl_faer_linalg_for_real {
             }
         }
 
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-        rhs_data.extend_from_slice(b.host_data());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
         let mut mem = MemBuffer::new(
             faer::linalg::lu::full_pivoting::solve::solve_in_place_scratch::<usize, Self>(
@@ -1178,7 +1185,7 @@ macro_rules! impl_faer_linalg_for_real {
         }
 
         let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(a.host_data(), n, n));
+        lu.copy_from(MatRef::from_column_major_slice(a.host_data()?, n, n));
         let mut row_perm = vec![0usize; n];
         let mut row_perm_inv = vec![0usize; n];
         let mut mem = MemBuffer::new(
@@ -1204,8 +1211,8 @@ macro_rules! impl_faer_linalg_for_real {
             }
         }
 
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-        rhs_data.extend_from_slice(b.host_data());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
         let mut mem = MemBuffer::new(if transpose_a {
             faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
@@ -1254,7 +1261,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(a, "triangular_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-        let a_mat = MatRef::from_column_major_slice(a.host_data(), n, n);
+        let a_mat = MatRef::from_column_major_slice(a.host_data()?, n, n);
 
         if left_side {
             if b_rows != n {
@@ -1264,8 +1271,8 @@ macro_rules! impl_faer_linalg_for_real {
                     rhs: vec![b_rows],
                 });
             }
-            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-            rhs_data.extend_from_slice(b.host_data());
+            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+            rhs_data.extend_from_slice(b.host_data()?);
             let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
             match (transpose_a, lower, unit_diagonal) {
                 (false, true, false) => {
@@ -1335,7 +1342,7 @@ macro_rules! impl_faer_linalg_for_real {
                 });
             }
             let nrhs = b_rows;
-            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data(), nrhs, n);
+            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
             let rhs = MatMut::from_column_major_slice_mut(&mut rhs_transposed, n, nrhs);
             match (transpose_a, lower, unit_diagonal) {
                 (false, true, false) => {
@@ -1408,7 +1415,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
+        let mat = MatRef::from_column_major_slice(input.host_data()?, m, n);
         let mut u = Mat::zeros(m, k);
         let mut v = Mat::zeros(n, k);
         let mut s = Diag::zeros(k);
@@ -1456,7 +1463,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
+        let mat = MatRef::from_column_major_slice(input.host_data()?, m, n);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
             m,
@@ -1488,7 +1495,7 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "qr")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
+        let mat = MatRef::from_column_major_slice(input.host_data()?, m, n);
         let block_size =
             faer::linalg::qr::no_pivoting::factor::recommended_block_size::<Self>(m, n);
         let mut qr = Mat::zeros(m, n);
@@ -1548,7 +1555,7 @@ macro_rules! impl_faer_linalg_for_real {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "eigh")?;
-        let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+        let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
         let mut values = Diag::zeros(n);
         let mut vectors = Mat::zeros(n, n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
@@ -1585,7 +1592,7 @@ macro_rules! impl_faer_linalg_for_real {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
-        let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+        let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
         let mut values = Diag::zeros(n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
             n,
@@ -1640,7 +1647,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let n = square_matrix_dim(input, "cholesky")?;
         let mut l = Mat::zeros(n, n);
         l.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()?),
             n,
             n,
         ));
@@ -1676,7 +1683,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()?),
             m,
             n,
         ));
@@ -1733,7 +1740,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()?),
             m,
             n,
         ));
@@ -1779,7 +1786,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let n = square_matrix_dim(input, "full_piv_lu")?;
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()?),
             n,
             n,
         ));
@@ -1848,7 +1855,7 @@ macro_rules! impl_faer_linalg_for_complex {
 
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(a.host_data()),
+            $to_faer_slice(a.host_data()?),
             n,
             n,
         ));
@@ -1882,8 +1889,8 @@ macro_rules! impl_faer_linalg_for_complex {
             }
         }
 
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-        rhs_data.extend_from_slice(b.host_data());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(
             $to_faer_slice_mut(&mut rhs_data),
             n,
@@ -1940,7 +1947,7 @@ macro_rules! impl_faer_linalg_for_complex {
 
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(a.host_data()),
+            $to_faer_slice(a.host_data()?),
             n,
             n,
         ));
@@ -1970,8 +1977,8 @@ macro_rules! impl_faer_linalg_for_complex {
             }
         }
 
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-        rhs_data.extend_from_slice(b.host_data());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+        rhs_data.extend_from_slice(b.host_data()?);
         let rhs =
             MatMut::from_column_major_slice_mut($to_faer_slice_mut(&mut rhs_data), n, b_cols);
         let mut mem = MemBuffer::new(if transpose_a {
@@ -2020,7 +2027,7 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(a, "triangular_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-        let a_mat = MatRef::from_column_major_slice($to_faer_slice(a.host_data()), n, n);
+        let a_mat = MatRef::from_column_major_slice($to_faer_slice(a.host_data()?), n, n);
 
         if left_side {
             if b_rows != n {
@@ -2030,8 +2037,8 @@ macro_rules! impl_faer_linalg_for_complex {
                     rhs: vec![b_rows],
                 });
             }
-            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
-            rhs_data.extend_from_slice(b.host_data());
+            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
+            rhs_data.extend_from_slice(b.host_data()?);
             let rhs = MatMut::from_column_major_slice_mut(
                 $to_faer_slice_mut(&mut rhs_data),
                 n,
@@ -2105,7 +2112,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 });
             }
             let nrhs = b_rows;
-            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data(), nrhs, n);
+            let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
             let rhs = MatMut::from_column_major_slice_mut(
                 $to_faer_slice_mut(&mut rhs_transposed),
                 n,
@@ -2182,7 +2189,7 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), m, n);
         let mut u = Mat::zeros(m, k);
         let mut v = Mat::zeros(n, k);
         let mut s = Diag::zeros(k);
@@ -2234,7 +2241,7 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), m, n);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
             m,
@@ -2271,7 +2278,7 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "qr")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), m, n);
         let block_size =
             faer::linalg::qr::no_pivoting::factor::recommended_block_size::<$faer_complex>(m, n);
         let mut qr = Mat::zeros(m, n);
@@ -2331,7 +2338,7 @@ macro_rules! impl_faer_linalg_for_complex {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "eigh")?;
-        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
         let mut values = Diag::zeros(n);
         let mut vectors = Mat::zeros(n, n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
@@ -2371,7 +2378,7 @@ macro_rules! impl_faer_linalg_for_complex {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
-        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
         let mut values = Diag::zeros(n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
             n,
@@ -2519,7 +2526,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         vec![m, n],
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
     );
 
@@ -2527,12 +2534,12 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
         if batch > 0 {
             let start = batch * matrix_len;
             let end = start + matrix_len;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[start..end]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end]);
         }
         let (packed, pivots, parity) = T::lu_factor_2d(ctx, buffers, &batch_input)?;
-        lu_data.extend_from_slice(packed.host_data());
-        pivot_data.extend_from_slice(pivots.host_data());
-        parity_data.extend_from_slice(parity.host_data());
+        lu_data.extend_from_slice(packed.host_data()?);
+        pivot_data.extend_from_slice(pivots.host_data()?);
+        parity_data.extend_from_slice(parity.host_data()?);
     }
 
     Ok((
@@ -2834,7 +2841,7 @@ macro_rules! impl_eig_real_2d {
             input: &TypedTensor<$real>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
-            let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+            let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
             let mut u_real = Mat::zeros(n, n);
             let mut s_re = Diag::zeros(n);
             let mut s_im = Diag::zeros(n);
@@ -2880,7 +2887,7 @@ macro_rules! impl_eig_values_real_2d {
             input: &TypedTensor<$real>,
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
-            let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+            let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
             let mut s_re = Diag::zeros(n);
             let mut s_im = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$real>(
@@ -2924,7 +2931,7 @@ macro_rules! impl_eig_complex_2d {
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
             let n = square_matrix_dim(input, "eig")?;
-            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
             let mut u = Mat::zeros(n, n);
             let mut s = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
@@ -2972,7 +2979,7 @@ macro_rules! impl_eig_values_complex_2d {
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
             let n = square_matrix_dim(input, "eig_values")?;
-            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
             let mut s = Diag::zeros(n);
             let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
                 n,
@@ -3066,12 +3073,12 @@ pub(crate) fn eig(
         let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
         return match input {
             Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
-                Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
-                Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
+                Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
+                Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
             Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
-                Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
-                Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
+                Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
+                Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
             _ => Err(tenferro_tensor::Error::backend_failure(
                 "eig",
@@ -3149,11 +3156,11 @@ pub(crate) fn eig_values(
             Tensor::F32(_) | Tensor::C32(_) => Ok(Tensor::C32(TypedTensor::from_vec_col_major(
                 value_shape,
                 Vec::new(),
-            ))),
+            )?)),
             Tensor::F64(_) | Tensor::C64(_) => Ok(Tensor::C64(TypedTensor::from_vec_col_major(
                 value_shape,
                 Vec::new(),
-            ))),
+            )?)),
             _ => Err(tenferro_tensor::Error::backend_failure(
                 "eig_values",
                 format!("unsupported dtype {:?}", input.dtype()),

@@ -930,7 +930,7 @@ git commit -m "feat: implement tenferro cubecl reductions"
 
 ---
 
-### Task 6: Route `CubeclBackend` Reductions Through `tenferro-cubecl`
+### Task 6: Route `CudaBackend` Reductions Through `tenferro-cubecl`
 
 **Files:**
 
@@ -992,7 +992,7 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
 
 **Step 4: Add a generic single-axis allocation/launch helper**
 
-In the `impl CubeclBackend` block, add a helper that allocates keepdims output, creates `TensorBinding`s, and calls a closure:
+In the `impl CudaBackend` block, add a helper that allocates keepdims output, creates `TensorBinding`s, and calls a closure:
 
 ```rust
 fn launch_reduce_axis_typed<T>(
@@ -1463,7 +1463,7 @@ Suggested PR body:
 
 - Adds `tenferro-cubecl` as the dedicated CubeCL kernel crate.
 - Moves GPU reduction launch/kernels behind the new crate boundary.
-- Routes `CubeclBackend` reductions through `tenferro-cubecl`.
+- Routes `CudaBackend` reductions through `tenferro-cubecl`.
 - Adds GPU `i64` `reduce_sum` and `reduce_prod` support.
 - Keeps `i64` max/min and complex max/min unsupported.
 

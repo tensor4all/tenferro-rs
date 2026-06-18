@@ -85,7 +85,7 @@ Owned export returns the column-major host buffer:
 use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-let (shape, data) = tensor.try_into_vec_col_major::<f64>().unwrap();
+let (shape, data) = tensor.into_vec_col_major::<f64>().unwrap();
 
 assert_eq!(shape, vec![2, 2]);
 assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);

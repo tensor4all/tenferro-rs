@@ -116,8 +116,8 @@ pub(crate) fn validate_traced_contract_dims(
         .iter()
         .zip(config.rhs_contracting_dims.iter())
     {
-        let lhs_dim = lhs.axis_sym_dim(lhs_axis);
-        let rhs_dim = rhs.axis_sym_dim(rhs_axis);
+        let lhs_dim = lhs.axis_sym_dim(lhs_axis)?;
+        let rhs_dim = rhs.axis_sym_dim(rhs_axis)?;
         if lhs_dim == rhs_dim {
             continue;
         }

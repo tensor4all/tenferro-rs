@@ -92,14 +92,14 @@ fn promote_binary<'a>(
 }
 
 fn materialize_tensor_read(input: TensorRead<'_>) -> Result<Tensor> {
-    input.try_to_tensor().map_err(Error::from)
+    input.to_tensor().map_err(Error::from)
 }
 
 fn concrete_tensor_read(input: TensorRead<'_>) -> Result<ConcreteTensorRead<'_>> {
     match input {
         TensorRead::Tensor(tensor) => Ok(ConcreteTensorRead::Borrowed(tensor)),
         TensorRead::View(view) => Ok(ConcreteTensorRead::Owned(Box::new(
-            view.try_to_tensor().map_err(Error::from)?,
+            view.to_tensor().map_err(Error::from)?,
         ))),
     }
 }
@@ -295,7 +295,7 @@ fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
     Ok(Tensor::F64(TypedTensor::from_vec_col_major(
         vec![],
         vec![size],
-    )))
+    )?))
 }
 
 fn execute_generated_host_output_on_backend_reads<B: TensorBackend>(
@@ -304,7 +304,7 @@ fn execute_generated_host_output_on_backend_reads<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Option<Tensor>> {
     let host = match op {
-        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
+        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)?,
         StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
         _ => return Ok(None),
     };
@@ -317,7 +317,7 @@ fn execute_generated_host_output_on_backend_tensors<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Option<Tensor>> {
     let host = match op {
-        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
+        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)?,
         StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
         _ => return Ok(None),
     };
@@ -786,7 +786,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
 
 fn resolve_tensor_shape_exprs(inputs: &[&Tensor], exprs: &[DimExpr]) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| {
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| {
         invalid_config(
             "eager shape expression",
             format!("failed to resolve eager shape expression: {err}"),
@@ -799,7 +799,7 @@ fn resolve_tensor_read_shape_exprs(
     exprs: &[DimExpr],
 ) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| {
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| {
         invalid_config(
             "eager shape expression",
             format!("failed to resolve eager shape expression: {err}"),
@@ -807,30 +807,30 @@ fn resolve_tensor_read_shape_exprs(
     })
 }
 
-fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
-    match dtype {
+fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
+    Ok(match dtype {
         DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
             vec![],
-            vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
-        )),
+            vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
+        )?),
         DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
             vec![],
-            vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
-        )),
+            vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
+        )?),
         DType::I32 => Tensor::I32(TypedTensor::from_vec_col_major(
             vec![],
-            vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
-        )),
+            vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
+        )?),
         DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
-            vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
-        )),
+            vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
+        )?),
         DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
             vec![],
-            vec![exact_bytes::<1>(dtype, bytes)[0] != 0],
-        )),
+            vec![exact_bytes::<1>(dtype, bytes)?[0] != 0],
+        )?),
         DType::C64 => {
-            let data = exact_bytes::<16>(dtype, bytes);
+            let data = exact_bytes::<16>(dtype, bytes)?;
             let mut re_bytes = [0u8; 8];
             let mut im_bytes = [0u8; 8];
             re_bytes.copy_from_slice(&data[..8]);
@@ -840,10 +840,10 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             Tensor::C64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(re, im)],
-            ))
+            )?)
         }
         DType::C32 => {
-            let data = exact_bytes::<8>(dtype, bytes);
+            let data = exact_bytes::<8>(dtype, bytes)?;
             let mut re_bytes = [0u8; 4];
             let mut im_bytes = [0u8; 4];
             re_bytes.copy_from_slice(&data[..4]);
@@ -853,23 +853,26 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             Tensor::C32(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex32::new(re, im)],
-            ))
+            )?)
         }
-    }
+    })
 }
 
-fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
+fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> Result<[u8; N]> {
     if bytes.len() != N {
-        panic!(
-            "constant {:?} expected {} bytes, got {}",
-            dtype,
-            N,
-            bytes.len()
-        );
+        return Err(invalid_config(
+            "Constant",
+            format!(
+                "constant {:?} expected {} bytes, got {}",
+                dtype,
+                N,
+                bytes.len()
+            ),
+        ));
     }
     let mut out = [0u8; N];
     out.copy_from_slice(bytes);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

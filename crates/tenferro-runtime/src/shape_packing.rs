@@ -82,7 +82,7 @@ fn index_select_config(
     let indices = Tensor::I64(TypedTensor::from_vec_col_major(
         vec![positions.len(), 1],
         index_data,
-    ));
+    )?);
 
     let config = GatherConfig {
         offset_dims,
@@ -253,7 +253,9 @@ fn apply_nary_concatenate(
             out_dtype,
             out_shape.iter().copied().map(SymDim::from).collect(),
         ),
-    );
+    )
+    // Stack builds a fresh graph output after validating all concrete shapes.
+    .expect("fresh stack output metadata registration failed");
 
     let mut inputs_map = HashMap::new();
     let mut extra_roots = Vec::new();

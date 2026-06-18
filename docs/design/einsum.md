@@ -172,7 +172,7 @@ contiguous block for the underlying tensor backend.
 ## GPU Interaction
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens
-when a compiled program is evaluated with `CubeclBackend` from
+when a compiled program is evaluated with `CudaBackend` from
 `crates/tenferro-gpu/src/cubecl/`.
 
 Current GPU status:

@@ -13,7 +13,10 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new();
-    let x = runtime.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let x = runtime.variable_from(Tensor::from_vec_col_major(
+        vec![3],
+        vec![1.0_f64, 2.0, 3.0],
+    )?);
 
     let prediction = x.mul(&x).unwrap();
     let loss = prediction.reduce_sum(&[0])?;
@@ -24,13 +27,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loss.backward()?;
 
     let grad = x
-        .grad()
+        .grad()?
         .expect("tracked variable should receive a gradient");
     assert_eq!(grad.shape(), &[3]);
     assert_close(grad.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
-    x.clear_grad();
-    assert!(x.grad().is_none());
+    x.clear_grad()?;
+    assert!(x.grad()?.is_none());
 
     Ok(())
 }

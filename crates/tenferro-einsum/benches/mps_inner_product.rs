@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::einsum;
+use tenferro_einsum::traced_tensor::einsum;
 use tenferro_runtime::{
     GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
 };
@@ -34,7 +34,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data).unwrap())
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -61,7 +61,8 @@ fn build_inner_product_graph(
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
-    let mut env = TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
+    let mut env =
+        TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
         env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
@@ -94,7 +95,7 @@ fn bench_mps_inner_product(c: &mut Criterion) {
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
         let compiled = compile_mps_inner_product(&fixture);
-        let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
+        let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
         engine
             .register_extension(tenferro_einsum::register_runtime)
             .expect("einsum runtime registration should succeed");
@@ -123,7 +124,7 @@ fn bench_mps_inner_product(c: &mut Criterion) {
             move |b| {
                 b.iter(|| {
                     let compiled = compile_mps_inner_product(black_box(&fixture));
-                    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
+                    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
                     engine
                         .register_extension(tenferro_einsum::register_runtime)
                         .expect("einsum runtime registration should succeed");

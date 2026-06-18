@@ -21,12 +21,12 @@ mod ported_and_paths;
 // ============================================================================
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64"),
     }
 }
@@ -53,7 +53,9 @@ fn einsum<C: TestEinsumContext>(
     inputs: &[&TracedTensor],
     subscripts: &str,
 ) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| tenferro_einsum::einsum(compiler, inputs, subscripts))
+    ctx.with_compiler(|compiler| {
+        tenferro_einsum::traced_tensor::einsum(compiler, inputs, subscripts)
+    })
 }
 
 fn einsum_with<C: TestEinsumContext>(
@@ -63,7 +65,7 @@ fn einsum_with<C: TestEinsumContext>(
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
     ctx.with_compiler(|compiler| {
-        tenferro_einsum::einsum_with(compiler, inputs, subscripts, optimize)
+        tenferro_einsum::traced_tensor::einsum_with(compiler, inputs, subscripts, optimize)
     })
 }
 
@@ -95,7 +97,7 @@ fn extension_cache_entries(compiler: &GraphCompiler) -> usize {
 /// Read a single element from a v2 Tensor by multi-index (col-major).
 fn get_v2(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
-        Tensor::F64(inner) => *inner.get(idx),
+        Tensor::F64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected F64"),
     }
 }
@@ -133,7 +135,7 @@ fn assert_close(a: f64, b: f64, label: &str) {
 
 fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
     input
-        .reshape_sym(&[input.sym_size(0), input.sym_size(1)])
+        .reshape_sym(&[input.sym_size(0).unwrap(), input.sym_size(1).unwrap()])
         .unwrap()
 }
 
@@ -144,8 +146,8 @@ fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
 #[test]
 fn traced_tensor_namespace_exposes_einsum() {
     let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(y.rank, 2);
@@ -156,11 +158,13 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
     let lhs = TracedTensor::from_vec_col_major(
         vec![2, 3, 4],
         (1..=24).map(f64::from).collect::<Vec<_>>(),
-    );
+    )
+    .unwrap();
     let rhs = TracedTensor::from_vec_col_major(
         vec![3, 4, 2],
         (1..=24).map(|value| f64::from(value) * 0.5).collect(),
-    );
+    )
+    .unwrap();
 
     let out =
         tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
@@ -176,8 +180,10 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
 
 #[test]
 fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
 
     let out = tenferro_einsum::traced_tensor::tensordot(
         &lhs,
@@ -197,8 +203,8 @@ fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
 
 #[test]
 fn traced_tensor_namespace_tensordot_rejects_invalid_axes() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
 
     let duplicate = match tenferro_einsum::traced_tensor::tensordot(
         &lhs,

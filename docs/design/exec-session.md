@@ -67,18 +67,18 @@ re-enter the pool.
 
 ### CubeCL/CUDA
 
-`CubeclBackend` is the current CUDA GPU backend. It uses CubeCL/CubeCL-CUDA and
+`CudaBackend` is the current CUDA GPU backend. It uses CubeCL/CubeCL-CUDA and
 runtime-loaded CUDA libraries from `crates/tenferro-gpu/src/cubecl/`.
 
-Today `CubeclBackend` does not define a separate exec-session struct. It uses
+Today `CudaBackend` does not define a separate exec-session struct. It uses
 the default `TensorBackend::with_backend_session` adapter, so each `BackendSession`
 call forwards to the backend method. The backend method launches CubeCL kernels
 or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
-`CubeclRuntime`.
+`CudaRuntime`.
 
 | CPU concept | CubeCL/CUDA concept |
 |---|---|
-| `CpuContext` (thread count and Rayon pool) | `CubeclRuntime` (CUDA device/client) |
+| `CpuContext` (thread count and Rayon pool) | `CudaRuntime` (CUDA device/client) |
 | `Par::rayon(0)` / `Par::Seq` | CubeCL launch through the stored runtime |
 | `BufferPool` (host `Vec<T>`) | CubeCL device buffers plus upload/download helpers |
 | faer/rayon CPU work | kernel launch on stream |
@@ -87,7 +87,7 @@ or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
 Future CubeCL work may introduce a dedicated GPU exec session if there is a
 measurable benefit from binding temporary workspace, stream state, or device
 buffer pooling across an entire compiled program. That should extend
-`CubeclBackend`; it should not add a separate `CudaBackend` type.
+`CudaBackend`; it should not add a separate `CudaBackend` type.
 
 ### Default (no-op)
 

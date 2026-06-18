@@ -13,7 +13,7 @@ reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CubeclBackend` |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CudaBackend` |
 
 CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
 can run supported operations on CUDA tensors when data is explicitly uploaded
@@ -102,7 +102,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 ```
 
 ## Traced Graph Execution

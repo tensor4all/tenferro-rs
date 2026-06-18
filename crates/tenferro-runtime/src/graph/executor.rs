@@ -1153,17 +1153,33 @@ fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
 }
 
 fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+    // Invariant: executor deferred zeros are derived from already-validated tensor shapes.
     match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        DType::F32 => {
+            Tensor::F32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::F64 => {
+            Tensor::F64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::I32 => {
+            Tensor::I32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::I64 => {
+            Tensor::I64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
         DType::Bool => {
             let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; len]))
+            Tensor::Bool(
+                TypedTensor::from_vec_col_major(shape, vec![false; len])
+                    .expect("validated bool default tensor shape"),
+            )
         }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+        DType::C32 => {
+            Tensor::C32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
+        DType::C64 => {
+            Tensor::C64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
+        }
     }
 }
 

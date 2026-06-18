@@ -131,7 +131,7 @@ owned by `tenferro-tensor`.
 **Step 3: Move GPU implementation**
 
 Move CubeCL/CUDA implementation into `tenferro-gpu`, define local
-`CubeclBackend` and `CubeclBuffer<T>`, and implement `TensorBackend` plus
+`CudaBackend` and `CubeclBuffer<T>`, and implement `TensorBackend` plus
 `BackendBuffer<T>` there.
 
 **Step 4: Verify**

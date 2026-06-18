@@ -16,8 +16,8 @@ and made trace node/edge internals private. This tenferro PR then:
 - pins `tidu` to the merged commit containing the new eager boundary
 - stores opaque `tidu::eager::Trace` handles instead of `GradNode` internals
 - records eager operations through `tidu::eager::Recorder`
-- runs backward through `tidu::eager::try_backward`
-- executes transpose through `tidu::emit::try_transpose_fragment`
+- runs backward through `tidu::eager::backward`
+- executes transpose through `tidu::emit::linear_transpose_with_builder`
 
 No public tenferro eager tensor API is changed.
 

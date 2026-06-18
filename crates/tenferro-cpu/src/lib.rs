@@ -162,7 +162,7 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
         return Err(cpu_backend_buffer_error(op));
     }
     StridedView::new(
-        view.as_physical_slice(),
+        view.as_physical_slice()?,
         view.shape(),
         view.strides(),
         view.offset(),
@@ -260,7 +260,9 @@ where
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
+    // Invariant: `StridedArray` owns data whose length matches its validated dimensions.
     TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())
+        .expect("strided array dimensions match owned data length")
 }
 
 pub(crate) fn default_placement() -> Placement {

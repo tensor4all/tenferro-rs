@@ -96,19 +96,22 @@ pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
 
 /// Infer output dtype for a single instruction given its op and input dtypes.
 ///
-/// Panics if the input dtypes are inconsistent for the op (shouldn't happen
-/// in well-formed SSA programs). For `StdTensorOp::Extension`, prefer the
-/// combined `infer_extension_output_meta` helper — this function only
-/// returns the first output's dtype, which is sufficient for single-output
-/// extensions but loses information for multi-output ones.
-pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
-    match op {
+/// For `StdTensorOp::Extension`, prefer the combined
+/// [`infer_extension_output_meta`] helper when shape metadata is also needed.
+/// This function returns only the first output's dtype.
+pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DType> {
+    let dtype = match op {
         StdTensorOp::Constant { dtype, .. } => *dtype,
         StdTensorOp::Convert { to, .. } => *to,
-        StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
+        StdTensorOp::Extension(ext) => {
+            return extension_first_output_dtype(ext.as_ref(), input_dtypes)
+        }
         StdTensorOp::Compare(_) => DType::Bool,
-        StdTensorOp::Abs => real_dtype_for_abs(input_dtypes[0]),
-        StdTensorOp::Select => promote_dtype(input_dtypes[1], input_dtypes[2]),
+        StdTensorOp::Abs => real_dtype_for_abs(dtype_input(op, input_dtypes, 0)?),
+        StdTensorOp::Select => promote_dtype(
+            dtype_input(op, input_dtypes, 1)?,
+            dtype_input(op, input_dtypes, 2)?,
+        ),
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
@@ -118,12 +121,22 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::DotGeneral { .. }
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::PadToMatch { .. }
-        | StdTensorOp::DynamicTruncate { .. } => promote_dtype(input_dtypes[0], input_dtypes[1]),
-        StdTensorOp::Div | StdTensorOp::Pow => {
-            promote_dtype_div_like(input_dtypes[0], input_dtypes[1])
-        }
-        StdTensorOp::Scatter(_) => promote_dtype(input_dtypes[0], input_dtypes[2]),
-        StdTensorOp::DynamicUpdateSlice => promote_dtype(input_dtypes[0], input_dtypes[1]),
+        | StdTensorOp::DynamicTruncate { .. } => promote_dtype(
+            dtype_input(op, input_dtypes, 0)?,
+            dtype_input(op, input_dtypes, 1)?,
+        ),
+        StdTensorOp::Div | StdTensorOp::Pow => promote_dtype_div_like(
+            dtype_input(op, input_dtypes, 0)?,
+            dtype_input(op, input_dtypes, 1)?,
+        ),
+        StdTensorOp::Scatter(_) => promote_dtype(
+            dtype_input(op, input_dtypes, 0)?,
+            dtype_input(op, input_dtypes, 2)?,
+        ),
+        StdTensorOp::DynamicUpdateSlice => promote_dtype(
+            dtype_input(op, input_dtypes, 0)?,
+            dtype_input(op, input_dtypes, 1)?,
+        ),
         // Unary / structural — output dtype equals input dtype.
         StdTensorOp::Neg
         | StdTensorOp::Conj
@@ -153,9 +166,19 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::DynamicSlice { .. }
         | StdTensorOp::Slice(_)
         | StdTensorOp::Pad(_)
-        | StdTensorOp::Reverse { .. } => input_dtypes[0],
+        | StdTensorOp::Reverse { .. } => dtype_input(op, input_dtypes, 0)?,
         StdTensorOp::ShapeOf { .. } => DType::F64,
-    }
+    };
+    Ok(dtype)
+}
+
+fn dtype_input(op: &StdTensorOp, input_dtypes: &[DType], index: usize) -> Result<DType> {
+    input_dtypes.get(index).copied().ok_or_else(|| {
+        shape_infer_error(format!(
+            "{op:?} missing input dtype at index {index}; got {} input dtypes",
+            input_dtypes.len()
+        ))
+    })
 }
 
 fn real_dtype_for_abs(dtype: DType) -> DType {
@@ -304,7 +327,7 @@ pub fn infer_output_shapes(
 ///
 /// Most existing shape rules produce exact dimensions. Runtime-sized operators
 /// can instead report a known upper bound so metadata consumers do not treat a
-/// compatibility shape as proof of exactness.
+/// bound expression as proof of exactness.
 ///
 pub fn infer_output_extents(
     op: &StdTensorOp,
@@ -402,7 +425,7 @@ fn dim_expr_to_sym_dim(expr: &DimExpr, input_idx: usize, axis: usize) -> SymDim 
     }
 }
 
-fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) -> DType {
+fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) -> Result<DType> {
     // For dtype-only queries we synthesise a rank-0 shape list per input so
     // the extension's `infer_output_meta` stays total even when shapes are
     // unknown to the caller. Extensions whose dtype depends on shape must
@@ -411,13 +434,13 @@ fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) ->
     let empty_rows: Vec<&[SymDim]> = (0..op.input_count()).map(|_| [].as_slice()).collect();
     let metas = op.infer_output_meta(input_dtypes, &empty_rows);
     if metas.is_empty() {
-        panic!(
+        return Err(shape_infer_error(format!(
             "ExtensionOp::infer_output_meta for family {:?} returned an \
              empty meta list; expected at least one output",
             op.family_id()
-        );
+        )));
     }
-    metas[0].0
+    Ok(metas[0].0)
 }
 
 fn require_input<'a>(

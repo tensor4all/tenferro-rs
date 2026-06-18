@@ -359,7 +359,7 @@ fn transpose_add(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_add(builder, cotangent_out, inputs, ctx))
+    semiring::transpose_add(builder, cotangent_out, inputs, ctx)
 }
 
 fn linearize_mul(
@@ -381,13 +381,7 @@ fn transpose_mul(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_mul(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    semiring::transpose_mul(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_neg(
@@ -420,9 +414,7 @@ fn linearize_conj(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::linearize_conj(
-        builder, primal_in, tangent_in, ctx,
-    ))
+    semiring::linearize_conj(builder, primal_in, tangent_in, ctx)
 }
 
 fn transpose_conj(
@@ -433,12 +425,7 @@ fn transpose_conj(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_conj(
-        builder,
-        cotangent_out,
-        inputs,
-        ctx,
-    ))
+    semiring::transpose_conj(builder, cotangent_out, inputs, ctx)
 }
 
 fn linearize_div(
@@ -780,13 +767,7 @@ fn transpose_reduce_sum(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_sum(
-        builder,
-        cotangent_out,
-        op,
-        inputs,
-        ctx,
-    ))
+    contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs, ctx)
 }
 
 fn linearize_reduce_prod(
@@ -800,9 +781,7 @@ fn linearize_reduce_prod(
     let StdTensorOp::ReduceProd { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(contraction::linearize_reduce_prod(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    contraction::linearize_reduce_prod(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn transpose_reduce_prod(
@@ -813,13 +792,7 @@ fn transpose_reduce_prod(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_prod(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn linearize_reduce_max(
@@ -833,9 +806,7 @@ fn linearize_reduce_max(
     let StdTensorOp::ReduceMax { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(contraction::linearize_reduce_chooser(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    contraction::linearize_reduce_chooser(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn linearize_reduce_min(
@@ -849,9 +820,7 @@ fn linearize_reduce_min(
     let StdTensorOp::ReduceMin { axes } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(contraction::linearize_reduce_chooser(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    contraction::linearize_reduce_chooser(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn transpose_reduce_max(
@@ -862,13 +831,7 @@ fn transpose_reduce_max(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_chooser(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn transpose_reduce_min(
@@ -879,13 +842,7 @@ fn transpose_reduce_min(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_chooser(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn linearize_transpose(
@@ -941,13 +898,7 @@ fn transpose_reshape(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(structural::transpose_reshape(
-        builder,
-        cotangent_out,
-        op,
-        inputs,
-        ctx,
-    ))
+    structural::transpose_reshape(builder, cotangent_out, op, inputs, ctx)
 }
 
 fn linearize_broadcast_in_dim(
@@ -977,14 +928,7 @@ fn transpose_broadcast_in_dim(
     let StdTensorOp::BroadcastInDim { shape, dims } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(structural::transpose_broadcast_in_dim(
-        builder,
-        cotangent_out,
-        shape,
-        dims,
-        inputs,
-        ctx,
-    ))
+    structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims, inputs, ctx)
 }
 
 fn linearize_convert(
@@ -1036,7 +980,7 @@ macro_rules! diagonal_rule {
             let StdTensorOp::$variant { axis_a, axis_b } = op else {
                 unreachable!("catalog kind mismatch")
             };
-            Ok($lin_call(builder, tangent_in, *axis_a, *axis_b))
+            $lin_call(builder, tangent_in, *axis_a, *axis_b)
         }
 
         fn $trans(
@@ -1050,14 +994,7 @@ macro_rules! diagonal_rule {
             let StdTensorOp::$variant { axis_a, axis_b } = op else {
                 unreachable!("catalog kind mismatch")
             };
-            Ok($trans_call(
-                builder,
-                cotangent_out,
-                inputs,
-                *axis_a,
-                *axis_b,
-                ctx,
-            ))
+            $trans_call(builder, cotangent_out, inputs, *axis_a, *axis_b, ctx)
         }
     };
 }
@@ -1151,14 +1088,7 @@ fn transpose_gather(
     let StdTensorOp::Gather(config) = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(indexing::transpose_gather(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    indexing::transpose_gather(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_gather_dynamic_slice_sizes(
@@ -1209,7 +1139,7 @@ fn transpose_gather_dynamic_slice_sizes(
     else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(indexing::transpose_gather_dynamic_slice_sizes(
+    indexing::transpose_gather_dynamic_slice_sizes(
         builder,
         cotangent_out,
         inputs,
@@ -1219,7 +1149,7 @@ fn transpose_gather_dynamic_slice_sizes(
         start_index_map,
         *index_vector_dim,
         ctx,
-    ))
+    )
 }
 
 fn linearize_scatter(
@@ -1233,9 +1163,7 @@ fn linearize_scatter(
     let StdTensorOp::Scatter(config) = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(indexing::linearize_scatter(
-        builder, primal_in, tangent_in, config, ctx,
-    ))
+    indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
 }
 
 fn transpose_scatter(
@@ -1249,14 +1177,7 @@ fn transpose_scatter(
     let StdTensorOp::Scatter(config) = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(indexing::transpose_scatter(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    indexing::transpose_scatter(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_slice(
@@ -1284,14 +1205,7 @@ fn transpose_slice(
     let StdTensorOp::Slice(config) = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(structural::transpose_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    structural::transpose_slice(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_dynamic_slice(
@@ -1321,13 +1235,7 @@ fn transpose_dynamic_slice(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::transpose_dynamic_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    indexing::transpose_dynamic_slice(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_dynamic_update_slice(
@@ -1338,9 +1246,7 @@ fn linearize_dynamic_update_slice(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::linearize_dynamic_update_slice(
-        builder, primal_in, tangent_in, ctx,
-    ))
+    indexing::linearize_dynamic_update_slice(builder, primal_in, tangent_in, ctx)
 }
 
 fn transpose_dynamic_update_slice(
@@ -1351,13 +1257,7 @@ fn transpose_dynamic_update_slice(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::transpose_dynamic_update_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    indexing::transpose_dynamic_update_slice(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_pad(
@@ -1385,14 +1285,7 @@ fn transpose_pad(
     let StdTensorOp::Pad(config) = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(structural::transpose_pad(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    structural::transpose_pad(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_concatenate(
@@ -1406,14 +1299,7 @@ fn linearize_concatenate(
     let StdTensorOp::Concatenate { axis, input_count } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(structural::linearize_concatenate(
-        builder,
-        primal_in,
-        tangent_in,
-        *axis,
-        *input_count,
-        ctx,
-    ))
+    structural::linearize_concatenate(builder, primal_in, tangent_in, *axis, *input_count, ctx)
 }
 
 fn transpose_concatenate(
@@ -1427,7 +1313,7 @@ fn transpose_concatenate(
     let StdTensorOp::Concatenate { axis, input_count } = op else {
         unreachable!("catalog kind mismatch")
     };
-    Ok(structural::transpose_concatenate(
+    structural::transpose_concatenate(
         builder,
         cotangent_out,
         inputs,
@@ -1435,7 +1321,7 @@ fn transpose_concatenate(
         *axis,
         *input_count,
         ctx,
-    ))
+    )
 }
 
 fn linearize_reverse(

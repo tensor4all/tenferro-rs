@@ -3,18 +3,18 @@
 //! This module is intentionally narrow: it exposes the launch, allocation, and
 //! pointer bridges needed by operation-family crates that provide CUDA kernels
 //! against tenferro's CubeCL runtime, without exposing the backend's raw buffer
-//! representation on `CubeclRuntime` or `CubeclBuffer` themselves.
+//! representation on `CudaRuntime` or `CubeclBuffer` themselves.
 
 use std::ffi::c_void;
 use std::fmt;
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
-use cubecl_cuda::CudaRuntime;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::{TensorRank, TypedTensor};
 
-use super::{dispatch, CubeclRuntime};
+use super::{dispatch, CudaRuntime};
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.
 pub struct DeviceByteBuffer {
@@ -56,21 +56,21 @@ impl DeviceByteBuffer {
 /// This is for operation-family kernel launches that cannot be implemented
 /// inside `tenferro-gpu` without creating a dependency cycle.
 pub fn with_cubecl_client<R>(
-    rt: &CubeclRuntime,
-    launch: impl FnOnce(&ComputeClient<CudaRuntime>) -> R,
+    rt: &CudaRuntime,
+    launch: impl FnOnce(&ComputeClient<CubeclCudaRuntime>) -> R,
 ) -> R {
     launch(rt.client())
 }
 
 /// Flush the CubeCL client after an unchecked kernel launch.
-pub fn flush_cubecl_client(rt: &CubeclRuntime, op: &'static str) -> crate::Result<()> {
+pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
     rt.client()
         .flush()
         .map_err(|err| crate::Error::backend_failure(op, format!("CubeCL launch failed: {err:?}")))
 }
 
 /// Return the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
-pub fn raw_cuda_stream(rt: &CubeclRuntime, op: &'static str) -> crate::Result<u64> {
+pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str) -> crate::Result<u64> {
     rt.raw_cuda_stream()
         .map_err(|err| crate::Error::backend_failure(op, err.to_string()))
 }
@@ -87,7 +87,7 @@ pub fn cube_dim_1d() -> CubeDim {
 
 /// Allocate a dense GPU tensor on the runtime's device.
 pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     dispatch::alloc_output(rt, shape)
@@ -106,7 +106,7 @@ pub fn ensure_typed_tensor_resident<T: 'static>(
 pub fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<TensorBinding<CudaRuntime>> {
+) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
     dispatch::typed_tensor_binding(tensor, op)
 }
 
@@ -114,13 +114,13 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>> {
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     dispatch::typed_tensor_array_arg(tensor, op)
 }
 
 /// Return a raw CUDA device pointer for a CubeCL-backed tensor.
 pub fn typed_device_ptr<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<*mut c_void> {
@@ -137,7 +137,11 @@ pub fn typed_device_ptr<T: 'static>(
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
-pub fn upload_typed_tensor<T>(rt: &CubeclRuntime, shape: Vec<usize>, data: Vec<T>) -> TypedTensor<T>
+pub fn upload_typed_tensor<T>(
+    rt: &CudaRuntime,
+    shape: Vec<usize>,
+    data: Vec<T>,
+) -> crate::Result<TypedTensor<T>>
 where
     T: CubeElement + Clone + Send + Sync + 'static,
 {
@@ -152,7 +156,7 @@ where
 
 /// Download a dense CubeCL-backed typed tensor to host memory.
 pub fn download_typed_tensor<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>>
@@ -162,10 +166,7 @@ where
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;
     if tensor.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            tensor.shape().to_vec(),
-            Vec::new(),
-        ));
+        return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
     }
     rt.synchronize()?;
     let bytes = rt
@@ -174,15 +175,12 @@ where
         .map_err(|err| {
             crate::Error::backend_failure(op, format!("failed to download tensor: {err:?}"))
         })?;
-    Ok(TypedTensor::from_vec_col_major(
-        tensor.shape().to_vec(),
-        T::from_bytes(&bytes).to_vec(),
-    ))
+    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
 }
 
 /// Allocate a CubeCL-owned byte workspace and return its CUDA pointer.
 pub fn alloc_device_bytes(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     nbytes: usize,
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
@@ -195,7 +193,7 @@ pub fn alloc_device_bytes(
 
 /// Upload bytes into a CubeCL-owned workspace and return its CUDA pointer.
 pub fn upload_device_bytes(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     bytes: &[u8],
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
@@ -207,7 +205,7 @@ pub fn upload_device_bytes(
 }
 
 fn device_bytes_from_handle(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     handle: cubecl_runtime::server::Handle,
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {

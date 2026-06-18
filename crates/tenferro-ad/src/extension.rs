@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use computegraph::GraphOperation;
-use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{Error, Result};
@@ -11,15 +10,10 @@ use tenferro_tensor::Tensor;
 
 use crate::eager::{record_eager_outputs, EagerTensor};
 
-pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
-pub use tenferro_ops::ext_op::{
-    is_extension_rule_registered, lookup_extension_rule, register_extension_rule,
-    ExtensionAdRule as _ExtensionAdRuleReexport, ExtensionOp as _ExtensionOpReexport,
-    ExtensionRegistryError, ExtensionRuleSet,
-};
+pub use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionRegistryError, ExtensionRuleSet};
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOpTrait,
+    ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOp,
     ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
 };
 

@@ -11,8 +11,8 @@ fn repo_file(path: &str) -> String {
 
 #[test]
 fn graph_program_exposes_read_only_lowering_view_for_owner_crates() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
 

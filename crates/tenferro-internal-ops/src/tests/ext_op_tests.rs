@@ -1,4 +1,4 @@
-//! Coverage tests for `ext_op` registry + validation.
+//! Coverage tests for `ext_op` rule-set validation and extension dispatch.
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
@@ -13,24 +13,13 @@ use tidu::{ADRuleKind, ADRuleResult};
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::ext_op::{
-    is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
-    register_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
+    linearize_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
     ExtensionRegistryError,
 };
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim};
 use tenferro_tensor::{DType, Tensor};
-
-#[test]
-fn global_extension_rule_registry_does_not_expect_on_poison_contract() {
-    let source = include_str!("../ext_op.rs");
-
-    assert!(
-        !source.contains("extension rule registry RwLock poisoned"),
-        "global extension rule registry should return errors/None on poison instead of panicking"
-    );
-}
 
 #[derive(Debug)]
 struct CoverageRule {
@@ -299,10 +288,15 @@ fn extension_payload_does_not_affect_tensor_input_arity() {
 fn register_and_lookup_rule_roundtrips() {
     let family = "covtest.register_rule.v1";
     let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
-    register_extension_rule(rule).expect("first rule registration should succeed");
+    let mut rules = ExtensionRuleSet::new();
+    rules
+        .register_rule(rule)
+        .expect("first rule registration should succeed");
 
-    assert!(is_extension_rule_registered(family));
-    let looked_up = lookup_extension_rule(family).expect("rule should be registered");
+    assert!(rules.is_rule_registered(family));
+    let looked_up = rules
+        .lookup_rule(family)
+        .expect("rule should be registered");
     assert_eq!(looked_up.family_id(), family);
 }
 
@@ -310,10 +304,13 @@ fn register_and_lookup_rule_roundtrips() {
 fn register_rule_rejects_duplicate_family_id() {
     let family = "covtest.duplicate_rule.v1";
     let first: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
-    register_extension_rule(first).expect("first rule registration should succeed");
+    let mut rules = ExtensionRuleSet::new();
+    rules
+        .register_rule(first)
+        .expect("first rule registration should succeed");
 
     let second: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
-    match register_extension_rule(second) {
+    match rules.register_rule(second) {
         Err(ExtensionRegistryError::DuplicateRule { family_id }) => {
             assert_eq!(family_id, family);
         }
@@ -326,7 +323,7 @@ fn register_rule_rejects_malformed_family_id() {
     let bad = "covtest.bad_rule";
     let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family: bad });
 
-    match register_extension_rule(rule) {
+    match ExtensionRuleSet::new().with_rule(rule) {
         Err(ExtensionRegistryError::MalformedFamilyId { family_id }) => {
             assert_eq!(family_id, bad);
         }
@@ -335,11 +332,8 @@ fn register_rule_rejects_malformed_family_id() {
 }
 
 #[test]
-fn explicit_empty_rule_set_does_not_fallback_to_global_registry() {
+fn empty_rule_set_does_not_use_process_global_fallback() {
     let family = "covtest.global_only.v1";
-    register_extension_rule(Arc::new(CoverageRule { family }))
-        .expect("global sentinel rule should register");
-
     let op = FamilyOnlyOp { family };
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let dx = builder.add_input(TensorInputKey::User { id: 10_201 });
@@ -447,7 +441,7 @@ fn register_rule_rejects_malformed_family_ids() {
     ];
     for bad in cases {
         let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family: bad });
-        match register_extension_rule(rule) {
+        match ExtensionRuleSet::new().with_rule(rule) {
             Err(ExtensionRegistryError::MalformedFamilyId { family_id }) => {
                 assert_eq!(family_id, bad);
             }

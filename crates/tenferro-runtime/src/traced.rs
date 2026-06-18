@@ -7,6 +7,7 @@ use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use computegraph::LocalValueId;
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::ad::context::GlobalMetadataScope;
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
@@ -19,7 +20,7 @@ use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
     concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new, push_metadata_scope,
     register_scoped_graph_metadata, register_scoped_value_metadata, symbolic_input_meta,
-    tensor_meta, MetadataScope,
+    tensor_meta,
 };
 use crate::scalar_semantics::round_real_to_i64;
 
@@ -50,7 +51,7 @@ pub struct TracedTensor {
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
-    pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
+    pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
 }
 
 impl fmt::Debug for TracedTensor {
@@ -75,16 +76,21 @@ pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
         .collect()
 }
 
-pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Vec<usize> {
+pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Result<Vec<usize>> {
     tensor
         .shape_hint
         .as_ref()
-        .unwrap_or_else(|| panic!("missing shape hint for traced tensor {}", tensor.id))
+        .ok_or_else(|| Error::InvalidGraphBuild {
+            op: "TracedTensor::concrete_shape",
+            message: format!("missing shape hint for traced tensor {}", tensor.id),
+        })?
         .iter()
         .map(|dim| {
-            dim.constant_value().unwrap_or_else(|| {
-                panic!("symbolic dimension in shape hint for tensor {}", tensor.id)
-            })
+            dim.constant_value()
+                .ok_or_else(|| Error::InvalidGraphBuild {
+                    op: "TracedTensor::concrete_shape",
+                    message: format!("symbolic dimension in shape hint for tensor {}", tensor.id),
+                })
         })
         .collect()
 }
@@ -93,67 +99,73 @@ pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Vec<usize> {
 ///
 /// Expanding singleton axes are first reshaped away so the existing
 /// `BroadcastInDim` transpose rule reduces them correctly during VJP.
-pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
-    let tensor_shape = concrete_shape(tensor);
+pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> Result<TracedTensor> {
+    let tensor_shape = concrete_shape(tensor)?;
     if tensor_shape == target_shape {
-        return tensor.clone();
+        return Ok(tensor.clone());
     }
 
-    let plan =
-        broadcast_input_plan(&tensor_shape, target_shape).unwrap_or_else(|err| panic!("{err}"));
+    let plan = broadcast_input_plan(&tensor_shape, target_shape).map_err(|err| {
+        Error::InvalidGraphBuild {
+            op: "broadcast_to",
+            message: err.to_string(),
+        }
+    })?;
 
     let source = if plan.source_shape == tensor_shape {
         tensor.clone()
     } else {
         tensor.reshape(&plan.source_shape)
     };
-    source.broadcast_in_dim(target_shape, &plan.dims)
+    Ok(source.broadcast_in_dim(target_shape, &plan.dims))
 }
 
 /// Broadcast two tensors to a common shape.
-pub(crate) fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
+pub(crate) fn broadcast_binary(
+    a: &TracedTensor,
+    b: &TracedTensor,
+) -> Result<(TracedTensor, TracedTensor)> {
     if a.shape_hint == b.shape_hint && a.rank == b.rank {
-        return (a.clone(), b.clone());
+        return Ok((a.clone(), b.clone()));
     }
     if (try_concrete_shape(a).is_none() || try_concrete_shape(b).is_none()) && a.rank == b.rank {
-        return (a.clone(), b.clone());
+        return Ok((a.clone(), b.clone()));
     }
-    let a_shape = concrete_shape(a);
-    let b_shape = concrete_shape(b);
-    let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|_| {
-        panic!(
-            "incompatible shapes for broadcast: {:?} and {:?}",
-            a_shape, b_shape
-        )
-    });
-    (broadcast_to(a, &target), broadcast_to(b, &target))
+    let a_shape = concrete_shape(a)?;
+    let b_shape = concrete_shape(b)?;
+    let target = broadcast_shape(&a_shape, &b_shape).map_err(|err| Error::InvalidGraphBuild {
+        op: "broadcast_binary",
+        message: err.to_string(),
+    })?;
+    Ok((broadcast_to(a, &target)?, broadcast_to(b, &target)?))
 }
 
 pub(crate) fn broadcast_ternary(
     a: &TracedTensor,
     b: &TracedTensor,
     c: &TracedTensor,
-) -> (TracedTensor, TracedTensor, TracedTensor) {
-    let a_shape = concrete_shape(a);
-    let b_shape = concrete_shape(b);
-    let c_shape = concrete_shape(c);
+) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    let a_shape = concrete_shape(a)?;
+    let b_shape = concrete_shape(b)?;
+    let c_shape = concrete_shape(c)?;
     let target = broadcast_shapes([a_shape.as_slice(), b_shape.as_slice(), c_shape.as_slice()])
-        .unwrap_or_else(|err| panic!("{err}"));
-    (
-        broadcast_to(a, &target),
-        broadcast_to(b, &target),
-        broadcast_to(c, &target),
-    )
+        .map_err(|err| Error::InvalidGraphBuild {
+            op: "broadcast_ternary",
+            message: err.to_string(),
+        })?;
+    Ok((
+        broadcast_to(a, &target)?,
+        broadcast_to(b, &target)?,
+        broadcast_to(c, &target)?,
+    ))
 }
 
 fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
     let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]));
-    let input_shape = concrete_shape(input);
-    let factor = broadcast_to(&scalar, &input_shape);
     apply_binary(
         StdTensorOp::Mul,
         input,
-        &factor,
+        &scalar,
         input.rank,
         input.shape_hint.clone(),
     )
@@ -200,18 +212,57 @@ fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) ->
     Ok(())
 }
 
-impl std::ops::Add for &TracedTensor {
-    type Output = TracedTensor;
+fn validate_traced_insert_axis(rank: usize, axis: usize, op: &'static str) -> Result<()> {
+    if axis > rank {
+        return Err(Error::InvalidGraphBuild {
+            op,
+            message: format!("axis {axis} out of bounds for rank {rank} insertion"),
+        });
+    }
+    Ok(())
+}
 
-    fn add(self, rhs: &TracedTensor) -> TracedTensor {
+fn validate_traced_perm(rank: usize, perm: &[usize], op: &'static str) -> Result<()> {
+    if perm.len() != rank {
+        return Err(Error::InvalidGraphBuild {
+            op,
+            message: format!(
+                "permutation length {} does not match rank {rank}",
+                perm.len()
+            ),
+        });
+    }
+    let mut seen = vec![false; rank];
+    for &axis in perm {
+        if axis >= rank {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("permutation axis {axis} out of bounds for rank {rank}"),
+            });
+        }
+        if seen[axis] {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("duplicate permutation axis {axis}"),
+            });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+impl std::ops::Add for &TracedTensor {
+    type Output = Result<TracedTensor>;
+
+    fn add(self, rhs: &TracedTensor) -> Result<TracedTensor> {
         TracedTensor::add(self, rhs)
     }
 }
 
 impl std::ops::Mul for &TracedTensor {
-    type Output = TracedTensor;
+    type Output = Result<TracedTensor>;
 
-    fn mul(self, rhs: &TracedTensor) -> TracedTensor {
+    fn mul(self, rhs: &TracedTensor) -> Result<TracedTensor> {
         TracedTensor::mul(self, rhs)
     }
 }
@@ -241,9 +292,9 @@ impl std::ops::Neg for &TracedTensor {
 }
 
 impl std::ops::Div for &TracedTensor {
-    type Output = TracedTensor;
+    type Output = Result<TracedTensor>;
 
-    fn div(self, rhs: &TracedTensor) -> TracedTensor {
+    fn div(self, rhs: &TracedTensor) -> Result<TracedTensor> {
         TracedTensor::div(self, rhs)
     }
 }
@@ -318,7 +369,9 @@ impl TracedTensor {
         let metadata_scope = register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
-        );
+        )
+        // Fresh input keys are unique within this constructor.
+        .expect("fresh concrete traced input metadata registration failed");
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
@@ -371,7 +424,9 @@ impl TracedTensor {
         let metadata_scope = register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
-        );
+        )
+        // Fresh input keys are unique within this constructor.
+        .expect("fresh symbolic traced input metadata registration failed");
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
@@ -420,7 +475,9 @@ impl TracedTensor {
         let metadata_scope = register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
-        );
+        )
+        // Fresh input keys are unique within this constructor.
+        .expect("fresh concrete traced placeholder metadata registration failed");
 
         Self {
             id,
@@ -464,7 +521,9 @@ impl TracedTensor {
         let metadata_scope = register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
-        );
+        )
+        // Fresh input keys are unique within this constructor.
+        .expect("fresh symbolic traced placeholder metadata registration failed");
 
         Self {
             id,
@@ -495,11 +554,14 @@ impl TracedTensor {
     /// let a = TracedTensor::from_vec_col_major(
     ///     vec![2, 3],
     ///     vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
-    /// );
+    /// )?;
     /// assert_eq!(a.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data))
+    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Result<Self> {
+        Ok(Self::from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(shape, data)?,
+        ))
     }
 
     /// Build a concrete-shape [`TracedTensor`] leaf from row-major typed
@@ -518,11 +580,14 @@ impl TracedTensor {
     /// let a = TracedTensor::from_vec_row_major(
     ///     vec![2, 3],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    /// );
+    /// )?;
     /// assert_eq!(a.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_tensor_concrete_shape(Tensor::from_vec_row_major(shape, data))
+    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Result<Self> {
+        Ok(Self::from_tensor_concrete_shape(
+            Tensor::from_vec_row_major(shape, data)?,
+        ))
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
@@ -571,7 +636,7 @@ impl TracedTensor {
     ///
     /// This mirrors the existing traced frontend behavior for composite ops
     /// that require concrete ranks and sizes at graph construction time.
-    pub fn concrete_shape(&self) -> Vec<usize> {
+    pub fn concrete_shape(&self) -> Result<Vec<usize>> {
         concrete_shape(self)
     }
 
@@ -597,15 +662,15 @@ impl TracedTensor {
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
     /// ```
-    pub fn add(&self, other: &TracedTensor) -> TracedTensor {
-        let (lhs, rhs) = broadcast_binary(self, other);
-        apply_binary(
+    pub fn add(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
             StdTensorOp::Add,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        )
+        ))
     }
 
     /// Elementwise multiplication with NumPy-style broadcasting.
@@ -621,15 +686,15 @@ impl TracedTensor {
     /// let y = x.mul(&z);
     /// let y2 = &x * &z;
     /// ```
-    pub fn mul(&self, other: &TracedTensor) -> TracedTensor {
-        let (lhs, rhs) = broadcast_binary(self, other);
-        apply_binary(
+    pub fn mul(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
             StdTensorOp::Mul,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        )
+        ))
     }
 
     /// Elementwise division with NumPy-style broadcasting.
@@ -645,27 +710,27 @@ impl TracedTensor {
     /// let y = x.div(&z);
     /// let y2 = &x / &z;
     /// ```
-    pub fn div(&self, other: &TracedTensor) -> TracedTensor {
-        let (lhs, rhs) = broadcast_binary(self, other);
-        apply_binary(
+    pub fn div(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
             StdTensorOp::Div,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        )
+        ))
     }
 
     /// Elementwise comparison with NumPy-style broadcasting.
-    pub fn compare(&self, other: &TracedTensor, dir: CompareDir) -> TracedTensor {
-        let (lhs, rhs) = broadcast_binary(self, other);
-        apply_binary(
+    pub fn compare(&self, other: &TracedTensor, dir: CompareDir) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
             StdTensorOp::Compare(dir),
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        )
+        ))
     }
 
     fn apply_same_shape_unary(&self, op: StdTensorOp) -> TracedTensor {
@@ -757,7 +822,8 @@ impl TracedTensor {
 
     /// Scale by a complex scalar: `y = factor * x`.
     ///
-    /// This currently supports complex tensors only. For real scaling, prefer
+    /// Real and bool tensors are promoted to `C64` before scaling. For a real
+    /// scalar factor that should preserve the input dtype, prefer
     /// [`scale_real`](Self::scale_real).
     ///
     /// # Examples
@@ -779,9 +845,8 @@ impl TracedTensor {
                 StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
             DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
-                panic!(
-                    "scale_complex only supports complex tensors; use scale_real for real tensors"
-                )
+                let promoted = self.convert(DType::C64);
+                scale_with_constant(&promoted, StdTensorOp::constant(factor))
             }
         }
     }
@@ -887,15 +952,15 @@ impl TracedTensor {
     /// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]);
     /// let y = base.pow(&exp);
     /// ```
-    pub fn pow(&self, other: &TracedTensor) -> TracedTensor {
-        let (lhs, rhs) = broadcast_binary(self, other);
-        apply_binary(
+    pub fn pow(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
             StdTensorOp::Pow,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        )
+        ))
     }
 
     /// Elementwise `exp(x) - 1`.
@@ -972,37 +1037,15 @@ impl TracedTensor {
     /// #     lhs_batch_dims: vec![],
     /// #     rhs_batch_dims: vec![],
     /// # };
-    /// let y = a.dot_general(&b, config);
-    /// ```
-    pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
-        self.try_dot_general(other, config)
-            .expect("DotGeneral config dimension validation failed")
-    }
-
-    /// Fallible generalized tensor contraction.
-    ///
-    /// This returns a typed runtime error when the dimension-numbering
-    /// configuration is invalid for the two operand ranks. [`Self::dot_general`]
-    /// is retained as a compatibility wrapper that panics on the same
-    /// validation failure.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_runtime::{DotGeneralConfig, TracedTensor};
-    /// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    /// # let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
-    /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: vec![1],
-    ///     rhs_contracting_dims: vec![0],
-    ///     lhs_batch_dims: vec![],
-    ///     rhs_batch_dims: vec![],
-    /// };
-    /// let y = a.try_dot_general(&b, config)?;
-    /// assert_eq!(y.rank, 2);
+    /// let y = a.dot_general(&b, config)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn try_dot_general(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the dimension-numbering configuration is invalid
+    /// for the operand ranks.
+    pub fn dot_general(
         &self,
         other: &TracedTensor,
         config: DotGeneralConfig,
@@ -1057,16 +1100,15 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.reduce_sum(&[0]);
-    /// let y2 = x.sum(&[0]);
+    /// let y = x.reduce_sum(&[0])?;
+    /// let y2 = x.reduce_sum(&[0])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_sum(&self, axes: &[usize]) -> TracedTensor {
-        self.try_reduce_sum(axes)
-            .expect("TracedTensor::reduce_sum axis validation failed")
-    }
-
-    /// Fallibly sum over the given axes.
-    pub fn try_reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an axis is out of bounds or duplicated.
+    pub fn reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_sum")?;
         Ok(apply_unary(
@@ -1089,15 +1131,14 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.reduce_max(&[0]);
+    /// let y = x.reduce_max(&[0])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
-        self.try_reduce_max(axes)
-            .expect("TracedTensor::reduce_max axis validation failed")
-    }
-
-    /// Fallibly reduce by taking the maximum along the given axes.
-    pub fn try_reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an axis is out of bounds or duplicated.
+    pub fn reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_max")?;
         Ok(apply_unary(
@@ -1120,15 +1161,14 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.reduce_min(&[0]);
+    /// let y = x.reduce_min(&[0])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
-        self.try_reduce_min(axes)
-            .expect("TracedTensor::reduce_min axis validation failed")
-    }
-
-    /// Fallibly reduce by taking the minimum along the given axes.
-    pub fn try_reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an axis is out of bounds or duplicated.
+    pub fn reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_min")?;
         Ok(apply_unary(
@@ -1148,15 +1188,14 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.reduce_prod(&[0]);
+    /// let y = x.reduce_prod(&[0])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
-        self.try_reduce_prod(axes)
-            .expect("TracedTensor::reduce_prod axis validation failed")
-    }
-
-    /// Fallibly reduce by taking the product along the given axes.
-    pub fn try_reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an axis is out of bounds or duplicated.
+    pub fn reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_prod")?;
         Ok(apply_unary(
@@ -1210,17 +1249,16 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    /// let rows = x.sym_size(0);
-    /// let cols = x.sym_size(1);
+    /// let rows = x.sym_size(0)?;
+    /// let cols = x.sym_size(1)?;
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn sym_size(&self, axis: usize) -> SymDim {
-        self.try_sym_size(axis)
-            .expect("TracedTensor::sym_size axis validation failed")
-    }
-
-    /// Fallibly return a symbolic expression for the size of one axis.
-    pub fn try_sym_size(&self, axis: usize) -> Result<SymDim> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis` is out of bounds.
+    pub fn sym_size(&self, axis: usize) -> Result<SymDim> {
         validate_traced_axis(self, axis, "TracedTensor::sym_size")?;
         Ok(self
             .shape_hint
@@ -1249,19 +1287,17 @@ impl TracedTensor {
     ///
     /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// // Concrete axis: reports the constant size.
-    /// assert_eq!(a.axis_sym_dim(0).constant_value(), Some(2));
+    /// assert_eq!(a.axis_sym_dim(0).unwrap().constant_value(), Some(2));
     ///
     /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     /// // Fully symbolic leaf: reports a TensorAxis reference.
-    /// assert!(b.axis_sym_dim(0).constant_value().is_none());
+    /// assert!(b.axis_sym_dim(0).unwrap().constant_value().is_none());
     /// ```
-    pub fn axis_sym_dim(&self, axis: usize) -> SymDim {
-        self.try_axis_sym_dim(axis)
-            .expect("TracedTensor::axis_sym_dim axis validation failed")
-    }
-
-    /// Fallibly return the canonical `SymDim` for `axis`.
-    pub fn try_axis_sym_dim(&self, axis: usize) -> Result<SymDim> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis` is out of bounds.
+    pub fn axis_sym_dim(&self, axis: usize) -> Result<SymDim> {
         validate_traced_axis(self, axis, "TracedTensor::axis_sym_dim")?;
         match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
             Some(dim) => Ok(dim.clone()),
@@ -1301,9 +1337,10 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    /// let rows = x.sym_size(0);
-    /// let cols = x.sym_size(1);
+    /// let rows = x.sym_size(0)?;
+    /// let cols = x.sym_size(1)?;
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
         let tensor_map = [(self.id, 0usize)];
@@ -1328,7 +1365,7 @@ impl TracedTensor {
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
     /// let y = x.broadcast_in_dim(&[2, 3], &[1]);
-    /// let y2 = x.broadcast(&[2, 3], &[1]);
+    /// let y2 = x.broadcast_in_dim(&[2, 3], &[1]);
     /// ```
     pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
         apply_unary(
@@ -1359,13 +1396,6 @@ impl TracedTensor {
     /// any references to `self`. Usually the simplest correct thing is to
     /// pass each unique non-self reference tensor once.
     ///
-    /// # Panics
-    ///
-    /// Compatibility wrapper that panics if a `SymDim` in `shape` references a
-    /// traced tensor that is neither `self` nor any tensor listed in
-    /// `shape_refs`. Use [`Self::try_broadcast_in_dim_sym`] for user-provided
-    /// symbolic shapes.
-    ///
     /// # Examples
     ///
     /// ```
@@ -1373,34 +1403,16 @@ impl TracedTensor {
     ///
     /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
-    /// let m = a.axis_sym_dim(0);
-    /// let k = a.axis_sym_dim(1);
-    /// let n = b.axis_sym_dim(1);
+    /// let m = a.axis_sym_dim(0)?;
+    /// let k = a.axis_sym_dim(1)?;
+    /// let n = b.axis_sym_dim(1)?;
     /// // Broadcast `a[m, k]` to `[m, k, n]`, placing `a`'s axes at 0, 1
     /// // and taking `n` from `b` as an auxiliary shape reference.
-    /// let a_b = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b]);
+    /// let a_b = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b])?;
     /// assert_eq!(a_b.rank, 3);
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn broadcast_in_dim_sym(
-        &self,
-        shape: &[SymDim],
-        dims: &[usize],
-        shape_refs: &[&TracedTensor],
-    ) -> TracedTensor {
-        // Intentional compatibility panic wrapper for callers that already
-        // prove every symbolic shape reference is listed in `shape_refs`.
-        self.try_broadcast_in_dim_sym(shape, dims, shape_refs)
-            .expect("TracedTensor::broadcast_in_dim_sym shape reference validation failed")
-    }
-
-    /// Fallibly broadcast into a symbolic target shape with explicit dimension
-    /// placement.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `shape` contains a symbolic tensor-axis reference
-    /// that is neither `self` nor any tensor listed in `shape_refs`.
-    pub fn try_broadcast_in_dim_sym(
         &self,
         shape: &[SymDim],
         dims: &[usize],
@@ -1462,21 +1474,28 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    /// let y = x.transpose(&[1, 0]);
+    /// let y = x.transpose(&[1, 0])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `perm` is not a valid permutation of the tensor
+    /// axes.
+    pub fn transpose(&self, perm: &[usize]) -> Result<TracedTensor> {
+        validate_traced_perm(self.rank, perm, "TracedTensor::transpose")?;
         let out_shape_hint = self
             .shape_hint
             .as_ref()
             .map(|shape| perm.iter().map(|&p| shape[p].clone()).collect());
-        apply_unary(
+        Ok(apply_unary(
             StdTensorOp::Transpose {
                 perm: perm.to_vec(),
             },
             self,
             self.rank,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Extract the diagonal along two axes.
@@ -1486,13 +1505,23 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.extract_diag(0, 1);
+    /// let y = x.extract_diag(0, 1)?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
-        assert!(
-            axis_a < self.rank && axis_b < self.rank && axis_a != axis_b,
-            "extract_diag: invalid axes"
-        );
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either axis is out of bounds or the two axes are
+    /// equal.
+    pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
+        validate_traced_axis(self, axis_a, "TracedTensor::extract_diag")?;
+        validate_traced_axis(self, axis_b, "TracedTensor::extract_diag")?;
+        if axis_a == axis_b {
+            return Err(Error::InvalidGraphBuild {
+                op: "TracedTensor::extract_diag",
+                message: "diagonal axes must be distinct".into(),
+            });
+        }
         let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
             shape
                 .iter()
@@ -1500,12 +1529,12 @@ impl TracedTensor {
                 .filter_map(|(axis, dim)| (axis != axis_b).then_some(dim.clone()))
                 .collect()
         });
-        apply_unary(
+        Ok(apply_unary(
             StdTensorOp::ExtractDiag { axis_a, axis_b },
             self,
             self.rank - 1,
             out_shape_hint,
-        )
+        ))
     }
 
     /// Embed a vector or lower-rank tensor along a diagonal.
@@ -1515,50 +1544,28 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]);
-    /// let y = x.embed_diag(0, 1);
+    /// let y = x.embed_diag(0, 1)?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
-        assert!(
-            axis_a < self.rank && axis_b <= self.rank,
-            "embed_diag: invalid axes"
-        );
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis_a` is out of bounds or `axis_b` is not a
+    /// valid insertion axis.
+    pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
+        validate_traced_axis(self, axis_a, "TracedTensor::embed_diag")?;
+        validate_traced_insert_axis(self.rank, axis_b, "TracedTensor::embed_diag")?;
         let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
             let mut out_shape = shape.clone();
             out_shape.insert(axis_b, shape[axis_a].clone());
             out_shape
         });
-        apply_unary(
+        Ok(apply_unary(
             StdTensorOp::EmbedDiag { axis_a, axis_b },
             self,
             self.rank + 1,
             out_shape_hint,
-        )
-    }
-
-    /// Alias for [`Self::reduce_sum`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_runtime::TracedTensor;
-    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    /// let y = x.sum(&[0]);
-    /// ```
-    pub fn sum(&self, axes: &[usize]) -> TracedTensor {
-        self.reduce_sum(axes)
-    }
-
-    /// Alias for [`Self::broadcast_in_dim`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_runtime::TracedTensor;
-    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
-    /// let y = x.broadcast(&[2, 3], &[1]);
-    /// ```
-    pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
-        self.broadcast_in_dim(shape, dims)
+        ))
     }
 
     /// Return the runtime size of one axis as a scalar `f64` tensor.
@@ -1572,25 +1579,25 @@ impl TracedTensor {
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    /// let cols = x.shape_of(1);
+    /// let cols = x.shape_of(1)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&cols).unwrap();
     /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     /// assert_eq!(out.shape(), &[] as &[usize]);
     /// ```
-    pub fn shape_of(&self, axis: usize) -> TracedTensor {
-        assert!(
-            axis < self.rank,
-            "axis {axis} out of bounds for rank {}",
-            self.rank
-        );
-        apply_unary_with_dtype(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis` is out of bounds.
+    pub fn shape_of(&self, axis: usize) -> Result<TracedTensor> {
+        validate_traced_axis(self, axis, "TracedTensor::shape_of")?;
+        Ok(apply_unary_with_dtype(
             StdTensorOp::ShapeOf { axis },
             self,
             0,
             Some(vec![]),
             DType::F64,
-        )
+        ))
     }
 
     /// Truncate this tensor along `axis` to the first `size` elements.
@@ -1607,30 +1614,31 @@ impl TracedTensor {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
-    /// let y = x.dynamic_truncate(&size, 0);
+    /// let y = x.dynamic_truncate(&size, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     /// assert_eq!(out.shape(), &[2]);
     /// ```
-    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> TracedTensor {
-        assert!(
-            axis < self.rank,
-            "axis {axis} out of bounds for rank {}",
-            self.rank
-        );
-        assert!(
-            size.rank == 0,
-            "dynamic_truncate size must be a scalar tensor, got rank {}",
-            size.rank
-        );
-        apply_binary(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis` is out of bounds or `size` is not scalar.
+    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+        validate_traced_axis(self, axis, "TracedTensor::dynamic_truncate")?;
+        if size.rank != 0 {
+            return Err(Error::InvalidGraphBuild {
+                op: "TracedTensor::dynamic_truncate",
+                message: format!("size must be a scalar tensor, got rank {}", size.rank),
+            });
+        }
+        Ok(apply_binary(
             StdTensorOp::DynamicTruncate { axis },
             self,
             size,
             self.rank,
             None,
-        )
+        ))
     }
 
     /// Pad this tensor with zeros along `axis` to match `reference.shape[axis]`.
@@ -1645,30 +1653,26 @@ impl TracedTensor {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
-    /// let y = x.pad_to_match(&reference, 0);
+    /// let y = x.pad_to_match(&reference, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
     /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     /// assert_eq!(out.shape(), &[4]);
     /// ```
-    pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> TracedTensor {
-        assert!(
-            axis < self.rank,
-            "axis {axis} out of bounds for rank {}",
-            self.rank
-        );
-        assert!(
-            axis < reference.rank,
-            "reference axis {axis} out of bounds for rank {}",
-            reference.rank
-        );
-        apply_binary(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `axis` is out of bounds for either tensor.
+    pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+        validate_traced_axis(self, axis, "TracedTensor::pad_to_match")?;
+        validate_traced_axis(reference, axis, "TracedTensor::pad_to_match")?;
+        Ok(apply_binary(
             StdTensorOp::PadToMatch { axis },
             self,
             reference,
             self.rank,
             reference.shape_hint.clone(),
-        )
+        ))
     }
 }
 
@@ -1678,7 +1682,9 @@ pub(crate) fn apply_unary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[input.dtype]);
+    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[input.dtype])
+        // Traced unary builders only pass built-in unary ops with one input dtype.
+        .expect("built-in traced unary dtype inference failed");
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
@@ -1825,7 +1831,9 @@ pub(crate) fn apply_binary(
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
     let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
-    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[lhs.dtype, rhs.dtype]);
+    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[lhs.dtype, rhs.dtype])
+        // Traced binary builders only pass built-in binary ops with both input dtypes.
+        .expect("built-in traced binary dtype inference failed");
 
     // Insert Convert ops when an input dtype differs from the primitive input dtype.
     let lhs = if lhs.dtype != input_dtype {
@@ -1857,9 +1865,15 @@ pub(crate) fn apply_broadcast_binary_op(
     op: StdTensorOp,
     lhs: &TracedTensor,
     rhs: &TracedTensor,
-) -> TracedTensor {
-    let (lhs, rhs) = broadcast_binary(lhs, rhs);
-    apply_binary(op, &lhs, &rhs, lhs.rank, lhs.shape_hint.clone())
+) -> Result<TracedTensor> {
+    let (lhs, rhs) = broadcast_binary(lhs, rhs)?;
+    Ok(apply_binary(
+        op,
+        &lhs,
+        &rhs,
+        lhs.rank,
+        lhs.shape_hint.clone(),
+    ))
 }
 
 pub(crate) fn apply_broadcast_ternary_op(
@@ -1867,16 +1881,16 @@ pub(crate) fn apply_broadcast_ternary_op(
     first: &TracedTensor,
     second: &TracedTensor,
     third: &TracedTensor,
-) -> TracedTensor {
-    let (first, second, third) = broadcast_ternary(first, second, third);
-    apply_ternary(
+) -> Result<TracedTensor> {
+    let (first, second, third) = broadcast_ternary(first, second, third)?;
+    Ok(apply_ternary(
         op,
         &first,
         &second,
         &third,
         first.rank,
         first.shape_hint.clone(),
-    )
+    ))
 }
 
 pub(crate) fn apply_ternary(
@@ -1888,7 +1902,9 @@ pub(crate) fn apply_ternary(
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
     let out_dtype =
-        crate::shape_infer::infer_output_dtype(&op, &[first.dtype, second.dtype, third.dtype]);
+        crate::shape_infer::infer_output_dtype(&op, &[first.dtype, second.dtype, third.dtype])
+            // Traced ternary builders only pass built-in ternary ops with all input dtypes.
+            .expect("built-in traced ternary dtype inference failed");
     let (first, second, third) = match op {
         StdTensorOp::Select => {
             let value_dtype = crate::shape_infer::promote_dtype(second.dtype, third.dtype);
@@ -2060,14 +2076,20 @@ fn register_single_output_metadata(
     output: LocalValueId,
     dtype: DType,
     shape_hint: &Option<Vec<SymDim>>,
-) -> MetadataScope {
+) -> GlobalMetadataScope {
     if let Some(shape) = shape_hint {
+        // Fresh graph output keys are generated in this builder, so metadata
+        // registration failure would indicate a global metadata invariant bug.
         register_scoped_value_metadata(
             graph.values()[output].key.clone(),
             tensor_meta(dtype, shape.clone()),
         )
+        .expect("fresh traced graph output metadata registration failed")
     } else {
+        // Fresh graph output keys are generated in this builder, so metadata
+        // registration failure would indicate a global metadata invariant bug.
         register_scoped_graph_metadata(graph, std::iter::empty())
+            .expect("fresh traced graph metadata registration failed")
     }
 }
 

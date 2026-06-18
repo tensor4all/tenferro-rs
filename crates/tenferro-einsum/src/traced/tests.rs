@@ -6,9 +6,9 @@ use crate::EinsumOptimize;
 
 #[test]
 fn concrete_traced_nary_einsum_expands_to_standard_graph() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
-    let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();

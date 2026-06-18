@@ -11,7 +11,9 @@ fn linearize_scatter_inactive_tangents_returns_none() {
     let op = StdTensorOp::Scatter(rank1_scatter_config());
     let primal_in = vec![operand_key, indices_key, updates_key];
     let tangent_in: [Option<LocalValueId>; 3] = [None, None, None];
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -40,7 +42,9 @@ fn linearize_scatter_operand_only_is_identity_passthrough() {
     let primal_in = vec![operand_key, indices_key, updates_key];
     let tangent_in = [Some(operand_tangent), None, None];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(
         result,
         vec![Some(operand_tangent)],
@@ -81,7 +85,9 @@ fn linearize_scatter_updates_only_uses_zero_operand() {
     ];
     let tangent_in = [None, None, Some(updates_tangent)];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 
@@ -152,7 +158,9 @@ fn linearize_scatter_both_tangents_emit_single_scatter() {
     let primal_in = vec![operand_key, indices_key.clone(), updates_key];
     let tangent_in = [Some(operand_tangent), None, Some(updates_tangent)];
 
-    let result = op.jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    let result = op
+        .jvp_rule(&mut builder, &primal_in, &[], &tangent_in, &mut ctx)
+        .unwrap();
     assert_eq!(result.len(), 1);
     let _ = result[0].expect("output tangent must be active");
 
@@ -200,15 +208,17 @@ fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
         ValueRef::External(updates_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, false, true],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, false, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(
         result[0],
         Some(cot),
@@ -270,15 +280,17 @@ fn transpose_scatter_updates_only_emits_only_gather() {
         ValueRef::External(updates_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, false, true],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, false, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(
         result[0], None,
         "operand cotangent is None when operand is inactive"
@@ -323,15 +335,17 @@ fn transpose_scatter_operand_only_is_identity_and_no_ops() {
         ValueRef::External(updates_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, false, false],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, false, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(
         result,
         vec![Some(cot), None, None],
@@ -363,15 +377,17 @@ fn transpose_scatter_inactive_updates_returns_all_none() {
     ];
 
     let op = StdTensorOp::Scatter(rank1_scatter_config());
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, false, false],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, false, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(result, vec![None, None, None]);
     assert!(builder.build().operations().is_empty());
 }
@@ -409,15 +425,17 @@ fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
         ValueRef::External(updates_key),
     ];
 
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, false, true],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, false, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert!(result[2].is_some());
 
     let graph = builder.build();
@@ -472,15 +490,17 @@ fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
         ValueRef::External(indices_key),
         ValueRef::External(updates_key.clone()),
     ];
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cot)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, false, true],
-        },
-        &mut ctx,
-    );
+    let result = op
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, false, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
 
     assert!(result[2].is_some());
     let graph = builder.build();

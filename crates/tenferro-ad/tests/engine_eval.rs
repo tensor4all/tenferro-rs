@@ -19,11 +19,11 @@ fn eval_exec_ir_non_consuming_preserves_caller_inputs() {
         n_slots: 3,
     };
 
-    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]));
-    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
     let inputs = vec![lhs, rhs];
 
-    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
+    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
     let outputs = engine
         .eval_exec_ir_non_consuming(&program, &inputs)
         .expect("non-consuming eval should succeed");

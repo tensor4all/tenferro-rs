@@ -164,7 +164,9 @@ fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
 where
     T: Copy + Clone + Zero,
 {
+    // Invariant: scalar shape `[]` always requires exactly one value.
     TypedTensor::from_vec_col_major(vec![], vec![Complex::new(scalar, T::zero())])
+        .expect("scalar complex tensor has a valid compact shape")
 }
 
 fn complex_scalar_tensor_from_tensor<T>(
@@ -1114,7 +1116,7 @@ struct LazyOuterProductStrideSpec<'a> {
 }
 
 fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Result<Vec<isize>> {
-    let base_strides = col_major_strides(spec.base_shape);
+    let base_strides = col_major_strides(spec.base_shape)?;
     let mut logical_strides = vec![None; spec.output_shape.len()];
     let mut base_axis = 0usize;
 
