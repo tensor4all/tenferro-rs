@@ -169,6 +169,13 @@ rules from `tensor4all-agent-rules`.
   preserve appropriate copyright notices, license obligations, attribution, and
   links to the original prototype or issue discussion.
 
+## CI Cost Discipline
+
+- Expensive CI lanes, especially GPU or larger-runner jobs, must be gated behind
+  cheaper repository-policy and non-GPU checks. Do not trigger hardware-backed
+  runners directly on PR updates when an earlier review, lint, docs, or CPU test
+  gate can reject the PR first.
+
 ## Standard Extension Boundary
 
 - Standard operation families (`tenferro-einsum`, `tenferro-linalg`,

@@ -54,6 +54,11 @@ instead of preserving them behind `try_*` or alias wrappers.
   use the canonical builder contract.
 - Updated the README architecture SVG so `tenferro-xla` appears as the L3
   StableHLO/PJRT peer executor, matching the crate table and architecture docs.
+- Reworked `CI_gpu.yml` so same-repository PRs wait for
+  `repository rules review (LLM)` and all cheap non-GPU checks before building
+  the CUDA test archive or starting the `ubuntu-gpu` runner. This avoids
+  spending GPU runner time on PR revisions already rejected by repository
+  policy, lint, docs, coverage, or CPU tests.
 
 ## Rule Updates
 
@@ -68,6 +73,9 @@ instead of preserving them behind `try_*` or alias wrappers.
 - `REPOSITORY_RULES.md` now requires AD graph-emission rules to distinguish
   rank, exact extents, conservative extents, and runtime shape sources instead
   of using exact-shape queries as a default.
+- `REPOSITORY_RULES.md` now records CI cost discipline: expensive GPU or
+  larger-runner lanes must sit behind cheaper repository-policy and non-GPU
+  checks.
 
 ## Verification
 
@@ -101,7 +109,8 @@ Local verification before push:
 - `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`
 - `/opt/homebrew/bin/python3.12 scripts/test-doc-consistency.py`
 
-No cloud GPU runtime checks were used; GPU coverage here is local source
-contract tests plus CUDA feature compilation. PR #1120 was closed before final
-branch updates so hardware GPU validation can run on a separate machine without
-spending cloud CI cycles on intermediate states.
+No successful cloud GPU runtime check had completed at the time of this local
+verification; GPU coverage here is local source-contract tests plus CUDA feature
+compilation. The pre-gate `CI_gpu` run on PR #1125 was cancelled after the
+repository-rules LLM review failed, and subsequent pushes gate CUDA archive
+building and GPU runner use behind that LLM review plus cheap non-GPU checks.

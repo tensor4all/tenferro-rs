@@ -6,7 +6,8 @@
 # heavy suite lives here so it runs once per PR instead of also on every push to
 # `main`. The `ci-gate` job below is the branch-protection check that proves the
 # workspace tests passed (via either the fork or same-repo path). GPU tests are
-# in `CI_gpu.yml`.
+# in `CI_gpu.yml` and are gated behind repository rules LLM review plus these
+# non-GPU checks.
 #
 # Named for its PURPOSE (PR workspace tests), not its runner. The `ci-maintainer`
 # job is intended to run on a self-hosted pool but currently uses GitHub-hosted
