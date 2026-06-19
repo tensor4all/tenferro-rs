@@ -86,7 +86,7 @@ operations.
 
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | `tenferro_runtime::tensor` functions; selected `tenferro_runtime::typed_tensor` wrappers | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
+| Everyday tensor ops | `TensorOpsExt` / `TypedTensorOpsExt` backend-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
 | Einsum | Internal to `tenferro-einsum` runtime execution | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |

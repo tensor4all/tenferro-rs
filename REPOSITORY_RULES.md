@@ -728,8 +728,11 @@ Tests follow implementation ownership.
   naturally (`&a + &b`, `&a * &b`) and associated functions for core operations
   with no natural receiver (`EagerTensor::where_select(...)`,
   `TracedTensor::concatenate(...)`).
-- **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use module
-  functions with an explicit backend (`tenferro_runtime::tensor::matmul(...)`).
+- **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
+  crate-root extension-trait methods with an explicit backend (`TensorOpsExt`,
+  `TypedTensorOpsExt`, and `TypedTensorMaskOpsExt`). The implementation may use
+  private helper modules, but public `tensor` / `typed_tensor` module free
+  functions are not part of the release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
   traits (`TracedTensorLinalgExt`, `EagerEinsumExt`,

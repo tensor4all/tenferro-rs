@@ -13,8 +13,8 @@ functions, while the old core module-function shims were removed.
 - Compatibility shims were deliberately not kept. `tenferro_ad::eager_tensor`
   and `tenferro_runtime::traced_tensor` were deleted for the core operation
   surface.
-- Non-AD concrete operations remain backend-explicit module functions under
-  `tenferro_runtime::tensor` and selected `typed_tensor` wrappers.
+- Non-AD concrete operations use backend-explicit crate-root extension traits:
+  `TensorOpsExt`, `TypedTensorOpsExt`, and `TypedTensorMaskOpsExt`.
 - Extension operation families use crate-root extension traits instead of
   public `traced_tensor` / `eager_tensor` module namespaces, because Rust
   extension crates cannot add inherent methods to external tensor types.

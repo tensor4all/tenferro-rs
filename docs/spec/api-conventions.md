@@ -46,11 +46,13 @@ The default stratum is internal.
    of dtype-specific public functions such as `constant_f64`.
 6. Traced tensor method and free-function names do not use a `traced_` prefix.
 7. Tensor operation surfaces are methods, associated functions, or extension
-   trait methods, not public `traced_tensor` / `eager_tensor` module free
-   functions. Core AD operations in `tenferro-runtime` and `tenferro-ad` use
-   inherent `TracedTensor` / `EagerTensor` methods or associated functions.
-   Extension-family crates use crate-root extension traits because they cannot
-   add inherent methods to external tensor types.
+   trait methods, not public module free functions. Core AD operations in
+   `tenferro-runtime` and `tenferro-ad` use inherent `TracedTensor` /
+   `EagerTensor` methods or associated functions. Concrete non-AD operations
+   use crate-root `TensorOpsExt` / `TypedTensorOpsExt` extension traits because
+   `Tensor` and `TypedTensor` are owned by `tenferro-tensor`. Extension-family
+   crates use crate-root extension traits because they cannot add inherent
+   methods to external tensor types.
 8. User-facing backend features use concrete backend family names such as
    `cuda` and `rocm`. Public crates must not expose a vague `gpu` feature.
 9. Optional operation-specific AD support belongs behind an `autodiff` feature

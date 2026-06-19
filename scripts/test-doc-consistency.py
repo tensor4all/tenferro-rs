@@ -157,6 +157,13 @@ def test_operation_surface_checker_rejects_tensor_module_exports() -> None:
     assert not checker.forbidden_tensor_module_export_offsets(
         "pub mod traced;\npub mod tensor;", "traced_tensor"
     )
+    assert checker.forbidden_public_module_export_offsets("pub mod tensor;", "tensor")
+    assert checker.forbidden_public_module_export_offsets(
+        "pub mod typed_tensor;", "typed_tensor"
+    )
+    assert not checker.forbidden_public_module_export_offsets(
+        "mod tensor;\npub use tensor::TensorOpsExt;", "tensor"
+    )
 
 
 def test_api_consistency_checker_rejects_public_try_compatibility_escape() -> None:
@@ -214,6 +221,8 @@ def test_removed_tensor_module_paths_do_not_compile() -> None:
                 """
                 use tenferro_ad::eager_tensor as ad_eager_tensor;
                 use tenferro_runtime::traced_tensor as runtime_traced_tensor;
+                use tenferro_runtime::tensor as runtime_tensor;
+                use tenferro_runtime::typed_tensor as runtime_typed_tensor;
                 use tenferro_einsum::eager_tensor as einsum_eager_tensor;
                 use tenferro_einsum::traced_tensor as einsum_traced_tensor;
                 use tenferro_linalg::eager_tensor as linalg_eager_tensor;
@@ -224,6 +233,8 @@ def test_removed_tensor_module_paths_do_not_compile() -> None:
                     let _ = (
                         ad_eager_tensor::add,
                         runtime_traced_tensor::add,
+                        runtime_tensor::matmul,
+                        runtime_typed_tensor::add,
                         einsum_eager_tensor::einsum,
                         einsum_traced_tensor::einsum,
                         linalg_eager_tensor::svd,

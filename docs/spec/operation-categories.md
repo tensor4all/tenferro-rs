@@ -28,12 +28,14 @@ through the AD/traced surfaces. This is current design intent, not a frozen cont
 or associated functions, not module free functions. Single-output operations use
 methods (`x.exp()`, `x.matmul(&y)`, `x.gather(&idx, config)`); operations with no
 natural receiver use associated functions (`TracedTensor::concatenate(...)`,
-`EagerTensor::where_select(...)`). Non-AD concrete operations stay as
-backend-explicit module functions on `tenferro_runtime::tensor` and selected
-`typed_tensor` wrappers. Extension families use crate-root extension traits
-because Rust does not let extension crates add inherent methods to external
-tensor types: linalg/FFT are tensor receiver methods, eager einsum is an input
-slice/array method, and traced einsum is a `GraphCompiler` method.
+`EagerTensor::where_select(...)`). Non-AD concrete operations use
+backend-explicit crate-root extension traits (`TensorOpsExt`,
+`TypedTensorOpsExt`, and `TypedTensorMaskOpsExt`) because `Tensor` and
+`TypedTensor` are owned by `tenferro-tensor`, not `tenferro-runtime`. Extension
+families likewise use crate-root extension traits because Rust does not let
+extension crates add inherent methods to external tensor types: linalg/FFT are
+tensor receiver methods, eager einsum is an input slice/array method, and
+traced einsum is a `GraphCompiler` method.
 
 **Parity rule (the core of the contract):** every operation in the Elementwise,
 Reductions, Shape/structural, and Indexing categories **must be exposed on both

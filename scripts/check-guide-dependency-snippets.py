@@ -65,7 +65,7 @@ LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -93,10 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let q = &outputs[3];
     let parity = &outputs[4];
 
-    let pt = tensor::transpose(p, &[1, 0], &mut backend)?;
-    let pt_l = tensor::matmul(&pt, l, &mut backend)?;
-    let pt_lu = tensor::matmul(&pt_l, u, &mut backend)?;
-    let reconstructed = tensor::matmul(&pt_lu, q, &mut backend)?;
+    let pt = p.transpose(&[1, 0], &mut backend)?;
+    let pt_l = pt.matmul(l, &mut backend)?;
+    let pt_lu = pt_l.matmul(u, &mut backend)?;
+    let reconstructed = pt_lu.matmul(q, &mut backend)?;
     assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 
     assert_eq!(parity.shape(), &[] as &[usize]);
@@ -115,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 TENSOR_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{typed_tensor, CompareDir};
+use tenferro_runtime::{CompareDir, TypedTensorOpsExt};
 use tenferro_tensor::{Rank, TypedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -135,9 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0])?;
-    let sum = typed_tensor::add(&lhs, &rhs, &mut backend)?;
-    let product = typed_tensor::mul(&lhs, &rhs, &mut backend)?;
-    let mask = typed_tensor::compare(&sum, &product, CompareDir::Lt, &mut backend)?;
+    let sum = lhs.add(&rhs, &mut backend)?;
+    let product = lhs.mul(&rhs, &mut backend)?;
+    let mask = sum.compare(&product, CompareDir::Lt, &mut backend)?;
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new();

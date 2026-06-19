@@ -73,7 +73,7 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -88,8 +88,8 @@ let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
 
 let factor = LinalgBackend::cholesky(&mut backend, &a).unwrap();
-let factor_t = tensor::transpose(&factor, &[1, 0], &mut backend).unwrap();
-let reconstructed = tensor::matmul(&factor, &factor_t, &mut backend).unwrap();
+let factor_t = factor.transpose(&[1, 0], &mut backend).unwrap();
+let reconstructed = factor.matmul(&factor_t, &mut backend).unwrap();
 
 assert_eq!(factor.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
@@ -122,7 +122,7 @@ let ad = AdContext::builder()
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -148,8 +148,8 @@ let sigma = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![s_values[0], 0.0, 0.0, s_values[1]],
 );
-let us = tensor::matmul(u, &sigma, &mut backend).unwrap();
-let reconstructed = tensor::matmul(&us, vt, &mut backend).unwrap();
+let us = u.matmul(&sigma, &mut backend).unwrap();
+let reconstructed = us.matmul(vt, &mut backend).unwrap();
 
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ```
@@ -159,7 +159,7 @@ assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -186,9 +186,9 @@ let r = &outputs[1];
 assert_eq!(q.shape(), &[4, 3]);
 assert_eq!(r.shape(), &[3, 3]);
 
-let reconstructed = tensor::matmul(q, r, &mut backend).unwrap();
-let qt = tensor::transpose(q, &[1, 0], &mut backend).unwrap();
-let qtq = tensor::matmul(&qt, q, &mut backend).unwrap();
+let reconstructed = q.matmul(r, &mut backend).unwrap();
+let qt = q.transpose(&[1, 0], &mut backend).unwrap();
+let qtq = qt.matmul(q, &mut backend).unwrap();
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
     vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -203,7 +203,7 @@ assert!(max_abs_diff(&qtq, &identity) < 1.0e-12);
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -228,9 +228,9 @@ let diagonal = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![value_slice[0], 0.0, 0.0, value_slice[1]],
 );
-let vd = tensor::matmul(vectors, &diagonal, &mut backend).unwrap();
-let vt = tensor::transpose(vectors, &[1, 0], &mut backend).unwrap();
-let reconstructed = tensor::matmul(&vd, &vt, &mut backend).unwrap();
+let vd = vectors.matmul(&diagonal, &mut backend).unwrap();
+let vt = vectors.transpose(&[1, 0], &mut backend).unwrap();
+let reconstructed = vd.matmul(&vt, &mut backend).unwrap();
 
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ```
@@ -287,7 +287,7 @@ and `F64` for `F64`/`C64` inputs. `full_piv_lu_solve(..., false)` solves
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -316,10 +316,10 @@ let l = &outputs[1];
 let u = &outputs[2];
 let q = &outputs[3];
 let parity = &outputs[4];
-let pt = tensor::transpose(p, &[1, 0], &mut backend).unwrap();
-let pt_l = tensor::matmul(&pt, l, &mut backend).unwrap();
-let pt_lu = tensor::matmul(&pt_l, u, &mut backend).unwrap();
-let reconstructed = tensor::matmul(&pt_lu, q, &mut backend).unwrap();
+let pt = p.transpose(&[1, 0], &mut backend).unwrap();
+let pt_l = pt.matmul(l, &mut backend).unwrap();
+let pt_lu = pt_l.matmul(u, &mut backend).unwrap();
+let reconstructed = pt_lu.matmul(q, &mut backend).unwrap();
 let x = LinalgBackend::full_piv_lu_solve(&mut backend, &a, &b, false).unwrap();
 
 assert_eq!(p.shape(), &[4, 4]);

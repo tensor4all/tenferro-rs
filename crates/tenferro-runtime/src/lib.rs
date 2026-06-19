@@ -49,9 +49,9 @@ mod segment;
 mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
-pub mod tensor;
+mod tensor;
 pub mod traced;
-pub mod typed_tensor;
+mod typed_tensor;
 
 pub use compiler::{CompilerOptions, OptimizerConfig};
 pub use error::{ContextId, Error, Result};
@@ -73,4 +73,6 @@ pub use tenferro_tensor::{
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
     TypedTensor, TypedTensorView,
 };
+pub use tensor::TensorOpsExt;
 pub use traced::TracedTensor;
+pub use typed_tensor::{TypedTensorMaskOpsExt, TypedTensorOpsExt};

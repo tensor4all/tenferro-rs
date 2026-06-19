@@ -100,6 +100,11 @@ REMOVED_MODULE_EXPORTS = [
     (pathlib.Path("crates/tenferro-fft/src"), "traced_tensor"),
 ]
 
+REMOVED_PUBLIC_MODULE_EXPORTS = [
+    (pathlib.Path("crates/tenferro-runtime/src"), "tensor"),
+    (pathlib.Path("crates/tenferro-runtime/src"), "typed_tensor"),
+]
+
 LIVE_DOC_ROOTS = [
     pathlib.Path("README.md"),
     pathlib.Path("AGENTS.md"),
@@ -133,6 +138,8 @@ RENDERED_SUFFIXES = {".html", ".js", ".json", ".txt"}
 FORBIDDEN_TENSOR_MODULE_PATTERNS = [
     "tenferro_ad::eager_tensor",
     "tenferro_runtime::traced_tensor",
+    "tenferro_runtime::tensor",
+    "tenferro_runtime::typed_tensor",
     "tenferro_einsum::eager_tensor",
     "tenferro_einsum::traced_tensor",
     "tenferro_linalg::eager_tensor",
@@ -140,6 +147,8 @@ FORBIDDEN_TENSOR_MODULE_PATTERNS = [
     "tenferro_fft::traced_tensor",
     "use tenferro_ad::{eager_tensor",
     "use tenferro_runtime::{traced_tensor",
+    "use tenferro_runtime::{tensor",
+    "use tenferro_runtime::{typed_tensor",
     "use tenferro_einsum::{eager_tensor",
     "use tenferro_einsum::{traced_tensor",
     "use tenferro_linalg::{eager_tensor",
@@ -238,6 +247,11 @@ def forbidden_tensor_module_export_offsets(text: str, module_name: str) -> list[
     return [match.start() for match in export_re.finditer(text)]
 
 
+def forbidden_public_module_export_offsets(text: str, module_name: str) -> list[int]:
+    export_re = re.compile(rf"\bpub\s+mod\s+{re.escape(module_name)}\b")
+    return [match.start() for match in export_re.finditer(text)]
+
+
 def forbidden_tensor_module_export_findings(
     crate_src: pathlib.Path, module_name: str
 ) -> list[Finding]:
@@ -245,6 +259,23 @@ def forbidden_tensor_module_export_findings(
     for path in rust_files(crate_src):
         text = read(path)
         for offset in forbidden_tensor_module_export_offsets(text, module_name):
+            findings.append(
+                Finding(
+                    "removed_tensor_module",
+                    f"{path}:{line_number(text, offset)}",
+                    f"`{module_name}` tensor operation module is publicly exported",
+                )
+            )
+    return findings
+
+
+def forbidden_public_module_export_findings(
+    crate_src: pathlib.Path, module_name: str
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in rust_files(crate_src):
+        text = read(path)
+        for offset in forbidden_public_module_export_offsets(text, module_name):
             findings.append(
                 Finding(
                     "removed_tensor_module",
@@ -287,6 +318,8 @@ def check_removed_tensor_modules() -> list[Finding]:
 
     for crate_src, module_name in REMOVED_MODULE_EXPORTS:
         findings.extend(forbidden_tensor_module_export_findings(crate_src, module_name))
+    for crate_src, module_name in REMOVED_PUBLIC_MODULE_EXPORTS:
+        findings.extend(forbidden_public_module_export_findings(crate_src, module_name))
     return findings
 
 

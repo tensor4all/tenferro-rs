@@ -1,4 +1,4 @@
-//! Typed tensor operations.
+//! Typed tensor operation extension traits.
 //!
 //! Operation families that are no longer part of core, including einsum, live
 //! in their extension crates.
@@ -8,7 +8,329 @@ use tenferro_tensor::{
     CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
 };
 
-pub use tenferro_tensor::TypedTensor;
+use tenferro_tensor::TypedTensor;
+
+/// Backend-explicit operations for dynamic-rank typed tensors.
+///
+/// `TypedTensor` is owned by `tenferro-tensor`, so `tenferro-runtime` exposes
+/// these operations as a crate-root extension trait rather than as inherent
+/// methods.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
+///
+/// let mut backend = CpuBackend::new();
+/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+/// let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
+/// let sum = x.add(&y, &mut backend).unwrap();
+/// assert_eq!(sum.host_data().unwrap(), &[4.0, 6.0]);
+/// ```
+pub trait TypedTensorOpsExt<T: TensorScalar> {
+    /// Elementwise addition with NumPy-style broadcasting.
+    fn add<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise subtraction with NumPy-style broadcasting.
+    fn sub<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise multiplication with NumPy-style broadcasting.
+    fn mul<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise division with NumPy-style broadcasting.
+    fn div<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise power with NumPy-style broadcasting.
+    fn pow<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise maximum with NumPy-style broadcasting.
+    fn maximum<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise minimum with NumPy-style broadcasting.
+    fn minimum<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Elementwise negation.
+    fn neg<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise absolute value.
+    fn abs<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise sign.
+    fn sign<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise complex conjugate.
+    fn conj<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise exponential.
+    fn exp<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise natural logarithm.
+    fn log<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise sine.
+    fn sin<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise cosine.
+    fn cos<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise hyperbolic tangent.
+    fn tanh<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise square root.
+    fn sqrt<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise reciprocal square root.
+    fn rsqrt<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise `exp(x) - 1`.
+    fn expm1<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise `log(1 + x)`.
+    fn log1p<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>>;
+    /// Elementwise comparison with NumPy-style broadcasting.
+    fn compare<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        dir: CompareDir,
+        backend: &mut B,
+    ) -> Result<TypedTensor<bool>>;
+    /// Clamp values elementwise between lower and upper bounds.
+    fn clamp<B: TensorBackend>(
+        &self,
+        lower: &TypedTensor<T>,
+        upper: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Rank-2 matrix multiplication.
+    fn matmul<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Sum over one or more axes.
+    fn reduce_sum<B: TensorBackend>(
+        &self,
+        axes: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Reshape through the backend structural operation.
+    fn reshape<B: TensorBackend>(&self, shape: &[usize], backend: &mut B)
+        -> Result<TypedTensor<T>>;
+    /// Permute axes through the backend structural operation.
+    fn transpose<B: TensorBackend>(
+        &self,
+        perm: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+    /// Broadcast into a larger shape.
+    fn broadcast_in_dim<B: TensorBackend>(
+        &self,
+        shape: &[usize],
+        dims: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+}
+
+/// Backend-explicit bool-mask operations for typed tensors.
+pub trait TypedTensorMaskOpsExt {
+    /// Select typed values using this bool tensor as condition.
+    fn where_select<T: TensorScalar, B: TensorBackend>(
+        &self,
+        on_true: &TypedTensor<T>,
+        on_false: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+}
+
+impl<T: TensorScalar> TypedTensorOpsExt<T> for TypedTensor<T> {
+    fn add<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        add(self, rhs, backend)
+    }
+
+    fn sub<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        sub(self, rhs, backend)
+    }
+
+    fn mul<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        mul(self, rhs, backend)
+    }
+
+    fn div<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        div(self, rhs, backend)
+    }
+
+    fn pow<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        pow(self, rhs, backend)
+    }
+
+    fn maximum<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        maximum(self, rhs, backend)
+    }
+
+    fn minimum<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        minimum(self, rhs, backend)
+    }
+
+    fn neg<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        neg(self, backend)
+    }
+
+    fn abs<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        abs(self, backend)
+    }
+
+    fn sign<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        sign(self, backend)
+    }
+
+    fn conj<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        conj(self, backend)
+    }
+
+    fn exp<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        exp(self, backend)
+    }
+
+    fn log<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        log(self, backend)
+    }
+
+    fn sin<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        sin(self, backend)
+    }
+
+    fn cos<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        cos(self, backend)
+    }
+
+    fn tanh<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        tanh(self, backend)
+    }
+
+    fn sqrt<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        sqrt(self, backend)
+    }
+
+    fn rsqrt<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        rsqrt(self, backend)
+    }
+
+    fn expm1<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        expm1(self, backend)
+    }
+
+    fn log1p<B: TensorBackend>(&self, backend: &mut B) -> Result<TypedTensor<T>> {
+        log1p(self, backend)
+    }
+
+    fn compare<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        dir: CompareDir,
+        backend: &mut B,
+    ) -> Result<TypedTensor<bool>> {
+        compare(self, rhs, dir, backend)
+    }
+
+    fn clamp<B: TensorBackend>(
+        &self,
+        lower: &TypedTensor<T>,
+        upper: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        clamp(self, lower, upper, backend)
+    }
+
+    fn matmul<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        matmul(self, rhs, backend)
+    }
+
+    fn reduce_sum<B: TensorBackend>(
+        &self,
+        axes: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        reduce_sum(self, axes, backend)
+    }
+
+    fn reshape<B: TensorBackend>(
+        &self,
+        shape: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        reshape(self, shape, backend)
+    }
+
+    fn transpose<B: TensorBackend>(
+        &self,
+        perm: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        transpose(self, perm, backend)
+    }
+
+    fn broadcast_in_dim<B: TensorBackend>(
+        &self,
+        shape: &[usize],
+        dims: &[usize],
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        broadcast_in_dim(self, shape, dims, backend)
+    }
+}
+
+impl TypedTensorMaskOpsExt for TypedTensor<bool> {
+    fn where_select<T: TensorScalar, B: TensorBackend>(
+        &self,
+        on_true: &TypedTensor<T>,
+        on_false: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        where_select(self, on_true, on_false, backend)
+    }
+}
 
 /// Elementwise addition with NumPy-style broadcasting.
 ///
@@ -16,13 +338,13 @@ pub use tenferro_tensor::TypedTensor;
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
-/// let z = typed_tensor::add(&x, &y, &mut backend).unwrap();
+/// let z = x.add(&y, &mut backend).unwrap();
 /// ```
-pub fn add<T: TensorScalar>(
+fn add<T: TensorScalar>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
@@ -41,12 +363,12 @@ macro_rules! unary_fn {
         ///
         /// ```rust
         /// # use tenferro_cpu::CpuBackend;
-        /// use tenferro_runtime::{typed_tensor, TypedTensor};
+        /// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap();
-        #[doc = concat!("let y = typed_tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
+        #[doc = concat!("let y = x.", stringify!($name), "(&mut backend).unwrap();")]
         /// ```
-        pub fn $name<T: TensorScalar>(
+        fn $name<T: TensorScalar>(
             input: &TypedTensor<T>,
             backend: &mut impl TensorBackend,
         ) -> Result<TypedTensor<T>> {
@@ -64,20 +386,20 @@ macro_rules! binary_fn {
         ///
         /// ```rust
         /// # use tenferro_cpu::CpuBackend;
-        /// use tenferro_runtime::{typed_tensor, TypedTensor};
+        /// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
         /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-        #[doc = concat!("let z = typed_tensor::", stringify!($name), "(&x, &y, &mut backend).unwrap();")]
+        #[doc = concat!("let z = x.", stringify!($name), "(&y, &mut backend).unwrap();")]
         /// ```
-        pub fn $name<T: TensorScalar>(
+        fn $name<T: TensorScalar>(
             lhs: &TypedTensor<T>,
             rhs: &TypedTensor<T>,
             backend: &mut impl TensorBackend,
         ) -> Result<TypedTensor<T>> {
             let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
-            let out =
-                backend.with_backend_session(|exec| exec.$method(lhs.tensor_read(), rhs.tensor_read()))?;
+            let out = backend
+                .with_backend_session(|exec| exec.$method(lhs.tensor_read(), rhs.tensor_read()))?;
             into_typed_result(stringify!($name), out)
         }
     };
@@ -129,13 +451,13 @@ unary_fn!(log1p, log1p_read, "Elementwise `log(1 + x)`.");
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-/// let z = typed_tensor::sub(&x, &y, &mut backend).unwrap();
+/// let z = x.sub(&y, &mut backend).unwrap();
 /// ```
-pub fn sub<T: TensorScalar>(
+fn sub<T: TensorScalar>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
@@ -156,14 +478,14 @@ pub fn sub<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
+/// use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-/// let z = typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+/// let z = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
 /// assert_eq!(z.host_data().unwrap(), &[true, false]);
 /// ```
-pub fn compare<T: TensorScalar>(
+fn compare<T: TensorScalar>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     dir: CompareDir,
@@ -184,14 +506,14 @@ pub fn compare<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
+/// use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-/// # let condition = typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
-/// let z = typed_tensor::where_select(&condition, &x, &y, &mut backend).unwrap();
+/// # let condition = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
+/// let z = condition.where_select(&x, &y, &mut backend).unwrap();
 /// ```
-pub fn where_select<T: TensorScalar>(
+fn where_select<T: TensorScalar>(
     condition: &TypedTensor<bool>,
     on_true: &TypedTensor<T>,
     on_false: &TypedTensor<T>,
@@ -215,14 +537,14 @@ pub fn where_select<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]).unwrap();
 /// # let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]).unwrap();
 /// # let upper = TypedTensor::<f64>::from_vec_col_major(vec![], vec![3.0]).unwrap();
-/// let z = typed_tensor::clamp(&x, &lower, &upper, &mut backend).unwrap();
+/// let z = x.clamp(&lower, &upper, &mut backend).unwrap();
 /// ```
-pub fn clamp<T: TensorScalar>(
+fn clamp<T: TensorScalar>(
     input: &TypedTensor<T>,
     lower: &TypedTensor<T>,
     upper: &TypedTensor<T>,
@@ -247,13 +569,13 @@ pub fn clamp<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
 /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]).unwrap();
-/// let c = typed_tensor::matmul(&a, &b, &mut backend).unwrap();
+/// let c = a.matmul(&b, &mut backend).unwrap();
 /// ```
-pub fn matmul<T: TensorScalar>(
+fn matmul<T: TensorScalar>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
@@ -276,17 +598,17 @@ pub fn matmul<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// let x = TypedTensor::<f64>::from_vec_col_major(
 ///     vec![2, 3],
 ///     vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
 /// )?;
-/// let row_sums = typed_tensor::reduce_sum(&x, &[1], &mut backend).unwrap();
+/// let row_sums = x.reduce_sum(&[1], &mut backend).unwrap();
 /// assert_eq!(row_sums.host_data()?, &[6.0, 15.0]);
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
-pub fn reduce_sum<T: TensorScalar>(
+fn reduce_sum<T: TensorScalar>(
     input: &TypedTensor<T>,
     axes: &[usize],
     backend: &mut impl TensorBackend,
@@ -302,13 +624,13 @@ pub fn reduce_sum<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-/// let y = typed_tensor::reshape(&x, &[3, 2], &mut backend).unwrap();
+/// let y = x.reshape(&[3, 2], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
-pub fn reshape<T: TensorScalar>(
+fn reshape<T: TensorScalar>(
     input: &TypedTensor<T>,
     shape: &[usize],
     backend: &mut impl TensorBackend,
@@ -324,13 +646,13 @@ pub fn reshape<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-/// let y = typed_tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
+/// let y = x.transpose(&[1, 0], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
-pub fn transpose<T: TensorScalar>(
+fn transpose<T: TensorScalar>(
     input: &TypedTensor<T>,
     perm: &[usize],
     backend: &mut impl TensorBackend,
@@ -349,13 +671,13 @@ pub fn transpose<T: TensorScalar>(
 ///
 /// ```rust
 /// # use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 /// # let mut backend = CpuBackend::new();
 /// let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
-/// let matrix = typed_tensor::broadcast_in_dim(&row, &[2, 3], &[1], &mut backend).unwrap();
+/// let matrix = row.broadcast_in_dim(&[2, 3], &[1], &mut backend).unwrap();
 /// assert_eq!(matrix.shape(), &[2, 3]);
 /// ```
-pub fn broadcast_in_dim<T: TensorScalar>(
+fn broadcast_in_dim<T: TensorScalar>(
     input: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],

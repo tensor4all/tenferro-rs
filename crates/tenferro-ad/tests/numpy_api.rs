@@ -6,7 +6,8 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
-    CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+    CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TensorOpsExt, TracedTensor,
+    TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt,
 };
 
 #[derive(Clone, Debug)]
@@ -348,7 +349,7 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let lhs = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 
-    let out = tenferro_runtime::tensor::add(&lhs, &rhs, &mut backend).unwrap();
+    let out = lhs.add(&rhs, &mut backend).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -358,33 +359,33 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 }
 
 #[test]
-fn tensor_module_exposes_initial_elementwise_free_functions() {
+fn tensor_extension_trait_exposes_initial_elementwise_methods() {
     let mut backend = CpuBackend::new();
     let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    let cond = tenferro_runtime::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
 
-    let _ = tenferro_runtime::tensor::sub(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::mul(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::div(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::pow(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::maximum(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::minimum(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::clamp(&x, &y, &x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::neg(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::abs(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::sign(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::conj(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::exp(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::log(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::sin(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::cos(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::tanh(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::sqrt(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::rsqrt(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::expm1(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::tensor::log1p(&x, &mut backend).unwrap();
+    let _ = x.sub(&y, &mut backend).unwrap();
+    let _ = x.mul(&y, &mut backend).unwrap();
+    let _ = x.div(&y, &mut backend).unwrap();
+    let _ = x.pow(&y, &mut backend).unwrap();
+    let _ = x.maximum(&y, &mut backend).unwrap();
+    let _ = x.minimum(&y, &mut backend).unwrap();
+    let _ = cond.where_select(&x, &y, &mut backend).unwrap();
+    let _ = x.clamp(&y, &x, &mut backend).unwrap();
+    let _ = x.neg(&mut backend).unwrap();
+    let _ = x.abs(&mut backend).unwrap();
+    let _ = x.sign(&mut backend).unwrap();
+    let _ = x.conj(&mut backend).unwrap();
+    let _ = x.exp(&mut backend).unwrap();
+    let _ = x.log(&mut backend).unwrap();
+    let _ = x.sin(&mut backend).unwrap();
+    let _ = x.cos(&mut backend).unwrap();
+    let _ = x.tanh(&mut backend).unwrap();
+    let _ = x.sqrt(&mut backend).unwrap();
+    let _ = x.rsqrt(&mut backend).unwrap();
+    let _ = x.expm1(&mut backend).unwrap();
+    let _ = x.log1p(&mut backend).unwrap();
 }
 
 #[test]
@@ -393,8 +394,8 @@ fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 
-    let cond = tenferro_runtime::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
-    let selected = tenferro_runtime::tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
+    let selected = cond.where_select(&x, &y, &mut backend).unwrap();
 
     assert_eq!(cond.dtype(), DType::Bool);
     assert_eq!(cond.as_slice::<bool>().unwrap(), &[true, false]);
@@ -411,7 +412,7 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
 
-    let out = tenferro_runtime::typed_tensor::add(&lhs, &rhs, &mut backend).unwrap();
+    let out = lhs.add(&rhs, &mut backend).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -421,34 +422,33 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 }
 
 #[test]
-fn typed_tensor_module_exposes_initial_elementwise_free_functions() {
+fn typed_tensor_extension_trait_exposes_initial_elementwise_methods() {
     let mut backend = CpuBackend::new();
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-    let cond =
-        tenferro_runtime::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
 
-    let _ = tenferro_runtime::typed_tensor::sub(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::mul(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::div(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::pow(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::maximum(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::minimum(&x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::clamp(&x, &y, &x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::neg(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::abs(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::sign(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::conj(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::exp(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::log(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::sin(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::cos(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::tanh(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::sqrt(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::rsqrt(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::expm1(&x, &mut backend).unwrap();
-    let _ = tenferro_runtime::typed_tensor::log1p(&x, &mut backend).unwrap();
+    let _ = x.sub(&y, &mut backend).unwrap();
+    let _ = x.mul(&y, &mut backend).unwrap();
+    let _ = x.div(&y, &mut backend).unwrap();
+    let _ = x.pow(&y, &mut backend).unwrap();
+    let _ = x.maximum(&y, &mut backend).unwrap();
+    let _ = x.minimum(&y, &mut backend).unwrap();
+    let _ = cond.where_select(&x, &y, &mut backend).unwrap();
+    let _ = x.clamp(&y, &x, &mut backend).unwrap();
+    let _ = x.neg(&mut backend).unwrap();
+    let _ = x.abs(&mut backend).unwrap();
+    let _ = x.sign(&mut backend).unwrap();
+    let _ = x.conj(&mut backend).unwrap();
+    let _ = x.exp(&mut backend).unwrap();
+    let _ = x.log(&mut backend).unwrap();
+    let _ = x.sin(&mut backend).unwrap();
+    let _ = x.cos(&mut backend).unwrap();
+    let _ = x.tanh(&mut backend).unwrap();
+    let _ = x.sqrt(&mut backend).unwrap();
+    let _ = x.rsqrt(&mut backend).unwrap();
+    let _ = x.expm1(&mut backend).unwrap();
+    let _ = x.log1p(&mut backend).unwrap();
 }
 
 #[test]
@@ -457,10 +457,8 @@ fn typed_tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 
-    let cond: TypedTensor<bool> =
-        tenferro_runtime::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
-    let selected =
-        tenferro_runtime::typed_tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+    let cond: TypedTensor<bool> = x.compare(&y, CompareDir::Gt, &mut backend).unwrap();
+    let selected = cond.where_select(&x, &y, &mut backend).unwrap();
 
     assert_eq!(cond.host_data().unwrap(), &[true, false]);
     assert_eq!(selected.into_vec_col_major().unwrap().1, vec![2.0, 8.0]);

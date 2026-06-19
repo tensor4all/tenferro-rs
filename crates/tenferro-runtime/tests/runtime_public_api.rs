@@ -1,7 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    tensor, DType, DotGeneralConfig, Error, GatherConfig, GraphCompiler, GraphExecutor, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorRead, TensorValue, TracedTensor,
+    DType, DotGeneralConfig, Error, GatherConfig, GraphCompiler, GraphExecutor, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue, TracedTensor,
 };
 
 #[test]
@@ -19,28 +19,28 @@ fn runtime_crate_exposes_traced_graph_execution_api() {
 }
 
 #[test]
-fn tensor_module_free_functions_cover_eager_runtime_paths() {
+fn tensor_extension_trait_covers_eager_runtime_paths() {
     let mut backend = CpuBackend::new();
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 
-    let converted = tensor::convert(&f32_input, DType::F64, &mut backend).unwrap();
+    let converted = f32_input.convert(DType::F64, &mut backend).unwrap();
     assert_eq!(converted.dtype(), DType::F64);
     assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 
-    let casted = tensor::cast(&input, DType::F32, &mut backend).unwrap();
+    let casted = input.cast(DType::F32, &mut backend).unwrap();
     assert_eq!(casted.dtype(), DType::F32);
     assert_eq!(casted.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let reshaped = tensor::reshape(&input, &[4], &mut backend).unwrap();
+    let reshaped = input.reshape(&[4], &mut backend).unwrap();
     assert_eq!(reshaped.shape(), &[4]);
     assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let transposed = tensor::transpose(&input, &[1, 0], &mut backend).unwrap();
+    let transposed = input.transpose(&[1, 0], &mut backend).unwrap();
     assert_eq!(transposed.shape(), &[2, 2]);
     assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
 
-    let summed = tensor::reduce_sum(&input, &[0], &mut backend).unwrap();
+    let summed = input.reduce_sum(&[0], &mut backend).unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(summed.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
 }
