@@ -12,7 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(3.0, 0.0),
             Complex64::new(4.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();

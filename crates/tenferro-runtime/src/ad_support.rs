@@ -6,20 +6,21 @@ use std::sync::Arc;
 
 use computegraph::graph::Graph;
 use computegraph::types::{LocalValueId, ValueKey};
+pub use tenferro_ops::ad::context::GlobalMetadataScope;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 pub use crate::checkpoint::CheckpointNode;
-use crate::metadata::MetadataScope as RuntimeMetadataScope;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
     push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
     register_scoped_metadata_batch, register_scoped_value_metadata, registered_meta,
-    tensor_meta_from_tensor, MetadataScope,
+    tensor_meta_from_tensor,
 };
 use crate::sym_dim::SymDim;
 use crate::traced::{next_input_key, next_traced_id, TracedTensor};
+use crate::{Error, Result};
 
 /// Parts required to construct a traced tensor from an AD transform.
 pub struct TracedTensorParts {
@@ -32,7 +33,7 @@ pub struct TracedTensorParts {
     pub inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
-    pub metadata_scopes: Vec<Arc<RuntimeMetadataScope>>,
+    pub metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
 }
 
 impl fmt::Debug for TracedTensorParts {
@@ -84,7 +85,7 @@ pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
     tensor.checkpoint_chain.clone()
 }
 
-pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<RuntimeMetadataScope>] {
+pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
     &tensor.metadata_scopes
 }
 
@@ -105,9 +106,13 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
     let new_metadata_scope = register_scoped_value_metadata(
         new_graph.values()[leaf_val].key.clone(),
         concrete_meta.clone(),
-    );
+    )
+    // The replacement checkpoint input key is freshly allocated here.
+    .expect("fresh checkpoint input metadata registration failed");
     let old_output_metadata_scope =
-        register_scoped_value_metadata(old_output_key.clone(), concrete_meta);
+        register_scoped_value_metadata(old_output_key.clone(), concrete_meta)
+            // Checkpoint aliases re-register metadata for the captured output key.
+            .expect("checkpoint output metadata registration failed");
     let node = CheckpointNode {
         graph: old_graph,
         alias_key: new_key.clone(),
@@ -135,40 +140,48 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
     tensor.inputs_map = Arc::new(merged);
 }
 
-pub fn metadata_scopes_for_new_leaf(scope: RuntimeMetadataScope) -> Vec<Arc<RuntimeMetadataScope>> {
-    metadata_scopes_for_scope(scope)
-}
-
-pub fn fresh_input_key() -> TensorInputKey {
+pub fn allocate_input_key() -> TensorInputKey {
     next_input_key()
 }
 
-pub fn leaf_input_key(tensor: &TracedTensor) -> TensorInputKey {
+pub fn leaf_input_key(tensor: &TracedTensor) -> Result<TensorInputKey> {
     match &tensor.graph.values()[tensor.val].key {
-        ValueKey::Input(key) => key.clone(),
-        other => panic!("expected traced leaf input, got {:?}", other),
+        ValueKey::Input(key) => Ok(key.clone()),
+        other => Err(Error::InvalidGraphBuild {
+            op: "ad_support::leaf_input_key",
+            message: format!("expected traced leaf input, got {other:?}"),
+        }),
     }
 }
 
-pub fn linear_input_key(graph: &Graph<StdTensorOp>, local_id: LocalValueId) -> TensorInputKey {
+pub fn linear_input_key(
+    graph: &Graph<StdTensorOp>,
+    local_id: LocalValueId,
+) -> Result<TensorInputKey> {
     match &graph.values()[local_id].key {
-        ValueKey::Input(key) => key.clone(),
-        other => panic!("expected linear graph input, got {:?}", other),
+        ValueKey::Input(key) => Ok(key.clone()),
+        other => Err(Error::InvalidGraphBuild {
+            op: "ad_support::linear_input_key",
+            message: format!("expected linear graph input, got {other:?}"),
+        }),
     }
 }
 
-pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::ones(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::ones(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::ones(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::ones(shape)),
+        DType::F32 => Ok(Tensor::F32(TypedTensor::ones(shape)?)),
+        DType::F64 => Ok(Tensor::F64(TypedTensor::ones(shape)?)),
+        DType::I32 => Ok(Tensor::I32(TypedTensor::ones(shape)?)),
+        DType::I64 => Ok(Tensor::I64(TypedTensor::ones(shape)?)),
         DType::Bool => {
             let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![true; len]))
+            Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
+                shape,
+                vec![true; len],
+            )?))
         }
-        DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
+        DType::C32 => Ok(Tensor::C32(TypedTensor::ones(shape)?)),
+        DType::C64 => Ok(Tensor::C64(TypedTensor::ones(shape)?)),
     }
 }
 

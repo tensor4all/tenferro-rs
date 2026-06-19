@@ -14,13 +14,13 @@ fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
     }
 }
 
-fn diagonal_matrix(diagonal: &[f64]) -> Tensor {
+fn diagonal_matrix(diagonal: &[f64]) -> Result<Tensor, tenferro_runtime::Error> {
     let n = diagonal.len();
     let mut values = vec![0.0_f64; n * n];
     for (index, value) in diagonal.iter().enumerate() {
         values[index + index * n] = *value;
     }
-    Tensor::from_vec_col_major(vec![n, n], values)
+    Ok(Tensor::from_vec_col_major(vec![n, n], values)?)
 }
 
 fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
@@ -57,18 +57,18 @@ fn run_case(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4])?;
     let (u, s, vt) = tenferro_linalg::traced_tensor::svd_with_eps(&x, 1.0e-12)?;
 
-    let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]);
+    let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s
-        .compare(&threshold, CompareDir::Gt)
-        .convert(DType::F64)
-        .reduce_sum(&[0]);
+        .compare(&threshold, CompareDir::Gt)?
+        .convert(DType::F64)?
+        .reduce_sum(&[0])?;
 
-    let u_truncated = u.dynamic_truncate(&keep_count, 1);
-    let s_truncated = s.dynamic_truncate(&keep_count, 0);
-    let vt_truncated = vt.dynamic_truncate(&keep_count, 0);
+    let u_truncated = u.dynamic_truncate(&keep_count, 1)?;
+    let s_truncated = s.dynamic_truncate(&keep_count, 0)?;
+    let vt_truncated = vt.dynamic_truncate(&keep_count, 0)?;
 
     let mut compiler = GraphCompiler::new();
     let reconstructed = tenferro_einsum::traced_tensor::einsum_with(
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     executor.register_extension(tenferro_linalg::register_runtime)?;
     executor.register_extension(tenferro_einsum::register_runtime)?;
 
-    let rank2 = diagonal_matrix(&[4.0, 3.0, 0.1, 0.01]);
+    let rank2 = diagonal_matrix(&[4.0, 3.0, 0.1, 0.01])?;
     run_case(
         &mut executor,
         &reconstructed_program,
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &truncated_expected(&[4.0, 3.0, 0.1, 0.01], 0.5),
     )?;
 
-    let rank3 = diagonal_matrix(&[4.0, 3.0, 2.0, 0.01]);
+    let rank3 = diagonal_matrix(&[4.0, 3.0, 2.0, 0.01])?;
     run_case(
         &mut executor,
         &reconstructed_program,

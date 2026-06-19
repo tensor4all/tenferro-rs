@@ -301,7 +301,7 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::try_new()
-    ///     .unwrap_or_else(|_| CpuBackend::with_threads(1));
+    ///     .unwrap_or_else(|_| CpuBackend::with_threads(1).unwrap());
     /// let _ = backend.num_threads();
     /// ```
     pub fn try_new() -> crate::Result<Self> {
@@ -316,7 +316,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{CpuBackend, CpuContext};
     ///
-    /// let ctx = Arc::new(CpuContext::with_threads(2));
+    /// let ctx = Arc::new(CpuContext::with_threads(2).unwrap());
     /// let backend = CpuBackend::from_context(ctx);
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
@@ -351,7 +351,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{CpuBackend, CpuContext};
     ///
-    /// let ctx = Arc::new(CpuContext::with_threads(1));
+    /// let ctx = Arc::new(CpuContext::with_threads(1).unwrap());
     /// let backend = CpuBackend::from_context_with_buffer_pool_limit(ctx, 0);
     /// assert_eq!(backend.buffer_pool_limit_bytes(), 0);
     /// ```
@@ -385,61 +385,50 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::with_threads(2);
+    /// let backend = CpuBackend::with_threads(2).unwrap();
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
-    pub fn with_threads(num_threads: usize) -> Self {
-        match Self::try_with_threads(num_threads) {
-            Ok(backend) => backend,
-            Err(err) => panic!("{err}"),
-        }
-    }
-
-    /// Try to create a CPU backend with a custom thread count.
     ///
-    /// # Examples
+    /// # Errors
     ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    ///
-    /// let backend = CpuBackend::try_with_threads(1).unwrap();
-    /// assert_eq!(backend.num_threads(), 1);
-    /// ```
-    pub fn try_with_threads(num_threads: usize) -> crate::Result<Self> {
-        CpuContext::try_with_threads(num_threads)
+    /// Returns an error when `num_threads` is zero or Rayon rejects the pool.
+    pub fn with_threads(num_threads: usize) -> crate::Result<Self> {
+        CpuContext::with_threads(num_threads)
             .map(|ctx| Self::from_context(Arc::new(ctx)))
             .map_err(|err| match err {
                 crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
-                    op: "CpuBackend::try_with_threads",
+                    op: "CpuBackend::with_threads",
                     message,
                 },
                 crate::Error::BackendFailure { message, .. } => {
-                    crate::Error::backend_failure("CpuBackend::try_with_threads", message)
+                    crate::Error::backend_failure("CpuBackend::with_threads", message)
                 }
                 err => err,
             })
     }
 
-    /// Try to create a CPU backend with a custom thread count and provider.
+    /// Create a CPU backend with a custom thread count and provider.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_cpu::{CpuBackend, CpuBackendKind};
     ///
-    /// let backend = CpuBackend::try_with_threads_and_kind(
+    /// let backend = CpuBackend::with_threads_and_kind(
     ///     1,
     ///     CpuBackendKind::default_compiled(),
     /// )?;
     /// assert_eq!(backend.num_threads(), 1);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn try_with_threads_and_kind(
-        num_threads: usize,
-        kind: CpuBackendKind,
-    ) -> crate::Result<Self> {
-        ensure_cpu_backend_kind_available(kind, "CpuBackend::try_with_threads_and_kind")?;
-        CpuContext::try_with_threads(num_threads)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `num_threads` is zero, Rayon rejects the pool, or
+    /// the selected provider is unavailable.
+    pub fn with_threads_and_kind(num_threads: usize, kind: CpuBackendKind) -> crate::Result<Self> {
+        ensure_cpu_backend_kind_available(kind, "CpuBackend::with_threads_and_kind")?;
+        CpuContext::with_threads(num_threads)
             .map(|ctx| Self {
                 ctx: Arc::new(ctx),
                 buffers: BufferPool::new(),
@@ -447,11 +436,11 @@ impl CpuBackend {
             })
             .map_err(|err| match err {
                 crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
-                    op: "CpuBackend::try_with_threads_and_kind",
+                    op: "CpuBackend::with_threads_and_kind",
                     message,
                 },
                 crate::Error::BackendFailure { message, .. } => {
-                    crate::Error::backend_failure("CpuBackend::try_with_threads_and_kind", message)
+                    crate::Error::backend_failure("CpuBackend::with_threads_and_kind", message)
                 }
                 err => err,
             })
@@ -478,7 +467,7 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::with_threads(2);
+    /// let backend = CpuBackend::with_threads(2).unwrap();
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
     pub fn num_threads(&self) -> usize {
@@ -540,7 +529,7 @@ impl CpuBackend {
     /// use tenferro_cpu::{CpuBackend, CpuContext};
     ///
     /// let backend = CpuBackend::from_context_with_buffer_pool_limit(
-    ///     Arc::new(CpuContext::with_threads(1)),
+    ///     Arc::new(CpuContext::with_threads(1).unwrap()),
     ///     4096,
     /// );
     /// assert_eq!(backend.buffer_pool_limit_bytes(), 4096);
@@ -595,7 +584,7 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::with_threads(1);
+    /// let backend = CpuBackend::with_threads(1).unwrap();
     /// let value = backend.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
@@ -930,8 +919,8 @@ impl TensorStructural for CpuBackend {
         self.broadcast_in_dim(&input, shape, dims)
     }
 
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::convert_with_pool(buffers, input, to))
+    fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| structural::cast_with_pool(buffers, input, to))
     }
 
     fn extract_diagonal(

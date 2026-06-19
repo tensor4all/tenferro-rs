@@ -17,10 +17,34 @@ fn cpu_context_from_env_falls_back_to_affinity_when_rayon_num_threads_is_absent(
 }
 
 #[test]
+fn cpu_context_from_env_falls_back_to_single_threaded_when_rayon_num_threads_is_invalid() {
+    with_rayon_num_threads(Some("not-a-number"), || {
+        let ctx = CpuContext::from_env();
+        assert_eq!(ctx.num_threads(), 1);
+    });
+}
+
+#[test]
 fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
     with_rayon_num_threads(Some("not-a-number"), || {
         assert!(CpuContext::try_from_env().is_err());
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn cpu_context_try_from_env_rejects_non_unicode_rayon_num_threads() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = RayonNumThreadsEnvGuard::new(None);
+    std::env::set_var("RAYON_NUM_THREADS", OsString::from_vec(vec![0xff]));
+
+    let err = CpuContext::try_from_env().unwrap_err();
+
+    assert!(
+        err.to_string().contains("failed to read RAYON_NUM_THREADS"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -36,9 +60,8 @@ fn cpu_context_try_from_env_rejects_zero_rayon_num_threads() {
 }
 
 #[test]
-#[should_panic(expected = "thread count must be at least 1")]
-fn cpu_context_with_threads_zero_panics_for_compatibility() {
-    let _ctx = CpuContext::with_threads(0);
+fn cpu_context_with_threads_zero_returns_error() {
+    assert!(CpuContext::with_threads(0).is_err());
 }
 
 #[test]
@@ -66,12 +89,12 @@ fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
 
 #[test]
 fn test_with_backend_session_runs_compiled_ops() {
-    let mut backend = CpuBackend::with_threads(2);
+    let mut backend = CpuBackend::with_threads(2).unwrap();
     let result = backend.with_backend_session(|session| {
         session
             .add(
-                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
-                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
+                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap()),
+                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap()),
             )
             .unwrap()
     });
@@ -81,19 +104,19 @@ fn test_with_backend_session_runs_compiled_ops() {
 
 #[test]
 fn cpu_context_install_enters_owned_pool() {
-    let ctx = CpuContext::with_threads(2);
+    let ctx = CpuContext::with_threads(2).unwrap();
     let seen_threads = ctx.install(rayon::current_num_threads);
     assert_eq!(seen_threads, 2);
 }
 
 #[test]
 fn cpu_install_accepts_send_state() {
-    let ctx = CpuContext::with_threads(2);
+    let ctx = CpuContext::with_threads(2).unwrap();
     let state = Arc::new(41usize);
     let seen = ctx.install(|| *state + 1);
     assert_eq!(seen, 42);
 
-    let backend = CpuBackend::with_threads(2);
+    let backend = CpuBackend::with_threads(2).unwrap();
     let state = Arc::new(20usize);
     let seen = backend.install(|| *state + 2);
     assert_eq!(seen, 22);
@@ -101,14 +124,14 @@ fn cpu_install_accepts_send_state() {
 
 #[test]
 fn cpu_backend_exec_session_enters_owned_pool() {
-    let mut backend = CpuBackend::with_threads(2);
+    let mut backend = CpuBackend::with_threads(2).unwrap();
     let seen_threads = backend.with_backend_session(|_| rayon::current_num_threads());
     assert_eq!(seen_threads, 2);
 }
 
 #[test]
 fn cpu_backend_shared_context() {
-    let ctx = Arc::new(CpuContext::with_threads(3));
+    let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
     let b1 = CpuBackend::from_context(ctx.clone());
     let b2 = CpuBackend::from_context(ctx);
     assert!(Arc::ptr_eq(&b1.ctx, &b2.ctx));
@@ -121,7 +144,7 @@ fn cpu_affinity_available_parallelism_reports_positive_count() {
 
 #[test]
 fn cpu_backend_from_context_shares_runtime_owner() {
-    let ctx = Arc::new(CpuContext::with_threads(3));
+    let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
     let b1 = CpuBackend::from_context(ctx.clone());
     let b2 = CpuBackend::from_context(ctx);
     assert_eq!(b1.num_threads(), 3);
@@ -131,19 +154,19 @@ fn cpu_backend_from_context_shares_runtime_owner() {
 #[cfg(feature = "cpu-faer")]
 #[test]
 fn cpu_context_faer_policy_is_seq_for_one_thread() {
-    let ctx = CpuContext::with_threads(1);
+    let ctx = CpuContext::with_threads(1).unwrap();
     assert!(matches!(ctx.faer_par(), faer::Par::Seq));
 }
 
 #[test]
 fn cpu_context_with_threads_reports_requested_size() {
-    let ctx = CpuContext::with_threads(2);
+    let ctx = CpuContext::with_threads(2).unwrap();
     assert_eq!(ctx.num_threads(), 2);
 }
 
 #[test]
 fn cpu_context_install_executes_closure() {
-    let ctx = CpuContext::with_threads(1);
+    let ctx = CpuContext::with_threads(1).unwrap();
     let seen = ctx.install(|| 1 + 1);
     assert_eq!(seen, 2);
 }

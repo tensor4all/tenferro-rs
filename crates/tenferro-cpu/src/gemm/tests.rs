@@ -69,8 +69,8 @@ fn checked_product_rejects_product_overflow() {
 
 #[test]
 fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
-    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
-    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]);
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0, 1],
         rhs_contracting_dims: vec![1, 0],
@@ -93,7 +93,7 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
     let (_lhs_perm, rhs_perm, canonical_config) =
         canonical_gemm_layout(&config, lhs.shape().len(), rhs.shape().len());
     assert_eq!(rhs_perm.as_slice(), &[1, 0]);
-    let rhs_canonical = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    let rhs_canonical = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let canonical = analyse_gemm_cached(
         &mut cache,
         Some(7),
@@ -115,8 +115,8 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
 
 #[test]
 fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
-    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
-    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]);
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -161,12 +161,14 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
 #[test]
 fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
     let lhs_source =
-        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
     let lhs_view = lhs_source.as_view().transpose_view([1, 0]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(
         vec![3, 2],
         vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
-    );
+    )
+    .unwrap();
     let rhs = Tensor::F64(rhs);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
@@ -176,7 +178,7 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
     };
     let mut buffers = BufferPool::new();
     let mut cache = GemmAnalysisCache::default();
-    let ctx = CpuContext::with_threads(1);
+    let ctx = CpuContext::with_threads(1).unwrap();
 
     let dispatch_count_before = strided_dot::test_dispatch_count();
     let out = dot_general_faer_read_cached(
@@ -199,8 +201,10 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
 #[cfg(feature = "cpu-blas")]
 #[test]
 fn blas_dot_general_contract_trailing_rhs_dim() {
-    let lhs = TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let lhs =
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![1],
@@ -213,7 +217,7 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
         .expect("dot_general should succeed");
 
     assert_eq!(out.shape(), &[2, 2]);
-    assert_eq!(out.host_data(), &[89.0, 116.0, 98.0, 128.0]);
+    assert_eq!(out.host_data().unwrap(), &[89.0, 116.0, 98.0, 128.0]);
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -316,7 +320,7 @@ fn faer_strided_gemm_accumulates_with_nontrivial_beta() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
-    let ctx = CpuContext::with_threads(1);
+    let ctx = CpuContext::with_threads(1).unwrap();
 
     unsafe {
         <f64 as FaerGemm>::strided_gemm(
@@ -347,7 +351,7 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
-    let ctx = CpuContext::with_threads(1);
+    let ctx = CpuContext::with_threads(1).unwrap();
 
     unsafe {
         <f64 as FaerGemm>::strided_gemm(

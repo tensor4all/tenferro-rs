@@ -29,33 +29,40 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn lhs_value() -> Tensor {
-    Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
+fn lhs_value() -> Result<Tensor, Box<dyn std::error::Error>> {
+    Ok(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    )?)
 }
 
-fn middle_value() -> Tensor {
-    Tensor::from_vec_col_major(
+fn middle_value() -> Result<Tensor, Box<dyn std::error::Error>> {
+    Ok(Tensor::from_vec_col_major(
         vec![3, 4],
         vec![
             10.0_f64, 20.0, 30.0, 11.0, 21.0, 31.0, 12.0, 22.0, 32.0, 13.0, 23.0, 33.0,
         ],
-    )
+    )?)
 }
 
-fn tail_value() -> Tensor {
-    Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
+    Ok(Tensor::from_vec_col_major(
+        vec![4, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+    )?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let product = tenferro_einsum::einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il")?;
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
+    let product =
+        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il")?;
 
-    let a_value = lhs_value();
-    let b_value = middle_value();
-    let c_value = tail_value();
+    let a_value = lhs_value()?;
+    let b_value = middle_value()?;
+    let c_value = tail_value()?;
     let program = compiler.compile_with_input_specs(
         &product,
         &[

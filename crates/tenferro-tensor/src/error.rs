@@ -61,6 +61,13 @@ pub enum Error {
         lhs: crate::DType,
         rhs: crate::DType,
     },
+    #[error("{op}: unsupported dtype conversion from {from:?} to {to:?}: {message}")]
+    UnsupportedDTypeConversion {
+        op: &'static str,
+        from: crate::DType,
+        to: crate::DType,
+        message: String,
+    },
     #[error("{op}: invalid config: {message}")]
     InvalidConfig { op: &'static str, message: String },
     #[error("{op}: backend failure: {message}")]

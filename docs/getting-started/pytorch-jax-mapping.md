@@ -26,7 +26,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `tenferro_runtime::tensor::matmul(&a, &b, &mut ctx)` | `tenferro_runtime::traced_tensor::matmul(&a, &b)` |
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `tenferro_runtime::tensor::reshape(&x, &shape, &mut ctx)` | `x.reshape(&shape)` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `tenferro_runtime::tensor::transpose(&x, &perm, &mut ctx)` | `x.transpose(&perm)` |
-| Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
+| Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `tenferro_runtime::tensor::reduce_sum(&x, &axes, &mut ctx)` | `x.reduce_sum(&axes)` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro_einsum::eager_tensor::einsum(...)` | `tenferro_einsum::traced_tensor::einsum(&mut compiler, ...)` plus `register_runtime` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::svd(&x)?` |
@@ -51,10 +51,9 @@ let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0
 
 then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 
-Use `Tensor::from_vec_row_major` or `TracedTensor::from_vec_row_major` for flat
-data copied from PyTorch, NumPy, or JAX row-major arrays. Use
-`from_vec_col_major` only when the flat buffer is already in tenferro's
-physical order.
+Use `from_vec_col_major` only with buffers already in tenferro's physical
+column-major order. Flat buffers copied from PyTorch, NumPy, or JAX row-major
+arrays must be reordered explicitly before tensor construction.
 
 ### Explicit CUDA transfer
 

@@ -113,7 +113,7 @@ not-needed    intentionally replaced or removed with reason
 | Source item | Current path | Target | Verification | Status |
 |-------------|--------------|--------|--------------|--------|
 | Einsum extension AD rule type | `EinsumExtensionAdRule` in `tenferro/src/einsum_extension.rs` | `crates/tenferro-einsum/src/ad.rs`, gated by `autodiff` | `rg -n "EinsumExtensionAdRule|ExtensionAdRule" crates/tenferro-einsum/src` | pending |
-| Rule registration | `ensure_einsum_extension_rule_registered` | `tenferro-einsum` registration helper, gated by `autodiff` | `rg -n "ensure_.*rule_registered|register_extension" crates/tenferro-einsum/src` | pending |
+| Rule ownership | `ad_rules()` | explicit `ExtensionRuleSet` helper, gated by `autodiff` | `rg -n "pub fn ad_rules|ExtensionRuleSet" crates/tenferro-einsum/src` | done |
 | Linearize rule | `linearize_einsum_extension` | `crates/tenferro-einsum/src/ad.rs`; preserve output-shape hints | `rg -n "linearize_einsum_extension|linearize" crates/tenferro-einsum/src` | pending |
 | Transpose rule | `transpose_einsum_extension` | `crates/tenferro-einsum/src/ad.rs`; preserve repeated/new label behavior | `rg -n "transpose_einsum_extension|transpose" crates/tenferro-einsum/src` | pending |
 | AD tests for traced einsum | `tenferro/tests/einsum_ad.rs` | `crates/tenferro-einsum/tests/ad.rs`, gated by `autodiff` | `cargo test -p tenferro-einsum --features autodiff --test ad` | pending |

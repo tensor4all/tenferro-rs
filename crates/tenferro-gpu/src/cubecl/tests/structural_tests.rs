@@ -208,8 +208,8 @@ fn test_cubecl_convert_matches_cpu() {
     let gpu_real = upload(&gpu, &real);
     let gpu_complex = upload(&gpu, &complex);
 
-    let expected = cpu.convert(&real, DType::F32).unwrap();
-    let gpu_out = gpu.convert(&gpu_real, DType::F32).unwrap();
+    let expected = cpu.cast(&real, DType::F32).unwrap();
+    let gpu_out = gpu.cast(&gpu_real, DType::F32).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-6);
 
@@ -218,8 +218,8 @@ fn test_cubecl_convert_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.convert(&complex, DType::F64).unwrap();
-    let gpu_out = gpu.convert(&gpu_complex, DType::F64).unwrap();
+    let expected = cpu.cast(&complex, DType::F64).unwrap();
+    let gpu_out = gpu.cast(&gpu_complex, DType::F64).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 }
@@ -323,7 +323,7 @@ fn cuda_to_contiguous_bool_view_returns_backend_failure() {
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CubeclBackend::to_contiguous",
+            op: "CudaBackend::to_contiguous",
             ref message,
         } if message.contains("unsupported dtype")
     ));
@@ -333,14 +333,14 @@ fn cuda_to_contiguous_bool_view_returns_backend_failure() {
 #[ignore]
 fn cuda_to_contiguous_host_view_returns_upload_hint() {
     let mut gpu = gpu_backend();
-    let host = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    let host = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
 
     let err = gpu.to_contiguous(&host.as_view()).unwrap_err();
 
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CubeclBackend::to_contiguous",
+            op: "CudaBackend::to_contiguous",
             ref message,
         } if message.contains("upload_tensor()")
     ));
@@ -350,7 +350,7 @@ fn cuda_to_contiguous_host_view_returns_upload_hint() {
 #[ignore]
 fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
     let mut gpu = gpu_backend();
-    let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     let dst_host = tensor_i32(vec![2], vec![0, 0]);
     let mut gpu_dst = upload(&gpu, &dst_host);
     let Tensor::I32(dst) = &mut gpu_dst else {
@@ -364,7 +364,7 @@ fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CubeclBackend::copy_from_contiguous",
+            op: "CudaBackend::copy_from_contiguous",
             ref message,
         } if message.contains("upload_tensor()")
     ));
@@ -379,7 +379,7 @@ fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
     let Tensor::I32(src) = &gpu_src else {
         panic!("expected i32 tensor");
     };
-    let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]);
+    let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]).unwrap();
 
     let err = gpu
         .copy_from_contiguous(src, &mut dst.as_view_mut())
@@ -388,7 +388,7 @@ fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CubeclBackend::copy_from_contiguous",
+            op: "CudaBackend::copy_from_contiguous",
             ref message,
         } if message.contains("upload_tensor()")
     ));

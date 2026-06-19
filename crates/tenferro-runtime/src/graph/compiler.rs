@@ -42,8 +42,8 @@ struct InputDescriptor {
 /// ```
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = &x + &x;
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let y = (&x + &x).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
 /// assert_eq!(program.output_count(), 1);
@@ -119,7 +119,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.input_count(), 1);
@@ -135,7 +135,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let y = x.neg();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
@@ -166,7 +166,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[3])])
@@ -519,7 +519,7 @@ fn descriptor_for_input(
                 default_tensor: Some(Arc::new(zeros_tensor(
                     tensor.dtype(),
                     tensor.shape().to_vec(),
-                ))),
+                )?)),
             });
         }
         if let Some(spec) = binding_specs.get(root) {
@@ -530,7 +530,10 @@ fn descriptor_for_input(
                 default_tensor: spec
                     .default_tensor
                     .as_ref()
-                    .map(|tensor| Arc::new(zeros_tensor(tensor.dtype(), tensor.shape().to_vec()))),
+                    .map(|tensor| {
+                        zeros_tensor(tensor.dtype(), tensor.shape().to_vec()).map(Arc::new)
+                    })
+                    .transpose()?,
             });
         }
     }
@@ -559,7 +562,7 @@ fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
 
 fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Tensor) -> bool {
     match (lhs.as_slice::<T>(), rhs.as_slice::<T>()) {
-        (Some(lhs), Some(rhs)) => lhs == rhs,
+        (Ok(lhs), Ok(rhs)) => lhs == rhs,
         // Backend-resident defaults cannot be inspected here; only the same
         // Arc<Tensor> is considered equivalent by `default_tensors_equivalent`.
         _ => false,
@@ -570,22 +573,32 @@ fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     key.primal_root()
 }
 
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
-        DType::F32 => Tensor::F32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(tenferro_tensor::TypedTensor::zeros(shape)),
+        DType::F32 => Ok(Tensor::F32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::F64 => Ok(Tensor::F64(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::I32 => Ok(Tensor::I32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::I64 => Ok(Tensor::I64(tenferro_tensor::TypedTensor::zeros(shape)?)),
         DType::Bool => {
-            let len = shape.iter().product();
-            Tensor::Bool(tenferro_tensor::TypedTensor::from_vec_col_major(
-                shape,
-                vec![false; len],
+            let len = checked_default_element_count(&shape)?;
+            Ok(Tensor::Bool(
+                tenferro_tensor::TypedTensor::from_vec_col_major(shape, vec![false; len])?,
             ))
         }
-        DType::C32 => Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)),
+        DType::C32 => Ok(Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::C64 => Ok(Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)?)),
     }
+}
+
+fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| Error::InvalidCompiledGraph {
+                message: format!(
+                    "default tensor shape product overflows usize for shape {shape:?}"
+                ),
+            })
+    })
 }
 
 #[cfg(test)]
@@ -599,11 +612,11 @@ mod tests {
 
     #[test]
     fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
-        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]);
+        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
         let y1 = x.neg();
         let mut y2 = x.neg();
         let key = x.input_key().expect("concrete traced tensor has input key");
-        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]));
+        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
         let mut inputs = (*y2.inputs_map).clone();
         inputs.insert(key.clone(), replacement);
         y2.inputs_map = Arc::new(inputs);
@@ -625,16 +638,22 @@ mod tests {
                 ordinal: 0,
             }),
         };
-        let lhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
-            vec![2],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
-            placement.clone(),
-        )));
-        let rhs = Arc::new(Tensor::F64(TypedTensor::from_buffer_col_major(
-            vec![2],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
-            placement,
-        )));
+        let lhs = Arc::new(Tensor::F64(
+            TypedTensor::from_buffer_col_major(
+                vec![2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
+                placement.clone(),
+            )
+            .unwrap(),
+        ));
+        let rhs = Arc::new(Tensor::F64(
+            TypedTensor::from_buffer_col_major(
+                vec![2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
+                placement,
+            )
+            .unwrap(),
+        ));
 
         assert!(
             !default_tensors_equivalent(&lhs, &rhs),

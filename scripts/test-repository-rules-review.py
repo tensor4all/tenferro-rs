@@ -170,6 +170,77 @@ def test_extract_json_payload_strips_fence() -> None:
     assert parsed["verdict"] == "pass"
 
 
+def test_extract_json_payload_reports_malformed_embedded_object() -> None:
+    mod = load_module()
+    try:
+        mod.extract_json_payload(
+            'prefix {"verdict": "fail", "findings": [{"summary": "unterminated]} suffix'
+        )
+    except ValueError as err:
+        assert "model response was not valid JSON" in str(err)
+    else:
+        raise AssertionError("malformed embedded JSON should raise ValueError")
+
+
+def test_parse_findings_caps_model_output() -> None:
+    mod = load_module()
+    raw = {
+        "verdict": "fail",
+        "findings": [
+            {
+                "id": f"finding-{index}",
+                "severity": "warn",
+                "rule_section": "Public Surface Discipline",
+                "file": "foo.rs",
+                "line": 1,
+                "summary": "test",
+                "detail": "detail",
+            }
+            for index in range(mod.MAX_FINDINGS_PER_CHUNK + 3)
+        ],
+    }
+    _, findings = mod.parse_findings(raw)
+    assert len(findings) == mod.MAX_FINDINGS_PER_CHUNK
+
+
+def test_parse_findings_normalizes_common_severity_aliases() -> None:
+    mod = load_module()
+    raw = {
+        "verdict": "fail",
+        "findings": [
+            {
+                "id": "a",
+                "severity": "warning",
+                "rule_section": "Public Surface Discipline",
+                "file": "foo.rs",
+                "line": 1,
+                "summary": "test",
+                "detail": "detail",
+            },
+            {
+                "id": "b",
+                "severity": "error",
+                "rule_section": "Public Surface Discipline",
+                "file": "foo.rs",
+                "line": 2,
+                "summary": "test",
+                "detail": "detail",
+            },
+        ],
+    }
+    _, findings = mod.parse_findings(raw)
+    assert [finding.severity for finding in findings] == ["warn", "block"]
+
+
+def test_llm_response_error_finding_blocks_with_diagnostic() -> None:
+    mod = load_module()
+    finding = mod.llm_response_error_finding(ValueError("bad json"))
+
+    assert finding.severity == "block"
+    assert finding.id == "llm-review-unusable"
+    assert "ValueError" in finding.detail
+
+
 def test_split_diff_chunks_respects_limit() -> None:
     mod = load_module()
     big = "x" * (mod.MAX_DIFF_CHARS + 1)
@@ -419,6 +490,10 @@ def main() -> int:
         test_select_rule_sections_includes_ad_for_tenferro_ad_crate,
         test_select_rule_sections_includes_performance_for_tensor_crates,
         test_extract_json_payload_strips_fence,
+        test_extract_json_payload_reports_malformed_embedded_object,
+        test_parse_findings_caps_model_output,
+        test_parse_findings_normalizes_common_severity_aliases,
+        test_llm_response_error_finding_blocks_with_diagnostic,
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
         test_split_large_file_diff_splits_oversized_single_hunk,

@@ -5,11 +5,11 @@ use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue,
 
 #[test]
 fn concrete_traced_einsum_executes_without_extension_runtime() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]);
-    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
+    let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -22,11 +22,11 @@ fn concrete_traced_einsum_executes_without_extension_runtime() {
 
 #[test]
 fn traced_binary_col_major_matmul_uses_direct_dot_general_without_extension_runtime() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ji,kj->ki").unwrap();
+    let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ji,kj->ki").unwrap();
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -39,8 +39,8 @@ fn traced_binary_col_major_matmul_uses_direct_dot_general_without_extension_runt
 
 #[test]
 fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension_runtime() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let subs = tenferro_einsum::Subscripts::parse("ji,kj->ki").unwrap();
     let lhs_shape = [2, 3];
     let rhs_shape = [4, 2];
@@ -48,7 +48,7 @@ fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension
     let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::einsum_with(
+    let c = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b],
         "ji,kj->ki",
@@ -67,10 +67,11 @@ fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension
 
 #[test]
 fn traced_einsum_final_permutation_can_return_lazy_value() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let out = tenferro_einsum::einsum(&mut compiler, &[&a], "ij->ji").unwrap();
+    let out = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a], "ij->ji").unwrap();
     let program = compiler.compile(&out).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -86,7 +87,7 @@ fn traced_einsum_final_permutation_can_return_lazy_value() {
         TensorValue::Tensor(_) => panic!("final einsum permutation should stay as a lazy view"),
     }
     assert_eq!(
-        values[0].to_tensor().as_slice::<f64>().unwrap(),
+        values[0].to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }
@@ -94,8 +95,8 @@ fn traced_einsum_final_permutation_can_return_lazy_value() {
 #[test]
 fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension_runtime()
 {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let subs = tenferro_einsum::Subscripts::parse("ji,kj->ki").unwrap();
     let lhs_shape = [2, 3];
     let rhs_shape = [4, 2];
@@ -103,7 +104,7 @@ fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_
     let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::einsum_with(
+    let c = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b],
         "ji,kj->ki",
@@ -114,8 +115,8 @@ fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_
         .compile_with_input_specs(&c, &[(&a, DType::F64, &[2, 3]), (&b, DType::F64, &[4, 2])])
         .unwrap();
 
-    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let b_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+    let a_value = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let b_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let out = executor
         .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value)])
@@ -142,11 +143,12 @@ fn runtime_registration_is_idempotent() {
 
 #[test]
 fn runtime_einsum_caches_are_extension_owned() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 3);
-    let y = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let y = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let dot = tenferro_einsum::einsum(&mut compiler, &[&x, &y], "iij,jk->ik").unwrap();
+    let dot =
+        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&x, &y], "iij,jk->ik").unwrap();
     let program = compiler
         .compile_with_input_specs(
             &dot,
@@ -158,8 +160,8 @@ fn runtime_einsum_caches_are_extension_owned() {
     executor
         .register_extension(tenferro_einsum::register_runtime)
         .unwrap();
-    let x_value = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]);
-    let y_value = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let x_value = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap();
+    let y_value = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let out = executor
         .run_with_inputs(&program, &[(&x, &x_value), (&y, &y_value)])
         .unwrap();
@@ -171,18 +173,20 @@ fn runtime_einsum_caches_are_extension_owned() {
 #[test]
 #[cfg(feature = "autodiff")]
 fn traced_einsum_grad_uses_extension_ad_rule() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let y = tenferro_einsum::einsum_with(
+    let y = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b],
         "ij,jk->ik",
         tenferro_einsum::EinsumOptimize::Path(vec![(0, 1)]),
     )
     .unwrap();
-    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).unwrap().grad(&a).unwrap();
     let program = compiler.compile(&grad_a).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());

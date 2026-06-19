@@ -4,7 +4,10 @@ use std::sync::Arc;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{fft, ifft, irfft, rfft, FftNorm};
+use tenferro_fft::{
+    traced_tensor::{fft, ifft, irfft, rfft},
+    FftNorm,
+};
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
@@ -94,17 +97,20 @@ fn finite_diff_c64_directional(
 
 fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     let len = shape.iter().product();
-    Tensor::C64(TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: 0,
-            }),
-        },
-    ))
+    Tensor::C64(
+        TypedTensor::from_buffer_col_major(
+            shape,
+            Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -114,7 +120,7 @@ fn publishes_extension_family_id() {
 
 #[test]
 fn traced_tensor_namespace_exposes_fft() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = tenferro_fft::traced_tensor::rfft(&x, None, -1, FftNorm::Backward).unwrap();
 
     assert_eq!(y.rank, 1);
@@ -122,7 +128,7 @@ fn traced_tensor_namespace_exposes_fft() {
 
 #[test]
 fn registered_runtime_reports_gpu_input_as_unsupported() {
-    let x = TracedTensor::input_concrete_shape(DType::C64, &[2]);
+    let x = TracedTensor::input_concrete_shape(DType::C64, &[2]).unwrap();
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -178,7 +184,8 @@ fn fft_c64_matches_numpy_convention() {
             Complex64::new(3.0, 0.0),
             Complex64::new(4.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -199,7 +206,8 @@ fn fft_with_longer_transform_uses_zero_padded_lanes() {
     let x = TracedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-    );
+    )
+    .unwrap();
     let y = fft(&x, Some(4), -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -225,7 +233,8 @@ fn fft_c32_uses_host_runtime() {
             Complex32::new(3.0, 0.0),
             Complex32::new(4.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -250,7 +259,8 @@ fn ifft_c64_applies_backward_normalization() {
             Complex64::new(-2.0, 0.0),
             Complex64::new(-2.0, -2.0),
         ],
-    );
+    )
+    .unwrap();
     let y = ifft(&spectrum, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -267,7 +277,7 @@ fn ifft_c64_applies_backward_normalization() {
 
 #[test]
 fn rfft_f64_returns_onesided_spectrum() {
-    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let y = rfft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -284,7 +294,7 @@ fn rfft_f64_returns_onesided_spectrum() {
 
 #[test]
 fn rfft_f32_returns_onesided_spectrum() {
-    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
     let y = rfft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -308,7 +318,8 @@ fn irfft_c64_reconstructs_real_signal() {
             Complex64::new(-2.0, 2.0),
             Complex64::new(-2.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -325,7 +336,8 @@ fn irfft_c32_reconstructs_real_signal() {
             Complex32::new(-2.0, 2.0),
             Complex32::new(-2.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
@@ -335,14 +347,14 @@ fn irfft_c32_reconstructs_real_signal() {
 
 #[test]
 fn traced_fft_rejects_invalid_dtype_axis_and_length() {
-    let int_input = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]);
+    let int_input = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
     let err = match fft(&int_input, None, -1, FftNorm::Backward) {
         Ok(_) => panic!("expected fft to reject integer input"),
         Err(err) => err,
     };
     assert!(err.to_string().contains("floating"), "{err}");
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let err = match rfft(&x, Some(0), -1, FftNorm::Backward) {
         Ok(_) => panic!("expected rfft to reject zero transform length"),
         Err(err) => err,
@@ -367,7 +379,8 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
             Complex64::new(3.0, 0.0),
             Complex64::new(4.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let dx = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
@@ -376,7 +389,8 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
             Complex64::new(0.0, 0.0),
             Complex64::new(-1.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let dy = y.jvp(&x, &dx).unwrap();
@@ -408,8 +422,8 @@ fn fft_c64_jvp_matches_finite_diff() {
         Complex64::new(-0.4, 0.2),
         Complex64::new(0.1, -0.5),
     ];
-    let x = TracedTensor::from_vec_col_major(vec![4], data.clone());
-    let dx = TracedTensor::from_vec_col_major(vec![4], tangent_data.clone());
+    let x = TracedTensor::from_vec_col_major(vec![4], data.clone()).unwrap();
+    let dx = TracedTensor::from_vec_col_major(vec![4], tangent_data.clone()).unwrap();
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let dy = y.jvp(&x, &dx).unwrap();
@@ -417,7 +431,7 @@ fn fft_c64_jvp_matches_finite_diff() {
 
     let expected = finite_diff_c64_directional(
         |xs| {
-            let x = TracedTensor::from_vec_col_major(vec![4], xs.to_vec());
+            let x = TracedTensor::from_vec_col_major(vec![4], xs.to_vec()).unwrap();
             let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
             run(&y).as_slice::<Complex64>().unwrap().to_vec()
         },
@@ -439,7 +453,8 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
             Complex64::new(3.0, 0.0),
             Complex64::new(4.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let cotangent = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
@@ -448,7 +463,8 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
             Complex64::new(-1.0, 0.5),
             Complex64::new(0.25, -2.0),
         ],
-    );
+    )
+    .unwrap();
 
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let dx = y.vjp(&x, &cotangent).unwrap();
@@ -476,7 +492,8 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
             Complex64::new(-2.0, 0.0),
             Complex64::new(-2.0, -2.0),
         ],
-    );
+    )
+    .unwrap();
     let cotangent = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
@@ -485,7 +502,8 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
             Complex64::new(-1.0, 0.5),
             Complex64::new(0.25, -2.0),
         ],
-    );
+    )
+    .unwrap();
 
     let y = ifft(&x, None, -1, FftNorm::Backward).unwrap();
     let dx = y.vjp(&x, &cotangent).unwrap();
@@ -505,7 +523,7 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
 #[test]
 #[cfg(feature = "autodiff")]
 fn rfft_vjp_unsupported_error_names_rfft_and_vjp() {
-    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let cotangent = TracedTensor::from_vec_col_major(
         vec![3],
         vec![
@@ -513,10 +531,11 @@ fn rfft_vjp_unsupported_error_names_rfft_and_vjp() {
             Complex64::new(0.5, -1.0),
             Complex64::new(2.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
 
     let y = rfft(&x, None, -1, FftNorm::Backward).unwrap();
-    let err = match y.vjp_optional_result(&x, &cotangent) {
+    let err = match y.vjp_optional(&x, &cotangent) {
         Ok(_) => panic!("rfft VJP should remain unsupported"),
         Err(err) => err,
     };
@@ -538,7 +557,8 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
             Complex64::new(-2.0, 2.0),
             Complex64::new(-2.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let tangent = TracedTensor::from_vec_col_major(
         vec![3],
         vec![
@@ -546,10 +566,11 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
             Complex64::new(1.0, -0.5),
             Complex64::new(0.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
 
     let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward).unwrap();
-    let err = match y.jvp_optional_result(&spectrum, &tangent) {
+    let err = match y.jvp_optional(&spectrum, &tangent) {
         Ok(_) => panic!("irfft JVP should remain unsupported"),
         Err(err) => err,
     };

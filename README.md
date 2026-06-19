@@ -150,6 +150,10 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 
 ## Minimal CPU Example
 
+Create a binary crate that depends on `tenferro-runtime` and `tenferro-cpu`.
+The same runnable example lives at
+`crates/tenferro-runtime/examples/cpu_quickstart.rs`.
+
 <!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
@@ -158,8 +162,8 @@ use tenferro_runtime::{tensor, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
 
     let c = tensor::matmul(&a, &b, &mut backend)?;
 

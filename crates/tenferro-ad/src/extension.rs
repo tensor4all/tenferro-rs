@@ -3,25 +3,48 @@
 use std::sync::Arc;
 
 use computegraph::GraphOperation;
-use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{Error, Result};
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{Tensor, TensorValue};
 
-use crate::eager::{record_eager_outputs, EagerTensor};
+use crate::eager::{record_eager_outputs, EagerRuntime, EagerTensor};
 
-pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
-pub use tenferro_ops::ext_op::{
-    is_extension_rule_registered, lookup_extension_rule, register_extension_rule,
-    ExtensionAdRule as _ExtensionAdRuleReexport, ExtensionOp as _ExtensionOpReexport,
-    ExtensionRegistryError, ExtensionRuleSet,
-};
+pub use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionRegistryError, ExtensionRuleSet};
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOpTrait,
+    ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOp,
     ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
 };
+
+/// Adopt an untracked eager tensor value produced by this runtime's backend.
+///
+/// This is a low-level extension contract for eager composite operations that
+/// execute through [`EagerRuntime::with_backend_mut`] and receive a lazy
+/// [`TensorValue`] from the backend. The value must have been produced for the
+/// same eager runtime; this helper intentionally does not register gradient
+/// metadata and must not be used for tracked outputs.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::extension::adopt_untracked_eager_value;
+/// use tenferro_ad::EagerRuntime;
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::{Tensor, TensorValue};
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let value = TensorValue::from_tensor(
+///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+/// );
+/// let eager = adopt_untracked_eager_value(ctx, value);
+/// assert_eq!(eager.shape(), &[1]);
+/// assert!(!eager.tracks_grad());
+/// ```
+#[must_use]
+pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -> EagerTensor {
+    EagerTensor::new_untracked_value_result(ctx, value)
+}
 
 /// Apply an extension op to eager AD tensors.
 ///
@@ -35,9 +58,9 @@ pub use tenferro_runtime::extension::{
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]),
+///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 ///     ctx,
-/// );
+/// ).unwrap();
 /// let _ = &x;
 /// let _apply = apply_eager;
 /// ```
@@ -79,10 +102,10 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     }
 
     if !inputs.iter().any(|input| input.requires_grad) {
-        return Ok(outputs
+        return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
-            .collect());
+            .collect();
     }
 
     let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
@@ -102,7 +125,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
         }
     }
 
-    Ok(recorded
+    recorded
         .traces
         .into_iter()
         .zip(outputs)
@@ -116,5 +139,5 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
                 metadata_scopes.clone(),
             )
         })
-        .collect())
+        .collect()
 }

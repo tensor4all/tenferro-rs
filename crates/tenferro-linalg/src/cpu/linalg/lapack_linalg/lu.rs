@@ -87,7 +87,7 @@ fn lu_2d<T: LapackLu>(
     let k = m.min(n);
     let m_i32 = dim_i32(m, "lu")?;
     let n_i32 = dim_i32(n, "lu")?;
-    let mut lu = input.host_data().to_vec();
+    let mut lu = input.host_data()?.to_vec();
     let mut ipiv = vec![0_i32; k];
     let mut info = 0;
     T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
@@ -137,10 +137,10 @@ fn lu_2d<T: LapackLu>(
     let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n);
 
     Ok(vec![
-        tensor_from_vec_with_template(vec![m, m], p_data, input),
-        tensor_from_vec_with_template(vec![m, k], l_data, input),
-        tensor_from_vec_with_template(vec![k, n], u_data, input),
-        tensor_from_vec_with_template(vec![], vec![parity], input),
+        tensor_from_vec_with_template(vec![m, m], p_data, input)?,
+        tensor_from_vec_with_template(vec![m, k], l_data, input)?,
+        tensor_from_vec_with_template(vec![k, n], u_data, input)?,
+        tensor_from_vec_with_template(vec![], vec![parity], input)?,
     ])
 }
 
@@ -151,7 +151,7 @@ fn lu_factor_2d<T: LapackLu>(
     let k = m.min(n);
     let m_i32 = dim_i32(m, "lu_factor")?;
     let n_i32 = dim_i32(n, "lu_factor")?;
-    let mut lu = input.host_data().to_vec();
+    let mut lu = input.host_data()?.to_vec();
     let mut ipiv = vec![0_i32; k];
     let mut info = 0;
     T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
@@ -169,9 +169,9 @@ fn lu_factor_2d<T: LapackLu>(
     };
 
     Ok((
-        tensor_from_vec_with_template(vec![m, n], lu, input),
-        tensor_from_vec_with_template(vec![k], ipiv, input),
-        tensor_from_vec_with_template(vec![], vec![parity], input),
+        tensor_from_vec_with_template(vec![m, n], lu, input)?,
+        tensor_from_vec_with_template(vec![k], ipiv, input)?,
+        tensor_from_vec_with_template(vec![], vec![parity], input)?,
     ))
 }
 
@@ -188,22 +188,22 @@ pub(crate) fn lu<T: LapackLu>(
                 matrix_with_batch_shape(m, m, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(k, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
                 vec![T::one(); parity_elements],
                 input,
-            ),
+            )?,
         ]);
     }
     batched_multi("lu", buffers, input, lu_2d)
@@ -218,17 +218,17 @@ pub(crate) fn lu_factor<T: LapackLu>(
         let k = m.min(n);
         let parity_elements = batch_element_count("lu_factor", batch_shape)?;
         return Ok((
-            tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input),
+            tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input)?,
             tensor_from_vec_with_template(
                 vector_with_batch_shape(k, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
                 vec![T::one(); parity_elements],
                 input,
-            ),
+            )?,
         ));
     }
 
@@ -245,18 +245,18 @@ pub(crate) fn lu_factor<T: LapackLu>(
         let end = start + matrix_len;
         let batch_input = tensor_from_vec_with_template(
             vec![m, n],
-            input.host_data()[start..end].to_vec(),
+            input.host_data()?[start..end].to_vec(),
             input,
-        );
+        )?;
         let (packed, pivots, parity) = lu_factor_2d(&batch_input)?;
-        lu_data.extend_from_slice(packed.host_data());
-        pivot_data.extend_from_slice(pivots.host_data());
-        parity_data.extend_from_slice(parity.host_data());
+        lu_data.extend_from_slice(packed.host_data()?);
+        pivot_data.extend_from_slice(pivots.host_data()?);
+        parity_data.extend_from_slice(parity.host_data()?);
     }
 
     Ok((
-        tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input),
-        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input),
-        tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input),
+        tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input)?,
+        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input)?,
+        tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input)?,
     ))
 }

@@ -16,7 +16,7 @@ use tenferro_ops::SymDim;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn scalar(v: f64) -> Tensor {
@@ -24,12 +24,12 @@ fn scalar(v: f64) -> Tensor {
 }
 
 fn i64_scalar(v: i64) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![v]))
+    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![v]).unwrap())
 }
 
 fn data(t: &Tensor) -> Vec<f64> {
     match t {
-        Tensor::F64(inner) => inner.host_data().to_vec(),
+        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
         _ => panic!("expected F64"),
     }
 }

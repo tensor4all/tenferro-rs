@@ -15,8 +15,6 @@ use crate::cache::{
     einsum_subscripts_retained_bytes, saturating_sum, vec_retained_bytes, ParsedEinsum,
     EINSUM_EXTENSION_FAMILY_ID, EINSUM_PARSE_CACHE, EINSUM_STATIC_PLANS_CACHE,
 };
-#[cfg(feature = "autodiff")]
-use crate::extension::ensure_einsum_extension_rule_registered;
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{
     hash_einsum_plan_spec, plan_spec_from_optimize, resolve_einsum_strategy_with_spec,
@@ -115,9 +113,6 @@ pub fn einsum_subscripts_with(
         return Ok(result);
     }
 
-    #[cfg(feature = "autodiff")]
-    ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
-
     let subs = Subscripts::from(subscripts);
 
     let (plan_spec, static_tree) = if let Some(shapes) = concrete_shapes(inputs) {
@@ -165,7 +160,7 @@ pub fn einsum_subscripts_with(
 
     let op =
         EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec);
-    let outputs = extension::try_apply(Arc::new(op), inputs)?;
+    let outputs = extension::apply(Arc::new(op), inputs)?;
     outputs
         .into_iter()
         .next()
@@ -186,17 +181,13 @@ fn expand_traced_einsum_graph(
     let input_dtypes: Vec<_> = inputs.iter().map(|tensor| tensor.dtype).collect();
     let input_sym_shapes: Vec<Vec<SymDim>> = inputs
         .iter()
-        .map(|tensor| {
-            tensor
-                .sym_shape()
-                .map(|shape| shape.to_vec())
-                .unwrap_or_else(|| {
-                    (0..tensor.rank)
-                        .map(|axis| tensor.axis_sym_dim(axis))
-                        .collect()
-                })
+        .map(|tensor| match tensor.sym_shape() {
+            Some(shape) => Ok(shape.to_vec()),
+            None => (0..tensor.rank)
+                .map(|axis| tensor.axis_sym_dim(axis))
+                .collect(),
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let input_sym_shape_refs: Vec<_> = input_sym_shapes.iter().map(Vec::as_slice).collect();
     let output_metas = op.infer_output_meta(&input_dtypes, &input_sym_shape_refs);
     let input_dim_shapes = traced_dim_expr_shapes(inputs);
@@ -270,8 +261,8 @@ fn try_direct_binary_dot_general(
     };
 
     let result = match plan.operand_order {
-        BinaryDotOperandOrder::Original => inputs[0].dot_general(inputs[1], plan.config),
-        BinaryDotOperandOrder::Swapped => inputs[1].dot_general(inputs[0], plan.config),
+        BinaryDotOperandOrder::Original => inputs[0].dot_general(inputs[1], plan.config)?,
+        BinaryDotOperandOrder::Swapped => inputs[1].dot_general(inputs[0], plan.config)?,
     };
     Ok(Some(result))
 }
@@ -388,14 +379,12 @@ fn infer_symbolic_output_shape(
 ) -> Result<Vec<SymDim>> {
     let mut label_dims = std::collections::HashMap::new();
     for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
-        let shape: Vec<_> = tensor
-            .sym_shape()
-            .map(|shape| shape.to_vec())
-            .unwrap_or_else(|| {
-                (0..tensor.rank)
-                    .map(|axis| tensor.axis_sym_dim(axis))
-                    .collect()
-            });
+        let shape: Vec<_> = match tensor.sym_shape() {
+            Some(shape) => shape.to_vec(),
+            None => (0..tensor.rank)
+                .map(|axis| tensor.axis_sym_dim(axis))
+                .collect::<Result<_>>()?,
+        };
         if labels.len() != shape.len() {
             return Err(Error::ContractionError(format!(
                 "einsum input rank mismatch: labels={}, shape={}",

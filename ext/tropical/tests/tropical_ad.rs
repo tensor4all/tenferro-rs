@@ -2,7 +2,7 @@
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::tropical_ad_rules;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
@@ -19,7 +19,6 @@ fn run_traced(output: &TracedTensor) -> Tensor {
 
 fn tropical_ad() -> AdContext {
     AdContext::builder()
-        .with_core_rules()
         .with_extension_rules(tropical_ad_rules().expect("tropical AD rules"))
         .build()
         .expect("AD context")
@@ -40,9 +39,9 @@ fn assert_f64_close(actual: &[f64], expected: &[f64], tolerance: f64) {
 }
 
 fn max_plus_eager_ij_jk_to_ik(a_data: Vec<f64>, b_data: Vec<f64>) -> Vec<f64> {
-    let a = Tensor::from_vec_col_major(vec![2, 2], a_data);
-    let b = Tensor::from_vec_col_major(vec![2, 2], b_data);
-    let out = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")
+    let a = Tensor::from_vec_col_major(vec![2, 2], a_data).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2, 2], b_data).unwrap();
+    let out = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")
         .expect("eager tropical einsum");
     out.output.as_slice::<f64>().expect("f64 output").to_vec()
 }
@@ -120,10 +119,10 @@ fn assert_sum_gradients(
     expected_a: &[f64],
     expected_b: &[f64],
 ) {
-    let a = TracedTensor::from_vec_col_major(a_shape, a_data);
-    let b = TracedTensor::from_vec_col_major(b_shape, b_data);
-    let out = tropical_dot_general_fused(&a, &b);
-    let loss = out.reduce_sum(&[0, 1]);
+    let a = TracedTensor::from_vec_col_major(a_shape, a_data).unwrap();
+    let b = TracedTensor::from_vec_col_major(b_shape, b_data).unwrap();
+    let out = tropical_dot_general_fused(&a, &b).unwrap();
+    let loss = out.reduce_sum(&[0, 1]).unwrap();
     let ad = tropical_ad();
 
     let grad_a = ad.grad(&loss, &a).expect("grad wrt a");
@@ -140,11 +139,11 @@ fn finite_difference_jvp_matches_unique_winner_max_plus_lhs_and_rhs() {
     let da_data = vec![0.25_f64, -0.5, 0.75, 1.25];
     let db_data = vec![-0.4_f64, 0.3, 1.1, -0.2];
 
-    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone());
-    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone());
-    let da = TracedTensor::from_vec_col_major(vec![2, 2], da_data.clone());
-    let db = TracedTensor::from_vec_col_major(vec![2, 2], db_data.clone());
-    let out = tropical_dot_general_fused(&a, &b);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
+    let da = TracedTensor::from_vec_col_major(vec![2, 2], da_data.clone()).unwrap();
+    let db = TracedTensor::from_vec_col_major(vec![2, 2], db_data.clone()).unwrap();
+    let out = tropical_dot_general_fused(&a, &b).unwrap();
     let ad = tropical_ad();
 
     let jvp_a = ad.jvp(&out, &a, &da).expect("jvp wrt a");
@@ -170,11 +169,12 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
     let b_data = vec![2.0_f64, 0.0, -1.0, 5.0];
     let weights_data = vec![0.5_f64, -1.25, 2.0, 0.75];
 
-    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone());
-    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone());
-    let weights = TracedTensor::from_vec_col_major(vec![2, 2], weights_data.clone());
-    let out = tropical_dot_general_fused(&a, &b);
-    let loss = (&out * &weights).reduce_sum(&[0, 1]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
+    let weights = TracedTensor::from_vec_col_major(vec![2, 2], weights_data.clone()).unwrap();
+    let out = tropical_dot_general_fused(&a, &b).unwrap();
+    let weighted = (&out * &weights).unwrap();
+    let loss = weighted.reduce_sum(&[0, 1]).unwrap();
     let ad = tropical_ad();
 
     let grad_a = ad.grad(&loss, &a).expect("grad wrt a");
@@ -198,14 +198,14 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
 fn traced_fused_forward_matches_eager_max_plus_einsum() {
     let a_data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let b_data = vec![10.0_f64, 20.0, 30.0, 40.0];
-    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone());
-    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone());
-    let fused = tropical_dot_general_fused(&a, &b);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
+    let fused = tropical_dot_general_fused(&a, &b).unwrap();
 
-    let eager_a = Tensor::from_vec_col_major(vec![2, 2], a_data);
-    let eager_b = Tensor::from_vec_col_major(vec![2, 2], b_data);
+    let eager_a = Tensor::from_vec_col_major(vec![2, 2], a_data).unwrap();
+    let eager_b = Tensor::from_vec_col_major(vec![2, 2], b_data).unwrap();
     let eager = tropical_einsum_with_argmax(
-        TropicalEinsumKind::MaxPlus,
+        TropicalKind::MaxPlus,
         &[&eager_a, &eager_b],
         "ij,jk->ik",
     )

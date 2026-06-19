@@ -99,31 +99,31 @@ fn finite_diff_tensor_directional(
 }
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn bool_tensor(shape: Vec<usize>, data: Vec<bool>) -> Tensor {
-    Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::Bool(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
     match tensor {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected f64 tensor"),
     }
 }
 
 fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
     match tensor {
-        Tensor::C64(inner) => inner.host_data(),
+        Tensor::C64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected c64 tensor"),
     }
 }
@@ -155,7 +155,7 @@ fn register_graph_metadata_for_test(
                 match known.get(key).cloned() {
                     Some(meta) => meta,
                     None => {
-                        let meta = lookup_global_metadata(key).unwrap_or_else(|| {
+                        let meta = lookup_global_metadata(key).unwrap().unwrap_or_else(|| {
                             panic!("test metadata registration missing input {:?}", key)
                         });
                         known.insert(key.clone(), meta.clone());
@@ -167,16 +167,18 @@ fn register_graph_metadata_for_test(
         let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
             .iter()
             .enumerate()
-            .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.shape.len()))
+            .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.rank()))
             .collect();
         let input_shape_refs: Vec<&[DimExpr]> =
             input_shape_exprs.iter().map(Vec::as_slice).collect();
         let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
-        let output_dtype = infer_output_dtype(&op_node.operation, &input_dtypes);
-        let resolved_inputs: Vec<&[SymDim]> = input_metas
+        let output_dtype = infer_output_dtype(&op_node.operation, &input_dtypes).unwrap();
+        let resolved_inputs: Vec<Vec<SymDim>> = input_metas
             .iter()
-            .map(|meta| meta.shape.as_slice())
+            .map(|meta| meta.bound_shape().unwrap())
             .collect();
+        let resolved_input_refs: Vec<&[SymDim]> =
+            resolved_inputs.iter().map(Vec::as_slice).collect();
 
         for (&output_id, extents) in op_node
             .outputs
@@ -185,7 +187,7 @@ fn register_graph_metadata_for_test(
         {
             let resolved_extents = extents
                 .into_iter()
-                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_inputs)))
+                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_input_refs)))
                 .collect();
             let meta = TensorMeta::with_extents(output_dtype, resolved_extents);
             let key = graph.values()[output_id].key.clone();
@@ -194,7 +196,7 @@ fn register_graph_metadata_for_test(
         }
     }
 
-    register_scoped_global_metadata_batch(registrations)
+    register_scoped_global_metadata_batch(registrations).unwrap()
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
@@ -285,7 +287,8 @@ fn grad_from_graph_with_inputs_and_cotangent(
         0,
         &mut ad_ctx,
         &HashMap::new(),
-    );
+    )
+    .unwrap();
     let _linear_metadata_scope = register_graph_metadata_for_test(
         linear.as_graph(),
         vec![(
@@ -299,7 +302,7 @@ fn grad_from_graph_with_inputs_and_cotangent(
         .iter()
         .map(|(_, local_id)| *local_id)
         .collect();
-    let transposed = linear_transpose(&linear, &mut ad_ctx);
+    let transposed = linear_transpose(&linear, &mut ad_ctx).unwrap();
     let linear_graph = Arc::new(linear.into_graph());
     let grad_key = transposed.tangent_outputs()[0]
         .map(|id| transposed.as_graph().values()[id].key.clone())
@@ -342,19 +345,16 @@ fn grad_from_graph_with_inputs_and_cotangent(
 
 fn zeros_by_dtype(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        DType::F32 => Tensor::F32(TypedTensor::zeros(shape).unwrap()),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(shape).unwrap()),
+        DType::I32 => Tensor::I32(TypedTensor::zeros(shape).unwrap()),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(shape).unwrap()),
         DType::Bool => {
             let n_elements = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(
-                shape,
-                vec![false; n_elements],
-            ))
+            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; n_elements]).unwrap())
         }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+        DType::C32 => Tensor::C32(TypedTensor::zeros(shape).unwrap()),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(shape).unwrap()),
     }
 }
 
@@ -398,7 +398,8 @@ fn jvp_from_graph_with_inputs(
         0,
         &mut ad_ctx,
         &HashMap::new(),
-    );
+    )
+    .unwrap();
     let _linear_metadata_scope = register_graph_metadata_for_test(
         linear.as_graph(),
         vec![(
@@ -672,7 +673,8 @@ fn transpose_primal_unary_op_with_inputs(
         90_000,
         &mut ad_ctx,
         &HashMap::new(),
-    );
+    )
+    .unwrap();
     let tangent_input_key = input_key.tangent_of(90_000);
     let _linear_metadata_scope = register_graph_metadata_for_test(
         linear.as_graph(),
@@ -682,7 +684,7 @@ fn transpose_primal_unary_op_with_inputs(
         )],
     );
     ad_ctx.refresh_global_metadata();
-    let transposed = linear_transpose(&linear, &mut ad_ctx);
+    let transposed = linear_transpose(&linear, &mut ad_ctx).unwrap();
     let linear_graph = Arc::new(linear.into_graph());
     let cotangent_input_key =
         match &transposed.as_graph().values()[transposed.tangent_inputs()[0].1].key {
@@ -822,9 +824,10 @@ fn assert_grad_matches_finite_diff_rhs(
 
 #[test]
 fn grad_x_squared() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = &x * &x;
-    let loss = y.reduce_sum(&[0]);
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let y = (&x * &x).unwrap();
+    let loss = y.reduce_sum(&[0]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
@@ -837,9 +840,10 @@ fn grad_extract_diag_sum() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    ));
-    let diag = a.extract_diag(0, 1);
-    let loss = diag.reduce_sum(&[0]);
+    ))
+    .unwrap();
+    let diag = a.extract_diag(0, 1).unwrap();
+    let loss = diag.reduce_sum(&[0]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
@@ -853,9 +857,10 @@ fn grad_extract_diag_sum() {
 
 #[test]
 fn grad_embed_diag_sum() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, -1.0, 4.0]));
-    let diag = x.embed_diag(0, 1);
-    let loss = diag.reduce_sum(&[0, 1]);
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, -1.0, 4.0]))
+        .unwrap();
+    let diag = x.embed_diag(0, 1).unwrap();
+    let loss = diag.reduce_sum(&[0, 1]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
@@ -869,13 +874,15 @@ fn jvp_extract_diag() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0],
-    ));
+    ))
+    .unwrap();
     let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    ));
+    ))
+    .unwrap();
 
-    let diag = a.extract_diag(0, 1);
+    let diag = a.extract_diag(0, 1).unwrap();
     let jvp = diag.jvp(&a, &da).unwrap();
 
     let result = eval_tensor(jvp);
@@ -885,10 +892,12 @@ fn jvp_extract_diag() {
 
 #[test]
 fn jvp_embed_diag() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![3.0, 4.0, 5.0]));
-    let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![3.0, 4.0, 5.0])).unwrap();
+    let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]))
+        .unwrap();
 
-    let diag = x.embed_diag(0, 1);
+    let diag = x.embed_diag(0, 1).unwrap();
     let jvp = diag.jvp(&x, &dx).unwrap();
 
     let result = eval_tensor(jvp);
@@ -904,9 +913,11 @@ fn grad_matmul_sum() {
     let a_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let b_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
-    let loss = matmul(&a, &b).sum(&[0, 1]);
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
+    let loss = matmul(&a, &b).unwrap().reduce_sum(&[0, 1]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
@@ -914,9 +925,11 @@ fn grad_matmul_sum() {
     let grad_data = get_f64_data(&grad_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec()));
-        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
-        eval_scalar(matmul(&a, &b).sum(&[0, 1]))
+        let a =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec())).unwrap();
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()))
+            .unwrap();
+        eval_scalar(matmul(&a, &b).unwrap().reduce_sum(&[0, 1]).unwrap())
     };
 
     for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
@@ -934,10 +947,12 @@ fn grad_matmul_sum_wrt_rhs() {
     let a_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let b_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
-    let matmul = a.dot_general(&b, matmul_config());
-    let loss = matmul.reduce_sum(&[0, 1]);
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
+    let matmul = a.dot_general(&b, matmul_config()).unwrap();
+    let loss = matmul.reduce_sum(&[0, 1]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&b).unwrap();
 
@@ -945,10 +960,12 @@ fn grad_matmul_sum_wrt_rhs() {
     let grad_data = get_f64_data(&grad_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
-        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()));
-        let matmul = a.dot_general(&b, matmul_config());
-        let loss = matmul.reduce_sum(&[0, 1]);
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()))
+            .unwrap();
+        let b =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec())).unwrap();
+        let matmul = a.dot_general(&b, matmul_config()).unwrap();
+        let loss = matmul.reduce_sum(&[0, 1]).unwrap();
         eval_scalar(loss)
     };
 
@@ -966,18 +983,20 @@ fn grad_matmul_sum_wrt_rhs() {
 fn grad_matmul_sum_shared_input() {
     let a_data = vec![1.0, 2.0, 3.0, 4.0];
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone()));
-    let matmul = a.dot_general(&a, matmul_config());
-    let loss = matmul.reduce_sum(&[0, 1]);
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone())).unwrap();
+    let matmul = a.dot_general(&a, matmul_config()).unwrap();
+    let loss = matmul.reduce_sum(&[0, 1]).unwrap();
     let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
-        let matmul = a.dot_general(&a, matmul_config());
-        let loss = matmul.reduce_sum(&[0, 1]);
+        let a =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec())).unwrap();
+        let matmul = a.dot_general(&a, matmul_config()).unwrap();
+        let loss = matmul.reduce_sum(&[0, 1]).unwrap();
         eval_scalar(loss)
     };
 
@@ -998,21 +1017,25 @@ fn grad_batched_matmul_sum() {
     let a_data: Vec<f64> = (0..24).map(|idx| 0.25 + idx as f64 * 0.1).collect();
     let b_data: Vec<f64> = (0..40).map(|idx| 0.5 + idx as f64 * 0.05).collect();
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), a_data.clone()));
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()));
-    let product = a.dot_general(&b, batched_matmul_config());
-    let loss = product.reduce_sum(&[0, 1, 2]);
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), a_data.clone()))
+        .unwrap();
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()))
+        .unwrap();
+    let product = a.dot_general(&b, batched_matmul_config()).unwrap();
+    let loss = product.reduce_sum(&[0, 1, 2]).unwrap();
     let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), xs.to_vec()));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), xs.to_vec()))
+            .unwrap();
         let b =
-            TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()));
-        let product = a.dot_general(&b, batched_matmul_config());
-        let loss = product.reduce_sum(&[0, 1, 2]);
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()))
+                .unwrap();
+        let product = a.dot_general(&b, batched_matmul_config()).unwrap();
+        let loss = product.reduce_sum(&[0, 1, 2]).unwrap();
         eval_scalar(loss)
     };
 
@@ -1028,9 +1051,11 @@ fn grad_batched_matmul_sum() {
 
 #[test]
 fn grad_mul_sum_wrt_both_inputs() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
-    let loss = (&x * &y).reduce_sum(&[0]);
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let y =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
+    let loss = (&x * &y).unwrap().reduce_sum(&[0]).unwrap();
 
     let grad_x = loss.grad(&x).unwrap();
     let grad_y = loss.grad(&y).unwrap();
@@ -1043,11 +1068,14 @@ fn grad_mul_sum_wrt_both_inputs() {
 
 #[test]
 fn jvp_elementwise_mul() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
-    let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 0.0, 0.0]));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let y =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
+    let dx =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 0.0, 0.0])).unwrap();
 
-    let prod = &x * &y;
+    let prod = (&x * &y).unwrap();
     let jvp = prod.jvp(&x, &dx).unwrap();
 
     let result = eval_tensor(jvp);
@@ -1056,11 +1084,14 @@ fn jvp_elementwise_mul() {
 
 #[test]
 fn jvp_elementwise_mul_y_tangent() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
-    let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.0, -1.0, 2.0]));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let y =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
+    let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.0, -1.0, 2.0]))
+        .unwrap();
 
-    let prod = &x * &y;
+    let prod = (&x * &y).unwrap();
     let jvp = prod.jvp(&y, &dy).unwrap();
 
     let result = eval_tensor(jvp);
@@ -1069,11 +1100,14 @@ fn jvp_elementwise_mul_y_tangent() {
 
 #[test]
 fn jvp_elementwise_add_y_tangent() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
-    let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let y =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
+    let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]))
+        .unwrap();
 
-    let sum = &x + &y;
+    let sum = (&x + &y).unwrap();
     let jvp = sum.jvp(&y, &dy).unwrap();
 
     let result = eval_tensor(jvp);
@@ -1082,8 +1116,9 @@ fn jvp_elementwise_add_y_tangent() {
 
 #[test]
 fn grad_neg_sum() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, -2.0, 3.0]));
-    let loss = (-&x).reduce_sum(&[0]);
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, -2.0, 3.0]))
+        .unwrap();
+    let loss = (-&x).reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1095,8 +1130,9 @@ fn grad_conj_sum_complex() {
     let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
-    ));
-    let loss = x.conj().reduce_sum(&[0]);
+    ))
+    .unwrap();
+    let loss = x.conj().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1108,13 +1144,14 @@ fn grad_conj_sum_complex() {
 
 #[test]
 fn scale_real_eval_and_grad_sum() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
 
     let y = x.scale_real(2.0);
     let y_eval = eval_tensor(y);
     assert_close_slice(get_f64_data(&y_eval), &[2.0, 4.0, 6.0]);
 
-    let loss = x.scale_real(2.0).reduce_sum(&[0]);
+    let loss = x.scale_real(2.0).reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice(get_f64_data(&grad_eval), &[2.0, 2.0, 2.0]);
@@ -1126,16 +1163,17 @@ fn scale_complex_eval_and_grad_complex_sum() {
     let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
-    ));
+    ))
+    .unwrap();
 
-    let y = x.scale_complex(factor);
+    let y = x.scale_complex(factor).unwrap();
     let y_eval = eval_tensor(y);
     assert_close_slice_c64(
         get_c64_data(&y_eval),
         &[Complex64::new(3.5, -0.5), Complex64::new(-0.75, 4.75)],
     );
 
-    let loss = x.scale_complex(factor).reduce_sum(&[0]);
+    let loss = x.scale_complex(factor).unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice_c64(get_c64_data(&grad_eval), &[factor.conj(), factor.conj()]);
@@ -1168,12 +1206,15 @@ fn complex_abs_ad_matches_jax_real_output_convention() {
     let tangent_data = vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 7.0)];
     let cotangent_data = vec![2.0, -0.5];
 
-    let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], input_data.clone()));
-    let dx = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], tangent_data.clone()));
+    let x =
+        TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], input_data.clone())).unwrap();
+    let dx = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], tangent_data.clone()))
+        .unwrap();
     let dy = x.abs().jvp(&x, &dx).unwrap();
 
     let cotangent =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], cotangent_data.clone()));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], cotangent_data.clone()))
+            .unwrap();
     let grad = x.abs().vjp(&x, &cotangent).unwrap();
 
     let results =
@@ -1204,15 +1245,18 @@ fn complex_sign_ad_is_zero_like_jax() {
     let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(-5.0, 12.0)],
-    ));
+    ))
+    .unwrap();
     let dx = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 7.0)],
-    ));
+    ))
+    .unwrap();
     let cotangent = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(2.0, -1.0), Complex64::new(-0.5, 3.0)],
-    ));
+    ))
+    .unwrap();
 
     let signed = x.sign();
     let tangent = signed.jvp(&x, &dx).unwrap();
@@ -1230,21 +1274,26 @@ fn complex_sign_ad_is_zero_like_jax() {
 
 #[test]
 fn elementwise_extrema_ties_split_cotangents_like_jax() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0]));
-    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 1.0]));
-    let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![10.0, 20.0]));
-    let dy = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![30.0, 40.0]));
-    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 6.0]));
-    let maximum = traced_tensor::maximum(&x, &y);
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 1.0])).unwrap();
+    let dx =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![10.0, 20.0])).unwrap();
+    let dy =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![30.0, 40.0])).unwrap();
+    let cotangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 6.0])).unwrap();
+    let maximum = traced_tensor::maximum(&x, &y).unwrap();
 
     let max_jvp_x = maximum.jvp(&x, &dx).unwrap();
     let max_jvp_y = maximum.jvp(&y, &dy).unwrap();
     let max_vjp_x = maximum.vjp(&x, &cotangent).unwrap();
     let max_vjp_y = maximum.vjp(&y, &cotangent).unwrap();
 
-    let min_lhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0]));
-    let min_rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 4.0]));
-    let minimum = traced_tensor::minimum(&min_lhs, &min_rhs);
+    let min_lhs =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
+    let min_rhs =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 4.0])).unwrap();
+    let minimum = traced_tensor::minimum(&min_lhs, &min_rhs).unwrap();
     let min_vjp_lhs = minimum.vjp(&min_lhs, &cotangent).unwrap();
     let min_vjp_rhs = minimum.vjp(&min_rhs, &cotangent).unwrap();
 
@@ -1272,21 +1321,28 @@ fn elementwise_extrema_ties_split_cotangents_like_jax() {
 #[test]
 fn clamp_ad_uses_strict_jax_boundary_masks() {
     let input =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.0, 1.0, 2.0, 3.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.0, 1.0, 2.0, 3.0]))
+            .unwrap();
     let lower =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 1.0, 1.0, 1.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 1.0, 1.0, 1.0]))
+            .unwrap();
     let upper =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![2.0, 2.0, 2.0, 2.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![2.0, 2.0, 2.0, 2.0]))
+            .unwrap();
     let d_input =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]))
+            .unwrap();
     let d_lower =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
+            .unwrap();
     let d_upper =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![5.0, 6.0, 7.0, 8.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![5.0, 6.0, 7.0, 8.0]))
+            .unwrap();
     let cotangent =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]))
+            .unwrap();
 
-    let clamped = traced_tensor::clamp(&input, &lower, &upper);
+    let clamped = traced_tensor::clamp(&input, &lower, &upper).unwrap();
     let input_jvp = clamped.jvp(&input, &d_input).unwrap();
     let lower_jvp = clamped.jvp(&lower, &d_lower).unwrap();
     let upper_jvp = clamped.jvp(&upper, &d_upper).unwrap();
@@ -1316,11 +1372,12 @@ fn complex_div_and_pow_vjps_conjugate_holomorphic_coefficients() {
     let y_data = vec![Complex64::new(1.5, -0.25), Complex64::new(0.7, 0.45)];
     let cotangent_data = vec![Complex64::new(-0.3, 0.9), Complex64::new(1.25, -0.5)];
 
-    let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], x_data.clone()));
-    let y = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], y_data.clone()));
+    let x = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], x_data.clone())).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], y_data.clone())).unwrap();
     let cotangent =
-        TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], cotangent_data.clone()));
-    let quotient = x.div(&y);
+        TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], cotangent_data.clone()))
+            .unwrap();
+    let quotient = x.div(&y).unwrap();
 
     let div_vjp_x = eval_tensor(quotient.vjp(&x, &cotangent).unwrap());
     let div_vjp_y = eval_tensor(quotient.vjp(&y, &cotangent).unwrap());
@@ -1339,7 +1396,7 @@ fn complex_div_and_pow_vjps_conjugate_holomorphic_coefficients() {
     assert_close_slice_c64(get_c64_data(&div_vjp_x), &expected_div_x);
     assert_close_slice_c64(get_c64_data(&div_vjp_y), &expected_div_y);
 
-    let pow = x.pow(&y);
+    let pow = x.pow(&y).unwrap();
     let pow_vjp_x = eval_tensor(pow.vjp(&x, &cotangent).unwrap());
     let pow_vjp_y = eval_tensor(pow.vjp(&y, &cotangent).unwrap());
 
@@ -1754,17 +1811,21 @@ fn mixed_complex_real_dot_general_jvp_promotes_rhs_tangent() {
 }
 
 #[test]
-fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.25, -2.5]));
-    let dx = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![0.5, -1.0]));
+fn cast_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.25, -2.5])).unwrap();
+    let dx =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![0.5, -1.0])).unwrap();
     let cotangent = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2],
         vec![Complex64::new(3.0, -7.0), Complex64::new(-2.5, 4.0)],
-    ));
+    ))
+    .unwrap();
 
-    let roundtrip = x.convert(DType::C64).convert(DType::F64);
-    let jvp = x.convert(DType::C64).jvp(&x, &dx).unwrap();
-    let vjp = x.convert(DType::C64).vjp(&x, &cotangent).unwrap();
+    let x_c64 = x.convert(DType::C64).unwrap();
+    let roundtrip = x_c64.cast(DType::F64);
+    let jvp = x_c64.jvp(&x, &dx).unwrap();
+    let vjp = x_c64.vjp(&x, &cotangent).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let results = run_many_traced_with(&mut engine, &[&roundtrip, &jvp, &vjp]).unwrap();
@@ -1778,26 +1839,30 @@ fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
 }
 
 #[test]
-fn convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
-    let real = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.25, -2.5]));
+fn cast_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
+    let real =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.25, -2.5])).unwrap();
     let real_tangent =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![0.5, -1.0]));
-    let integer = TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![1, -2]));
-    let integer_tangent = TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![5, 7]));
-    let boolean = TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, false]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![0.5, -1.0])).unwrap();
+    let integer =
+        TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![1, -2])).unwrap();
+    let integer_tangent =
+        TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![5, 7])).unwrap();
+    let boolean =
+        TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, false])).unwrap();
     let boolean_tangent =
-        TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, true]));
+        TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, true])).unwrap();
 
     assert!(
-        real.convert(DType::I64)
-            .jvp_optional_result(&real, &real_tangent)
+        real.cast(DType::I64)
+            .jvp_optional(&real, &real_tangent)
             .unwrap()
             .is_none(),
         "float-to-integer convert has no output tangent"
     );
     assert!(
-        real.convert(DType::Bool)
-            .jvp_optional_result(&real, &real_tangent)
+        real.cast(DType::Bool)
+            .jvp_optional(&real, &real_tangent)
             .unwrap()
             .is_none(),
         "float-to-bool convert has no output tangent"
@@ -1805,7 +1870,8 @@ fn convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     assert!(
         integer
             .convert(DType::F64)
-            .jvp_optional_result(&integer, &integer_tangent)
+            .unwrap()
+            .jvp_optional(&integer, &integer_tangent)
             .unwrap()
             .is_none(),
         "integer inputs have float0-like inactive tangents"
@@ -1813,27 +1879,30 @@ fn convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     assert!(
         boolean
             .convert(DType::F64)
-            .jvp_optional_result(&boolean, &boolean_tangent)
+            .unwrap()
+            .jvp_optional(&boolean, &boolean_tangent)
             .unwrap()
             .is_none(),
         "bool inputs have float0-like inactive tangents"
     );
 
     assert!(
-        real.convert(DType::I64)
-            .vjp_optional_result(
+        real.cast(DType::I64)
+            .vjp_optional(
                 &real,
-                &TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![3, -4])),
+                &TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![3, -4]))
+                    .unwrap(),
             )
             .unwrap()
             .is_none(),
         "integer outputs have no cotangent to transpose"
     );
     assert!(
-        real.convert(DType::Bool)
-            .vjp_optional_result(
+        real.cast(DType::Bool)
+            .vjp_optional(
                 &real,
-                &TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, false])),
+                &TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, false]))
+                    .unwrap(),
             )
             .unwrap()
             .is_none(),
@@ -1842,9 +1911,11 @@ fn convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     assert!(
         integer
             .convert(DType::F64)
-            .vjp_optional_result(
+            .unwrap()
+            .vjp_optional(
                 &integer,
-                &TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, -4.0])),
+                &TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, -4.0]))
+                    .unwrap(),
             )
             .unwrap()
             .is_none(),
@@ -1853,9 +1924,11 @@ fn convert_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     assert!(
         boolean
             .convert(DType::F64)
-            .vjp_optional_result(
+            .unwrap()
+            .vjp_optional(
                 &boolean,
-                &TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, -4.0])),
+                &TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, -4.0]))
+                    .unwrap(),
             )
             .unwrap()
             .is_none(),
@@ -1868,15 +1941,18 @@ fn vjp_matmul() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    ))
+    .unwrap();
     let cotangent =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, 1.0]));
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, 1.0]))
+            .unwrap();
 
-    let y = a.dot_general(&b, matmul_config());
+    let y = a.dot_general(&b, matmul_config()).unwrap();
     let vjp = y.vjp(&a, &cotangent).unwrap();
 
     let result = eval_tensor(vjp);
@@ -1888,20 +1964,23 @@ fn grad_nonscalar_errors() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
-    let y = a.dot_general(&b, matmul_config());
+    ))
+    .unwrap();
+    let y = a.dot_general(&b, matmul_config()).unwrap();
 
     assert!(y.grad(&a).is_err());
 }
 
 #[test]
 fn grad_full_vector_reduction() {
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
-    let loss = x.reduce_sum(&[0]);
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
+        .unwrap();
+    let loss = x.reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);

@@ -6,25 +6,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use computegraph::graph::{Graph, GraphBuilder};
+use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
 use computegraph::{OperationRole, ValueRef};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::SymDim;
+use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
 use tenferro_tensor::{TensorFusion, TensorRead};
-use tidu::ADKey;
+use tidu::eager::BackwardExecutor;
+use tidu::{linearize, ADKey};
 
 use crate::eager_backend::EagerBackend;
 use crate::eager_exec::exec_op_on_tensor_reads_with_extension_executor;
+use crate::metadata::{register_scoped_metadata_batch, tensor_meta_from_tensor};
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,
+    zero_from_exact_metadata, TenferroBackwardCallbacks,
 };
 use super::{
     eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
@@ -94,20 +98,20 @@ fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
     }));
     assert!(poisoned.is_err());
 
-    assert!(ctx.try_clear_extension_caches().is_err());
-    assert!(ctx.try_cache_stats().is_err());
-    assert!(ctx.try_extension_cache_limits().is_err());
+    assert!(ctx.clear_extension_caches().is_err());
+    assert!(ctx.cache_stats().is_err());
+    assert!(ctx.extension_cache_limits().is_err());
     assert!(ctx
-        .try_set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
+        .set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
         .is_err());
     assert!(ctx.with_extension_caches_mut(|_| ()).is_err());
 
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.clear_extension_caches();
-        ctx.clear_caches();
+        let _ = ctx.clear_extension_caches();
+        let _ = ctx.clear_caches();
         let _ = ctx.cache_stats();
         let _ = ctx.extension_cache_limits();
-        ctx.set_extension_cache_limits(ExtensionCacheLimits::default());
+        let _ = ctx.set_extension_cache_limits(ExtensionCacheLimits::default());
     }))
     .is_ok());
 }
@@ -133,9 +137,10 @@ fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
 fn eager_index_select_reports_poisoned_backend_lock() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         Arc::clone(&ctx),
-    );
+    )
+    .unwrap();
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = ctx.backend.lock().unwrap();
         panic!("poison eager backend lock");
@@ -154,20 +159,21 @@ fn eager_index_select_reports_poisoned_backend_lock() {
 fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]),
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let poisoned_slot = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = x.grad_slot.lock().unwrap();
         panic!("poison eager gradient slot");
     }));
     assert!(poisoned_slot.is_err());
 
-    assert!(x.try_grad().is_err());
-    assert!(x.try_clear_grad().is_err());
+    assert!(x.grad().is_err());
+    assert!(x.clear_grad().is_err());
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert!(x.grad().is_none());
-        x.clear_grad();
+        let _ = x.grad();
+        let _ = x.clear_grad();
     }))
     .is_ok());
 
@@ -177,9 +183,9 @@ fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
     }));
     assert!(poisoned_registry.is_err());
 
-    assert!(ctx.try_clear_grads().is_err());
+    assert!(ctx.clear_grads().is_err());
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.clear_grads();
+        let _ = ctx.clear_grads();
     }))
     .is_ok());
 }
@@ -274,12 +280,26 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.eager_execute(inputs)
     }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
 }
 
 #[test]
 fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
     let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let reads = [TensorRead::from_tensor(&input)];
     let mut backend = CpuBackend::new();
     let mut extension_executor = ExtensionExecutor::<CpuBackend>::new();
@@ -311,9 +331,10 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     .expect("register read-path fallback runtime");
 
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let x_t = x.transpose(&[1, 0]).unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
     assert!(!x_t.materialized_cache_is_initialized());
@@ -324,7 +345,11 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(outputs.len(), 1);
     assert_eq!(
-        outputs[0].data().as_slice::<f64>().unwrap(),
+        outputs[0]
+            .materialized()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }
@@ -346,7 +371,7 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
     let user = TensorInputKey::User { id: 7 };
     let base_key = ValueKey::Input(user.clone());
     let tangent_key = ValueKey::Input(user.tangent_of(11));
-    let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]));
+    let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap());
     let initial_data = HashMap::from([(base_key.clone(), Arc::clone(&base))]);
 
     assert_eq!(missing_tangent_base_key(&base_key), None);
@@ -355,25 +380,185 @@ fn eager_forward_helpers_synthesize_tangent_values_from_primal_data() {
         Some(base_key.clone())
     );
     assert_eq!(
-        eager_forward_input_metadata(&tangent_key, &initial_data).shape,
-        vec![SymDim::from(2usize)]
+        eager_forward_input_metadata(&tangent_key, &initial_data)
+            .unwrap()
+            .exact_shape(),
+        Some(vec![SymDim::from(2usize)])
     );
 
     let mut all_values = HashMap::new();
     let mut backend = CpuBackend::new();
-    let tangent = eager_forward_value(&mut all_values, &tangent_key, &initial_data, &mut backend);
+    let tangent =
+        eager_forward_value(&mut all_values, &tangent_key, &initial_data, &mut backend).unwrap();
     assert_eq!(tangent.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+}
+
+#[test]
+fn eager_forward_helpers_report_missing_values_without_panicking() {
+    let user = TensorInputKey::User { id: 8 };
+    let base_key = ValueKey::Input(user.clone());
+    let tangent_key = ValueKey::Input(user.tangent_of(12));
+    let initial_data = HashMap::new();
+
+    let err = eager_forward_input_metadata(&base_key, &initial_data).unwrap_err();
+    assert!(
+        err.to_string().contains("missing concrete eager value"),
+        "{err}"
+    );
+    let err = eager_forward_input_metadata(&tangent_key, &initial_data).unwrap_err();
+    assert!(
+        err.to_string().contains("missing base eager value"),
+        "{err}"
+    );
+
+    let mut all_values = HashMap::new();
+    let mut backend = CpuBackend::new();
+    let err =
+        eager_forward_value(&mut all_values, &base_key, &initial_data, &mut backend).unwrap_err();
+    assert!(
+        err.to_string().contains("missing concrete eager value"),
+        "{err}"
+    );
+    let err = eager_forward_value(&mut all_values, &tangent_key, &initial_data, &mut backend)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("missing base eager value"),
+        "{err}"
+    );
+}
+
+#[test]
+fn eager_backward_zero_from_exact_metadata_covers_dtypes_and_dynamic_none() {
+    let mut backend = CpuBackend::new();
+    let dynamic = TensorMeta::with_extents(
+        DType::F64,
+        vec![ShapeExtent::upper_bound(SymDim::from(2usize))],
+    );
+    assert!(zero_from_exact_metadata(&dynamic, &mut backend)
+        .unwrap()
+        .is_none());
+    let symbolic_exact = TensorMeta::exact(DType::F64, vec![SymDim::tensor_axis(9, 0)]);
+    assert!(zero_from_exact_metadata(&symbolic_exact, &mut backend)
+        .unwrap()
+        .is_none());
+    let overflow = TensorMeta::exact(
+        DType::Bool,
+        vec![SymDim::from(usize::MAX), SymDim::from(2usize)],
+    );
+    let err = zero_from_exact_metadata(&overflow, &mut backend).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("zero tensor shape product overflows"),
+        "{err}"
+    );
+
+    for dtype in [
+        DType::F32,
+        DType::F64,
+        DType::I32,
+        DType::I64,
+        DType::Bool,
+        DType::C32,
+        DType::C64,
+    ] {
+        let meta = TensorMeta::exact(dtype, vec![SymDim::from(2usize)]);
+        let zero = zero_from_exact_metadata(&meta, &mut backend)
+            .unwrap()
+            .expect("exact metadata should produce zero tensor");
+        assert_eq!(zero.dtype(), dtype);
+        assert_eq!(zero.shape(), &[2]);
+    }
+}
+
+#[test]
+fn eager_backward_callbacks_record_add_errors_without_panicking() {
+    let mut backend = CpuBackend::new();
+    let mut callbacks = TenferroBackwardCallbacks::new(&mut backend, None, Vec::new());
+    let a = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let b = Arc::new(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap());
+
+    let first = callbacks.add_operands(&a, &b);
+    assert!(Arc::ptr_eq(&first, &a));
+    let second = callbacks.add_operands(&a, &b);
+    assert!(Arc::ptr_eq(&second, &a));
+
+    let err = callbacks
+        .take_error()
+        .expect("shape mismatch should be recorded");
+    assert!(
+        err.to_string().contains("eager cotangent add failed"),
+        "{err}"
+    );
+    assert!(callbacks.take_error().is_none());
+}
+
+#[test]
+fn eager_backward_transpose_runs_without_extension_executor() {
+    let input_key = TensorInputKey::User { id: 123 };
+    let mut graph_builder = GraphBuilder::<StdTensorOp>::new();
+    let x = graph_builder.add_input(input_key.clone());
+    let y = graph_builder.add_operation(
+        StdTensorOp::Mul,
+        vec![ValueRef::Local(x), ValueRef::Local(x)],
+        OperationRole::Primary,
+    )[0];
+    graph_builder.set_outputs(vec![y]);
+    let graph = Arc::new(graph_builder.build());
+    let output_key = graph.values()[y].key.clone();
+    let x_tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap());
+    let _primal_scope = register_scoped_metadata_batch(vec![(
+        ValueKey::Input(input_key.clone()),
+        tensor_meta_from_tensor(x_tensor.as_ref()),
+    )])
+    .unwrap();
+
+    let view = resolve(vec![Arc::clone(&graph)]);
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
+    let linear = linearize(
+        &view,
+        &[output_key],
+        std::slice::from_ref(&input_key),
+        0,
+        &mut ad_ctx,
+        &HashMap::new(),
+    )
+    .unwrap();
+    let tangent_input_key = match &linear.as_graph().values()[linear.tangent_inputs()[0].1].key {
+        ValueKey::Input(key) => key.clone(),
+        other => panic!("expected tangent input key, got {other:?}"),
+    };
+    let _linear_scope = register_scoped_metadata_batch(vec![(
+        ValueKey::Input(tangent_input_key),
+        tensor_meta_from_tensor(x_tensor.as_ref()),
+    )])
+    .unwrap();
+    ad_ctx.refresh_global_metadata();
+
+    let cotangent = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap());
+    let mut backend = CpuBackend::new();
+    let mut callbacks = TenferroBackwardCallbacks::new(&mut backend, None, Vec::new());
+    let external_data = HashMap::from([(ValueKey::Input(input_key), x_tensor)]);
+    let gradients = callbacks
+        .run_transposed_linear(&linear, &[Some(cotangent)], &external_data, &mut ad_ctx)
+        .unwrap();
+
+    let grad = gradients[0].as_ref().expect("active gradient");
+    assert_eq!(grad.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
 
 #[test]
 fn standard_graph_op_executes_untracked_outputs_without_trace() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
-    );
-    let rhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+    )
+    .unwrap();
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
 
     let outputs =
         EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
@@ -382,19 +567,30 @@ fn standard_graph_op_executes_untracked_outputs_without_trace() {
     assert_eq!(outputs.len(), 1);
     assert!(!outputs[0].tracks_grad());
     assert_eq!(outputs[0].debug_trace_saved_value_count(), None);
-    assert_eq!(outputs[0].data().shape(), &[] as &[usize]);
-    assert_eq!(outputs[0].data().as_slice::<f64>().unwrap(), &[36.0]);
+    assert_eq!(outputs[0].shape(), &[] as &[usize]);
+    assert_eq!(
+        outputs[0]
+            .materialized()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[36.0]
+    );
 }
 
 #[test]
 fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
-    );
-    let rhs =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+    )
+    .unwrap();
+    let rhs = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
 
     let mut outputs =
         EagerTensor::standard_graph_op(&[&lhs, &rhs], |keys| Ok(build_add_mul_reduce_graph(keys)))
@@ -402,12 +598,21 @@ fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
     let loss = outputs.pop().expect("one output");
 
     assert!(loss.tracks_grad());
-    assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[36.0]);
+    assert_eq!(
+        loss.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[36.0]
+    );
     assert_eq!(loss.debug_trace_saved_value_count(), Some(5));
 
     loss.backward().expect("backward through recorded graph");
-    assert_eq!(lhs.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
-    assert_eq!(rhs.grad().unwrap().as_slice::<f64>().unwrap(), &[7.0, 10.0]);
+    assert_eq!(
+        lhs.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[3.0, 4.0]
+    );
+    assert_eq!(
+        rhs.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[7.0, 10.0]
+    );
 }
 
 #[test]
@@ -426,10 +631,16 @@ fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
 
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let lhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
-    let rhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        lhs_ctx,
+    )
+    .unwrap();
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        rhs_ctx,
+    )
+    .unwrap();
 
     let err = match EagerTensor::standard_graph_op(&[&lhs, &rhs], |_| {
         panic!("cross-context inputs should fail before graph construction")
@@ -444,16 +655,16 @@ fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
 fn zero_like_tensor_covers_non_f64_dtypes() {
     let mut backend = CpuBackend::new();
     let cases = [
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f32]),
-        Tensor::from_vec_col_major(vec![1], vec![1_i32]),
-        Tensor::from_vec_col_major(vec![1], vec![1_i64]),
-        Tensor::from_vec_col_major(vec![2], vec![true, false]),
-        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(1.0, -1.0)]),
-        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex64::new(1.0, -1.0)]),
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+        Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(1.0, -1.0)]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex64::new(1.0, -1.0)]).unwrap(),
     ];
 
     for input in cases {
-        let zero = zero_like_tensor(&input, &mut backend);
+        let zero = zero_like_tensor(&input, &mut backend).unwrap();
         assert_eq!(zero.shape(), input.shape());
     }
 }
@@ -461,8 +672,8 @@ fn zero_like_tensor_covers_non_f64_dtypes() {
 #[test]
 fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
     let mut backend = EagerBackend::cpu(CpuBackend::new());
-    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
-    let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap();
 
     let out = backend
         .execute_broadcast_multiply(
@@ -487,9 +698,10 @@ fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
 fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let x_t = x.transpose(&[1, 0]).unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
     assert!(!x_t.materialized_cache_is_initialized());
@@ -497,13 +709,16 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let doubled = x_t.add(&x_t).unwrap();
     assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
-        doubled.data().as_slice::<f64>().unwrap(),
+        doubled.materialized().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 
     let reduced = x_t.reduce_sum(&[0]).unwrap();
     assert!(!x_t.materialized_cache_is_initialized());
-    assert_eq!(reduced.data().as_slice::<f64>().unwrap(), &[9.0, 12.0]);
+    assert_eq!(
+        reduced.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[9.0, 12.0]
+    );
 
     let dot = x_t
         .dot_general(
@@ -518,7 +733,7 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
         .unwrap();
     assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
-        dot.data().as_slice::<f64>().unwrap(),
+        dot.materialized().unwrap().as_slice::<f64>().unwrap(),
         &[5.0, 11.0, 17.0, 11.0, 25.0, 39.0, 17.0, 39.0, 61.0]
     );
 }

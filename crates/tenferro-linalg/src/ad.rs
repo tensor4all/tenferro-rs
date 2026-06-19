@@ -13,9 +13,9 @@
 //!     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
 //!     .build()
 //!     .unwrap();
-//! let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
-//! let (_u, s, _vt) = tenferro_linalg::svd(&x).unwrap();
-//! let loss = s.reduce_sum(&[0]);
+//! let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+//! let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&x).unwrap();
+//! let loss = s.reduce_sum(&[0]).unwrap();
 //! let grad = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(grad.rank, 2);
 //! ```
@@ -24,8 +24,7 @@ use std::sync::Arc;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ad::extension::{
-    is_extension_rule_registered, register_extension_rule as register_rule, ExtensionAdRuleTrait,
-    ExtensionOpTrait, ExtensionRegistryError, ExtensionRuleSet,
+    ExtensionAdRule, ExtensionOp, ExtensionRegistryError, ExtensionRuleSet,
 };
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -50,41 +49,17 @@ pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new().with_rule(Arc::new(LinalgAdRule))
 }
 
-/// Register the `tenferro-linalg` extension AD rule.
-///
-/// This process-global registration API is retained as a compatibility bridge.
-/// Prefer explicit [`ad_rules`] ownership through `tenferro_ad::AdContext`.
-///
-/// # Examples
-///
-/// ```rust
-/// tenferro_linalg::register_extension_rule().unwrap();
-/// ```
-pub fn register_extension_rule() -> Result<(), ExtensionRegistryError> {
-    if is_extension_rule_registered(LINALG_EXTENSION_FAMILY_ID) {
-        return Ok(());
-    }
-    let rules = ad_rules()?;
-    let Some(rule) = rules.lookup_rule(LINALG_EXTENSION_FAMILY_ID) else {
-        return Ok(());
-    };
-    match register_rule(rule) {
-        Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
 #[derive(Debug)]
 struct LinalgAdRule;
 
-impl ExtensionAdRuleTrait for LinalgAdRule {
+impl ExtensionAdRule for LinalgAdRule {
     fn family_id(&self) -> &'static str {
         LINALG_EXTENSION_FAMILY_ID
     }
 
     fn linearize(
         &self,
-        op: &dyn ExtensionOpTrait,
+        op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         primal_in: &[ValueKey<StdTensorOp>],
         primal_out: &[ValueKey<StdTensorOp>],
@@ -92,9 +67,9 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
-        let tangents = match op.op() {
+        match op.op() {
             LinalgOp::Lu => rules::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
-            LinalgOp::LuFactor => vec![None; op.output_count()],
+            LinalgOp::LuFactor => Ok(vec![None; op.output_count()]),
             LinalgOp::LuSolvePrepared {
                 transpose_a,
                 conjugate_a,
@@ -147,19 +122,27 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             LinalgOp::EighVals { eps } => {
                 rules::linearize_eigh_values(builder, primal_in, tangent_in, eps, ctx)
             }
-            LinalgOp::Eig { input_dtype } => {
-                rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
-            }
-            LinalgOp::EigVals { input_dtype } => {
-                rules::linearize_eig_values(builder, primal_in, tangent_in, input_dtype, ctx)
-            }
-        };
-        Ok(tangents)
+            LinalgOp::Eig { input_dtype } => Ok(rules::linearize_eig(
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                input_dtype,
+                ctx,
+            )),
+            LinalgOp::EigVals { input_dtype } => Ok(rules::linearize_eig_values(
+                builder,
+                primal_in,
+                tangent_in,
+                input_dtype,
+                ctx,
+            )),
+        }
     }
 
     fn transpose_rule(
         &self,
-        op: &dyn ExtensionOpTrait,
+        op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
@@ -168,7 +151,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
         let mut builder = DynBuilder(builder);
-        let cotangents = match op.op() {
+        match op.op() {
             LinalgOp::TriangularSolve {
                 left_side,
                 lower,
@@ -185,7 +168,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             LinalgOp::LuSolvePrepared {
                 transpose_a,
                 conjugate_a,
-            } => rules::transpose_lu_solve_prepared(
+            } => Ok(rules::transpose_lu_solve_prepared(
                 &mut builder,
                 cotangent_out,
                 inputs,
@@ -193,7 +176,7 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
                 transpose_a,
                 conjugate_a,
                 ctx,
-            ),
+            )),
             LinalgOp::FullPivLuSolve { transpose_a } => rules::transpose_full_piv_lu_solve(
                 &mut builder,
                 cotangent_out,
@@ -212,9 +195,8 @@ impl ExtensionAdRuleTrait for LinalgAdRule {
             | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
-            | LinalgOp::EigVals { .. } => vec![None; op.input_count()],
-        };
-        Ok(cotangents)
+            | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
+        }
     }
 }
 
@@ -231,11 +213,11 @@ impl PrimitiveRuleBuilder for DynBuilder<'_> {
     }
 }
 
-fn downcast_ad_op(op: &dyn ExtensionOpTrait, kind: ADRuleKind) -> ADRuleResult<&LinalgExtensionOp> {
+fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&LinalgExtensionOp> {
     op.as_any()
         .downcast_ref::<LinalgExtensionOp>()
         .ok_or_else(|| {
-            ADRuleError::unsupported("tenferro-linalg.linalg.v1 payload type mismatch", kind)
+            ADRuleError::invalid_input("tenferro-linalg.linalg.v1", kind, "payload type mismatch")
         })
 }
 
@@ -244,7 +226,7 @@ mod tests {
     use super::*;
     use computegraph::graph::GraphBuilder;
     use tenferro_ops::input_key::TensorInputKey;
-    use tenferro_ops::{SymDim, TensorMeta};
+    use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     use tenferro_tensor::DType;
 
     fn input_key(id: u64) -> ValueKey<StdTensorOp> {
@@ -293,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn triangular_solve_jvp_returns_none_for_non_matrix_operands() {
+    fn triangular_solve_jvp_rejects_non_matrix_operands() {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let mut ctx = ShapeGuardContext::default();
         let lhs = input_key(20);
@@ -308,7 +290,7 @@ mod tests {
             unit_diagonal: false,
         });
 
-        let result = LinalgAdRule
+        let err = LinalgAdRule
             .linearize(
                 &op,
                 &mut builder,
@@ -317,10 +299,154 @@ mod tests {
                 &[None, Some(rhs_tangent)],
                 &mut ctx,
             )
+            .unwrap_err();
+
+        assert_eq!(err.rule(), ADRuleKind::Jvp);
+        assert!(err
+            .to_string()
+            .contains("expected matrix operands with rank >= 2"));
+        assert!(builder.build().operations().is_empty());
+    }
+
+    #[test]
+    fn triangular_solve_jvp_accepts_upper_bound_matrix_metadata() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let lhs = input_key(30);
+        let rhs = input_key(31);
+        ctx.insert_metadata(
+            lhs.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                ],
+            ),
+        );
+        ctx.insert_metadata(
+            rhs.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                    ShapeExtent::upper_bound(SymDim::from(2usize)),
+                ],
+            ),
+        );
+        let rhs_tangent = builder.add_input(TensorInputKey::User { id: 32 });
+        let op = LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        });
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[lhs.clone(), rhs],
+                &[input_key(33)],
+                &[None, Some(rhs_tangent)],
+                &mut ctx,
+            )
             .unwrap();
 
-        assert_eq!(result, vec![None]);
-        assert!(builder.build().operations().is_empty());
+        assert!(result[0].is_some());
+        let graph = builder.build();
+        assert_eq!(graph.operations().len(), 1);
+        let solve = &graph.operations()[0];
+        assert_eq!(solve.inputs[0], ValueRef::External(lhs));
+        assert_eq!(solve.inputs[1], ValueRef::Local(rhs_tangent));
+    }
+
+    #[test]
+    fn triangular_solve_transpose_accepts_upper_bound_matrix_metadata() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let lhs = input_key(40);
+        let rhs = input_key(41);
+        ctx.insert_metadata(
+            lhs.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                ],
+            ),
+        );
+        ctx.insert_metadata(
+            rhs.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                    ShapeExtent::upper_bound(SymDim::from(2usize)),
+                ],
+            ),
+        );
+        let cotangent = builder.add_input(TensorInputKey::User { id: 42 });
+        let op = LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        });
+
+        let result = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent)],
+                &[ValueRef::External(lhs.clone()), ValueRef::External(rhs)],
+                &OperationRole::Linearized {
+                    active_mask: vec![false, true],
+                },
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result[0], None);
+        assert!(result[1].is_some());
+        let graph = builder.build();
+        assert_eq!(graph.operations().len(), 1);
+        assert_eq!(graph.operations()[0].inputs[0], ValueRef::External(lhs));
+        assert_eq!(graph.operations()[0].inputs[1], ValueRef::Local(cotangent));
+    }
+
+    #[test]
+    fn cholesky_jvp_uses_rank_when_input_metadata_is_upper_bound() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let primal = input_key(50);
+        ctx.insert_metadata(
+            primal.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                    ShapeExtent::upper_bound(SymDim::from(4usize)),
+                ],
+            ),
+        );
+        let tangent = builder.add_input(TensorInputKey::User { id: 51 });
+        let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[primal],
+                &[input_key(52)],
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert!(result[0].is_some());
+        assert!(!builder.build().operations().is_empty());
     }
 
     #[test]

@@ -24,6 +24,29 @@ fn cpu_lapack_full_piv_lu_source() -> String {
     .unwrap_or_else(|err| panic!("LAPACK full_piv_lu source should be readable: {err}"))
 }
 
+fn cpu_lapack_eig_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cpu")
+            .join("linalg")
+            .join("lapack_linalg")
+            .join("eig.rs"),
+    )
+    .unwrap_or_else(|err| panic!("LAPACK eig source should be readable: {err}"))
+}
+
+fn cpu_faer_linalg_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cpu")
+            .join("linalg")
+            .join("faer_linalg.rs"),
+    )
+    .unwrap_or_else(|err| panic!("faer linalg source should be readable: {err}"))
+}
+
 fn cpu_backend_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,9 +79,9 @@ fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
     );
 
     for needle in [
-        "input.host_data()[start..end].to_vec()",
-        "a.host_data()[a_start..a_end].to_vec()",
-        "b.host_data()[b_start..b_end].to_vec()",
+        "input.host_data().unwrap()[start..end].to_vec()",
+        "a.host_data().unwrap()[a_start..a_end].to_vec()",
+        "b.host_data().unwrap()[b_start..b_end].to_vec()",
     ] {
         assert!(
             !batched_helpers.contains(needle),
@@ -94,6 +117,40 @@ fn lapack_full_piv_lu_rejects_positive_getc2_info() {
         factor.contains("matrix is singular"),
         "positive getc2 info should be reported as a singular matrix"
     );
+}
+
+#[test]
+fn cpu_eig_real_complex_classification_uses_tolerance() {
+    for (name, source) in [
+        ("LAPACK eig", cpu_lapack_eig_source()),
+        ("faer eig", cpu_faer_linalg_source()),
+    ] {
+        assert!(
+            source.contains("eig_imag_is_effectively_zero"),
+            "{name} should classify real-vs-complex eigenvalue pairs with a tolerance helper"
+        );
+        assert!(
+            !source.contains("s_im[col] == 0.0") && !source.contains("s_im[j] == 0.0"),
+            "{name} should not compare eigenvalue imaginary parts to exact zero"
+        );
+    }
+}
+
+#[test]
+fn faer_lu_singularity_detection_uses_tolerance() {
+    let source = cpu_faer_linalg_source();
+
+    assert!(
+        source.contains("real_pivot_is_effectively_singular")
+            && source.contains("complex_pivot_is_effectively_singular"),
+        "faer LU solve paths should use tolerance helpers for singularity checks"
+    );
+    for needle in ["lu[(i, i)] == 0.0", "value.re == 0.0 && value.im == 0.0"] {
+        assert!(
+            !source.contains(needle),
+            "faer LU solve paths should not use exact-zero singularity checks: found {needle}"
+        );
+    }
 }
 
 #[test]

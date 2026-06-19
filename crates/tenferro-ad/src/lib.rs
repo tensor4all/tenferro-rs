@@ -22,9 +22,9 @@
 //! use tenferro_ad::AdContext;
 //! use tenferro_runtime::TracedTensor;
 //!
-//! let ad = AdContext::builder().with_core_rules().build().unwrap();
-//! let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-//! let loss = &x * &x;
+//! let ad = AdContext::builder().build().unwrap();
+//! let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+//! let loss = (&x * &x).unwrap();
 //! let dx = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(dx.rank, 0);
 //! ```
@@ -66,6 +66,6 @@ pub(crate) mod metadata {
     pub use tenferro_runtime::ad_support::{
         metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_graph_metadata,
         register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
-        MetadataScope,
+        GlobalMetadataScope,
     };
 }

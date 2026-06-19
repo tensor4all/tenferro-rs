@@ -33,7 +33,7 @@ macro_rules! impl_real_eigh {
             ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
                 let n = square_matrix_dim(input, "eigh")?;
                 let n_i32 = dim_i32(n, "eigh")?;
-                let mut vectors = input.host_data().to_vec();
+                let mut vectors = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
@@ -69,8 +69,8 @@ macro_rules! impl_real_eigh {
                 check_lapack_info("eigh", $routine, info)?;
 
                 Ok(vec![
-                    tensor_from_vec_with_template(vec![n], values, input),
-                    tensor_from_vec_with_template(vec![n, n], vectors, input),
+                    tensor_from_vec_with_template(vec![n], values, input)?,
+                    tensor_from_vec_with_template(vec![n, n], vectors, input)?,
                 ])
             }
 
@@ -80,7 +80,7 @@ macro_rules! impl_real_eigh {
             ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
-                let mut work_matrix = input.host_data().to_vec();
+                let mut work_matrix = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
@@ -115,7 +115,7 @@ macro_rules! impl_real_eigh {
                 }
                 check_lapack_info("eigh_values", $routine, info)?;
 
-                Ok(tensor_from_vec_with_template(vec![n], values, input))
+                tensor_from_vec_with_template(vec![n], values, input)
             }
         }
     };
@@ -132,7 +132,7 @@ macro_rules! impl_complex_eigh {
             ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
                 let n = square_matrix_dim(input, "eigh")?;
                 let n_i32 = dim_i32(n, "eigh")?;
-                let mut vectors = input.host_data().to_vec();
+                let mut vectors = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $real; n];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
@@ -178,8 +178,8 @@ macro_rules! impl_complex_eigh {
                             .map(|value| <$complex>::new(value, 0.0))
                             .collect(),
                         input,
-                    ),
-                    tensor_from_vec_with_template(vec![n, n], vectors, input),
+                    )?,
+                    tensor_from_vec_with_template(vec![n, n], vectors, input)?,
                 ])
             }
 
@@ -189,7 +189,7 @@ macro_rules! impl_complex_eigh {
             ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
-                let mut work_matrix = input.host_data().to_vec();
+                let mut work_matrix = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $real; n];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
@@ -227,7 +227,7 @@ macro_rules! impl_complex_eigh {
                 }
                 check_lapack_info("eigh_values", $routine, info)?;
 
-                Ok(tensor_from_vec_with_template(vec![n], values, input))
+                tensor_from_vec_with_template(vec![n], values, input)
             }
         }
     };
@@ -256,12 +256,12 @@ pub(crate) fn eigh<T: LapackEigh>(
                 vector_with_batch_shape(n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
         ]);
     }
     batched_multi("eigh", buffers, input, eigh_2d)
@@ -280,11 +280,11 @@ pub(crate) fn eigh_values<T: LapackEigh>(
 ) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "eigh_values")?;
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             vector_with_batch_shape(n, batch_shape),
             Vec::new(),
             input,
-        ));
+        );
     }
 
     let (core_shape, batch_shape) =
@@ -302,16 +302,12 @@ pub(crate) fn eigh_values<T: LapackEigh>(
         let end = start + slice_size;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
+            input.host_data()?[start..end].to_vec(),
             input,
-        );
+        )?;
         let values = eigh_values_2d(buffers, &batch_input)?;
-        data.extend_from_slice(values.host_data());
+        data.extend_from_slice(values.host_data()?);
     }
 
-    Ok(tensor_from_vec_with_template(
-        vector_with_batch_shape(n, batch_shape),
-        data,
-        input,
-    ))
+    tensor_from_vec_with_template(vector_with_batch_shape(n, batch_shape), data, input)
 }

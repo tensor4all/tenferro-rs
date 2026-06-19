@@ -10,7 +10,7 @@ use tenferro_tensor::DType;
 /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 /// use tenferro_xla::{lower_to_stablehlo, Error};
 ///
-/// let x = TracedTensor::input_symbolic_shape(DType::I64, 1);
+/// let x = TracedTensor::input_symbolic_shape(DType::I64, 1).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler
 ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::I64, &[2])])

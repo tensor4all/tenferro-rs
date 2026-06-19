@@ -18,8 +18,8 @@ pub use tenferro_tensor::TypedTensor;
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]);
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
 /// let z = typed_tensor::add(&x, &y, &mut backend).unwrap();
 /// ```
 pub fn add<T: TensorScalar>(
@@ -30,7 +30,7 @@ pub fn add<T: TensorScalar>(
     let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
     let out =
         backend.with_backend_session(|exec| exec.add_read(lhs.tensor_read(), rhs.tensor_read()))?;
-    try_into_typed_result("add", out)
+    into_typed_result("add", out)
 }
 
 macro_rules! unary_fn {
@@ -43,7 +43,7 @@ macro_rules! unary_fn {
         /// # use tenferro_cpu::CpuBackend;
         /// use tenferro_runtime::{typed_tensor, TypedTensor};
         /// # let mut backend = CpuBackend::new();
-        /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]);
+        /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap();
         #[doc = concat!("let y = typed_tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
         /// ```
         pub fn $name<T: TensorScalar>(
@@ -51,7 +51,7 @@ macro_rules! unary_fn {
             backend: &mut impl TensorBackend,
         ) -> Result<TypedTensor<T>> {
             let out = backend.with_backend_session(|exec| exec.$method(T::tensor_read(input)))?;
-            try_into_typed_result(stringify!($name), out)
+            into_typed_result(stringify!($name), out)
         }
     };
 }
@@ -66,8 +66,8 @@ macro_rules! binary_fn {
         /// # use tenferro_cpu::CpuBackend;
         /// use tenferro_runtime::{typed_tensor, TypedTensor};
         /// # let mut backend = CpuBackend::new();
-        /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-        /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+        /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+        /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
         #[doc = concat!("let z = typed_tensor::", stringify!($name), "(&x, &y, &mut backend).unwrap();")]
         /// ```
         pub fn $name<T: TensorScalar>(
@@ -78,7 +78,7 @@ macro_rules! binary_fn {
             let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
             let out =
                 backend.with_backend_session(|exec| exec.$method(lhs.tensor_read(), rhs.tensor_read()))?;
-            try_into_typed_result(stringify!($name), out)
+            into_typed_result(stringify!($name), out)
         }
     };
 }
@@ -131,8 +131,8 @@ unary_fn!(log1p, log1p_read, "Elementwise `log(1 + x)`.");
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 /// let z = typed_tensor::sub(&x, &y, &mut backend).unwrap();
 /// ```
 pub fn sub<T: TensorScalar>(
@@ -145,7 +145,7 @@ pub fn sub<T: TensorScalar>(
     let out = backend.with_backend_session(|exec| {
         exec.add_read(lhs.tensor_read(), TensorRead::from_tensor(&neg_rhs))
     })?;
-    try_into_typed_result("sub", out)
+    into_typed_result("sub", out)
 }
 
 /// Elementwise comparison with NumPy-style broadcasting.
@@ -158,10 +158,10 @@ pub fn sub<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 /// let z = typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
-/// assert_eq!(z.host_data(), &[true, false]);
+/// assert_eq!(z.host_data().unwrap(), &[true, false]);
 /// ```
 pub fn compare<T: TensorScalar>(
     lhs: &TypedTensor<T>,
@@ -173,7 +173,7 @@ pub fn compare<T: TensorScalar>(
     let out = backend.with_backend_session(|exec| {
         exec.compare_read(lhs.tensor_read(), rhs.tensor_read(), &dir)
     })?;
-    try_into_typed_result("compare", out)
+    into_typed_result("compare", out)
 }
 
 /// Select values from `on_true` or `on_false` using a condition tensor.
@@ -186,8 +186,8 @@ pub fn compare<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
-/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 /// # let condition = typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
 /// let z = typed_tensor::where_select(&condition, &x, &y, &mut backend).unwrap();
 /// ```
@@ -206,7 +206,7 @@ pub fn where_select<T: TensorScalar>(
             on_false.tensor_read(),
         )
     })?;
-    try_into_typed_result("where_select", out)
+    into_typed_result("where_select", out)
 }
 
 /// Clamp values elementwise between lower and upper bounds.
@@ -217,9 +217,9 @@ pub fn where_select<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]);
-/// # let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]);
-/// # let upper = TypedTensor::<f64>::from_vec_col_major(vec![], vec![3.0]);
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]).unwrap();
+/// # let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]).unwrap();
+/// # let upper = TypedTensor::<f64>::from_vec_col_major(vec![], vec![3.0]).unwrap();
 /// let z = typed_tensor::clamp(&x, &lower, &upper, &mut backend).unwrap();
 /// ```
 pub fn clamp<T: TensorScalar>(
@@ -236,7 +236,7 @@ pub fn clamp<T: TensorScalar>(
             upper.tensor_read(),
         )
     })?;
-    try_into_typed_result("clamp", out)
+    into_typed_result("clamp", out)
 }
 
 /// Matrix multiplication helper for rank-2 typed tensors.
@@ -249,8 +249,8 @@ pub fn clamp<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
-/// # let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]);
+/// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+/// # let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]).unwrap();
 /// let c = typed_tensor::matmul(&a, &b, &mut backend).unwrap();
 /// ```
 pub fn matmul<T: TensorScalar>(
@@ -267,7 +267,7 @@ pub fn matmul<T: TensorScalar>(
     let out = backend.with_backend_session(|exec| {
         exec.dot_general_read(T::tensor_read(a), T::tensor_read(b), &config)
     })?;
-    try_into_typed_result("matmul", out)
+    into_typed_result("matmul", out)
 }
 
 /// Sum elements across one or more axes.
@@ -278,12 +278,13 @@ pub fn matmul<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// let x = TypedTensor::<f64>::from_vec_row_major(
+/// let x = TypedTensor::<f64>::from_vec_col_major(
 ///     vec![2, 3],
-///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-/// );
+///     vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+/// )?;
 /// let row_sums = typed_tensor::reduce_sum(&x, &[1], &mut backend).unwrap();
-/// assert_eq!(row_sums.host_data(), &[6.0, 15.0]);
+/// assert_eq!(row_sums.host_data()?, &[6.0, 15.0]);
+/// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
 pub fn reduce_sum<T: TensorScalar>(
     input: &TypedTensor<T>,
@@ -292,7 +293,7 @@ pub fn reduce_sum<T: TensorScalar>(
 ) -> Result<TypedTensor<T>> {
     let out =
         backend.with_backend_session(|exec| exec.reduce_sum_read(T::tensor_read(input), axes))?;
-    try_into_typed_result("reduce_sum", out)
+    into_typed_result("reduce_sum", out)
 }
 
 /// Reshape a typed tensor through the backend structural operation.
@@ -303,7 +304,7 @@ pub fn reduce_sum<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
 /// let y = typed_tensor::reshape(&x, &[3, 2], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
@@ -314,7 +315,7 @@ pub fn reshape<T: TensorScalar>(
 ) -> Result<TypedTensor<T>> {
     let out =
         backend.with_backend_session(|exec| exec.reshape_read(T::tensor_read(input), shape))?;
-    try_into_typed_result("reshape", out)
+    into_typed_result("reshape", out)
 }
 
 /// Permute typed tensor axes through the backend structural operation.
@@ -325,7 +326,7 @@ pub fn reshape<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
 /// let y = typed_tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
@@ -336,7 +337,7 @@ pub fn transpose<T: TensorScalar>(
 ) -> Result<TypedTensor<T>> {
     let out =
         backend.with_backend_session(|exec| exec.transpose_read(T::tensor_read(input), perm))?;
-    try_into_typed_result("transpose", out)
+    into_typed_result("transpose", out)
 }
 
 /// Broadcast a typed tensor into a larger shape.
@@ -350,7 +351,7 @@ pub fn transpose<T: TensorScalar>(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
-/// let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
+/// let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
 /// let matrix = typed_tensor::broadcast_in_dim(&row, &[2, 3], &[1], &mut backend).unwrap();
 /// assert_eq!(matrix.shape(), &[2, 3]);
 /// ```
@@ -363,7 +364,7 @@ pub fn broadcast_in_dim<T: TensorScalar>(
     let out = backend.with_backend_session(|exec| {
         exec.broadcast_in_dim_read(T::tensor_read(input), shape, dims)
     })?;
-    try_into_typed_result("broadcast_in_dim", out)
+    into_typed_result("broadcast_in_dim", out)
 }
 
 enum ReadInput<'a> {
@@ -435,12 +436,9 @@ fn broadcast_error(err: impl std::fmt::Display) -> Error {
     Error::backend_failure("broadcast", err.to_string())
 }
 
-fn try_into_typed_result<T: TensorScalar>(
-    op: &'static str,
-    tensor: Tensor,
-) -> Result<TypedTensor<T>> {
+fn into_typed_result<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Result<TypedTensor<T>> {
     let actual = tensor.dtype();
-    T::try_into_typed(tensor).ok_or(Error::DTypeMismatch {
+    T::into_typed(tensor).map_err(|_| Error::DTypeMismatch {
         op,
         lhs: T::dtype(),
         rhs: actual,

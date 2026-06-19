@@ -97,6 +97,23 @@ pub(crate) fn missing_rule(kind: PrimitiveOpKind, rule: ADRuleKind) -> ADRuleErr
     ADRuleError::unsupported(format!("missing primitive AD rule for {kind:?}"), rule)
 }
 
+fn catalog_kind_mismatch(op: &StdTensorOp, rule: ADRuleKind) -> ADRuleError {
+    ADRuleError::invalid_input(
+        "tenferro-internal-ops primitive AD registry",
+        rule,
+        format!("AD registry rule was invoked with a mismatched operation: {op:?}"),
+    )
+}
+
+macro_rules! catalog_payload {
+    ($op:expr, $rule:expr, $pattern:pat => $payload:expr) => {
+        match $op {
+            $pattern => $payload,
+            _ => return Err(catalog_kind_mismatch($op, $rule)),
+        }
+    };
+}
+
 static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT] = [
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Add,
@@ -359,7 +376,7 @@ fn transpose_add(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_add(builder, cotangent_out, inputs, ctx))
+    semiring::transpose_add(builder, cotangent_out, inputs, ctx)
 }
 
 fn linearize_mul(
@@ -381,13 +398,7 @@ fn transpose_mul(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_mul(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    semiring::transpose_mul(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_neg(
@@ -420,9 +431,7 @@ fn linearize_conj(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::linearize_conj(
-        builder, primal_in, tangent_in, ctx,
-    ))
+    semiring::linearize_conj(builder, primal_in, tangent_in, ctx)
 }
 
 fn transpose_conj(
@@ -433,12 +442,7 @@ fn transpose_conj(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(semiring::transpose_conj(
-        builder,
-        cotangent_out,
-        inputs,
-        ctx,
-    ))
+    semiring::transpose_conj(builder, cotangent_out, inputs, ctx)
 }
 
 fn linearize_div(
@@ -736,9 +740,8 @@ fn linearize_dot_general(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::DotGeneral { config } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let config =
+        catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::DotGeneral { config } => config);
     contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
 }
 
@@ -750,9 +753,8 @@ fn transpose_dot_general(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::DotGeneral { config } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let config =
+        catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::DotGeneral { config } => config);
     contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
@@ -764,9 +766,7 @@ fn linearize_reduce_sum(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::ReduceSum { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::ReduceSum { axes } => axes);
     Ok(contraction::linearize_reduce_sum(
         builder, tangent_in, op, axes,
     ))
@@ -780,13 +780,7 @@ fn transpose_reduce_sum(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_sum(
-        builder,
-        cotangent_out,
-        op,
-        inputs,
-        ctx,
-    ))
+    contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs, ctx)
 }
 
 fn linearize_reduce_prod(
@@ -797,12 +791,8 @@ fn linearize_reduce_prod(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::ReduceProd { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(contraction::linearize_reduce_prod(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    let axes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::ReduceProd { axes } => axes);
+    contraction::linearize_reduce_prod(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn transpose_reduce_prod(
@@ -813,13 +803,7 @@ fn transpose_reduce_prod(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_prod(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn linearize_reduce_max(
@@ -830,12 +814,8 @@ fn linearize_reduce_max(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::ReduceMax { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(contraction::linearize_reduce_chooser(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    let axes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::ReduceMax { axes } => axes);
+    contraction::linearize_reduce_chooser(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn linearize_reduce_min(
@@ -846,12 +826,8 @@ fn linearize_reduce_min(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::ReduceMin { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(contraction::linearize_reduce_chooser(
-        builder, primal_in, primal_out, tangent_in, axes, ctx,
-    ))
+    let axes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::ReduceMin { axes } => axes);
+    contraction::linearize_reduce_chooser(builder, primal_in, primal_out, tangent_in, axes, ctx)
 }
 
 fn transpose_reduce_max(
@@ -862,13 +838,7 @@ fn transpose_reduce_max(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_chooser(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn transpose_reduce_min(
@@ -879,13 +849,7 @@ fn transpose_reduce_min(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(contraction::transpose_reduce_chooser(
-        builder,
-        cotangent_out,
-        inputs,
-        op,
-        ctx,
-    ))
+    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
 }
 
 fn linearize_transpose(
@@ -896,9 +860,7 @@ fn linearize_transpose(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Transpose { perm } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let perm = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Transpose { perm } => perm);
     Ok(structural::linearize_transpose(builder, tangent_in, perm))
 }
 
@@ -910,9 +872,7 @@ fn transpose_transpose(
     _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Transpose { perm } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let perm = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Transpose { perm } => perm);
     Ok(structural::transpose_transpose(
         builder,
         cotangent_out,
@@ -941,13 +901,7 @@ fn transpose_reshape(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(structural::transpose_reshape(
-        builder,
-        cotangent_out,
-        op,
-        inputs,
-        ctx,
-    ))
+    structural::transpose_reshape(builder, cotangent_out, op, inputs, ctx)
 }
 
 fn linearize_broadcast_in_dim(
@@ -958,9 +912,11 @@ fn linearize_broadcast_in_dim(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::BroadcastInDim { shape, dims } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let (shape, dims) = catalog_payload!(
+        op,
+        ADRuleKind::Jvp,
+        StdTensorOp::BroadcastInDim { shape, dims } => (shape, dims)
+    );
     Ok(structural::linearize_broadcast_in_dim(
         builder, primal_in, tangent_in, shape, dims, ctx,
     ))
@@ -974,17 +930,12 @@ fn transpose_broadcast_in_dim(
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::BroadcastInDim { shape, dims } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(structural::transpose_broadcast_in_dim(
-        builder,
-        cotangent_out,
-        shape,
-        dims,
-        inputs,
-        ctx,
-    ))
+    let (shape, dims) = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::BroadcastInDim { shape, dims } => (shape, dims)
+    );
+    structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims, inputs, ctx)
 }
 
 fn linearize_convert(
@@ -995,9 +946,8 @@ fn linearize_convert(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Convert { from, to } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let (from, to) =
+        catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Convert { from, to } => (from, to));
     Ok(structural::linearize_convert(
         builder, tangent_in, *from, *to,
     ))
@@ -1011,9 +961,11 @@ fn transpose_convert(
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Convert { from, to } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let (from, to) = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::Convert { from, to } => (from, to)
+    );
     Ok(structural::transpose_convert(
         builder,
         cotangent_out,
@@ -1033,10 +985,12 @@ macro_rules! diagonal_rule {
             tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            let StdTensorOp::$variant { axis_a, axis_b } = op else {
-                unreachable!("catalog kind mismatch")
-            };
-            Ok($lin_call(builder, tangent_in, *axis_a, *axis_b))
+            let (axis_a, axis_b) = catalog_payload!(
+                op,
+                ADRuleKind::Jvp,
+                StdTensorOp::$variant { axis_a, axis_b } => (axis_a, axis_b)
+            );
+            $lin_call(builder, tangent_in, *axis_a, *axis_b)
         }
 
         fn $trans(
@@ -1047,17 +1001,12 @@ macro_rules! diagonal_rule {
             _mode: &OperationRole,
             ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            let StdTensorOp::$variant { axis_a, axis_b } = op else {
-                unreachable!("catalog kind mismatch")
-            };
-            Ok($trans_call(
-                builder,
-                cotangent_out,
-                inputs,
-                *axis_a,
-                *axis_b,
-                ctx,
-            ))
+            let (axis_a, axis_b) = catalog_payload!(
+                op,
+                ADRuleKind::Transpose,
+                StdTensorOp::$variant { axis_a, axis_b } => (axis_a, axis_b)
+            );
+            $trans_call(builder, cotangent_out, inputs, *axis_a, *axis_b, ctx)
         }
     };
 }
@@ -1087,9 +1036,7 @@ macro_rules! triangular_rule {
             tangent_in: &[Option<LocalValueId>],
             _ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            let StdTensorOp::$variant { k } = op else {
-                unreachable!("catalog kind mismatch")
-            };
+            let k = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::$variant { k } => k);
             Ok($lin_call(builder, tangent_in, *k))
         }
 
@@ -1101,9 +1048,7 @@ macro_rules! triangular_rule {
             _mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            let StdTensorOp::$variant { k } = op else {
-                unreachable!("catalog kind mismatch")
-            };
+            let k = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::$variant { k } => k);
             Ok($trans_call(builder, cotangent_out, *k))
         }
     };
@@ -1132,9 +1077,7 @@ fn linearize_gather(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Gather(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let config = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Gather(config) => config);
     Ok(indexing::linearize_gather(
         builder, primal_in, tangent_in, config,
     ))
@@ -1148,17 +1091,8 @@ fn transpose_gather(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Gather(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(indexing::transpose_gather(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Gather(config) => config);
+    indexing::transpose_gather(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_gather_dynamic_slice_sizes(
@@ -1169,16 +1103,23 @@ fn linearize_gather_dynamic_slice_sizes(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::GatherDynamicSliceSizes {
-        offset_dims,
-        collapsed_slice_dims,
-        start_index_map,
-        index_vector_dim,
-        slice_sizes,
-    } = op
-    else {
-        unreachable!("catalog kind mismatch")
-    };
+    let (offset_dims, collapsed_slice_dims, start_index_map, index_vector_dim, slice_sizes) = catalog_payload!(
+        op,
+        ADRuleKind::Jvp,
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => (
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        )
+    );
     Ok(indexing::linearize_gather_dynamic_slice_sizes(
         builder,
         primal_in,
@@ -1199,17 +1140,18 @@ fn transpose_gather_dynamic_slice_sizes(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::GatherDynamicSliceSizes {
-        offset_dims,
-        collapsed_slice_dims,
-        start_index_map,
-        index_vector_dim,
-        ..
-    } = op
-    else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(indexing::transpose_gather_dynamic_slice_sizes(
+    let (offset_dims, collapsed_slice_dims, start_index_map, index_vector_dim) = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            ..
+        } => (offset_dims, collapsed_slice_dims, start_index_map, index_vector_dim)
+    );
+    indexing::transpose_gather_dynamic_slice_sizes(
         builder,
         cotangent_out,
         inputs,
@@ -1219,7 +1161,7 @@ fn transpose_gather_dynamic_slice_sizes(
         start_index_map,
         *index_vector_dim,
         ctx,
-    ))
+    )
 }
 
 fn linearize_scatter(
@@ -1230,12 +1172,8 @@ fn linearize_scatter(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Scatter(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(indexing::linearize_scatter(
-        builder, primal_in, tangent_in, config, ctx,
-    ))
+    let config = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Scatter(config) => config);
+    indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
 }
 
 fn transpose_scatter(
@@ -1246,17 +1184,9 @@ fn transpose_scatter(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Scatter(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(indexing::transpose_scatter(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    let config =
+        catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Scatter(config) => config);
+    indexing::transpose_scatter(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_slice(
@@ -1267,9 +1197,7 @@ fn linearize_slice(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Slice(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let config = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Slice(config) => config);
     Ok(structural::linearize_slice(builder, tangent_in, config))
 }
 
@@ -1281,17 +1209,8 @@ fn transpose_slice(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Slice(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(structural::transpose_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Slice(config) => config);
+    structural::transpose_slice(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_dynamic_slice(
@@ -1302,9 +1221,7 @@ fn linearize_dynamic_slice(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::DynamicSlice { slice_sizes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let slice_sizes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::DynamicSlice { slice_sizes } => slice_sizes);
     Ok(indexing::linearize_dynamic_slice(
         builder,
         primal_in,
@@ -1321,13 +1238,7 @@ fn transpose_dynamic_slice(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::transpose_dynamic_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    indexing::transpose_dynamic_slice(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_dynamic_update_slice(
@@ -1338,9 +1249,7 @@ fn linearize_dynamic_update_slice(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::linearize_dynamic_update_slice(
-        builder, primal_in, tangent_in, ctx,
-    ))
+    indexing::linearize_dynamic_update_slice(builder, primal_in, tangent_in, ctx)
 }
 
 fn transpose_dynamic_update_slice(
@@ -1351,13 +1260,7 @@ fn transpose_dynamic_update_slice(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(indexing::transpose_dynamic_update_slice(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    indexing::transpose_dynamic_update_slice(builder, cotangent_out, inputs, mode, ctx)
 }
 
 fn linearize_pad(
@@ -1368,9 +1271,7 @@ fn linearize_pad(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Pad(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let config = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Pad(config) => config);
     Ok(structural::linearize_pad(builder, tangent_in, config))
 }
 
@@ -1382,17 +1283,8 @@ fn transpose_pad(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Pad(config) = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(structural::transpose_pad(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        config,
-        ctx,
-    ))
+    let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Pad(config) => config);
+    structural::transpose_pad(builder, cotangent_out, inputs, mode, config, ctx)
 }
 
 fn linearize_concatenate(
@@ -1403,17 +1295,12 @@ fn linearize_concatenate(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Concatenate { axis, input_count } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(structural::linearize_concatenate(
-        builder,
-        primal_in,
-        tangent_in,
-        *axis,
-        *input_count,
-        ctx,
-    ))
+    let (axis, input_count) = catalog_payload!(
+        op,
+        ADRuleKind::Jvp,
+        StdTensorOp::Concatenate { axis, input_count } => (axis, input_count)
+    );
+    structural::linearize_concatenate(builder, primal_in, tangent_in, *axis, *input_count, ctx)
 }
 
 fn transpose_concatenate(
@@ -1424,10 +1311,12 @@ fn transpose_concatenate(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Concatenate { axis, input_count } = op else {
-        unreachable!("catalog kind mismatch")
-    };
-    Ok(structural::transpose_concatenate(
+    let (axis, input_count) = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::Concatenate { axis, input_count } => (axis, input_count)
+    );
+    structural::transpose_concatenate(
         builder,
         cotangent_out,
         inputs,
@@ -1435,7 +1324,7 @@ fn transpose_concatenate(
         *axis,
         *input_count,
         ctx,
-    ))
+    )
 }
 
 fn linearize_reverse(
@@ -1446,9 +1335,7 @@ fn linearize_reverse(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Reverse { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axes = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::Reverse { axes } => axes);
     Ok(structural::linearize_reverse(builder, tangent_in, axes))
 }
 
@@ -1460,9 +1347,7 @@ fn transpose_reverse(
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::Reverse { axes } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axes = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Reverse { axes } => axes);
     Ok(structural::transpose_reverse(
         builder,
         cotangent_out,
@@ -1501,9 +1386,11 @@ fn linearize_dynamic_truncate(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::DynamicTruncate { axis } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axis = catalog_payload!(
+        op,
+        ADRuleKind::Jvp,
+        StdTensorOp::DynamicTruncate { axis } => axis
+    );
     Ok(dynamic::linearize_dynamic_truncate(
         builder, primal_in, primal_out, tangent_in, *axis, ctx,
     ))
@@ -1517,9 +1404,11 @@ fn transpose_dynamic_truncate(
     _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::DynamicTruncate { axis } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axis = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::DynamicTruncate { axis } => axis
+    );
     Ok(dynamic::transpose_dynamic_truncate(
         builder,
         cotangent_out,
@@ -1536,9 +1425,7 @@ fn linearize_pad_to_match(
     tangent_in: &[Option<LocalValueId>],
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::PadToMatch { axis } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axis = catalog_payload!(op, ADRuleKind::Jvp, StdTensorOp::PadToMatch { axis } => axis);
     Ok(dynamic::linearize_pad_to_match(
         builder, primal_in, tangent_in, *axis,
     ))
@@ -1552,9 +1439,11 @@ fn transpose_pad_to_match(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let StdTensorOp::PadToMatch { axis } = op else {
-        unreachable!("catalog kind mismatch")
-    };
+    let axis = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::PadToMatch { axis } => axis
+    );
     Ok(dynamic::transpose_pad_to_match(
         builder,
         cotangent_out,

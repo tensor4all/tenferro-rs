@@ -93,9 +93,5 @@ where
     )
     .map_err(map_strided_error)?;
 
-    Ok(TypedTensor::from_buffer_col_major(
-        out_shape,
-        Buffer::Host(out_data),
-        default_placement(),
-    ))
+    TypedTensor::from_buffer_col_major(out_shape, Buffer::Host(out_data), default_placement())
 }

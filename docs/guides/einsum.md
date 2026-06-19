@@ -29,11 +29,11 @@ use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 
 let mut compiler = GraphCompiler::new();
 let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
@@ -59,20 +59,20 @@ labels in that form.
 use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
-let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]));
+let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
+let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap()).unwrap();
 
 let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij").unwrap();
 let diag = tenferro_einsum::eager_tensor::einsum(&[&v], "i->ii").unwrap();
 
-assert_eq!(outer.data().shape(), &[2, 3]);
+assert_eq!(outer.shape(), &[2, 3]);
 assert_eq!(
-    outer.data().as_slice::<f64>().unwrap(),
+    outer.materialized().unwrap().as_slice::<f64>().unwrap(),
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
-assert_eq!(diag.data().shape(), &[3, 3]);
+assert_eq!(diag.shape(), &[3, 3]);
 assert_eq!(
-    diag.data().as_slice::<f64>().unwrap(),
+    diag.materialized().unwrap().as_slice::<f64>().unwrap(),
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
 );
 ```

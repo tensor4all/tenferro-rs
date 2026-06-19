@@ -77,7 +77,7 @@ use burn_ndarray::NdArray;
 
 impl TensorNetworkOps for NdArray<f64> {
     fn tn_einsum(subscripts: &str, inputs: Vec<FloatTensor<Self>>) -> FloatTensor<Self> {
-        // burn_to_tenferro → tenferro_einsum::einsum → tenferro_to_burn
+        // burn_to_tenferro → tenferro_einsum::traced_tensor::einsum → tenferro_to_burn
         todo!()
     }
 }

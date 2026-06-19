@@ -216,7 +216,7 @@ fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
     let memory_source = cubecl_source("memory.rs");
     let memory_ptr = source_section(
         &memory_source,
-        "pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {",
+        "pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {",
         "fn upload_typed<",
     );
     assert_ordered_needles(
@@ -314,7 +314,7 @@ fn cubecl_scatter_validates_all_device_inputs_before_binding() {
     let scatter_complex = source_section(
         &mod_source,
         "    fn scatter_complex_typed<",
-        "impl BackendRuntimeCache for CubeclBackend",
+        "impl BackendRuntimeCache for CudaBackend",
     );
     assert_ordered_needles(
         "scatter_complex_typed",
@@ -337,7 +337,7 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
         "    pub(crate) fn client(&self)",
     );
     assert_ordered_needles(
-        "CubeclRuntime::new",
+        "CudaRuntime::new",
         new_source,
         &[
             "cudarc::runtime::result::device::set",
@@ -345,13 +345,14 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
             "cudarc::driver::result::primary_ctx::retain",
             "cudarc::driver::result::ctx::set_current",
             "let device = CudaDevice::new(device_ordinal);",
-            "let client = CudaRuntime::client(&device);",
+            "let client =",
+            "::client(&device);",
         ],
     );
 
-    let drop_source = source_section(&runtime_source, "impl Drop for CubeclRuntime", "}");
+    let drop_source = source_section(&runtime_source, "impl Drop for CudaRuntime", "}");
     assert_ordered_needles(
-        "CubeclRuntime::drop",
+        "CudaRuntime::drop",
         drop_source,
         &[
             "let _ = self.synchronize();",
@@ -410,6 +411,6 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cubecl_runtime_exposes_explicit_synchronize() {
-    let _sync: fn(&tenferro_gpu::CubeclRuntime) -> tenferro_tensor::Result<()> =
-        tenferro_gpu::CubeclRuntime::synchronize;
+    let _sync: fn(&tenferro_gpu::CudaRuntime) -> tenferro_tensor::Result<()> =
+        tenferro_gpu::CudaRuntime::synchronize;
 }

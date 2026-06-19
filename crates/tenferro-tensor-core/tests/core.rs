@@ -13,6 +13,18 @@ fn host_tensor_uses_host_specific_public_name() {
 }
 
 #[test]
+fn tensor_core_does_not_expose_row_major_compatibility_apis() {
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/lib.rs"))
+        .expect("tenferro-tensor-core source must be readable");
+
+    assert!(
+        !source.contains("from_vec_row_major") && !source.contains("into_vec_row_major"),
+        "tensor-core public API must stay column-major only; row-major conversion belongs at external boundaries"
+    );
+}
+
+#[test]
 fn dynamic_rank_shape_roundtrips_vec() {
     let shape = <DynRank as TensorRank>::shape_from_vec(vec![2, 3].into()).unwrap();
     assert_eq!(shape.as_ref(), &[2, 3]);
@@ -515,11 +527,11 @@ fn dynamic_tensor_and_view_report_dtype_mismatch() {
 }
 
 #[test]
-fn layout_helpers_and_row_major_roundtrip() {
+fn layout_helpers_and_col_major_roundtrip() {
     assert_eq!(col_major_strides(&[2, 3]).unwrap().as_slice(), &[1, 2]);
-    let tensor = HostTensor::from_vec_row_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
+    let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4]).unwrap();
     assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
-    assert_eq!(tensor.into_vec_row_major().unwrap().1, vec![1, 2, 3, 4]);
+    assert_eq!(tensor.into_vec_col_major().1, vec![1, 3, 2, 4]);
 }
 
 #[test]
@@ -546,14 +558,14 @@ fn typed_owned_accessors_and_exports_cover_success_and_errors() {
 }
 
 #[test]
-fn scalar_row_major_helpers_cover_scalar_and_empty_shapes() {
-    let scalar = HostTensor::from_vec_row_major(vec![], vec![7_i64]).unwrap();
+fn scalar_col_major_helpers_cover_scalar_and_empty_shapes() {
+    let scalar = HostTensor::from_vec_col_major(vec![], vec![7_i64]).unwrap();
     assert_eq!(scalar.shape(), &[]);
-    assert_eq!(scalar.into_vec_row_major().unwrap().1, vec![7]);
+    assert_eq!(scalar.into_vec_col_major().1, vec![7]);
 
-    let empty = HostTensor::<i64>::from_vec_row_major(vec![0, 3], vec![]).unwrap();
+    let empty = HostTensor::<i64>::from_vec_col_major(vec![0, 3], vec![]).unwrap();
     assert!(empty.is_empty());
-    assert_eq!(empty.into_vec_row_major().unwrap().1, Vec::<i64>::new());
+    assert_eq!(empty.into_vec_col_major().1, Vec::<i64>::new());
 }
 
 #[test]
@@ -623,8 +635,8 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
 }
 
 #[test]
-fn dynamic_row_major_and_view_metadata_ops_cover_all_variants() {
-    let tensor = Tensor::from_vec_row_major(vec![1, 2], vec![10_i64, 20]).unwrap();
+fn dynamic_col_major_and_view_metadata_ops_cover_all_variants() {
+    let tensor = Tensor::from_vec_col_major(vec![1, 2], vec![10_i64, 20]).unwrap();
     assert_eq!(tensor.shape(), &[1, 2]);
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[10, 20]);
 
@@ -662,7 +674,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
 
     let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap();
     let view = tensor.as_view();
-    assert!(view.is_contiguous_col_major());
+    assert!(view.is_compact_col_major());
     assert!(matches!(
         view.transpose_view(&[0]).unwrap_err(),
         Error::InvalidPermutationLength {

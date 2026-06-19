@@ -41,7 +41,7 @@ An extension crate is responsible for:
 
 Keep operation identity and runtime caches separate.
 
-The `ExtensionOpTrait` value is the operation's graph identity. It participates
+The `ExtensionOp` value is the operation's graph identity. It participates
 in hashing, equality, graph comparison, and AD rule lookup. Put parameters that
 change the meaning of the operation there: axes, normalization mode, algorithm
 choice, and similar values. Do not hide unbounded plan caches, vendor handles,
@@ -70,22 +70,22 @@ users a way to clear it and inspect retained entries.
 
 ## Implementing An Extension Op
 
-Implement `tenferro_runtime::extension::ExtensionOpTrait` for the operation
+Implement `tenferro_runtime::extension::ExtensionOp` for the operation
 descriptor. It carries operation parameters such as axes, modes, constants, or
 kernel configuration. Tensor-valued parameters should usually be normal inputs,
 not descriptor fields.
 
 Extension operation descriptors do not need process-global registration. Construct
-`Arc<dyn ExtensionOpTrait>` and pass it to `tenferro_runtime::extension::apply` for
+`Arc<dyn ExtensionOp>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
-For AD, implement `tenferro_ad::extension::ExtensionAdRuleTrait`, put the rule
+For AD, implement `tenferro_ad::extension::ExtensionAdRule`, put the rule
 in a `tenferro_ad::extension::ExtensionRuleSet`, and attach that set with
 `tenferro_ad::AdContext::builder().with_extension_rules(...)`. Rule builders
 expose incoming tangents/cotangents and helper methods for emitting tensor
 operations, so extension authors do not need to handle graph IDs directly. The
-process-global `register_extension_rule` helper remains available only for
-compatibility with older global lookup paths.
+extension crate should expose a small `ad_rules()` helper that constructs the
+fresh rule set its operations need.
 
 When porting Julia `frule` / `rrule` code:
 
@@ -97,7 +97,7 @@ When porting Julia `frule` / `rrule` code:
 
 The lower-level adapter API remains available for specialized extension
 authors who need direct graph-builder control. New extension authors should
-start with `ExtensionAdRuleTrait` plus an explicit `ExtensionRuleSet`.
+start with `ExtensionAdRule` plus an explicit `ExtensionRuleSet`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
 removed; operation descriptors are carried directly in the graph.
 

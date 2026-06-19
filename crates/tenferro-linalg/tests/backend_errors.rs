@@ -13,35 +13,35 @@ use tenferro_tensor::{
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn c32_tensor(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
-    Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::C32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn i32_tensor(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
-    Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::I32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn f64_values(tensor: &Tensor) -> Vec<f64> {
     match tensor {
-        Tensor::F64(tensor) => tensor.host_data().to_vec(),
+        Tensor::F64(tensor) => tensor.host_data().unwrap().to_vec(),
         other => panic!("expected F64 tensor, got {:?}", other.dtype()),
     }
 }
 
 fn c64_values(tensor: &Tensor) -> Vec<Complex64> {
     match tensor {
-        Tensor::C64(tensor) => tensor.host_data().to_vec(),
+        Tensor::C64(tensor) => tensor.host_data().unwrap().to_vec(),
         other => panic!("expected C64 tensor, got {:?}", other.dtype()),
     }
 }
@@ -55,11 +55,14 @@ fn opaque_backend_placement() -> Placement {
 
 fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
     let len = shape.iter().product();
-    Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
-        shape,
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
-        opaque_backend_placement(),
-    ))
+    Tensor::F64(
+        TypedTensor::<f64>::from_buffer_col_major(
+            shape,
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
+            opaque_backend_placement(),
+        )
+        .unwrap(),
+    )
 }
 
 fn assert_backend_download_error<T>(result: tenferro_tensor::Result<T>, expected_op: &'static str) {
@@ -146,7 +149,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
             reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
             broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
-            convert(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
+            cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
             extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
             embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
             tril(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
@@ -204,7 +207,8 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         }
     }
 
-    let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
+    let input =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]).unwrap();
     let mut backend = DefaultOnlyLinalgBackend;
 
     let err = backend.lu_factor(&Tensor::F64(input.clone())).unwrap_err();
@@ -248,7 +252,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]));
+    let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let err = backend
         .lu_solve_prepared(
             &Tensor::F64(input.clone()),
@@ -319,8 +323,8 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
     let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
     let factors = backend.lu_factor(&a).unwrap();
     assert!(matches!(&factors[0], Tensor::F32(t) if t.shape() == [2, 2]));
-    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data() == [2, 2]));
-    assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data() == [-1.0]));
+    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [2, 2]));
+    assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data().unwrap() == [-1.0]));
 
     let a = c32_tensor(
         vec![2, 2],
@@ -333,8 +337,10 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
     );
     let factors = backend.lu_factor(&a).unwrap();
     assert!(matches!(&factors[0], Tensor::C32(t) if t.shape() == [2, 2]));
-    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data() == [1, 2]));
-    assert!(matches!(&factors[2], Tensor::C32(t) if t.host_data() == [Complex32::new(1.0, 0.0)]));
+    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [1, 2]));
+    assert!(
+        matches!(&factors[2], Tensor::C32(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
+    );
 }
 
 #[test]

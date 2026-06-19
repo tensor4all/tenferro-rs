@@ -57,7 +57,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::from_vec_col_major(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data).unwrap()
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -80,7 +80,7 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
 }
 
 fn scalar_one() -> Tensor {
-    Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)])
+    Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap()
 }
 
 fn inner_fresh_backend_cache(
@@ -179,7 +179,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("fresh_backend_cache", &params), |b| {
             b.iter(|| {
-                let mut backend = CpuBackend::with_threads(1);
+                let mut backend = CpuBackend::with_threads(1).unwrap();
                 let output = inner_fresh_backend_cache(
                     black_box(&mut backend),
                     black_box(&fixture.bra_tensors),
@@ -194,7 +194,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     (
-                        CpuBackend::with_threads(1),
+                        CpuBackend::with_threads(1).unwrap(),
                         <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
                     )
                 },
@@ -216,7 +216,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     (
-                        CpuBackend::with_threads(1),
+                        CpuBackend::with_threads(1).unwrap(),
                         <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
                     )
                 },

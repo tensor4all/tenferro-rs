@@ -34,10 +34,10 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
     shape: Vec<usize>,
     data: Vec<T>,
     template: &TypedTensor<U>,
-) -> TypedTensor<T> {
-    let mut tensor = TypedTensor::from_vec_col_major(shape, data);
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
     tensor.set_placement(template.placement().clone());
-    tensor
+    Ok(tensor)
 }
 
 fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
@@ -45,14 +45,18 @@ fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
     shape: Vec<usize>,
     data: &[T],
     template: &TypedTensor<U>,
-) -> TypedTensor<T> {
+) -> tenferro_tensor::Result<TypedTensor<T>> {
     let mut owned = buffers.acquire_with_capacity::<T>(data.len());
     owned.extend_from_slice(data);
     tensor_from_vec_with_template(shape, owned, template)
 }
 
-fn refill_tensor_from_slice<T: Copy>(tensor: &mut TypedTensor<T>, data: &[T]) {
-    tensor.host_data_mut().copy_from_slice(data);
+fn refill_tensor_from_slice<T: Copy>(
+    tensor: &mut TypedTensor<T>,
+    data: &[T],
+) -> tenferro_tensor::Result<()> {
+    tensor.host_data_mut()?.copy_from_slice(data);
+    Ok(())
 }
 
 pub(crate) fn split_core_and_batch_result<'a, T>(
@@ -240,15 +244,15 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
-    );
+    )?;
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let start = batch_idx * slice_size;
             let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[start..end]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
         }
         let batch_output = op(buffers, &batch_input)?;
 
@@ -266,7 +270,7 @@ where
         }
 
         match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()),
+            Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
                 return Err(tenferro_tensor::Error::InvalidConfig {
                     op: op_name,
@@ -285,7 +289,7 @@ where
         op: op_name,
         message: "missing output data".into(),
     })?;
-    Ok(tensor_from_vec_with_template(out_shape, out_data, input))
+    tensor_from_vec_with_template(out_shape, out_data, input)
 }
 
 pub(crate) fn batched_multi<T, F>(
@@ -319,15 +323,15 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
-    );
+    )?;
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let start = batch_idx * slice_size;
             let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[start..end]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -367,18 +371,18 @@ where
                     rhs: out_shapes[idx].clone(),
                 });
             }
-            out_data[idx].extend_from_slice(batch_output.host_data());
+            out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
     }
 
-    Ok(out_shapes
+    out_shapes
         .into_iter()
         .zip(out_data)
         .map(|(mut out_shape, out_data)| {
             out_shape.extend_from_slice(batch_shape);
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
-        .collect())
+        .collect()
 }
 
 pub(crate) fn batched_multi_convert<InT: PoolScalar, OutT: Clone, F>(
@@ -411,15 +415,15 @@ where
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
-        &input.host_data()[first_range],
+        &input.host_data()?[first_range],
         input,
-    );
+    )?;
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
             let start = batch_idx * slice_size;
             let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()[start..end]);
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -459,18 +463,18 @@ where
                     rhs: out_shapes[idx].clone(),
                 });
             }
-            out_data[idx].extend_from_slice(batch_output.host_data());
+            out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
     }
 
-    Ok(out_shapes
+    out_shapes
         .into_iter()
         .zip(out_data)
         .map(|(mut out_shape, out_data)| {
             out_shape.extend_from_slice(batch_shape);
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
-        .collect())
+        .collect()
 }
 
 pub(crate) fn batched_binary_result<T, F>(
@@ -520,15 +524,15 @@ where
     let mut batch_a = tensor_from_pooled_slice_with_template(
         buffers,
         a_core_shape.to_vec(),
-        &a.host_data()[a_first_range],
+        &a.host_data()?[a_first_range],
         a,
-    );
+    )?;
     let mut batch_b = tensor_from_pooled_slice_with_template(
         buffers,
         b_core_shape.to_vec(),
-        &b.host_data()[b_first_range],
+        &b.host_data()?[b_first_range],
         b,
-    );
+    )?;
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
@@ -536,8 +540,8 @@ where
             let a_end = a_start + a_slice_size;
             let b_start = batch_idx * b_slice_size;
             let b_end = b_start + b_slice_size;
-            refill_tensor_from_slice(&mut batch_a, &a.host_data()[a_start..a_end]);
-            refill_tensor_from_slice(&mut batch_b, &b.host_data()[b_start..b_end]);
+            refill_tensor_from_slice(&mut batch_a, &a.host_data()?[a_start..a_end])?;
+            refill_tensor_from_slice(&mut batch_b, &b.host_data()?[b_start..b_end])?;
         }
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
@@ -555,7 +559,7 @@ where
         }
 
         match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()),
+            Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
                 return Err(tenferro_tensor::Error::InvalidConfig {
                     op: op_name,
@@ -574,7 +578,7 @@ where
         op: op_name,
         message: "missing output data".into(),
     })?;
-    Ok(tensor_from_vec_with_template(out_shape, out_data, b))
+    tensor_from_vec_with_template(out_shape, out_data, b)
 }
 
 pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -599,12 +603,12 @@ pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Ve
     let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
     match input {
         Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
-            Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
-            Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
+            Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
+            Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
         ]),
         Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
-            Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
-            Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
+            Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
+            Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
         ]),
         _ => Err(tenferro_tensor::Error::backend_failure(
             "eig",

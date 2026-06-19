@@ -8,13 +8,13 @@
 //! # Examples
 //!
 //! ```
-//! use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+//! use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 //! use tenferro_tensor::Tensor;
 //!
 //! let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
 //! let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
 //! let result = tropical_einsum_with_argmax(
-//!     TropicalEinsumKind::MaxPlus,
+//!     TropicalKind::MaxPlus,
 //!     &[&a, &b],
 //!     "ij,jk->ik",
 //! )?;
@@ -29,24 +29,9 @@ use tenferro_einsum::{ContractionTree, Subscripts};
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use crate::cpu::{tropical_gemm_with_argmax, TropicalGemmKind};
+use crate::TropicalKind;
 
 const OP: &str = "tropical_einsum_with_argmax";
-
-/// Tropical einsum semiring flavor.
-///
-/// This is an alias for the crate-level [`crate::TropicalKind`], kept here so
-/// callers can import einsum-specific APIs from one module without introducing a
-/// second semiring enum.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_ext_tropical::{einsum::TropicalEinsumKind, TropicalKind};
-///
-/// assert_eq!(TropicalEinsumKind::MaxPlus, TropicalKind::MaxPlus);
-/// assert_ne!(TropicalEinsumKind::MaxPlus, TropicalEinsumKind::MinPlus);
-/// ```
-pub type TropicalEinsumKind = crate::TropicalKind;
 
 /// Argmax metadata captured for one pairwise tropical contraction step.
 ///
@@ -55,12 +40,12 @@ pub type TropicalEinsumKind = crate::TropicalKind;
 /// # Examples
 ///
 /// ```
-/// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+/// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
 /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-/// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+/// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ///
 /// assert_eq!(result.argmax[0].indices(), &[0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -96,12 +81,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].indices(), &[0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -116,12 +101,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].output_shape(), &[1, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -136,12 +121,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].output_subscripts(), &[b'i' as u32, b'k' as u32]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -156,12 +141,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].contracted_subscripts(), &[b'j' as u32]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -178,12 +163,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].contracted_shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -201,12 +186,12 @@ impl TropicalArgmaxStep {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
     /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
-    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].winner_coordinates(0).unwrap(), vec![0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -223,12 +208,12 @@ impl TropicalArgmaxStep {
 /// # Examples
 ///
 /// ```
-/// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+/// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]);
 /// let b = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f32]);
-/// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+/// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ///
 /// assert_eq!(result.output.as_slice::<f32>().unwrap(), &[5.0]);
 /// assert_eq!(result.argmax.len(), 1);
@@ -257,18 +242,18 @@ pub struct TropicalEinsumResult {
 /// # Examples
 ///
 /// ```
-/// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+/// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
 /// let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
-/// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ki")?;
+/// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ki")?;
 ///
 /// assert_eq!(result.output.as_slice::<f64>().unwrap(), &[11.0, 10.0, 15.0, 6.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub fn tropical_einsum_with_argmax(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     inputs: &[&Tensor],
     notation: &str,
 ) -> tenferro_tensor::Result<TropicalEinsumResult> {
@@ -293,7 +278,7 @@ pub fn tropical_einsum_with_argmax(
 /// ```
 /// use tenferro_einsum::Subscripts;
 /// use tenferro_ext_tropical::einsum::{
-///     tropical_einsum_subscripts_with_argmax, TropicalEinsumKind,
+///     tropical_einsum_subscripts_with_argmax, TropicalKind,
 /// };
 /// use tenferro_tensor::Tensor;
 ///
@@ -301,14 +286,14 @@ pub fn tropical_einsum_with_argmax(
 /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
 /// let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
 /// let result =
-///     tropical_einsum_subscripts_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], &subscripts)?;
+///     tropical_einsum_subscripts_with_argmax(TropicalKind::MaxPlus, &[&a, &b], &subscripts)?;
 ///
 /// assert_eq!(result.output.as_slice::<f64>().unwrap(), &[3.0]);
 /// assert_eq!(result.argmax[0].indices(), &[0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub fn tropical_einsum_subscripts_with_argmax(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> tenferro_tensor::Result<TropicalEinsumResult> {
@@ -398,7 +383,7 @@ pub fn tropical_einsum_subscripts_with_argmax(
 }
 
 fn execute_typed<T>(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
     lhs_subs: &[u32],
@@ -441,7 +426,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn execute_target_order_gemm_typed<T>(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     inputs: &[&Tensor],
     lhs: &[T],
     rhs: &[T],
@@ -466,7 +451,7 @@ where
             contracted_shape,
         );
         return Ok(TropicalEinsumResult {
-            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new()),
+            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new())?,
             argmax: vec![argmax_step],
         });
     }
@@ -542,14 +527,14 @@ where
         contracted_shape,
     );
     Ok(TropicalEinsumResult {
-        output: Tensor::from_vec_col_major(requested_shape, values),
+        output: Tensor::from_vec_col_major(requested_shape, values)?,
         argmax: vec![argmax_step],
     })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn execute_fallback_typed<T>(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     inputs: &[&Tensor],
     lhs: &[T],
     rhs: &[T],
@@ -576,7 +561,7 @@ where
             contracted_shape,
         );
         return Ok(TropicalEinsumResult {
-            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new()),
+            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new())?,
             argmax: vec![argmax_step],
         });
     }
@@ -640,7 +625,7 @@ where
         contracted_shape,
     );
     Ok(TropicalEinsumResult {
-        output: Tensor::from_vec_col_major(requested_shape, values),
+        output: Tensor::from_vec_col_major(requested_shape, values)?,
         argmax: vec![argmax_step],
     })
 }
@@ -816,22 +801,22 @@ fn offset_for_axes(
         })
 }
 
-fn tropical_identity<T: Float>(kind: TropicalEinsumKind) -> T {
+fn tropical_identity<T: Float>(kind: TropicalKind) -> T {
     match kind {
-        TropicalEinsumKind::MaxPlus => T::neg_infinity(),
-        TropicalEinsumKind::MinPlus => T::infinity(),
+        TropicalKind::MaxPlus => T::neg_infinity(),
+        TropicalKind::MinPlus => T::infinity(),
     }
 }
 
 fn tropical_candidate_is_better<T: Float>(
-    kind: TropicalEinsumKind,
+    kind: TropicalKind,
     candidate: T,
     best: T,
     has_ordered_candidate: bool,
 ) -> bool {
     match kind {
-        TropicalEinsumKind::MaxPlus => !has_ordered_candidate || candidate > best,
-        TropicalEinsumKind::MinPlus => !has_ordered_candidate || candidate < best,
+        TropicalKind::MaxPlus => !has_ordered_candidate || candidate > best,
+        TropicalKind::MinPlus => !has_ordered_candidate || candidate < best,
     }
 }
 

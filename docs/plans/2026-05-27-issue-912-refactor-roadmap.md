@@ -562,13 +562,13 @@ static PRIMITIVE_AD_RULES: &[PrimitiveAdRule] = &[
 ];
 ```
 
-Move the current `try_linearize` and `try_transpose_rule` match arm bodies into
+Move the current `linearize` and `transpose_rule` match arm bodies into
 small private wrapper functions. Keep `StdTensorOp::Extension(_)` handling in
 `ad/mod.rs`, outside the primitive registry.
 
 **Step 4: Replace lookup**
 
-In `try_linearize`:
+In `linearize`:
 
 ```rust
 let Some(kind) = op.primitive_kind() else {
@@ -1012,7 +1012,7 @@ runtime, memory, upload/download, and FFI library loading in `tenferro-gpu`.
 Under `#[cfg(feature = "cuda")]`:
 
 ```rust
-impl crate::backend::LinalgBackend for tenferro_gpu::cubecl::CubeclBackend {
+impl crate::backend::LinalgBackend for tenferro_gpu::cubecl::CudaBackend {
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         crate::gpu::svd(self, input)
     }

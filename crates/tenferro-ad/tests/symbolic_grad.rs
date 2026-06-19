@@ -26,13 +26,13 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 #[test]
 fn grad_of_sum_of_squares_against_symbolic_input() {
     // f(x) = sum(x * x), df/dx = 2 * x
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let sq = &x * &x;
-    let loss = sq.reduce_sum(&[0]);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let sq = (&x * &x).unwrap();
+    let loss = sq.reduce_sum(&[0]).unwrap();
 
     let g = loss.grad(&x).expect("grad build");
 
-    let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g
         .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
@@ -45,22 +45,22 @@ fn grad_of_sum_of_squares_against_symbolic_input() {
 #[test]
 fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
     // Same symbolic grad graph, eval with shape [3] then shape [5].
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let sq = &x * &x;
-    let loss = sq.reduce_sum(&[0]);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let sq = (&x * &x).unwrap();
+    let loss = sq.reduce_sum(&[0]).unwrap();
     let g_template = loss.grad(&x).expect("grad build");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let g1 = g_template.clone();
-    let b1 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b1 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let out1 = g1
         .run_with_inputs_auto(&mut engine, &[(&x, &b1)])
         .expect("eval1");
     assert_eq!(f64_data(&out1), &[2.0, 4.0, 6.0]);
 
     let g2 = g_template.clone();
-    let b2 = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+    let b2 = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
     let out2 = g2
         .run_with_inputs_auto(&mut engine, &[(&x, &b2)])
         .expect("eval2");
@@ -71,16 +71,16 @@ fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
 fn grad_of_dot_product_against_two_symbolic_inputs() {
     // f(a, b) = sum(a * b)
     // df/da = b, df/db = a
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let loss = (&a * &b).reduce_sum(&[0]);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let loss = (&a * &b).unwrap().reduce_sum(&[0]).unwrap();
 
     let grad_a = loss.grad(&a).expect("grad a");
     let grad_b = loss.grad(&b).expect("grad b");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let tb = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let tb = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
 
     let out_a = grad_a
         .run_with_inputs_auto(&mut engine, &[(&a, &ta), (&b, &tb)])
@@ -96,13 +96,13 @@ fn grad_of_dot_product_against_two_symbolic_inputs() {
 #[test]
 fn grad_with_concrete_shape_placeholder() {
     // input_concrete_shape placeholder works for AD too.
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]);
-    let sq = &x * &x;
-    let loss = sq.reduce_sum(&[0]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
+    let sq = (&x * &x).unwrap();
+    let loss = sq.reduce_sum(&[0]).unwrap();
     let g = loss.grad(&x).expect("grad build");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let bound = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let bound = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let out = g
         .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("eval grad");

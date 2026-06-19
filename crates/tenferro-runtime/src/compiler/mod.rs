@@ -112,7 +112,7 @@ pub fn compile_std_to_exec_with_options(
                     let extents = exact_extents_from_shapes(&shapes);
                     (dtypes, shapes, extents)
                 } else {
-                    let dtype = infer_output_dtype(&instr.operation, &input_dtypes);
+                    let dtype = infer_output_dtype(&instr.operation, &input_dtypes)?;
                     let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs)?;
                     let extents = infer_output_extents(&instr.operation, &input_shapes_refs)?;
                     if shapes.len() != instr.outputs.len() {
@@ -750,11 +750,14 @@ fn sort_contracting_dims(config: &mut DotGeneralConfig) {
 }
 
 fn consecutive_if_sorted(dims: &[usize]) -> bool {
-    if dims.is_empty() {
+    let Some((&first, rest)) = dims.split_first() else {
         return true;
-    }
-    let min_val = *dims.iter().min().expect("non-empty");
-    let max_val = *dims.iter().max().expect("non-empty");
+    };
+    let (min_val, max_val) = rest
+        .iter()
+        .fold((first, first), |(min_val, max_val), &dim| {
+            (min_val.min(dim), max_val.max(dim))
+        });
     max_val - min_val == dims.len() - 1
 }
 

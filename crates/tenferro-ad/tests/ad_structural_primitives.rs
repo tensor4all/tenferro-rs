@@ -53,21 +53,25 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
     let min_weights = vec![1.5_f64, -0.25, 0.75, 2.25];
 
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], x_data.clone()),
+        Tensor::from_vec_col_major(vec![4], x_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let y = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], y_data.clone()),
+        Tensor::from_vec_col_major(vec![4], y_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let max_weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4], max_weights.clone()),
+        Tensor::from_vec_col_major(vec![4], max_weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let min_weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4], min_weights.clone()),
+        Tensor::from_vec_col_major(vec![4], min_weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let max_loss = x
         .maximum(&y)
@@ -86,8 +90,8 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
     let loss = max_loss.add(&min_loss).unwrap();
     let _ = loss.backward().unwrap();
 
-    let grad_x = x.grad().unwrap();
-    let grad_y = y.grad().unwrap();
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_y = y.grad().unwrap().unwrap();
 
     let loss_for_x = |xs: &[f64]| {
         let max_part = weighted_sum(
@@ -135,21 +139,25 @@ fn eager_select_gradients_match_finite_diff() {
     let weights = vec![0.5_f64, -1.0, 2.0, 1.25];
 
     let condition = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4], condition_data.clone()),
+        Tensor::from_vec_col_major(vec![4], condition_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let on_true = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], true_data.clone()),
+        Tensor::from_vec_col_major(vec![4], true_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let on_false = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], false_data.clone()),
+        Tensor::from_vec_col_major(vec![4], false_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4], weights.clone()),
+        Tensor::from_vec_col_major(vec![4], weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let loss = EagerTensor::select(&condition, &on_true, &on_false)
         .unwrap()
@@ -181,11 +189,11 @@ fn eager_select_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(on_true.grad().unwrap().as_ref()),
+        f64_data(on_true.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(loss_for_true, &true_data),
     );
     assert_close(
-        f64_data(on_false.grad().unwrap().as_ref()),
+        f64_data(on_false.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(loss_for_false, &false_data),
     );
 }
@@ -199,21 +207,25 @@ fn eager_clamp_gradients_match_finite_diff() {
     let weights = vec![0.5_f64, -1.25, 2.0, 0.75];
 
     let input = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], input_data.clone()),
+        Tensor::from_vec_col_major(vec![4], input_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let lower = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], lower_data.clone()),
+        Tensor::from_vec_col_major(vec![4], lower_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let upper = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], upper_data.clone()),
+        Tensor::from_vec_col_major(vec![4], upper_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4], weights.clone()),
+        Tensor::from_vec_col_major(vec![4], weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let loss = input
         .clamp(&lower, &upper)
@@ -235,18 +247,18 @@ fn eager_clamp_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(input.grad().unwrap().as_ref()),
+        f64_data(input.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(|xs| loss_with(xs, &lower_data, &upper_data), &input_data),
     );
     assert_close(
-        f64_data(lower.grad().unwrap().as_ref()),
+        f64_data(lower.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(
             |lows| loss_with(&input_data, lows, &upper_data),
             &lower_data,
         ),
     );
     assert_close(
-        f64_data(upper.grad().unwrap().as_ref()),
+        f64_data(upper.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(
             |highs| loss_with(&input_data, &lower_data, highs),
             &upper_data,
@@ -261,13 +273,15 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
     let weights = vec![0.5_f64, -1.25];
 
     let input = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], input_data.clone()),
+        Tensor::from_vec_col_major(vec![2, 3], input_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], weights.clone()),
+        Tensor::from_vec_col_major(vec![2], weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let loss = input
         .extract_diag(0, 1)
@@ -280,7 +294,7 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
 
     let loss_for_input = |values: &[f64]| weights[0] * values[0] + weights[1] * values[3];
 
-    let grad = input.grad().unwrap();
+    let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), &[2, 3]);
     assert_close(
         f64_data(&grad),
@@ -299,13 +313,15 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
     ];
 
     let input = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(input_shape.clone(), input_data.clone()),
+        Tensor::from_vec_col_major(input_shape.clone(), input_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2, 3], weights.clone()),
+        Tensor::from_vec_col_major(vec![3, 2, 3], weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let loss = input
         .embed_diag(1, 0)
@@ -327,7 +343,7 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
             .sum()
     };
 
-    let grad = input.grad().unwrap();
+    let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), input_shape.as_slice());
     assert_close(
         f64_data(&grad),
@@ -344,21 +360,25 @@ fn eager_concatenate_gradients_match_finite_diff() {
     let weights = vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 0.75];
 
     let left = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], left_data.clone()),
+        Tensor::from_vec_col_major(vec![2], left_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let middle = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![1], middle_data.clone()),
+        Tensor::from_vec_col_major(vec![1], middle_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let right = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![3], right_data.clone()),
+        Tensor::from_vec_col_major(vec![3], right_data.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let weights_tensor = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![6], weights.clone()),
+        Tensor::from_vec_col_major(vec![6], weights.clone()).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
 
     let concatenated = EagerTensor::concatenate(&[&left, &middle, &right], 0).unwrap();
     let loss = concatenated
@@ -400,15 +420,15 @@ fn eager_concatenate_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(left.grad().unwrap().as_ref()),
+        f64_data(left.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(loss_for_left, &left_data),
     );
     assert_close(
-        f64_data(middle.grad().unwrap().as_ref()),
+        f64_data(middle.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(loss_for_middle, &middle_data),
     );
     assert_close(
-        f64_data(right.grad().unwrap().as_ref()),
+        f64_data(right.grad().unwrap().unwrap().as_ref()),
         &finite_diff_unary(loss_for_right, &right_data),
     );
 }

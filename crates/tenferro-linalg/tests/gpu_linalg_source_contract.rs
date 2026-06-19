@@ -72,7 +72,7 @@ fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
     for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
         assert!(
             !cubecl_mod.contains(needle),
-            "CubeclBackend should not expose linalg-specific state: found {needle}"
+            "CudaBackend should not expose linalg-specific state: found {needle}"
         );
     }
 }

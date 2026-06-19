@@ -25,12 +25,12 @@ const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
 
 fn f64_scalar(val: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]).unwrap())
 }
 
 fn get_f64_scalar(t: &Tensor) -> f64 {
     match t {
-        Tensor::F64(inner) => inner.host_data()[0],
+        Tensor::F64(inner) => inner.host_data().unwrap()[0],
         _ => panic!("expected F64"),
     }
 }
@@ -86,12 +86,12 @@ fn fixed_point_traced(
     conv_tol: f64,
     engine: &mut GraphExecutor<CpuBackend>,
 ) -> (TracedTensor, usize) {
-    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0));
+    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0)).unwrap();
     let mut prev_val = x0;
 
     for iter in 1..=max_iter {
         // Build graph: x_new = a * cos(x)
-        let x_new = a * &x.cos();
+        let x_new = (a * &x.cos()).unwrap();
 
         // Convergence check — eval() must NOT break the graph
         let x_check = x_new.clone();
@@ -113,7 +113,7 @@ fn fixed_point_traced(
 
 #[test]
 fn eval_mid_loop_preserves_graph_connectivity() {
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
@@ -142,7 +142,7 @@ fn iterative_ad_gradient_matches_finite_diff() {
     let conv_tol = 1e-12;
 
     // --- AD gradient ---
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &mut engine);
 
@@ -170,7 +170,7 @@ fn iterative_ad_gradient_matches_finite_diff() {
 #[test]
 fn eval_all_evaluates_primal_and_gradient() {
     let a_val = 0.8_f64;
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
@@ -209,10 +209,10 @@ fn graph_size_grows_linearly() {
     // Run with a fixed number of iterations (no convergence check)
     // and measure graph op count.
     fn ops_for_k_iters(k: usize) -> usize {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
-        let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
+        let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5)).unwrap();
         for _ in 0..k {
-            x = &a * &x.cos();
+            x = (&a * &x.cos()).unwrap();
         }
         total_ops(x.graph())
     }

@@ -454,7 +454,7 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let n = square_matrix_dim(input, "full_piv_lu")?;
-    let mut lu = input.host_data().to_vec();
+    let mut lu = input.host_data()?.to_vec();
     let (ipiv, jpiv, _info) = factor_getc2("full_piv_lu", &mut lu, n)?;
 
     let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
@@ -483,11 +483,11 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
     };
 
     Ok(vec![
-        tensor_from_vec_with_template(vec![n, n], p_data, input),
-        tensor_from_vec_with_template(vec![n, n], l_data, input),
-        tensor_from_vec_with_template(vec![n, n], u_data, input),
-        tensor_from_vec_with_template(vec![n, n], q_data, input),
-        tensor_from_vec_with_template(vec![], vec![parity], input),
+        tensor_from_vec_with_template(vec![n, n], p_data, input)?,
+        tensor_from_vec_with_template(vec![n, n], l_data, input)?,
+        tensor_from_vec_with_template(vec![n, n], u_data, input)?,
+        tensor_from_vec_with_template(vec![n, n], q_data, input)?,
+        tensor_from_vec_with_template(vec![], vec![parity], input)?,
     ])
 }
 
@@ -508,9 +508,9 @@ fn solve_2d<T: LapackFullPivLu>(
     }
 
     let mut lu = if transpose_a {
-        transpose_col_major_data(a.host_data(), n, n)
+        transpose_col_major_data(a.host_data()?, n, n)
     } else {
-        a.host_data().to_vec()
+        a.host_data()?.to_vec()
     };
     let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n)?;
     if info > 0 {
@@ -520,7 +520,7 @@ fn solve_2d<T: LapackFullPivLu>(
         ));
     }
 
-    let mut rhs = b.host_data().to_vec();
+    let mut rhs = b.host_data()?.to_vec();
     let n_i32 = dim_i32(n, "full_piv_lu_solve")?;
     for col in 0..b_cols {
         let start = col * n;
@@ -538,7 +538,7 @@ fn solve_2d<T: LapackFullPivLu>(
         T::apply_inverse_scale(&mut rhs[start..end], scale);
     }
 
-    Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
+    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
 }
 
 pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
@@ -553,27 +553,27 @@ pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
                 vec![T::one(); parity_elements],
                 input,
-            ),
+            )?,
         ]);
     }
     super::helpers::batched_multi("full_piv_lu", buffers, input, full_piv_lu_2d)
@@ -602,11 +602,7 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b,
-        ));
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
     batched_binary_result("full_piv_lu_solve", buffers, a, b, |buffers, a, b| {
         solve_2d(buffers, a, b, transpose_a)

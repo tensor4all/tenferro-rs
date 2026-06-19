@@ -63,9 +63,7 @@ tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-feat
 
 The explicit provider features are `blas-openblas`, `blas-accelerate`, and
 `blas-mkl`. Cargo features are additive, so tenferro rejects builds that enable
-more than one explicit BLAS provider. The legacy `src-openblas`,
-`src-accelerate`, and `src-intel-mkl-dynamic-parallel` names remain aliases for
-the corresponding explicit provider features.
+more than one explicit BLAS provider.
 
 Provider build scripts may need environment variables when using system
 installations. OpenBLAS setups commonly use `OPENBLAS_LIB_DIR`; MKL setups
@@ -109,8 +107,8 @@ use tenferro_runtime::{tensor, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
 
     let c = tensor::matmul(&a, &b, &mut backend)?;
 

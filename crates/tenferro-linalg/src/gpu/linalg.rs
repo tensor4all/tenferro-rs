@@ -3,7 +3,7 @@ use std::ops::Neg;
 use std::os::raw::c_char;
 
 use cubecl::prelude::{ComplexCore, CubeElement, CubePrimitive};
-use cubecl_cuda::CudaRuntime;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
@@ -21,7 +21,7 @@ use tenferro_gpu::cuda_interop::{
 };
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
-use tenferro_gpu::{download_tensor, CubeclBackend, CubeclRuntime};
+use tenferro_gpu::{download_tensor, CudaBackend, CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
@@ -38,7 +38,7 @@ trait LinalgScalar:
     const NEEDS_RWORK: bool;
 
     fn copy_svd_v_to_vt(
-        rt: &CubeclRuntime,
+        rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -52,7 +52,7 @@ impl LinalgScalar for f32 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_svd_v_to_vt(
-        rt: &CubeclRuntime,
+        rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -68,7 +68,7 @@ impl LinalgScalar for f64 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_svd_v_to_vt(
-        rt: &CubeclRuntime,
+        rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -84,7 +84,7 @@ impl LinalgScalar for Complex32 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_svd_v_to_vt(
-        rt: &CubeclRuntime,
+        rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -100,7 +100,7 @@ impl LinalgScalar for Complex64 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_svd_v_to_vt(
-        rt: &CubeclRuntime,
+        rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -162,9 +162,7 @@ fn ensure_cubecl_resident_typed<T: 'static>(
     ensure_typed_tensor_resident(input, op)
 }
 
-fn linalg_handles(
-    backend: &CubeclBackend,
-) -> Result<CudaExtensionCacheGuard<'_, CudaLinalgHandles>> {
+fn linalg_handles(backend: &CudaBackend) -> Result<CudaExtensionCacheGuard<'_, CudaLinalgHandles>> {
     backend
         .cuda_extension_cache()
         .get_or_try_init(CudaLinalgHandles::load)
@@ -186,7 +184,7 @@ impl Workspace {
     }
 }
 
-pub(super) fn cholesky(backend: &mut CubeclBackend, input: &Tensor) -> Result<Tensor> {
+pub(super) fn cholesky(backend: &mut CudaBackend, input: &Tensor) -> Result<Tensor> {
     match input {
         Tensor::F32(t) => cholesky_typed(backend, t).map(Tensor::F32),
         Tensor::F64(t) => cholesky_typed(backend, t).map(Tensor::F64),
@@ -199,7 +197,7 @@ pub(super) fn cholesky(backend: &mut CubeclBackend, input: &Tensor) -> Result<Te
 }
 
 pub(super) fn triangular_solve(
-    backend: &mut CubeclBackend,
+    backend: &mut CudaBackend,
     a: &Tensor,
     b: &Tensor,
     left_side: bool,
@@ -236,7 +234,7 @@ pub(super) fn triangular_solve(
     }
 }
 
-pub(super) fn lu(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn lu(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => lu_typed(backend, t).map(|(p, l, u, parity)| {
             vec![
@@ -276,7 +274,7 @@ pub(super) fn lu(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tens
     }
 }
 
-pub(super) fn lu_factor(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn lu_factor(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => lu_factor_typed(backend, t).map(|(packed_lu, pivots, parity)| {
             vec![
@@ -312,7 +310,7 @@ pub(super) fn lu_factor(backend: &mut CubeclBackend, input: &Tensor) -> Result<V
     }
 }
 
-pub(super) fn full_piv_lu(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn full_piv_lu(_backend: &mut CudaBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::backend_failure(
         "full_piv_lu",
         "complete-pivoting LU is not implemented for the CubeCL backend",
@@ -320,7 +318,7 @@ pub(super) fn full_piv_lu(_backend: &mut CubeclBackend, _input: &Tensor) -> Resu
 }
 
 pub(super) fn full_piv_lu_solve(
-    _backend: &mut CubeclBackend,
+    _backend: &mut CudaBackend,
     _a: &Tensor,
     _b: &Tensor,
     _transpose_a: bool,
@@ -331,7 +329,7 @@ pub(super) fn full_piv_lu_solve(
     ))
 }
 
-pub(super) fn svd(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn svd(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => svd_typed(backend, t)
             .map(|(u, s, vt)| vec![Tensor::F32(u), Tensor::F32(s), Tensor::F32(vt)]),
@@ -347,7 +345,7 @@ pub(super) fn svd(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Ten
     }
 }
 
-pub(super) fn svd_values(backend: &mut CubeclBackend, input: &Tensor) -> Result<Tensor> {
+pub(super) fn svd_values(backend: &mut CudaBackend, input: &Tensor) -> Result<Tensor> {
     match input {
         Tensor::F32(t) => svd_values_typed(backend, t).map(Tensor::F32),
         Tensor::F64(t) => svd_values_typed(backend, t).map(Tensor::F64),
@@ -359,7 +357,7 @@ pub(super) fn svd_values(backend: &mut CubeclBackend, input: &Tensor) -> Result<
     }
 }
 
-pub(super) fn qr(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn qr(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => qr_typed(backend, t).map(|(q, r)| vec![Tensor::F32(q), Tensor::F32(r)]),
         Tensor::F64(t) => qr_typed(backend, t).map(|(q, r)| vec![Tensor::F64(q), Tensor::F64(r)]),
@@ -371,7 +369,7 @@ pub(super) fn qr(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tens
     }
 }
 
-pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn eigh(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => eigh_typed(backend, t).map(|(w, v)| vec![Tensor::F32(w), Tensor::F32(v)]),
         Tensor::F64(t) => eigh_typed(backend, t).map(|(w, v)| vec![Tensor::F64(w), Tensor::F64(v)]),
@@ -383,7 +381,7 @@ pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> Result<Vec<Te
     }
 }
 
-pub(super) fn eigh_values(backend: &mut CubeclBackend, input: &Tensor) -> Result<Tensor> {
+pub(super) fn eigh_values(backend: &mut CudaBackend, input: &Tensor) -> Result<Tensor> {
     match input {
         Tensor::F32(t) => eigh_values_typed(backend, t).map(Tensor::F32),
         Tensor::F64(t) => eigh_values_typed(backend, t).map(Tensor::F64),
@@ -395,7 +393,7 @@ pub(super) fn eigh_values(backend: &mut CubeclBackend, input: &Tensor) -> Result
     }
 }
 
-pub(super) fn eig(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn eig(_backend: &mut CudaBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::backend_failure(
         "eig",
         "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
@@ -405,7 +403,7 @@ pub(super) fn eig(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<T
     ))
 }
 
-pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Result<Tensor> {
+pub(super) fn solve(backend: &mut CudaBackend, a: &Tensor, b: &Tensor) -> Result<Tensor> {
     const OP: &str = "solve";
 
     backend.runtime().set_current_cuda_context(OP)?;
@@ -441,7 +439,7 @@ pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Resu
 }
 
 pub(super) fn lu_solve_prepared(
-    backend: &mut CubeclBackend,
+    backend: &mut CudaBackend,
     a: &Tensor,
     packed_lu: &Tensor,
     pivots: &Tensor,
@@ -509,7 +507,7 @@ pub(super) fn lu_solve_prepared(
     }
 }
 
-fn cholesky_typed<T>(backend: &CubeclBackend, input: &TypedTensor<T>) -> Result<TypedTensor<T>>
+fn cholesky_typed<T>(backend: &CudaBackend, input: &TypedTensor<T>) -> Result<TypedTensor<T>>
 where
     T: LinalgScalar,
 {
@@ -569,7 +567,7 @@ where
 }
 
 fn triangular_solve_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -598,7 +596,7 @@ where
 }
 
 fn triangular_solve_typed_with_op<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -711,7 +709,7 @@ where
 }
 
 fn lu_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<(
     TypedTensor<T>,
@@ -738,7 +736,7 @@ where
 }
 
 fn lu_factor_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
@@ -798,7 +796,7 @@ where
     }
 
     let host_info = download_device_tensor(backend.runtime(), &info, OP)?;
-    for &info_value in host_info.host_data() {
+    for &info_value in host_info.host_data()? {
         if info_value < 0 {
             return Err(Error::backend_failure(
                 OP,
@@ -815,7 +813,7 @@ where
 }
 
 fn lu_solve_prepared_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     packed_lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     b: &TypedTensor<T>,
@@ -882,7 +880,7 @@ where
 }
 
 fn copy_svd_v_to_vt_real<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -896,7 +894,7 @@ where
 }
 
 fn copy_svd_v_to_vt_complex<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -910,7 +908,7 @@ where
 }
 
 fn launch_svd_v_to_vt_real<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
     op: &'static str,
@@ -925,7 +923,7 @@ where
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -938,7 +936,7 @@ where
 }
 
 fn launch_svd_v_to_vt_complex<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
     op: &'static str,
@@ -953,7 +951,7 @@ where
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -966,7 +964,7 @@ where
 }
 
 fn svd_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<(
     TypedTensor<T>,
@@ -1163,7 +1161,7 @@ where
 }
 
 fn svd_values_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T::Real>>
 where
@@ -1342,7 +1340,7 @@ where
 }
 
 fn qr_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
@@ -1458,7 +1456,7 @@ where
 }
 
 fn eigh_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T::Real>, TypedTensor<T>)>
 where
@@ -1535,7 +1533,7 @@ where
 }
 
 fn eigh_values_typed<T>(
-    backend: &CubeclBackend,
+    backend: &CudaBackend,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T::Real>>
 where
@@ -1610,7 +1608,7 @@ where
 }
 
 fn build_lu_outputs_device<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     m: usize,
@@ -1651,7 +1649,7 @@ where
     let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
     let launch_count = cube_count_for_len(launch_len)?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -1671,7 +1669,7 @@ where
 }
 
 fn build_lu_parity_device<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     pivots: &TypedTensor<i32>,
     k: usize,
     batch_shape: &[usize],
@@ -1684,7 +1682,7 @@ where
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
     let launch_count = cube_count_for_len(parity.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_parity::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::lu_parity::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -1698,7 +1696,7 @@ where
 }
 
 fn fill_one_device_tensor<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     shape: &[usize],
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -1709,7 +1707,7 @@ where
     let out_arg = typed_tensor_binding(&out, op)?;
     let launch_count = cube_count_for_len(out.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -1721,7 +1719,7 @@ where
 }
 
 fn apply_lu_pivots_typed<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     input: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     inverse: bool,
@@ -1739,7 +1737,7 @@ where
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
     let launch_count = cube_count_for_len(out.n_elements())?;
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CudaRuntime>(
+        cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -1756,7 +1754,7 @@ where
 }
 
 fn zero_sized_lu_factor_outputs<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
@@ -1777,22 +1775,22 @@ where
     ))
 }
 
-fn raw_stream(rt: &CubeclRuntime, op: &'static str) -> Result<CudaStream> {
+fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
     raw_cuda_stream(rt, op).map(|stream| stream as usize as CudaStream)
 }
 
-fn sync_stream(rt: &CubeclRuntime, op: &'static str) -> Result<()> {
+fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
     let stream = raw_stream(rt, op)? as cudaStream_t;
     unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
         Error::backend_failure(op, format!("CUDA stream synchronize failed: {err:?}"))
     })
 }
 
-fn alloc_workspace_bytes(rt: &CubeclRuntime, nbytes: usize, op: &'static str) -> Result<Workspace> {
+fn alloc_workspace_bytes(rt: &CudaRuntime, nbytes: usize, op: &'static str) -> Result<Workspace> {
     alloc_device_bytes(rt, nbytes, op).map(Workspace::from_device)
 }
 
-fn alloc_workspace_elems<T>(rt: &CubeclRuntime, len: i32, op: &'static str) -> Result<Workspace>
+fn alloc_workspace_elems<T>(rt: &CudaRuntime, len: i32, op: &'static str) -> Result<Workspace>
 where
     T: CubeElement + Clone,
 {
@@ -1802,7 +1800,7 @@ where
 }
 
 fn typed_device_ptr<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<*mut c_void> {
@@ -1810,7 +1808,7 @@ fn typed_device_ptr<T: 'static>(
 }
 
 fn clone_device_tensor<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -1834,7 +1832,7 @@ where
 }
 
 fn upload_pointer_array(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     pointers: &[usize],
     op: &'static str,
 ) -> Result<Workspace> {
@@ -1846,7 +1844,7 @@ fn upload_pointer_array(
 }
 
 fn download_device_tensor<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -1858,7 +1856,7 @@ where
 }
 
 fn copy_device_to_device(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     dst: *mut c_void,
     src: *const c_void,
     nbytes: usize,
@@ -1984,13 +1982,13 @@ fn check_solver_info(op: &'static str, call: &'static str, info: i32) -> Result<
 }
 
 fn check_solver_info_tensor(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     info: &TypedTensor<i32>,
     op: &'static str,
     call: &'static str,
 ) -> Result<()> {
     let host_info = download_device_tensor(rt, info, op)?;
-    for &value in host_info.host_data() {
+    for &value in host_info.host_data()? {
         check_solver_info(op, call, value)?;
     }
     Ok(())
@@ -2054,7 +2052,7 @@ unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_voi
 }
 
 fn zero_like_linalg_device_tensor(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     input: &Tensor,
     op: &'static str,
 ) -> Result<Tensor> {
@@ -2093,13 +2091,13 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 /// download 1 scalar → check > 0.
 ///
 /// Only the final scalar (8 bytes) is transferred to host.
-fn validate_nonsingular_gpu(backend: &mut CubeclBackend, u: &Tensor) -> Result<()> {
+fn validate_nonsingular_gpu(backend: &mut CudaBackend, u: &Tensor) -> Result<()> {
     let diag = backend.extract_diagonal(u, 0, 1)?;
 
     // abs — convert complex to real first (complex abs not supported)
     let abs_diag = match &diag {
         Tensor::C32(_) | Tensor::C64(_) => {
-            let real_diag = backend.convert(&diag, DType::F64)?;
+            let real_diag = backend.cast(&diag, DType::F64)?;
             backend.abs(&real_diag)?
         }
         _ => backend.abs(&diag)?,
@@ -2114,8 +2112,14 @@ fn validate_nonsingular_gpu(backend: &mut CubeclBackend, u: &Tensor) -> Result<(
     backend.runtime().synchronize()?;
     let host_min = download_tensor(backend.runtime(), &min_val)?;
     let is_singular = match &host_min {
-        Tensor::F64(t) => t.host_data()[0] == 0.0 || !t.host_data()[0].is_finite(),
-        Tensor::F32(t) => t.host_data()[0] == 0.0 || !t.host_data()[0].is_finite(),
+        Tensor::F64(t) => {
+            let value = t.host_data()?[0];
+            value == 0.0 || !value.is_finite()
+        }
+        Tensor::F32(t) => {
+            let value = t.host_data()?[0];
+            value == 0.0 || !value.is_finite()
+        }
         _ => {
             return Err(Error::backend_failure(
                 "solve",

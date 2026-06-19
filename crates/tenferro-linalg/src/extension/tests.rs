@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use tenferro_runtime::extension::ExtensionOpTrait;
+use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{
-    Buffer, BufferHandle, ComputeDevice, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement,
+    Buffer, BufferHandle, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement,
     Tensor, TypedTensor,
 };
 
@@ -10,17 +10,20 @@ use super::{LinalgExtensionOp, LinalgOp};
 
 #[test]
 fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
-    let tensor = Tensor::F64(TypedTensor::from_buffer_col_major(
-        vec![2, 2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 4))),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(ComputeDevice {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: 0,
-            }),
-        },
-    ));
+    let tensor = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![2, 2],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 4))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    );
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
     let err = op.eager_execute(&[&tensor]).unwrap_err();

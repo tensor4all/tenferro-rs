@@ -1,12 +1,12 @@
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
-use cubecl_cuda::CudaRuntime;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use std::sync::Arc;
 
 use crate::config::CompareDir;
-use crate::cubecl::CubeclRuntime;
+use crate::cubecl::CudaRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
+    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
     TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
@@ -116,19 +116,19 @@ pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
         })
 }
 
-pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
+pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> crate::Result<(Vec<usize>, Vec<usize>)> {
     // CubeCL CUDA kernels still receive a dynamic metadata pointer for tensor
     // args. Rank-0 tensors need one dense metadata element so that launch
     // argument layout stays consistent, while tenferro keeps the public shape
     // as `[]` and passes the logical rank separately where needed.
     if shape.is_empty() {
-        return (vec![1], vec![1]);
+        return Ok((vec![1], vec![1]));
     }
-    let strides = crate::types::col_major_strides(shape)
+    let strides = crate::types::col_major_strides(shape)?
         .into_iter()
         .map(|stride| stride as usize)
         .collect();
-    (shape.to_vec(), strides)
+    Ok((shape.to_vec(), strides))
 }
 
 fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usize> {
@@ -195,10 +195,10 @@ fn validate_raw_ternary_shapes<TA, TB, TC>(
 pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<TensorBinding<CudaRuntime>> {
+) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let (shape, strides) = cubecl_shape_and_strides(tensor.shape());
+    let (shape, strides) = cubecl_shape_and_strides(tensor.shape())?;
 
     // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
     // The checked invariant above proves `buffer.element_len()` equals the dense
@@ -211,7 +211,7 @@ pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
 }
 
 pub(crate) fn ensure_resident_on_runtime<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -220,7 +220,7 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
 }
 
 pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -229,7 +229,7 @@ pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(
 }
 
 pub(crate) fn ensure_view_mut_resident_on_runtime<T: 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     view: &TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -238,7 +238,7 @@ pub(crate) fn ensure_view_mut_resident_on_runtime<T: 'static>(
 }
 
 fn ensure_placement_resident_on_runtime(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     placement: &Placement,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -281,13 +281,13 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
     device_ordinal: usize,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
         shape,
         Buffer::Backend(Arc::new(buffer)),
         Placement {
             memory_kind: MemoryKind::Device,
-            device: Some(ComputeDevice {
+            device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
@@ -296,7 +296,7 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
 }
 
 pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     let len = checked_shape_product("cubecl_alloc_output", shape)?;
@@ -307,30 +307,30 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
         )
     })?;
     let handle = rt.client().empty(byte_len);
-    Ok(typed_from_cubecl(
+    typed_from_cubecl(
         shape.to_vec(),
         CubeclBuffer::new(handle, len),
         rt.device_ordinal(),
-    ))
+    )
 }
 
 pub(crate) fn alloc_bool_output(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<bool>> {
     let len = checked_shape_product("cubecl_alloc_bool_output", shape)?;
     let handle = rt.client().empty(len);
-    Ok(typed_from_cubecl(
+    typed_from_cubecl(
         shape.to_vec(),
         CubeclBuffer::new(handle, len),
         rt.device_ordinal(),
-    ))
+    )
 }
 
 pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>> {
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
 
@@ -344,7 +344,7 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
 pub(crate) fn typed_view_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>> {
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     let buffer = cubecl_view_buffer(view, op)?;
 
     // SAFETY: `TensorLayout` validation at view construction proves the
@@ -357,7 +357,7 @@ pub(crate) fn typed_view_array_arg<T: CubeElement + Clone>(
 pub(crate) fn typed_view_mut_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>> {
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     let buffer = cubecl_view_mut_buffer(view, op)?;
 
     // SAFETY: `TypedTensorViewMut` construction validates both reachable
@@ -369,7 +369,7 @@ pub(crate) fn typed_view_mut_array_arg<T: CubeElement + Clone>(
 pub(crate) fn bool_tensor_array_arg(
     tensor: &TypedTensor<bool, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>> {
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
 
@@ -383,7 +383,7 @@ pub(crate) fn typed_tensor_array_arg_as<T, U>(
     tensor: &TypedTensor<T, impl TensorRank>,
     len: usize,
     op: &'static str,
-) -> crate::Result<ArrayArg<CudaRuntime>>
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
 where
     T: CubeElement + Clone,
     U: CubeElement + Clone,
@@ -424,16 +424,16 @@ where
 }
 
 pub(crate) fn launch_unary<TIn, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -467,16 +467,16 @@ where
 }
 
 pub(crate) fn launch_unary_tensor<TIn, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -508,12 +508,17 @@ where
 }
 
 pub(crate) fn launch_nullary_into<TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     output: &TypedTensor<TOut>,
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
-    launch: impl FnOnce(&ComputeClient<CudaRuntime>, CubeCount, CubeDim, ArrayArg<CudaRuntime>),
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
 ) -> crate::Result<()>
 where
     TOut: CubeElement + Clone,
@@ -531,18 +536,18 @@ where
 }
 
 pub(crate) fn launch_unary_tensor_into<TIn, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     output: &TypedTensor<TOut>,
     input: &TypedTensor<TIn>,
     op: &'static str,
     count: CubeCount,
     dim: CubeDim,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<()>
 where
@@ -565,18 +570,18 @@ where
 }
 
 pub(crate) fn launch_binary<TLhs, TRhs, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     lhs: &TypedTensor<TLhs>,
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -614,18 +619,18 @@ where
 }
 
 pub(crate) fn launch_compare_bool<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<bool>>
 where
@@ -658,18 +663,18 @@ where
 }
 
 pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     lhs: &TypedTensor<TLhs>,
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -705,20 +710,20 @@ where
 }
 
 pub(crate) fn launch_select_bool<T>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     pred: &TypedTensor<bool>,
     on_true: &TypedTensor<T>,
     on_false: &TypedTensor<T>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<T>>
 where
@@ -754,20 +759,20 @@ where
 }
 
 pub(crate) fn launch_ternary<TA, TB, TC, TOut>(
-    rt: &CubeclRuntime,
+    rt: &CudaRuntime,
     a: &TypedTensor<TA>,
     b: &TypedTensor<TB>,
     c: &TypedTensor<TC>,
     out_shape: &[usize],
     op: &'static str,
     launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
+        &ComputeClient<CubeclCudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -901,7 +906,7 @@ macro_rules! launch_binary_elementwise_kernel {
             $lhs.shape(),
             $op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CubeclCudaRuntime>(
                     client, count, dim, out, lhs_arg, rhs_arg,
                 );
             },
@@ -918,7 +923,7 @@ macro_rules! launch_unary_elementwise_kernel {
             $input.shape(),
             $op,
             |client, count, dim, out, input_arg| unsafe {
-                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CubeclCudaRuntime>(
                     client, count, dim, out, input_arg,
                 );
             },

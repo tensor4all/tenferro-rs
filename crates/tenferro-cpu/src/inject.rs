@@ -17,24 +17,14 @@
 //!   providers).  tenferro's consumer path remains LP64; the `cblas-inject`
 //!   and `lapack-inject` crates transparently bridge the integer types.
 //!
-//! ## Existing typed wrappers vs raw-pointer API
+//! ## Raw-pointer provider API
 //!
-//! - [`register_blas_gemm_fn_ptrs`] and
-//!   [`register_lapack_full_piv_lu_fn_ptrs`] accept typed LP64 function
-//!   pointers and remain available for backwards compatibility.
-//! - The new raw-pointer entry points
-//!   ([`register_blas_gemm_provider_ptrs`],
-//!   [`register_lapack_provider_ptrs`]) accept opaque `*const c_void`
-//!   pointers together with a [`ProviderAbi`] selector.  They cover the
-//!   full GEMM and LAPACK surface.
+//! [`register_blas_gemm_provider_ptrs`] and [`register_lapack_provider_ptrs`]
+//! accept opaque `*const c_void` pointers together with a [`ProviderAbi`]
+//! selector. They are the only public registration API, so LP64 and ILP64
+//! providers use the same contract.
 
 use std::ffi::c_void;
-
-use cblas_inject::{CgemmFnPtr, DgemmFnPtr, SgemmFnPtr, ZgemmFnPtr};
-use lapack_inject::{
-    Cgesc2Lp64FnPtr, Cgetc2Lp64FnPtr, Dgesc2Lp64FnPtr, Dgetc2Lp64FnPtr, Sgesc2Lp64FnPtr,
-    Sgetc2Lp64FnPtr, Zgesc2Lp64FnPtr, Zgetc2Lp64FnPtr,
-};
 
 // --- Public types --------------------------------------------------------
 
@@ -310,118 +300,6 @@ impl LapackProviderPtrSet {
     }
 }
 
-// --- Typed function-pointer sets (compatibility wrappers) ----------------
-
-/// Set of CBLAS GEMM function pointers to register in one call.
-///
-/// Any field set to `None` is skipped, so callers can register only the
-/// scalar types they plan to use.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
-///
-/// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new())?;
-/// }
-/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BlasGemmFnPtrSet {
-    /// Fortran `sgemm` function pointer.
-    pub sgemm: Option<SgemmFnPtr>,
-    /// Fortran `dgemm` function pointer.
-    pub dgemm: Option<DgemmFnPtr>,
-    /// Fortran `cgemm` function pointer.
-    pub cgemm: Option<CgemmFnPtr>,
-    /// Fortran `zgemm` function pointer.
-    pub zgemm: Option<ZgemmFnPtr>,
-}
-
-impl BlasGemmFnPtrSet {
-    /// Create an empty set (all pointers are `None`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::inject::BlasGemmFnPtrSet;
-    ///
-    /// let ptrs = BlasGemmFnPtrSet::new();
-    /// assert!(ptrs.dgemm.is_none());
-    /// ```
-    pub const fn new() -> Self {
-        Self {
-            sgemm: None,
-            dgemm: None,
-            cgemm: None,
-            zgemm: None,
-        }
-    }
-}
-
-/// Set of LAPACK complete-pivoting LU function pointers to register.
-///
-/// tenferro currently uses `xGETC2` for the factorization and `xGESC2` for
-/// solves. Any field set to `None` is skipped.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_cpu::inject::{
-///     register_lapack_full_piv_lu_fn_ptrs, LapackFullPivLuFnPtrSet,
-/// };
-///
-/// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new())?;
-/// }
-/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LapackFullPivLuFnPtrSet {
-    /// Fortran `sgetc2` LP64 function pointer.
-    pub sgetc2: Option<Sgetc2Lp64FnPtr>,
-    /// Fortran `sgesc2` LP64 function pointer.
-    pub sgesc2: Option<Sgesc2Lp64FnPtr>,
-    /// Fortran `dgetc2` LP64 function pointer.
-    pub dgetc2: Option<Dgetc2Lp64FnPtr>,
-    /// Fortran `dgesc2` LP64 function pointer.
-    pub dgesc2: Option<Dgesc2Lp64FnPtr>,
-    /// Fortran `cgetc2` LP64 function pointer.
-    pub cgetc2: Option<Cgetc2Lp64FnPtr>,
-    /// Fortran `cgesc2` LP64 function pointer.
-    pub cgesc2: Option<Cgesc2Lp64FnPtr>,
-    /// Fortran `zgetc2` LP64 function pointer.
-    pub zgetc2: Option<Zgetc2Lp64FnPtr>,
-    /// Fortran `zgesc2` LP64 function pointer.
-    pub zgesc2: Option<Zgesc2Lp64FnPtr>,
-}
-
-impl LapackFullPivLuFnPtrSet {
-    /// Create an empty set (all pointers are `None`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::inject::LapackFullPivLuFnPtrSet;
-    ///
-    /// let ptrs = LapackFullPivLuFnPtrSet::new();
-    /// assert!(ptrs.dgetc2.is_none());
-    /// ```
-    pub const fn new() -> Self {
-        Self {
-            sgetc2: None,
-            sgesc2: None,
-            dgetc2: None,
-            dgesc2: None,
-            cgetc2: None,
-            cgesc2: None,
-            zgetc2: None,
-            zgesc2: None,
-        }
-    }
-}
-
 // --- Status helpers ------------------------------------------------------
 
 /// Map a `cblas-inject` status code to a `Result`.
@@ -451,110 +329,6 @@ fn lapack_registration_status(
         2 => Err(ProviderRegistrationError::AlreadyRegistered { symbol }),
         _ => Err(ProviderRegistrationError::UnknownStatus { symbol, status }),
     }
-}
-
-// --- Compatibility wrappers (typed LP64) ---------------------------------
-
-/// Register CBLAS GEMM function pointers in one call.
-///
-/// This is a thin bulk wrapper over `cblas-inject`'s LP64 registration
-/// entry points.
-///
-/// # Safety
-///
-/// Each provided function pointer must have the exact Fortran BLAS ABI
-/// expected by `cblas-inject`.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_cpu::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
-///
-/// unsafe {
-///     register_blas_gemm_fn_ptrs(BlasGemmFnPtrSet::new())?;
-/// }
-/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
-/// ```
-pub unsafe fn register_blas_gemm_fn_ptrs(
-    ptrs: BlasGemmFnPtrSet,
-) -> Result<(), ProviderRegistrationError> {
-    if let Some(f) = ptrs.sgemm {
-        let status = unsafe { cblas_inject::cblas_inject_register_sgemm_lp64(f as *const c_void) };
-        blas_registration_status("sgemm", status)?;
-    }
-    if let Some(f) = ptrs.dgemm {
-        let status = unsafe { cblas_inject::cblas_inject_register_dgemm_lp64(f as *const c_void) };
-        blas_registration_status("dgemm", status)?;
-    }
-    if let Some(f) = ptrs.cgemm {
-        let status = unsafe { cblas_inject::cblas_inject_register_cgemm_lp64(f as *const c_void) };
-        blas_registration_status("cgemm", status)?;
-    }
-    if let Some(f) = ptrs.zgemm {
-        let status = unsafe { cblas_inject::cblas_inject_register_zgemm_lp64(f as *const c_void) };
-        blas_registration_status("zgemm", status)?;
-    }
-    Ok(())
-}
-
-/// Register LAPACK complete-pivoting LU function pointers in one call.
-///
-/// This is a thin bulk wrapper over `lapack-inject`'s per-symbol
-/// `register_*` functions.
-///
-/// # Safety
-///
-/// Each provided function pointer must have the exact Fortran LAPACK ABI
-/// expected by `lapack-inject`.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_cpu::inject::{
-///     register_lapack_full_piv_lu_fn_ptrs, LapackFullPivLuFnPtrSet,
-/// };
-///
-/// unsafe {
-///     register_lapack_full_piv_lu_fn_ptrs(LapackFullPivLuFnPtrSet::new())?;
-/// }
-/// # Ok::<(), tenferro_cpu::inject::ProviderRegistrationError>(())
-/// ```
-pub unsafe fn register_lapack_full_piv_lu_fn_ptrs(
-    ptrs: LapackFullPivLuFnPtrSet,
-) -> Result<(), ProviderRegistrationError> {
-    if let Some(f) = ptrs.sgetc2 {
-        let status = unsafe { lapack_inject::register_sgetc2_lp64(f) };
-        lapack_registration_status("sgetc2", status)?;
-    }
-    if let Some(f) = ptrs.sgesc2 {
-        let status = unsafe { lapack_inject::register_sgesc2_lp64(f) };
-        lapack_registration_status("sgesc2", status)?;
-    }
-    if let Some(f) = ptrs.dgetc2 {
-        let status = unsafe { lapack_inject::register_dgetc2_lp64(f) };
-        lapack_registration_status("dgetc2", status)?;
-    }
-    if let Some(f) = ptrs.dgesc2 {
-        let status = unsafe { lapack_inject::register_dgesc2_lp64(f) };
-        lapack_registration_status("dgesc2", status)?;
-    }
-    if let Some(f) = ptrs.cgetc2 {
-        let status = unsafe { lapack_inject::register_cgetc2_lp64(f) };
-        lapack_registration_status("cgetc2", status)?;
-    }
-    if let Some(f) = ptrs.cgesc2 {
-        let status = unsafe { lapack_inject::register_cgesc2_lp64(f) };
-        lapack_registration_status("cgesc2", status)?;
-    }
-    if let Some(f) = ptrs.zgetc2 {
-        let status = unsafe { lapack_inject::register_zgetc2_lp64(f) };
-        lapack_registration_status("zgetc2", status)?;
-    }
-    if let Some(f) = ptrs.zgesc2 {
-        let status = unsafe { lapack_inject::register_zgesc2_lp64(f) };
-        lapack_registration_status("zgesc2", status)?;
-    }
-    Ok(())
 }
 
 // --- Raw-pointer BLAS GEMM registration ----------------------------------

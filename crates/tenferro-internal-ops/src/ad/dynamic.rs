@@ -114,7 +114,7 @@ pub fn transpose_pad_to_match(
     // For concrete input metadata the adjoint is just a prefix slice back to
     // the original input shape. This keeps the transposed graph statically
     // shape-exact across checkpoint aliases.
-    if let Some(input_shape) = ctx.try_shape_of(&inputs[0]) {
+    if let Some(input_shape) = ctx.shape_if_available(&inputs[0]) {
         assert!(
             axis < input_shape.len(),
             "transpose_pad_to_match: axis {axis} out of bounds for rank {}",
@@ -172,10 +172,10 @@ fn static_truncated_shape(
     ctx: &mut ShapeGuardContext,
 ) -> Option<Vec<usize>> {
     let input_shape = ctx
-        .try_shape_of(&ValueRef::External(primal_in[0].clone()))?
+        .shape_if_available(&ValueRef::External(primal_in[0].clone()))?
         .to_vec();
     let output_shape = ctx
-        .try_shape_of(&ValueRef::External(primal_out[0].clone()))?
+        .shape_if_available(&ValueRef::External(primal_out[0].clone()))?
         .to_vec();
     if axis >= input_shape.len() || input_shape.len() != output_shape.len() {
         return None;

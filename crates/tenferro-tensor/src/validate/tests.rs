@@ -2,14 +2,45 @@ use num_complex::{Complex32, Complex64};
 
 use super::*;
 
+#[test]
+fn checked_convert_follows_dtype_promotion_lattice() {
+    assert!(can_convert_dtype(DType::F32, DType::F64));
+    assert!(can_convert_dtype(DType::F64, DType::C64));
+    assert!(can_convert_dtype(DType::Bool, DType::I64));
+
+    assert!(!can_convert_dtype(DType::F64, DType::F32));
+    assert!(!can_convert_dtype(DType::F64, DType::I32));
+    assert!(!can_convert_dtype(DType::C64, DType::F64));
+    assert!(!can_convert_dtype(DType::I32, DType::Bool));
+}
+
+#[test]
+fn validate_convert_dtype_reports_typed_error() {
+    let err = validate_convert_dtype("convert", DType::C64, DType::I32).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::UnsupportedDTypeConversion {
+            op: "convert",
+            from: DType::C64,
+            to: DType::I32,
+            ..
+        }
+    ));
+}
+
 macro_rules! float_singular_tests {
     ($mod_name:ident, $t:ty) => {
         mod $mod_name {
             use super::*;
 
+            fn tensor(shape: Vec<usize>, data: Vec<$t>) -> TypedTensor<$t> {
+                TypedTensor::<$t>::from_vec_col_major(shape, data).unwrap()
+            }
+
             #[test]
             fn nonsquare_tall_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![3, 2],
                     vec![
                         2.0 as $t, 1.0 as $t, 0.0 as $t, 0.0 as $t, 5.0 as $t, 4.0 as $t,
@@ -20,7 +51,7 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn nonsquare_tall_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![3, 2],
                     vec![
                         0.0 as $t, 1.0 as $t, 0.0 as $t, 0.0 as $t, 0.0 as $t, 4.0 as $t,
@@ -32,7 +63,7 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn nonsquare_wide_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 3],
                     vec![
                         2.0 as $t, 0.0 as $t, 1.0 as $t, 3.0 as $t, 0.0 as $t, 4.0 as $t,
@@ -43,7 +74,7 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn nonsquare_wide_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 3],
                     vec![
                         0.0 as $t, 0.0 as $t, 1.0 as $t, 3.0 as $t, 0.0 as $t, 4.0 as $t,
@@ -55,27 +86,21 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn zero_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
-                    vec![2, 2],
-                    vec![0.0 as $t, 1.0 as $t, 1.0 as $t, 0.0 as $t],
-                );
+                let t = tensor(vec![2, 2], vec![0.0 as $t, 1.0 as $t, 1.0 as $t, 0.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
                 assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
             }
 
             #[test]
             fn nan_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
-                    vec![2, 2],
-                    vec![<$t>::NAN, 1.0 as $t, 0.0 as $t, 1.0 as $t],
-                );
+                let t = tensor(vec![2, 2], vec![<$t>::NAN, 1.0 as $t, 0.0 as $t, 1.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
                 assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
             }
 
             #[test]
             fn inf_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![<$t>::INFINITY, 1.0 as $t, 0.0 as $t, 1.0 as $t],
                 );
@@ -85,7 +110,7 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn neg_inf_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![<$t>::NEG_INFINITY, 1.0 as $t, 0.0 as $t, 1.0 as $t],
                 );
@@ -95,20 +120,20 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn single_element_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(vec![1, 1], vec![0.0 as $t]);
+                let t = tensor(vec![1, 1], vec![0.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
                 assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
             }
 
             #[test]
             fn single_element_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(vec![1, 1], vec![5.0 as $t]);
+                let t = tensor(vec![1, 1], vec![5.0 as $t]);
                 assert!(check_singular_diagonal(&t).is_ok());
             }
 
             #[test]
             fn batched_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2, 2],
                     vec![
                         1.0 as $t, 0.0 as $t, 0.0 as $t, 2.0 as $t, 0.0 as $t, 0.0 as $t,
@@ -121,7 +146,7 @@ macro_rules! float_singular_tests {
 
             #[test]
             fn batched_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2, 2],
                     vec![
                         1.0 as $t, 0.0 as $t, 0.0 as $t, 2.0 as $t, 3.0 as $t, 0.0 as $t,
@@ -139,9 +164,13 @@ macro_rules! complex_singular_tests {
         mod $mod_name {
             use super::*;
 
+            fn tensor(shape: Vec<usize>, data: Vec<$t>) -> TypedTensor<$t> {
+                TypedTensor::<$t>::from_vec_col_major(shape, data).unwrap()
+            }
+
             #[test]
             fn nonsquare_tall_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![3, 2],
                     vec![
                         <$t>::new(2.0 as $float, 0.0 as $float),
@@ -157,7 +186,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn nonsquare_tall_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![3, 2],
                     vec![
                         <$t>::new(0.0 as $float, 0.0 as $float),
@@ -174,7 +203,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn nonsquare_wide_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 3],
                     vec![
                         <$t>::new(2.0 as $float, 0.0 as $float),
@@ -190,7 +219,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn nonsquare_wide_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 3],
                     vec![
                         <$t>::new(0.0 as $float, 0.0 as $float),
@@ -207,7 +236,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![
                         <$t>::new(2.0 as $float, 0.0 as $float),
@@ -221,7 +250,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn zero_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![
                         <$t>::new(0.0 as $float, 0.0 as $float),
@@ -236,7 +265,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn nan_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![
                         <$t>::new(<$float>::NAN, 0.0 as $float),
@@ -251,7 +280,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn inf_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![
                         <$t>::new(1.0 as $float, <$float>::INFINITY),
@@ -266,7 +295,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn neg_inf_diagonal() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2],
                     vec![
                         <$t>::new(<$float>::NEG_INFINITY, 0.0 as $float),
@@ -281,26 +310,20 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn single_element_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
-                    vec![1, 1],
-                    vec![<$t>::new(0.0 as $float, 0.0 as $float)],
-                );
+                let t = tensor(vec![1, 1], vec![<$t>::new(0.0 as $float, 0.0 as $float)]);
                 let err = check_singular_diagonal(&t).unwrap_err();
                 assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
             }
 
             #[test]
             fn single_element_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
-                    vec![1, 1],
-                    vec![<$t>::new(5.0 as $float, 0.0 as $float)],
-                );
+                let t = tensor(vec![1, 1], vec![<$t>::new(5.0 as $float, 0.0 as $float)]);
                 assert!(check_singular_diagonal(&t).is_ok());
             }
 
             #[test]
             fn batched_singular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2, 2],
                     vec![
                         <$t>::new(1.0 as $float, 0.0 as $float),
@@ -319,7 +342,7 @@ macro_rules! complex_singular_tests {
 
             #[test]
             fn batched_nonsingular() {
-                let t = TypedTensor::<$t>::from_vec_col_major(
+                let t = tensor(
                     vec![2, 2, 2],
                     vec![
                         <$t>::new(1.0 as $float, 0.0 as $float),
@@ -351,7 +374,7 @@ fn rank_less_than_two_returns_error_instead_of_panicking() {
         } else {
             vec![1.0, 2.0, 3.0]
         };
-        let t = TypedTensor::<f64>::from_vec_col_major(shape.clone(), data);
+        let t = TypedTensor::<f64>::from_vec_col_major(shape.clone(), data).unwrap();
         let err = check_singular_diagonal(&t).unwrap_err();
         assert!(matches!(
             err,
@@ -369,7 +392,8 @@ fn f64_batched_error_includes_batch_index_and_position() {
     let t = TypedTensor::<f64>::from_vec_col_major(
         vec![2, 2, 2],
         vec![1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 0.0],
-    );
+    )
+    .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -387,7 +411,7 @@ fn f64_batched_error_includes_batch_index_and_position() {
 
 #[test]
 fn f64_unbatched_error_omits_batch_index_and_includes_position() {
-    let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
+    let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -405,7 +429,7 @@ fn f64_unbatched_error_omits_batch_index_and_includes_position() {
 
 #[test]
 fn f64_unbatched_error_second_diagonal_reports_correct_position() {
-    let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 1.0, 1.0, 0.0]);
+    let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -422,7 +446,8 @@ fn f64_batched_error_first_batch_reports_correct_position() {
     let t = TypedTensor::<f64>::from_vec_col_major(
         vec![2, 2, 2],
         vec![0.0, 1.0, 1.0, 2.0, 3.0, 0.0, 0.0, 4.0],
-    );
+    )
+    .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -440,7 +465,8 @@ fn f64_batched_error_first_batch_reports_correct_position() {
 
 #[test]
 fn f32_unbatched_error_includes_exact_position() {
-    let t = TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![0.0f32, 1.0, 1.0, 0.0]);
+    let t =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![0.0f32, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -466,7 +492,8 @@ fn c64_unbatched_error_includes_exact_position() {
             Complex64::new(1.0, 0.0),
             Complex64::new(0.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -492,7 +519,8 @@ fn c32_unbatched_error_includes_exact_position() {
             Complex32::new(1.0, 0.0),
             Complex32::new(0.0, 0.0),
         ],
-    );
+    )
+    .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
         Error::BackendFailure { message, .. } => message.clone(),
@@ -517,30 +545,36 @@ macro_rules! validate_nonsingular_u_test {
 
             #[test]
             fn singular() {
-                let t = Tensor::$variant(TypedTensor::<$inner>::from_vec_col_major(
-                    vec![2, 2],
-                    vec![
-                        <$inner>::zero(),
-                        <$inner>::one(),
-                        <$inner>::one(),
-                        <$inner>::zero(),
-                    ],
-                ));
+                let t = Tensor::$variant(
+                    TypedTensor::<$inner>::from_vec_col_major(
+                        vec![2, 2],
+                        vec![
+                            <$inner>::zero(),
+                            <$inner>::one(),
+                            <$inner>::one(),
+                            <$inner>::zero(),
+                        ],
+                    )
+                    .unwrap(),
+                );
                 let err = validate_nonsingular_u(&t).unwrap_err();
                 assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
             }
 
             #[test]
             fn nonsingular() {
-                let t = Tensor::$variant(TypedTensor::<$inner>::from_vec_col_major(
-                    vec![2, 2],
-                    vec![
-                        <$inner>::one(),
-                        <$inner>::zero(),
-                        <$inner>::zero(),
-                        <$inner>::one() + <$inner>::one(),
-                    ],
-                ));
+                let t = Tensor::$variant(
+                    TypedTensor::<$inner>::from_vec_col_major(
+                        vec![2, 2],
+                        vec![
+                            <$inner>::one(),
+                            <$inner>::zero(),
+                            <$inner>::zero(),
+                            <$inner>::one() + <$inner>::one(),
+                        ],
+                    )
+                    .unwrap(),
+                );
                 assert!(validate_nonsingular_u(&t).is_ok());
             }
         }

@@ -42,7 +42,8 @@ The crate is more mature than the issue description assumes:
 Near no-op since no GPU code exists. Actions:
 
 - Add module-level doc comments clarifying CPU-only status
-- Add `#[cfg(not(feature = "gpu"))]` compile-time assertion on faer backend
+- Add compile-time assertions against concrete backend features such as `cuda`,
+  `webgpu`, and `rocm` on the faer backend
 - Document in `backend/mod.rs` where future GPU backends would slot in
 - Verify `cargo test -p tenferro-linalg` still passes
 

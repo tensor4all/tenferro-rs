@@ -5,8 +5,8 @@ use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 fn compiler_clear_caches_clears_compile_entries() {
     let mut compiler = GraphCompiler::new();
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
     let _ = compiler.compile(&y).expect("compile");
 
     let before = compiler.cache_stats();
@@ -22,8 +22,8 @@ fn compiler_clear_caches_clears_compile_entries() {
 #[test]
 fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
     let mut compiler = GraphCompiler::new();
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
     let program = compiler.compile(&y).expect("compile");
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
@@ -40,8 +40,8 @@ fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
 
 #[test]
 fn executor_clear_caches_clears_executor_owned_runtime_caches() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).expect("compile");
     let mut executor = GraphExecutor::new(CpuBackend::new());

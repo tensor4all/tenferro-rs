@@ -92,13 +92,15 @@ fn linearize_elementwise_inactive_inputs_return_none_without_ops() {
         StdTensorOp::Clamp,
     ] {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let result = op.jvp_rule(
-            &mut builder,
-            &keys,
-            &[input_key(4)],
-            &[None, None, None],
-            &mut ctx,
-        );
+        let result = op
+            .jvp_rule(
+                &mut builder,
+                &keys,
+                &[input_key(4)],
+                &[None, None, None],
+                &mut ctx,
+            )
+            .unwrap();
         assert_eq!(result, vec![None], "{op:?}");
         assert!(
             builder.build().operations().is_empty(),
@@ -115,13 +117,15 @@ fn linearize_div_with_two_active_inputs_sums_both_terms() {
     let mut ctx = ShapeGuardContext::default();
     let op = StdTensorOp::Div;
 
-    let result = op.jvp_rule(
-        &mut builder,
-        &[input_key(12), input_key(13)],
-        &[input_key(14)],
-        &[Some(dx), Some(dy)],
-        &mut ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &[input_key(12), input_key(13)],
+            &[input_key(14)],
+            &[Some(dx), Some(dy)],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert!(result[0].is_some());
     let graph = builder.build();
@@ -137,13 +141,15 @@ fn linearize_extrema_uses_jax_balanced_tie_masks() {
 
     let mut max_builder = GraphBuilder::<StdTensorOp>::new();
     let dx = max_builder.add_input(tensor_input(20));
-    let result = StdTensorOp::Maximum.jvp_rule(
-        &mut max_builder,
-        &[input_key(21), input_key(22)],
-        &[],
-        &[Some(dx), None],
-        &mut ctx,
-    );
+    let result = StdTensorOp::Maximum
+        .jvp_rule(
+            &mut max_builder,
+            &[input_key(21), input_key(22)],
+            &[],
+            &[Some(dx), None],
+            &mut ctx,
+        )
+        .unwrap();
     assert!(result[0].is_some());
     let graph = max_builder.build();
     assert_eq!(graph.operations()[0].operation, StdTensorOp::Maximum);
@@ -170,13 +176,15 @@ fn linearize_extrema_uses_jax_balanced_tie_masks() {
 
     let mut min_builder = GraphBuilder::<StdTensorOp>::new();
     let dy = min_builder.add_input(tensor_input(23));
-    let result = StdTensorOp::Minimum.jvp_rule(
-        &mut min_builder,
-        &[input_key(24), input_key(25)],
-        &[],
-        &[None, Some(dy)],
-        &mut ctx,
-    );
+    let result = StdTensorOp::Minimum
+        .jvp_rule(
+            &mut min_builder,
+            &[input_key(24), input_key(25)],
+            &[],
+            &[None, Some(dy)],
+            &mut ctx,
+        )
+        .unwrap();
     assert!(result[0].is_some());
     let graph = min_builder.build();
     assert_eq!(graph.operations()[0].operation, StdTensorOp::Minimum);
@@ -210,13 +218,15 @@ fn linearize_clamp_builds_nested_selects_for_active_bounds() {
     let dupper = builder.add_input(tensor_input(32));
     let mut ctx = ShapeGuardContext::default();
 
-    let result = StdTensorOp::Clamp.jvp_rule(
-        &mut builder,
-        &[input_key(33), input_key(34), input_key(35)],
-        &[],
-        &[Some(dx), Some(dlower), Some(dupper)],
-        &mut ctx,
-    );
+    let result = StdTensorOp::Clamp
+        .jvp_rule(
+            &mut builder,
+            &[input_key(33), input_key(34), input_key(35)],
+            &[],
+            &[Some(dx), Some(dlower), Some(dupper)],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert!(result[0].is_some());
     let graph = builder.build();
@@ -240,36 +250,42 @@ fn transpose_elementwise_handles_missing_or_inactive_cotangents() {
     ];
 
     assert_eq!(
-        StdTensorOp::Div.transpose_rule(
-            &mut builder,
-            &[None],
-            &inputs,
-            &OperationRole::Primary,
-            &mut ctx
-        ),
+        StdTensorOp::Div
+            .transpose_rule(
+                &mut builder,
+                &[None],
+                &inputs,
+                &OperationRole::Primary,
+                &mut ctx
+            )
+            .unwrap(),
         vec![None, None]
     );
     let abs_ct = builder.add_input(tensor_input(42));
     assert_eq!(
-        StdTensorOp::Abs.transpose_rule(
-            &mut builder,
-            &[Some(abs_ct)],
-            &[inputs[0].clone()],
-            &OperationRole::Primary,
-            &mut ctx,
-        ),
+        StdTensorOp::Abs
+            .transpose_rule(
+                &mut builder,
+                &[Some(abs_ct)],
+                &[inputs[0].clone()],
+                &OperationRole::Primary,
+                &mut ctx,
+            )
+            .unwrap(),
         vec![None]
     );
     assert_eq!(
-        StdTensorOp::Maximum.transpose_rule(
-            &mut builder,
-            &[None],
-            &inputs,
-            &OperationRole::Linearized {
-                active_mask: vec![true, true],
-            },
-            &mut ctx,
-        ),
+        StdTensorOp::Maximum
+            .transpose_rule(
+                &mut builder,
+                &[None],
+                &inputs,
+                &OperationRole::Linearized {
+                    active_mask: vec![true, true],
+                },
+                &mut ctx,
+            )
+            .unwrap(),
         vec![None, None]
     );
 }
@@ -285,15 +301,17 @@ fn transpose_select_splits_cotangent_only_to_active_value_inputs() {
         ValueRef::External(input_key(53)),
     ];
 
-    let result = StdTensorOp::Select.transpose_rule(
-        &mut builder,
-        &[Some(ct)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, true, false],
-        },
-        &mut ctx,
-    );
+    let result = StdTensorOp::Select
+        .transpose_rule(
+            &mut builder,
+            &[Some(ct)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result[0], None);
     assert!(result[1].is_some());
@@ -316,29 +334,33 @@ fn transpose_clamp_covers_lower_only_and_inner_paths() {
 
     let mut lower_builder = GraphBuilder::<StdTensorOp>::new();
     let lower_ct = lower_builder.add_input(tensor_input(63));
-    let result = StdTensorOp::Clamp.transpose_rule(
-        &mut lower_builder,
-        &[Some(lower_ct)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![false, true, false],
-        },
-        &mut ctx,
-    );
+    let result = StdTensorOp::Clamp
+        .transpose_rule(
+            &mut lower_builder,
+            &[Some(lower_ct)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert_eq!(result[0], None);
     assert!(result[1].is_some());
     assert_eq!(result[2], None);
 
     let mut full_builder = GraphBuilder::<StdTensorOp>::new();
     let full_ct = full_builder.add_input(tensor_input(64));
-    let result = StdTensorOp::Clamp.transpose_rule(
-        &mut full_builder,
-        &[Some(full_ct)],
-        &inputs,
-        &OperationRole::Linearized {
-            active_mask: vec![true, true, true],
-        },
-        &mut ctx,
-    );
+    let result = StdTensorOp::Clamp
+        .transpose_rule(
+            &mut full_builder,
+            &[Some(full_ct)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![true, true, true],
+            },
+            &mut ctx,
+        )
+        .unwrap();
     assert!(result.iter().all(Option::is_some));
 }

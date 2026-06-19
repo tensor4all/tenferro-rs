@@ -6,7 +6,7 @@ use tenferro_einsum::EinsumOptimize;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn run_traced(tensor: &TracedTensor) -> Tensor {
@@ -91,21 +91,23 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5],
-    ));
+    ))
+    .unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let y = tenferro_einsum::einsum_with(
+    let y = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b],
         "ij,jk->ik",
         EinsumOptimize::Path(vec![(0, 1)]),
     )
     .unwrap();
-    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).unwrap().grad(&a).unwrap();
     let result = run_traced(&grad_a);
 
     assert_eq!(result.shape(), &[2, 3]);
@@ -119,33 +121,37 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
 fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
     let a_data = vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75];
     let b_data = vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5];
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let y = tenferro_einsum::einsum_with(
+    let y = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b],
         "ij,jk->ik",
         EinsumOptimize::Path(vec![(0, 1)]),
     )
     .unwrap();
-    let loss = y.reduce_sum(&[0, 1]);
+    let loss = y.reduce_sum(&[0, 1]).unwrap();
     let grad_a = run_traced(&loss.grad(&a).unwrap());
     let grad_b = run_traced(&loss.grad(&b).unwrap());
 
     let eval_loss = |lhs: &[f64], rhs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], lhs.to_vec()));
-        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], rhs.to_vec()));
+        let a =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], lhs.to_vec())).unwrap();
+        let b =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], rhs.to_vec())).unwrap();
         let mut compiler = GraphCompiler::new();
-        let y = tenferro_einsum::einsum_with(
+        let y = tenferro_einsum::traced_tensor::einsum_with(
             &mut compiler,
             &[&a, &b],
             "ij,jk->ik",
             EinsumOptimize::Path(vec![(0, 1)]),
         )
         .unwrap();
-        run_traced(&y.reduce_sum(&[0, 1]))
+        run_traced(&y.reduce_sum(&[0, 1]).unwrap())
             .as_slice::<f64>()
             .unwrap()[0]
     };
@@ -168,19 +174,19 @@ fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
 
 #[test]
 fn symbolic_grad_einsum_with_explicit_path_uses_extension_ad_rule() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let y = tenferro_einsum::einsum_with(
+    let y = tenferro_einsum::traced_tensor::einsum_with(
         &mut compiler,
         &[&a, &b, &c],
         "ij,jk,kl->il",
         tenferro_einsum::EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
     )
     .unwrap();
-    let loss = y.reduce_sum(&[0, 1]);
+    let loss = y.reduce_sum(&[0, 1]).unwrap();
     let grad_a = loss.grad(&a).unwrap();
     let grad_b = loss.grad(&b).unwrap();
     let grad_c = loss.grad(&c).unwrap();

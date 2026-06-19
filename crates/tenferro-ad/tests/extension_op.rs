@@ -20,15 +20,12 @@ mod api_and_registry;
 mod support;
 use std::any::Any;
 use std::hash::Hasher;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use support::RunTraced;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_ad::extension::{
-    apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionRuleSet,
-};
+use tenferro_ad::extension::{apply_eager, ExtensionAdRule, ExtensionRuleSet};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
@@ -37,29 +34,8 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::{DType, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, TensorBackend, TensorRead, TypedTensor};
 use tidu::ADRuleResult;
-
-// ----------------------------------------------------------------------
-// Test-only AD rule registration guard. Integration tests may share a process,
-// so register each family at most once per process.
-// ----------------------------------------------------------------------
-fn register_rule_once(rule: Arc<dyn ExtensionAdRuleTrait>) {
-    static REGISTERED: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
-    let guard = REGISTERED.get_or_init(|| Mutex::new(Vec::new()));
-    let mut ids = guard.lock().expect("test rule registry mutex");
-    let family_id = rule.family_id();
-    if ids.contains(&family_id) {
-        return;
-    }
-    if let Err(err) = register_extension_rule(rule) {
-        match err {
-            tenferro_ad::extension::ExtensionRegistryError::DuplicateRule { .. } => {}
-            other => panic!("register_extension_rule failed: {other}"),
-        }
-    }
-    ids.push(family_id);
-}
 
 // ----------------------------------------------------------------------
 // TestScaleBy2: single-input, single-output. y = x + x (= 2x).
@@ -112,12 +88,11 @@ impl ExtensionOp for TestScaleBy2 {
         // Reuse the same strategy the AD rules use: output = input + input.
         match input {
             Tensor::F64(inner) => {
-                let data = inner.host_data();
+                let data = inner.host_data().unwrap();
                 let sum: Vec<f64> = data.iter().map(|&v| v + v).collect();
-                Ok(vec![Tensor::F64(TypedTensor::from_vec_col_major(
-                    input.shape().to_vec(),
-                    sum,
-                ))])
+                Ok(vec![Tensor::F64(
+                    TypedTensor::from_vec_col_major(input.shape().to_vec(), sum).unwrap(),
+                )])
             }
             other => Err(tenferro_tensor::Error::backend_failure(
                 "extension",
@@ -130,14 +105,10 @@ impl ExtensionOp for TestScaleBy2 {
     }
 }
 
-fn ensure_scale_by_2_registered() {
-    register_rule_once(Arc::new(TestScaleBy2Rule));
-}
-
 #[derive(Debug)]
 struct TestScaleBy2Rule;
 
-impl ExtensionAdRuleTrait for TestScaleBy2Rule {
+impl ExtensionAdRule for TestScaleBy2Rule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.scale_by_2.v1"
     }
@@ -189,6 +160,19 @@ impl ExtensionAdRuleTrait for TestScaleBy2Rule {
             None => Ok(vec![None]),
         }
     }
+}
+
+fn scale_by_2_rules() -> ExtensionRuleSet {
+    ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestScaleBy2Rule))
+        .expect("scale_by_2 rule registration")
+}
+
+fn scale_by_2_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(scale_by_2_rules())
+        .build()
+        .expect("scale_by_2 AD context")
 }
 
 // ----------------------------------------------------------------------
@@ -247,14 +231,10 @@ impl ExtensionOp for TestSwap {
     }
 }
 
-fn ensure_swap_registered() {
-    register_rule_once(Arc::new(TestSwapRule));
-}
-
 #[derive(Debug)]
 struct TestSwapRule;
 
-impl ExtensionAdRuleTrait for TestSwapRule {
+impl ExtensionAdRule for TestSwapRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.swap.v1"
     }
@@ -282,6 +262,19 @@ impl ExtensionAdRuleTrait for TestSwapRule {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[1], cotangent_out[0]])
     }
+}
+
+fn swap_rules() -> ExtensionRuleSet {
+    ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestSwapRule))
+        .expect("swap rule registration")
+}
+
+fn swap_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(swap_rules())
+        .build()
+        .expect("swap AD context")
 }
 
 // ----------------------------------------------------------------------
@@ -430,15 +423,10 @@ impl ExtensionOp for TestProbeLinear {
     }
 }
 
-fn ensure_probe_registered() {
-    register_rule_once(Arc::new(TestProbeIdentityRule));
-    register_rule_once(Arc::new(TestProbeLinearRule));
-}
-
 #[derive(Debug)]
 struct TestProbeIdentityRule;
 
-impl ExtensionAdRuleTrait for TestProbeIdentityRule {
+impl ExtensionAdRule for TestProbeIdentityRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_identity.v1"
     }
@@ -491,7 +479,7 @@ impl ExtensionAdRuleTrait for TestProbeIdentityRule {
 #[derive(Debug)]
 struct TestProbeLinearRule;
 
-impl ExtensionAdRuleTrait for TestProbeLinearRule {
+impl ExtensionAdRule for TestProbeLinearRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_linear.v1"
     }
@@ -589,6 +577,21 @@ impl ExtensionOp for TestBadOutputCount {
 // Helpers
 // ----------------------------------------------------------------------
 
+fn probe_rules() -> ExtensionRuleSet {
+    ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestProbeIdentityRule))
+        .expect("probe identity rule registration")
+        .with_rule(Arc::new(TestProbeLinearRule))
+        .expect("probe linear rule registration")
+}
+
+fn probe_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(probe_rules())
+        .build()
+        .expect("probe AD context")
+}
+
 fn hash_shape(shape: &[usize], hasher: &mut dyn Hasher) {
     hasher.write_usize(shape.len());
     for &dim in shape {
@@ -598,7 +601,7 @@ fn hash_shape(shape: &[usize], hasher: &mut dyn Hasher) {
 
 fn f64_slice(tensor: &Tensor) -> &[f64] {
     match tensor {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64 tensor"),
     }
 }
@@ -620,6 +623,20 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TestRuntime {
         _ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.eager_execute(inputs)
+    }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
     }
 }
 
@@ -652,10 +669,8 @@ fn register_test_eager_runtime(runtime: &EagerRuntime, family_id: &'static str) 
 
 #[test]
 fn scale_by_2_forward_roundtrip() {
-    ensure_scale_by_2_registered();
-
-    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let outputs = apply(Arc::new(TestScaleBy2), &[&x]);
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let outputs = apply(Arc::new(TestScaleBy2), &[&x]).unwrap();
     assert_eq!(outputs.len(), 1);
     let y = outputs.into_iter().next().unwrap();
 
@@ -669,17 +684,16 @@ fn scale_by_2_forward_roundtrip() {
 
 #[test]
 fn scale_by_2_grad_against_reduce_sum() {
-    ensure_scale_by_2_registered();
-
     // loss = sum(scale_by_2(x))    =>   dloss/dx = [2, 2, 2, 2]
-    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
+        .unwrap()
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]);
+    let loss = scaled.reduce_sum(&[0]).unwrap();
 
-    let g = loss.grad(&x).expect("grad build");
+    let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g.run_with(&mut engine).unwrap();
 
@@ -689,14 +703,14 @@ fn scale_by_2_grad_against_reduce_sum() {
 
 #[test]
 fn scale_by_2_eager_backward_uses_registered_rule() {
-    ensure_scale_by_2_registered();
-
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ad = scale_by_2_ad_context();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
     register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -707,19 +721,20 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
     let _ = loss.backward().expect("eager backward");
 
     assert_eq!(
-        x.grad().unwrap().as_slice::<f64>().unwrap(),
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 2.0, 2.0, 2.0]
     );
 }
 
 #[test]
 fn ad_context_uses_owned_extension_rules_without_global_fallback() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
+        .unwrap()
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]);
+    let loss = scaled.reduce_sum(&[0]).unwrap();
 
     let empty_ad = AdContext::builder().build().unwrap();
     let err = match empty_ad.grad(&loss, &x) {
@@ -732,7 +747,6 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
         .with_rule(Arc::new(TestScaleBy2Rule))
         .expect("owned scale_by_2 rule registration");
     let ad = AdContext::builder()
-        .with_core_rules()
         .with_extension_rules(rules)
         .build()
         .unwrap();
@@ -748,7 +762,7 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     let grad_out = grad.run_with(&mut engine).unwrap();
     assert_eq!(f64_slice(&grad_out), &[2.0, 2.0]);
 
-    let dx = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]);
+    let dx = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).unwrap();
     let jvp = ad.jvp(&scaled, &x, &dx).expect("jvp should build");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let jvp_out = jvp.run_with(&mut engine).unwrap();
@@ -762,7 +776,7 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     let jvp_out = jvp.run_with(&mut engine).unwrap();
     assert_eq!(f64_slice(&jvp_out), &[6.0, 10.0]);
 
-    let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]);
+    let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]).unwrap();
     let vjp = ad.vjp(&scaled, &x, &dy).expect("vjp should build");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let vjp_out = vjp.run_with(&mut engine).unwrap();
@@ -787,7 +801,6 @@ fn ad_context_builder_rejects_duplicate_extension_rule_sets() {
         .expect("second rule set");
 
     let err = AdContextBuilder::new()
-        .with_core_rules()
         .with_extension_rules(first)
         .with_extension_rules(second)
         .build()
@@ -806,9 +819,10 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
     let empty_ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &empty_ad);
     register_test_eager_runtime(&empty_ctx, "tenferro-tests.scale_by_2.v1");
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         empty_ctx,
-    );
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -824,14 +838,16 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
         .with_rule(Arc::new(TestScaleBy2Rule))
         .expect("owned scale_by_2 rule registration");
     let ad = AdContext::builder()
-        .with_core_rules()
         .with_extension_rules(rules)
         .build()
         .unwrap();
     let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
     register_test_eager_runtime(&ctx, "tenferro-tests.scale_by_2.v1");
-    let x =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -841,21 +857,24 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
 
     let _ = loss.backward().expect("eager backward");
 
-    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 2.0]);
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 2.0]
+    );
 }
 
 fn assert_probe_identity_eager_backward(probe: Tensor) {
-    ensure_probe_registered();
-
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ad = probe_ad_context();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
     register_test_eager_runtime(&ctx, "tenferro-tests.probe_identity.v1");
     register_test_eager_runtime(&ctx, "tenferro-tests.probe_linear.v1");
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let probe_shape = probe.shape().to_vec();
-    let probe = EagerTensor::from_tensor_in(probe, ctx);
+    let probe = EagerTensor::from_tensor_in(probe, ctx).unwrap();
     let y = apply_eager(Arc::new(TestProbeIdentity { probe_shape }), &[&x, &probe])
         .expect("probe identity eager apply")
         .into_iter()
@@ -865,33 +884,51 @@ fn assert_probe_identity_eager_backward(probe: Tensor) {
 
     let _ = loss.backward().expect("eager backward");
 
-    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[1.0, 1.0]);
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0, 1.0]
+    );
 }
 
 #[test]
 fn eager_backward_materializes_missing_tangent_zeros_for_all_probe_dtypes() {
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]));
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]));
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]));
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![true, false]));
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(
-        vec![2],
-        vec![Complex32::new(1.0, -1.0), Complex32::new(2.0, -2.0)],
-    ));
-    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, -2.0)],
-    ));
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap(),
+    );
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap(),
+    );
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap(),
+    );
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+    );
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(
+            vec![2],
+            vec![Complex32::new(1.0, -1.0), Complex32::new(2.0, -2.0)],
+        )
+        .unwrap(),
+    );
+    assert_probe_identity_eager_backward(
+        Tensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, -2.0)],
+        )
+        .unwrap(),
+    );
 }
 
 #[test]
 fn missing_extension_rule_errors_in_traced_grad() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = apply(Arc::new(TestNoAd), &[&x])
+        .unwrap()
         .into_iter()
         .next()
         .expect("single output");
-    let loss = y.reduce_sum(&[0]);
+    let loss = y.reduce_sum(&[0]).unwrap();
 
     let err = match loss.grad(&x) {
         Ok(_) => panic!("missing extension AD rule unexpectedly succeeded"),
@@ -905,8 +942,11 @@ fn missing_extension_rule_errors_in_traced_grad() {
 fn missing_extension_rule_errors_in_eager_backward() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     register_test_eager_runtime(&ctx, "tenferro-tests.no_ad.v1");
-    let x =
-        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
         .expect("forward-only eager extension apply")
         .into_iter()

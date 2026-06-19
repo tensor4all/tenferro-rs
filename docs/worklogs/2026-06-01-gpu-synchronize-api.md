@@ -8,7 +8,7 @@ This change adds an explicit host-side synchronization API for eager and direct
 CUDA backend execution:
 
 - `EagerRuntime::synchronize()` for eager code,
-- `CubeclRuntime::synchronize()` for direct CubeCL CUDA backend integrations.
+- `CudaRuntime::synchronize()` for direct CubeCL CUDA backend integrations.
 
 Eager CPU runtimes return immediately. Eager CUDA runtimes synchronize the
 current backend stream without downloading tensor data.

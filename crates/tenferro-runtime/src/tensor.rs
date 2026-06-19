@@ -8,12 +8,9 @@ use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Error, Result, Tensor
 
 pub use tenferro_tensor::Tensor;
 
-/// Convert a tensor to a different dtype.
+/// Convert a tensor to a different dtype using the checked conversion lattice.
 ///
-/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
-/// conversion sets the imaginary part to zero; complex-to-real or
-/// complex-to-integer conversion uses the real part. Boolean conversion uses
-/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+/// Use [`cast`] for explicit lossy dtype projection.
 ///
 /// # Examples
 ///
@@ -21,11 +18,43 @@ pub use tenferro_tensor::Tensor;
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, DType, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = tensor::convert(&x, DType::F32, &mut backend).unwrap();
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let y = tensor::convert(&x, DType::C64, &mut backend).unwrap();
+/// assert_eq!(y.dtype(), DType::C64);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error when the requested conversion is outside tenferro's checked
+/// dtype-promotion lattice, or when the backend does not support the requested
+/// conversion.
 pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
     backend.with_backend_session(|exec| exec.convert(input, to))
+}
+
+/// Cast a tensor to a different dtype using explicit dtype projection.
+///
+/// Unlike [`convert`], `cast` may truncate, narrow precision, project complex
+/// values to their real component, or use boolean truthiness where the backend
+/// supports the requested projection.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, DType, Tensor};
+/// # let mut backend = CpuBackend::new();
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
+/// let y = tensor::cast(&x, DType::I32, &mut backend).unwrap();
+/// assert_eq!(y.as_slice::<i32>().unwrap(), &[1, -2]);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when the backend does not support the requested explicit
+/// dtype projection.
+pub fn cast(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
+    backend.with_backend_session(|exec| exec.cast(input, to))
 }
 
 /// Elementwise addition with NumPy-style broadcasting.
@@ -36,8 +65,8 @@ pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> R
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// # let y = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// # let y = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 /// let z = tensor::add(&x, &y, &mut backend).unwrap();
 /// ```
 pub fn add(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
@@ -55,7 +84,7 @@ macro_rules! unary_fn {
         /// # use tenferro_cpu::CpuBackend;
         /// use tenferro_runtime::{tensor, Tensor};
         /// # let mut backend = CpuBackend::new();
-        /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
+        /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
         #[doc = concat!("let y = tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
         /// ```
         pub fn $name(input: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
@@ -74,8 +103,8 @@ macro_rules! binary_fn {
         /// # use tenferro_cpu::CpuBackend;
         /// use tenferro_runtime::{tensor, Tensor};
         /// # let mut backend = CpuBackend::new();
-        /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-        /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+        /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+        /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
         #[doc = concat!("let z = tensor::", stringify!($name), "(&x, &y, &mut backend).unwrap();")]
         /// ```
         pub fn $name(
@@ -133,8 +162,8 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// let z = tensor::sub(&x, &y, &mut backend).unwrap();
 /// ```
 pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
@@ -153,8 +182,8 @@ pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Resu
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, CompareDir, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// let z = tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
 /// assert_eq!(z.as_slice::<bool>().unwrap(), &[true, false]);
 /// ```
@@ -178,8 +207,8 @@ pub fn compare(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, CompareDir, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
-/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+/// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 /// # let condition = tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
 /// let z = tensor::where_select(&condition, &x, &y, &mut backend).unwrap();
 /// ```
@@ -201,9 +230,9 @@ pub fn where_select(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]);
-/// # let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]);
-/// # let upper = Tensor::from_vec_col_major(vec![], vec![3.0_f64]);
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]).unwrap();
+/// # let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
+/// # let upper = Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
 /// let z = tensor::clamp(&x, &lower, &upper, &mut backend).unwrap();
 /// ```
 pub fn clamp(
@@ -226,8 +255,8 @@ pub fn clamp(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-/// # let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+/// # let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+/// # let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
 /// let c = tensor::matmul(&a, &b, &mut backend).unwrap();
 /// ```
 pub fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
@@ -248,7 +277,7 @@ pub fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Resul
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let y = tensor::reshape(&x, &[4], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[4]);
 /// ```
@@ -268,7 +297,7 @@ pub fn reshape(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// # let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let y = tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
@@ -288,7 +317,7 @@ pub fn transpose(
 /// # use tenferro_cpu::CpuBackend;
 /// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
-/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let y = tensor::reduce_sum(&x, &[0], &mut backend).unwrap();
 /// assert_eq!(y.shape(), &[2]);
 /// ```

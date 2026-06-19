@@ -37,12 +37,20 @@ It may proceed as a bug-fix PR only when all of these are true:
 
 - The target behavior is already intended by current docs, tests, issue
   discussion, or existing API contracts.
-- The fix can be implemented without new public API.
 - The fix can be implemented without a new operation family, backend,
   dependency, feature flag, or architectural layer.
 - The fix does not change roadmap direction or require design acceptance.
 
 If any condition fails, stop the PR path and switch to issue intake.
+
+When the bug exposes a flawed public contract, prioritize the cleanest
+root-cause design fix even if that changes the canonical public API. API
+compatibility is not a goal unless the task explicitly requires it. Do not add
+`try_*` compatibility escape hatches merely to avoid a cleaner API change.
+If tenferro depends on an insufficient `tidu` AD-transform API, tidu API cleanup
+is part of the bug contract and should be the first-class repair path. Prefer a
+long-term clean, maintainable `tidu` contract over lossy tenferro-side adapters,
+generic error mapping, or compatibility shims.
 
 ## Step 2: Reproducer And Expected Result
 

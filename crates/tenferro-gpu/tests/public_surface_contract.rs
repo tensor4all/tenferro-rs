@@ -138,8 +138,8 @@ fn public_backend_names_are_provider_specific() {
         "WebGPU backend should have an explicit public WebGpuBackend name"
     );
     assert!(
-        lib_rs.contains("CubeclBackend"),
-        "the existing CubeclBackend compatibility name should remain while downstream users migrate"
+        !lib_rs.contains("CubeclBackend") && !lib_rs.contains("CubeclRuntime"),
+        "CubeCL implementation names should not remain as public CUDA backend aliases"
     );
 }
 
@@ -273,6 +273,19 @@ fn cubecl_structural_shape_arithmetic_is_checked() {
             "CubeCL structural path must not use unchecked shape arithmetic: found {banned}"
         );
     }
+}
+
+#[test]
+fn cubecl_gemm_contracting_element_product_is_checked() {
+    let gemm = repo_file("crates/tenferro-gpu/src/cubecl/gemm.rs");
+    assert!(
+        gemm.contains("checked_mul(lhs.shape()[lhs_axis])"),
+        "CubeCL GEMM must reject contracting dimension product overflow"
+    );
+    assert!(
+        !gemm.contains("contracting_elements *= lhs.shape()[lhs_axis];"),
+        "CubeCL GEMM must not use unchecked contracting dimension multiplication"
+    );
 }
 
 #[test]

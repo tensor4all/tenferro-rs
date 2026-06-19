@@ -8,7 +8,7 @@ use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{SymDim, TensorMeta};
+use crate::{ShapeExtent, SymDim, TensorMeta};
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -48,13 +48,15 @@ fn linearize_reshape_reuses_dynamic_shape_sources_as_inactive_inputs() {
         ],
     };
 
-    let result = op.jvp_rule(
-        &mut builder,
-        &[data_key, shape_key.clone()],
-        &[],
-        &[Some(data_tangent), None],
-        &mut ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &[data_key, shape_key.clone()],
+            &[],
+            &[Some(data_tangent), None],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("reshape tangent output must be active");
@@ -102,7 +104,8 @@ fn transpose_reshape_returns_none_for_dynamic_shape_sources() {
         &inputs,
         &linear_mode(&[true, false]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 2);
     assert!(result[0].is_some());
@@ -119,6 +122,56 @@ fn transpose_reshape_returns_none_for_dynamic_shape_sources() {
             to_shape: DimExpr::input_shape(1, 2),
         }
     );
+    assert_eq!(
+        reshape.role,
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        }
+    );
+}
+
+#[test]
+fn transpose_reshape_accepts_upper_bound_input_metadata() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(15));
+    let data_key = input_key(16);
+    let inputs = vec![ValueRef::External(data_key.clone())];
+    ctx.insert_metadata(
+        data_key,
+        TensorMeta::with_extents(
+            DType::F64,
+            vec![
+                ShapeExtent::upper_bound(SymDim::from(4usize)),
+                ShapeExtent::upper_bound(SymDim::from(5usize)),
+            ],
+        ),
+    );
+
+    let result = StdTensorOp::Reshape { to_shape: vec![] }
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &inputs,
+            &linear_mode(&[true]),
+            &mut ctx,
+        )
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].is_some());
+
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 1);
+    let reshape = &graph.operations()[0];
+    assert_eq!(
+        reshape.operation,
+        StdTensorOp::Reshape {
+            to_shape: DimExpr::input_shape(1, 2),
+        }
+    );
+    assert_eq!(reshape.inputs[0], ValueRef::Local(cotangent));
+    assert_eq!(reshape.inputs[1], inputs[0]);
     assert_eq!(
         reshape.role,
         OperationRole::Linearized {
@@ -145,13 +198,15 @@ fn linearize_broadcast_reuses_dynamic_shape_sources_as_inactive_inputs() {
         dims: vec![1],
     };
 
-    let result = op.jvp_rule(
-        &mut builder,
-        &[data_key, shape_key.clone()],
-        &[],
-        &[Some(data_tangent), None],
-        &mut ctx,
-    );
+    let result = op
+        .jvp_rule(
+            &mut builder,
+            &[data_key, shape_key.clone()],
+            &[],
+            &[Some(data_tangent), None],
+            &mut ctx,
+        )
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let tangent_out = result[0].expect("broadcast tangent output must be active");
@@ -195,7 +250,8 @@ fn transpose_broadcast_returns_none_for_dynamic_shape_sources() {
         &inputs,
         &linear_mode(&[true, false]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 2);
     assert!(result[0].is_some());
@@ -221,7 +277,55 @@ fn transpose_broadcast_reduces_singleton_input_axes() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
+    )
+    .unwrap();
+
+    assert_eq!(result.len(), 1);
+    let cotangent_in = result[0].expect("broadcast cotangent input must be active");
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 2);
+    let reduce = &graph.operations()[0];
+    assert_eq!(reduce.operation, StdTensorOp::ReduceSum { axes: vec![0] });
+    assert_eq!(reduce.inputs, vec![ValueRef::Local(cotangent)]);
+    let reshape = &graph.operations()[1];
+    assert_eq!(
+        reshape.operation,
+        StdTensorOp::Reshape {
+            to_shape: DimExpr::input_shape(1, 1),
+        }
     );
+    assert_eq!(reshape.inputs[0], ValueRef::Local(reduce.outputs[0]));
+    assert_eq!(reshape.inputs[1], inputs[0]);
+    assert!(reshape.outputs.contains(&cotangent_in));
+}
+
+#[test]
+fn transpose_broadcast_reduces_upper_bound_singleton_input_axes() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(45));
+    let data_key = input_key(46);
+    let inputs = vec![ValueRef::External(data_key.clone())];
+    ctx.insert_metadata(
+        data_key,
+        TensorMeta::with_extents(
+            DType::F64,
+            vec![ShapeExtent::upper_bound(SymDim::from(1usize))],
+        ),
+    );
+
+    let result = StdTensorOp::BroadcastInDim {
+        shape: vec![DimExpr::Const(3)],
+        dims: vec![0],
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 1);
     let cotangent_in = result[0].expect("broadcast cotangent input must be active");
@@ -270,7 +374,8 @@ fn transpose_broadcast_restores_non_monotonic_dimension_order() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 1);
     let cotangent_in = result[0].expect("broadcast cotangent input must be active");
@@ -283,6 +388,48 @@ fn transpose_broadcast_restores_non_monotonic_dimension_order() {
     );
     assert_eq!(transpose.inputs, vec![ValueRef::Local(cotangent)]);
     assert!(transpose.outputs.contains(&cotangent_in));
+}
+
+#[test]
+fn transpose_embed_diag_accepts_upper_bound_input_metadata_for_rank_only_perm() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(55));
+    let data_key = input_key(56);
+    let inputs = vec![ValueRef::External(data_key.clone())];
+    ctx.insert_metadata(
+        data_key,
+        TensorMeta::with_extents(
+            DType::F64,
+            vec![
+                ShapeExtent::upper_bound(SymDim::from(4usize)),
+                ShapeExtent::upper_bound(SymDim::from(5usize)),
+            ],
+        ),
+    );
+
+    let result = StdTensorOp::EmbedDiag {
+        axis_a: 1,
+        axis_b: 0,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].is_some());
+
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 2);
+    assert_eq!(
+        graph.operations()[1].operation,
+        StdTensorOp::Transpose { perm: vec![1, 0] }
+    );
 }
 
 #[test]
@@ -310,7 +457,8 @@ fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
         &inputs,
         &linear_mode(&[true]),
         &mut ctx,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result, vec![None]);
     assert!(builder.build().operations().is_empty());

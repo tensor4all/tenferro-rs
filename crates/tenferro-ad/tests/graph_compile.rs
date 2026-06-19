@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use tenferro_runtime::extension::{apply, ExtensionOpTrait};
+use tenferro_runtime::extension::{apply, ExtensionOp};
 use tenferro_runtime::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 use tenferro_runtime::{SymDim, Tensor};
@@ -17,7 +17,7 @@ impl std::fmt::Debug for ConstantDebugExtension {
     }
 }
 
-impl ExtensionOpTrait for ConstantDebugExtension {
+impl ExtensionOp for ConstantDebugExtension {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.graph_compile_constant_debug.v1"
     }
@@ -26,14 +26,14 @@ impl ExtensionOpTrait for ConstantDebugExtension {
         hasher.write_u64(0);
     }
 
-    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other
             .as_any()
             .downcast_ref::<ConstantDebugExtension>()
             .is_some_and(|other| self.payload == other.payload)
     }
 
-    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
         Arc::new(self.clone())
     }
 
@@ -64,8 +64,8 @@ impl ExtensionOpTrait for ConstantDebugExtension {
 
 #[test]
 fn graph_compiler_compiles_without_backend() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
@@ -77,8 +77,8 @@ fn graph_compiler_compiles_without_backend() {
 
 #[test]
 fn graph_compiler_validates_placeholder_specs() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let y = &x + &x;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -93,7 +93,7 @@ fn graph_compiler_validates_placeholder_specs() {
         .unwrap_err();
     assert!(format!("{err}").contains("dtype"));
 
-    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]);
+    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let err = compiler
         .compile_with_input_specs(&z.neg(), &[(&z, DType::F64, &[2])])
         .unwrap_err();
@@ -102,7 +102,7 @@ fn graph_compiler_validates_placeholder_specs() {
 
 #[test]
 fn graph_program_input_accessors_report_compiled_contract() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.neg();
 
     let mut compiler = GraphCompiler::new();
@@ -123,8 +123,9 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(1).unwrap());
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let _ = compiler.compile(&(&x + &x)).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
+    let _ = compiler.compile(&y).unwrap();
     let _ = compiler.compile(&x.neg()).unwrap();
 
     let stats = compiler.cache_stats();
@@ -136,7 +137,7 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
 #[test]
 fn graph_compiler_compiler_options_setter_clears_compile_cache() {
     let mut compiler = GraphCompiler::new();
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let _ = compiler.compile(&x.neg()).unwrap();
     assert_eq!(compiler.compile_cache_len(), 1);
 
@@ -157,8 +158,8 @@ fn graph_compiler_cache_distinguishes_symbolic_input_shapes() {
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
 
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let y = &x + &x;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
 
     let _ = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
@@ -175,10 +176,10 @@ fn graph_compiler_cache_distinguishes_dtypes() {
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
 
-    let x_f64 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y_f64 = &x_f64 + &x_f64;
-    let x_f32 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
-    let y_f32 = &x_f32 + &x_f32;
+    let x_f64 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y_f64 = (&x_f64 + &x_f64).unwrap();
+    let x_f32 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+    let y_f32 = (&x_f32 + &x_f32).unwrap();
 
     let _ = compiler.compile(&y_f64).unwrap();
     let _ = compiler.compile(&y_f32).unwrap();
@@ -191,9 +192,13 @@ fn graph_compiler_cache_distinguishes_extension_payload_eq_despite_hash_collisio
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y1 = apply(Arc::new(ConstantDebugExtension { payload: 1 }), &[&x]).remove(0);
-    let y2 = apply(Arc::new(ConstantDebugExtension { payload: 2 }), &[&x]).remove(0);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y1 = apply(Arc::new(ConstantDebugExtension { payload: 1 }), &[&x])
+        .unwrap()
+        .remove(0);
+    let y2 = apply(Arc::new(ConstantDebugExtension { payload: 2 }), &[&x])
+        .unwrap()
+        .remove(0);
 
     let _ = compiler.compile(&y1).unwrap();
     let _ = compiler.compile(&y2).unwrap();
@@ -203,8 +208,8 @@ fn graph_compiler_cache_distinguishes_extension_payload_eq_despite_hash_collisio
 
 #[test]
 fn graph_compiler_compile_many_returns_multi_output_program() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = &x + &x;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = (&x + &x).unwrap();
     let z = x.neg();
 
     let mut compiler = GraphCompiler::new();

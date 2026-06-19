@@ -54,7 +54,7 @@ In `tenferro/src/lib.rs`, below the existing public re-exports, add:
 #[cfg(feature = "cubecl")]
 pub mod cuda {
     pub use tenferro_tensor::cubecl::{
-        download_tensor, gpu_available, upload_tensor, CubeclBackend as CudaBackend,
+        download_tensor, gpu_available, upload_tensor, CudaBackend,
     };
 }
 ```

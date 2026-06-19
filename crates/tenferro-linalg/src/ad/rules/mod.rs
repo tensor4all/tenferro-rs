@@ -30,6 +30,7 @@ pub(crate) use tenferro_ops::ad::support::{
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 mod solve;
 mod support;
@@ -46,35 +47,48 @@ use support::*;
 /// Category C `input_shape` snapshots have been removed from the linalg op
 /// variants; instead, AD rules resolve the primal input's shape through the
 /// [`ShapeGuardContext`] metadata surface. Concrete shapes collapse to
-/// `DimExpr::Const`; symbolic shapes fall back to `DimExpr::input_shape(0, rank)`
-/// so downstream op constructors that still carry shape fields (e.g.
-/// `TriangularSolve`) see a well-formed shape expression.
+/// `DimExpr::Const`; non-constant exact shapes and rank-known bounded metadata
+/// fall back to `DimExpr::input_shape(0, rank)` so graph-emitting rules that only
+/// need rank can preserve runtime shape sources.
 fn primal_input_shape(
     ctx: &mut ShapeGuardContext,
     primal_in: &[ValueKey<StdTensorOp>],
-) -> Vec<DimExpr> {
-    let shape = ctx.shape_of(&ValueRef::External(primal_in[0].clone()));
-    if let Some(concrete) = shape
-        .iter()
-        .map(|dim| dim.constant_value())
-        .collect::<Option<Vec<_>>>()
-    {
-        DimExpr::from_concrete(&concrete)
-    } else {
-        DimExpr::input_shape(0, shape.len())
+) -> Option<Vec<DimExpr>> {
+    let input = ValueRef::External(primal_in[0].clone());
+    if let Some(exact_shape) = ctx.shape_if_available(&input) {
+        return if let Some(concrete) = exact_shape
+            .iter()
+            .map(|dim| dim.constant_value())
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(DimExpr::from_concrete(&concrete))
+        } else {
+            Some(DimExpr::input_shape(0, exact_shape.len()))
+        };
     }
+
+    let rank = ctx.rank_of(&input).ok()?;
+    Some(DimExpr::input_shape(0, rank))
 }
 
 fn primal_matrix_input_shape(
     ctx: &mut ShapeGuardContext,
     primal_in: &[ValueKey<StdTensorOp>],
 ) -> Option<Vec<DimExpr>> {
-    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = primal_input_shape(ctx, primal_in)?;
     (input_shape.len() >= 2).then_some(input_shape)
 }
 
 fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
     StdTensorOp::Extension(Arc::new(LinalgExtensionOp::new(op)))
+}
+
+fn invalid_dim_expr(op: &'static str, err: impl std::fmt::Display) -> ADRuleError {
+    ADRuleError::invalid_input(
+        format!("tenferro-linalg.{op}"),
+        ADRuleKind::Jvp,
+        format!("invalid matrix dimension expression: {err}"),
+    )
 }
 
 pub(crate) fn linearize_lu(
@@ -83,17 +97,18 @@ pub(crate) fn linearize_lu(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None, None, None];
+        return Ok(vec![None, None, None, None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None, None, None];
+        return Ok(vec![None, None, None, None]);
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
-    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
+    let (m_size, n_size) =
+        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_lu", err))?;
     let k = DimExpr::min(m.clone(), n.clone());
     let k_size = m_size.min(n_size);
     let rank = input_shape.len();
@@ -182,7 +197,7 @@ pub(crate) fn linearize_lu(
         du_full
     };
 
-    vec![None, Some(dl), Some(du), None]
+    Ok(vec![None, Some(dl), Some(du), None])
 }
 
 pub(crate) fn linearize_full_piv_lu(
@@ -191,19 +206,20 @@ pub(crate) fn linearize_full_piv_lu(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None, None, None, None];
+        return Ok(vec![None, None, None, None, None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None, None, None, None];
+        return Ok(vec![None, None, None, None, None]);
     };
     let input_shape = input_shape.as_slice();
     let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
-    let (rows_size, cols_size) = resolve_and_guard(rows, cols, ctx);
+    let (rows_size, cols_size) = resolve_and_guard(rows, cols, ctx)
+        .map_err(|err| invalid_dim_expr("linearize_full_piv_lu", err))?;
     if rows_size != cols_size {
-        return vec![None, None, None, None, None];
+        return Ok(vec![None, None, None, None, None]);
     }
 
     let rank = input_shape.len();
@@ -263,7 +279,7 @@ pub(crate) fn linearize_full_piv_lu(
         rank,
     );
 
-    vec![None, Some(dl), Some(du), None, None]
+    Ok(vec![None, Some(dl), Some(du), None, None])
 }
 
 pub(crate) fn linearize_eig(
@@ -285,14 +301,20 @@ pub(crate) fn linearize_eig(
     let rank = input_shape.len();
     let v = ValueRef::External(primal_out[1].clone());
     let da_complex = match input_dtype {
-        DType::F64 | DType::F32 => builder.add_operation(
+        DType::F64 => builder.add_operation(
             StdTensorOp::Convert {
                 from: input_dtype,
-                to: match input_dtype {
-                    DType::F64 => DType::C64,
-                    DType::F32 => DType::C32,
-                    _ => unreachable!("real dtype branch"),
-                },
+                to: DType::C64,
+            },
+            vec![ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::F32 => builder.add_operation(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: DType::C32,
             },
             vec![ValueRef::Local(da)],
             OperationRole::Linearized {
@@ -338,14 +360,20 @@ pub(crate) fn linearize_eig_values(
     );
     let v = ValueRef::Local(eig_outputs[1]);
     let da_complex = match input_dtype {
-        DType::F64 | DType::F32 => builder.add_operation(
+        DType::F64 => builder.add_operation(
             StdTensorOp::Convert {
                 from: input_dtype,
-                to: match input_dtype {
-                    DType::F64 => DType::C64,
-                    DType::F32 => DType::C32,
-                    _ => unreachable!("real dtype branch"),
-                },
+                to: DType::C64,
+            },
+            vec![ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::F32 => builder.add_operation(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: DType::C32,
             },
             vec![ValueRef::Local(da)],
             OperationRole::Linearized {
@@ -375,19 +403,20 @@ pub(crate) fn linearize_svd(
     tangent_in: &[Option<LocalValueId>],
     eps: f64,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None, None];
+        return Ok(vec![None, None, None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None, None];
+        return Ok(vec![None, None, None]);
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
-    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
+    let (m_size, n_size) =
+        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_svd", err))?;
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let k = DimExpr::min(m.clone(), n.clone());
     let u = ValueRef::External(primal_out[0].clone());
     let s = ValueRef::External(primal_out[1].clone());
@@ -540,7 +569,7 @@ pub(crate) fn linearize_svd(
 
     let dvt = adjoint_matrix_linear(builder, dv, matrix_rank, dtype);
 
-    vec![Some(du), Some(ds), Some(dvt)]
+    Ok(vec![Some(du), Some(ds), Some(dvt)])
 }
 
 pub(crate) fn linearize_svd_values(
@@ -549,17 +578,17 @@ pub(crate) fn linearize_svd_values(
     tangent_in: &[Option<LocalValueId>],
     eps: f64,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None];
+        return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let svd_outputs = builder.add_operation(
         linalg_std_op(LinalgOp::Svd { eps }),
         vec![ValueRef::External(primal_in[0].clone())],
@@ -583,7 +612,7 @@ pub(crate) fn linearize_svd_values(
         vec![true, false],
         matrix_rank,
     );
-    vec![Some(extract_diag_linear(builder, ds_mat))]
+    Ok(vec![Some(extract_diag_linear(builder, ds_mat))])
 }
 
 pub(crate) fn linearize_eigh(
@@ -593,19 +622,19 @@ pub(crate) fn linearize_eigh(
     tangent_in: &[Option<LocalValueId>],
     eps: f64,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let w = ValueRef::External(primal_out[0].clone());
-    let w_dtype = ctx.dtype_of(&w);
+    let w_dtype = ctx.dtype_of(&w)?;
     let v = ValueRef::External(primal_out[1].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
 
@@ -656,7 +685,7 @@ pub(crate) fn linearize_eigh(
         matrix_rank,
     );
 
-    vec![Some(dw), Some(dv)]
+    Ok(vec![Some(dw), Some(dv)])
 }
 
 pub(crate) fn linearize_eigh_values(
@@ -665,17 +694,17 @@ pub(crate) fn linearize_eigh_values(
     tangent_in: &[Option<LocalValueId>],
     eps: f64,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None];
+        return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let eigh_outputs = builder.add_operation(
         linalg_std_op(LinalgOp::Eigh { eps }),
         vec![ValueRef::External(primal_in[0].clone())],
@@ -699,7 +728,7 @@ pub(crate) fn linearize_eigh_values(
         matrix_rank,
     );
 
-    vec![Some(extract_diag_linear(builder, projected))]
+    Ok(vec![Some(extract_diag_linear(builder, projected))])
 }
 
 pub(crate) fn linearize_cholesky(
@@ -708,17 +737,17 @@ pub(crate) fn linearize_cholesky(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None];
+        return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let l = ValueRef::External(primal_out[0].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
     let l_conj = conjugate_primal_if_dtype_complex(builder, l.clone(), dtype);
@@ -767,7 +796,7 @@ pub(crate) fn linearize_cholesky(
         matrix_rank,
     );
 
-    vec![Some(dl)]
+    Ok(vec![Some(dl)])
 }
 
 pub(crate) fn linearize_qr(
@@ -776,19 +805,20 @@ pub(crate) fn linearize_qr(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
 
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
-    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
+    let (m_size, n_size) =
+        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_qr", err))?;
     let matrix_rank = input_shape.len();
-    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let q = ValueRef::External(primal_out[0].clone());
     let r = ValueRef::External(primal_out[1].clone());
 
@@ -928,7 +958,7 @@ pub(crate) fn linearize_qr(
             dr = linear_add(builder, dr, dr_trailing_full);
         }
 
-        return vec![Some(dq), Some(dr)];
+        return Ok(vec![Some(dq), Some(dr)]);
     }
 
     let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank, dtype);
@@ -984,5 +1014,5 @@ pub(crate) fn linearize_qr(
         matrix_rank,
     );
 
-    vec![Some(dq), Some(dr)]
+    Ok(vec![Some(dq), Some(dr)])
 }

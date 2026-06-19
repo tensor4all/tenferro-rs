@@ -8,14 +8,14 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 use tidu::eager::BackwardExecutor;
-use tidu::{LinearizedGraph, PrimitiveGraph};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, LinearizedGraph, PrimitiveGraph};
 
 use crate::eager_builder::EagerPrimitiveBuilder;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 use crate::extension_runtime::ExtensionExecutor;
 use crate::metadata::{
     push_metadata_scope, register_scoped_live_graph_metadata, tensor_meta_from_tensor,
-    MetadataScope,
+    GlobalMetadataScope,
 };
 
 use super::zero_like_tensor;
@@ -23,19 +23,31 @@ use super::zero_like_tensor;
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
     extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-    metadata_scopes: Vec<Arc<MetadataScope>>,
+    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    deferred_error: Option<ADRuleError>,
 }
 
 impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
     pub(crate) fn new(
         backend: &'a mut B,
         extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-        metadata_scopes: Vec<Arc<MetadataScope>>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Self {
         Self {
             backend,
             extension_executor,
             metadata_scopes,
+            deferred_error: None,
+        }
+    }
+
+    pub(crate) fn take_error(&mut self) -> Option<ADRuleError> {
+        self.deferred_error.take()
+    }
+
+    fn record_error(&mut self, err: ADRuleError) {
+        if self.deferred_error.is_none() {
+            self.deferred_error = Some(err);
         }
     }
 }
@@ -55,17 +67,18 @@ pub(super) fn missing_tangent_base_key(
 pub(super) fn eager_forward_input_metadata(
     key: &ValueKey<StdTensorOp>,
     initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
-) -> TensorMeta {
+) -> ADRuleResult<TensorMeta> {
     if let Some(value) = initial_data.get(key) {
-        return tensor_meta_from_tensor(value.as_ref());
+        return Ok(tensor_meta_from_tensor(value.as_ref()));
     }
 
-    let base_key = missing_tangent_base_key(key)
-        .unwrap_or_else(|| panic!("missing concrete eager value for {:?}", key));
-    let base = initial_data
-        .get(&base_key)
-        .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
-    tensor_meta_from_tensor(base.as_ref())
+    let base_key = missing_tangent_base_key(key).ok_or_else(|| {
+        eager_ad_invalid_input(format!("missing concrete eager value for {key:?}"))
+    })?;
+    let base = initial_data.get(&base_key).ok_or_else(|| {
+        eager_ad_invalid_input(format!("missing base eager value for {base_key:?}"))
+    })?;
+    Ok(tensor_meta_from_tensor(base.as_ref()))
 }
 
 pub(super) fn eager_forward_value<B: TensorBackend>(
@@ -73,19 +86,22 @@ pub(super) fn eager_forward_value<B: TensorBackend>(
     key: &ValueKey<StdTensorOp>,
     initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
-) -> Arc<Tensor> {
+) -> ADRuleResult<Arc<Tensor>> {
     if let Some(value) = all_values.get(key) {
-        return Arc::clone(value);
+        return Ok(Arc::clone(value));
     }
 
-    let base_key = missing_tangent_base_key(key)
-        .unwrap_or_else(|| panic!("missing concrete eager value for {:?}", key));
-    let base = initial_data
-        .get(&base_key)
-        .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
-    let value = Arc::new(zero_like_tensor(base.as_ref(), backend));
+    let base_key = missing_tangent_base_key(key).ok_or_else(|| {
+        eager_ad_invalid_input(format!("missing concrete eager value for {key:?}"))
+    })?;
+    let base = initial_data.get(&base_key).ok_or_else(|| {
+        eager_ad_invalid_input(format!("missing base eager value for {base_key:?}"))
+    })?;
+    let value = Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(|err| {
+        eager_ad_invalid_input(format!("failed to create eager tangent zero: {err}"))
+    })?);
     all_values.insert(key.clone(), Arc::clone(&value));
-    value
+    Ok(value)
 }
 
 fn live_graph_values(graph: &Graph<StdTensorOp>) -> HashSet<LocalValueId> {
@@ -119,32 +135,52 @@ fn linear_op_depends_on_tangents(mode: &OperationRole) -> bool {
     matches!(mode, OperationRole::Linearized { active_mask } if active_mask.iter().any(|is_active| *is_active))
 }
 
-fn zero_from_exact_metadata<B: TensorBackend>(
+pub(super) fn zero_from_exact_metadata<B: TensorBackend>(
     meta: &TensorMeta,
     backend: &mut B,
-) -> Option<Tensor> {
-    let shape = meta
-        .exact_shape()?
+) -> ADRuleResult<Option<Tensor>> {
+    let Some(shape) = meta.exact_shape() else {
+        return Ok(None);
+    };
+    let shape = shape
         .into_iter()
         .map(|dim| dim.constant_value())
-        .collect::<Option<Vec<_>>>()?;
-    let host = match meta.dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
-        DType::Bool => {
-            let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![false; len]))
-        }
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+        .collect::<Option<Vec<_>>>();
+    let Some(shape) = shape else {
+        return Ok(None);
     };
-    Some(
-        backend
-            .upload_host_tensor(&host)
-            .unwrap_or_else(|err| panic!("eager primitive zero metadata upload failed: {err}")),
-    )
+    let host =
+        match meta.dtype {
+            DType::F32 => Tensor::F32(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create F32 zero: {err}"))
+            })?),
+            DType::F64 => Tensor::F64(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create F64 zero: {err}"))
+            })?),
+            DType::I32 => Tensor::I32(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create I32 zero: {err}"))
+            })?),
+            DType::I64 => Tensor::I64(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create I64 zero: {err}"))
+            })?),
+            DType::Bool => {
+                let len = checked_zero_element_count(&shape)?;
+                Tensor::Bool(
+                    TypedTensor::from_vec_col_major(shape, vec![false; len]).map_err(|err| {
+                        eager_ad_invalid_input(format!("failed to create bool zero: {err}"))
+                    })?,
+                )
+            }
+            DType::C32 => Tensor::C32(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create C32 zero: {err}"))
+            })?),
+            DType::C64 => Tensor::C64(TypedTensor::zeros(shape).map_err(|err| {
+                eager_ad_invalid_input(format!("failed to create C64 zero: {err}"))
+            })?),
+        };
+    Ok(Some(backend.upload_host_tensor(&host).map_err(|err| {
+        eager_ad_invalid_input(format!("failed to upload eager zero tensor: {err}"))
+    })?))
 }
 
 fn prefill_missing_linear_zero_values<B: TensorBackend>(
@@ -152,22 +188,37 @@ fn prefill_missing_linear_zero_values<B: TensorBackend>(
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ctx: &mut ShapeGuardContext,
     backend: &mut B,
-) {
+) -> ADRuleResult<()> {
     for value in linear.as_graph().values() {
         if external_data.contains_key(&value.key) {
             continue;
         }
         let Some(meta) = ctx
-            .try_metadata_of(&ValueRef::External(value.key.clone()))
+            .metadata_if_available(&ValueRef::External(value.key.clone()))
             .cloned()
         else {
             continue;
         };
-        let Some(zero) = zero_from_exact_metadata(&meta, backend) else {
+        let Some(zero) = zero_from_exact_metadata(&meta, backend)? else {
             continue;
         };
         external_data.insert(value.key.clone(), Arc::new(zero));
     }
+    Ok(())
+}
+
+fn checked_zero_element_count(shape: &[usize]) -> ADRuleResult<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| {
+            eager_ad_invalid_input(format!(
+                "zero tensor shape product overflows for shape {shape:?}"
+            ))
+        })
+    })
+}
+
+fn eager_ad_invalid_input(message: impl Into<String>) -> ADRuleError {
+    ADRuleError::invalid_input("tenferro-ad.eager", ADRuleKind::Transpose, message)
 }
 
 impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
@@ -178,18 +229,23 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         graph: PrimitiveGraph<'_, StdTensorOp>,
         initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
+        if self.deferred_error.is_some() {
+            return initial_data.clone();
+        }
         let graph = graph.as_graph();
         let mut all_values = initial_data.clone();
         let live_values = live_graph_values(graph);
-        let input_metadata = graph
-            .inputs()
-            .iter()
-            .map(|&input_id| {
-                let key = graph.values()[input_id].key.clone();
-                let meta = eager_forward_input_metadata(&key, initial_data);
-                (key, meta)
-            })
-            .collect::<Vec<_>>();
+        let mut input_metadata = Vec::with_capacity(graph.inputs().len());
+        for &input_id in graph.inputs() {
+            let key = graph.values()[input_id].key.clone();
+            match eager_forward_input_metadata(&key, initial_data) {
+                Ok(meta) => input_metadata.push((key, meta)),
+                Err(err) => {
+                    self.record_error(err);
+                    return all_values;
+                }
+            }
+        }
 
         for op_node in graph.operations() {
             if linear_op_depends_on_tangents(&op_node.role) {
@@ -203,10 +259,9 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
                 continue;
             }
 
-            let resolved_values: Vec<Arc<Tensor>> = op_node
-                .inputs
-                .iter()
-                .map(|input| match input {
+            let mut resolved_values = Vec::with_capacity(op_node.inputs.len());
+            for input in &op_node.inputs {
+                let resolved = match input {
                     ValueRef::Local(local_id) => {
                         let key = &graph.values()[*local_id].key;
                         eager_forward_value(&mut all_values, key, initial_data, self.backend)
@@ -214,11 +269,18 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
                     ValueRef::External(key) => {
                         eager_forward_value(&mut all_values, key, initial_data, self.backend)
                     }
-                })
-                .collect();
+                };
+                match resolved {
+                    Ok(value) => resolved_values.push(value),
+                    Err(err) => {
+                        self.record_error(err);
+                        return all_values;
+                    }
+                }
+            }
             let resolved_inputs: Vec<&Tensor> =
                 resolved_values.iter().map(|value| value.as_ref()).collect();
-            let outputs =
+            let outputs_result =
                 if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
                     exec_op_on_tensors_with_extension_executor(
                         &op_node.operation,
@@ -228,13 +290,17 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
                     )
                 } else {
                     exec_op_on_tensors(&op_node.operation, &resolved_inputs, self.backend)
+                };
+            let outputs = match outputs_result {
+                Ok(outputs) => outputs,
+                Err(err) => {
+                    self.record_error(eager_ad_invalid_input(format!(
+                        "eager forward exec failed for {:?}: {err}",
+                        op_node.operation
+                    )));
+                    return all_values;
                 }
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "eager forward exec failed for {:?}: {}",
-                        op_node.operation, err
-                    )
-                });
+            };
 
             for (output_id, output) in op_node.outputs.iter().zip(outputs) {
                 let key = graph.values()[*output_id].key.clone();
@@ -243,7 +309,15 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         }
 
         let metadata_scope =
-            register_scoped_live_graph_metadata(graph, &live_values, input_metadata);
+            match register_scoped_live_graph_metadata(graph, &live_values, input_metadata) {
+                Ok(scope) => scope,
+                Err(err) => {
+                    self.record_error(eager_ad_invalid_input(format!(
+                        "eager replay metadata registration failed: {err}"
+                    )));
+                    return all_values;
+                }
+            };
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
 
         all_values
@@ -256,9 +330,12 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         external_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
     ) -> tidu::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
+        if let Some(err) = self.take_error() {
+            return Err(err);
+        }
         let mut external_data = external_data.clone();
         ctx.refresh_global_metadata();
-        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend);
+        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
 
         let mut builder = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
             EagerPrimitiveBuilder::with_extension_executor(self.backend, extension_executor)
@@ -275,21 +352,30 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             })
             .collect::<Vec<_>>();
 
-        tidu::try_linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx).map(
-            |cotangent_ids| {
-                cotangent_ids
-                    .into_iter()
-                    .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)))
-                    .collect()
-            },
-        )
+        let transpose_result =
+            tidu::linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx);
+        if let Some(err) = builder.take_error() {
+            return Err(err);
+        }
+        let cotangent_ids = transpose_result?;
+        cotangent_ids
+            .into_iter()
+            .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)).transpose())
+            .collect()
     }
 
     fn add_operands(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> Arc<Tensor> {
-        Arc::new(
-            self.backend
-                .add(a.as_ref(), b.as_ref())
-                .unwrap_or_else(|err| panic!("eager cotangent add failed: {}", err)),
-        )
+        if self.deferred_error.is_some() {
+            return Arc::clone(a);
+        }
+        match self.backend.add(a.as_ref(), b.as_ref()) {
+            Ok(sum) => Arc::new(sum),
+            Err(err) => {
+                self.record_error(eager_ad_invalid_input(format!(
+                    "eager cotangent add failed: {err}"
+                )));
+                Arc::clone(a)
+            }
+        }
     }
 }

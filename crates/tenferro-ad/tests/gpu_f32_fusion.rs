@@ -4,15 +4,16 @@
 
 mod support;
 use support::RunTraced;
-use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
-fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
+fn upload_traced(backend: &CudaBackend, tensor: &Tensor) -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape(upload_tensor(backend.runtime(), tensor).unwrap())
+        .unwrap()
 }
 
 #[test]
@@ -26,14 +27,14 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
 
-    let gpu_backend = CubeclBackend::new(0).unwrap();
+    let gpu_backend = CudaBackend::new(0).unwrap();
     let a = upload_traced(&gpu_backend, &a_host);
     let b = upload_traced(&gpu_backend, &b_host);
     let c = upload_traced(&gpu_backend, &c_host);
     let mut engine = GraphExecutor::new(gpu_backend);
 
-    let sum = a.add(&b);
-    let result_traced = sum.mul(&c);
+    let sum = a.add(&b).unwrap();
+    let result_traced = sum.mul(&c).unwrap();
 
     let result = result_traced.run_with(&mut engine).unwrap();
     let result = download_tensor(engine.backend().runtime(), &result).unwrap();

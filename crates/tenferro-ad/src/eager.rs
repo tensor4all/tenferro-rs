@@ -8,8 +8,11 @@ use std::time::{Duration, Instant};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheStore};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
+#[cfg(test)]
 use computegraph::graph::Graph;
-use computegraph::{ValueKey, ValueRef};
+use computegraph::ValueKey;
+#[cfg(test)]
+use computegraph::ValueRef;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
@@ -19,22 +22,27 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
+#[cfg(test)]
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{
-    BackendSessionHost, CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead,
-    TensorValue, TypedTensor,
+    CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
+    TypedTensor,
 };
 use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recorder, Trace};
 
 use self::backward::TenferroBackwardCallbacks;
 use crate::eager_backend::EagerBackend;
+#[cfg(test)]
+use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
 use crate::eager_exec::{
     exec_op_on_tensor_reads_with_extension_executor, exec_op_on_tensors_with_extension_executor,
-    exec_standard_op_on_tensor_reads_in_session,
 };
 use crate::error::{ContextId, Error, Result};
+#[cfg(test)]
+use crate::metadata::push_metadata_scope;
 use crate::metadata::{
-    metadata_scopes_for_scope, push_metadata_scope, register_scoped_metadata_batch,
-    register_scoped_value_metadata, tensor_meta_from_tensor, MetadataScope,
+    metadata_scopes_for_scope, register_scoped_metadata_batch, register_scoped_value_metadata,
+    tensor_meta_from_tensor, GlobalMetadataScope,
 };
 use crate::traced::next_input_key;
 
@@ -157,6 +165,7 @@ pub struct EagerRuntimeCacheStats {
     pub extensions: CacheStats,
 }
 
+#[cfg(test)]
 pub(crate) struct EagerGraphExecution {
     pub(crate) outputs: Vec<Arc<Tensor>>,
     pub(crate) retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
@@ -174,11 +183,11 @@ pub(crate) struct EagerGraphExecution {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-/// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx.clone());
-/// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), ctx);
+/// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
+/// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
 /// let z = x.add(&y).unwrap();
 ///
-/// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0]);
+/// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
 pub struct EagerRuntime {
     pub(crate) backend: Mutex<EagerBackend>,
@@ -278,7 +287,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
     pub fn with_cpu_backend(backend: CpuBackend) -> Arc<Self> {
@@ -413,17 +422,11 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// ctx.clear_extension_caches();
-    /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    /// ctx.clear_extension_caches()?;
+    /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn clear_extension_caches(&self) {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_clear_extension_caches`; this boundary must not panic on poison.
-        let _ = self.try_clear_extension_caches();
-    }
-
-    /// Fallibly clear generic extension runtime cache entries.
-    pub fn try_clear_extension_caches(&self) -> Result<()> {
+    pub fn clear_extension_caches(&self) -> Result<()> {
         self.lock_extension_executor()?.clear_caches();
         Ok(())
     }
@@ -437,18 +440,12 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// ctx.clear_caches();
-    /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    /// ctx.clear_caches()?;
+    /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn clear_caches(&self) {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_clear_caches`; this boundary must not panic on poison.
-        let _ = self.try_clear_caches();
-    }
-
-    /// Fallibly clear every cache owned by this eager context.
-    pub fn try_clear_caches(&self) -> Result<()> {
-        self.try_clear_extension_caches()
+    pub fn clear_caches(&self) -> Result<()> {
+        self.clear_extension_caches()
     }
 
     /// Return eager runtime cache-entry and retained-byte stats.
@@ -460,43 +457,23 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let stats = ctx.cache_stats();
+    /// let stats = ctx.cache_stats()?;
     /// assert_eq!(stats.extensions.entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn cache_stats(&self) -> EagerRuntimeCacheStats {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_cache_stats`; stats default to empty when the runtime is poisoned.
-        self.try_cache_stats().unwrap_or_default()
-    }
-
-    /// Fallibly return eager runtime cache-entry and retained-byte stats.
-    pub fn try_cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
+    pub fn cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
         Ok(EagerRuntimeCacheStats {
             extensions: self.lock_extension_executor()?.cache_stats(),
         })
     }
 
     /// Return the extension cache retention limits.
-    pub fn extension_cache_limits(&self) -> ExtensionCacheLimits {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_extension_cache_limits`.
-        self.try_extension_cache_limits().unwrap_or_default()
-    }
-
-    /// Fallibly return the extension cache retention limits.
-    pub fn try_extension_cache_limits(&self) -> Result<ExtensionCacheLimits> {
+    pub fn extension_cache_limits(&self) -> Result<ExtensionCacheLimits> {
         Ok(self.lock_extension_executor()?.cache_limits())
     }
 
     /// Replace extension cache retention limits.
-    pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_set_extension_cache_limits`; this boundary must not panic on poison.
-        let _ = self.try_set_extension_cache_limits(limits);
-    }
-
-    /// Fallibly replace extension cache retention limits.
-    pub fn try_set_extension_cache_limits(&self, limits: ExtensionCacheLimits) -> Result<()> {
+    pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) -> Result<()> {
         self.lock_extension_executor()?.set_cache_limits(limits);
         Ok(())
     }
@@ -521,7 +498,7 @@ impl EagerRuntime {
     ///     caches.put(key, 7_usize, std::mem::size_of::<usize>());
     /// });
     ///
-    /// assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    /// assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 1);
     /// ```
     pub fn with_extension_caches_mut<R>(
         &self,
@@ -610,6 +587,7 @@ impl EagerRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn exec_standard_graph_outputs(
         &self,
         graph: &Graph<StdTensorOp>,
@@ -686,12 +664,6 @@ impl EagerRuntime {
         })
     }
 
-    pub(crate) fn register_grad_slot(&self, key: &ValueKey<StdTensorOp>, slot: &GradSlot) {
-        // Constructors cannot return an error today. Avoid reading or mutating
-        // poisoned state; fallible paths such as `backward` report the poison.
-        let _ = self.try_register_grad_slot(key, slot);
-    }
-
     pub(crate) fn try_register_grad_slot(
         &self,
         key: &ValueKey<StdTensorOp>,
@@ -714,24 +686,18 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
-    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
+    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx.clone()).unwrap();
     /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
-    /// ctx.clear_grads();
+    /// ctx.clear_grads()?;
     ///
-    /// assert!(x.grad().is_none());
-    /// assert!(y.grad().is_none());
+    /// assert!(x.grad()?.is_none());
+    /// assert!(y.grad()?.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn clear_grads(&self) {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_clear_grads`; this boundary must not panic on poison.
-        let _ = self.try_clear_grads();
-    }
-
-    /// Fallibly clear all live gradient slots tracked by this context.
-    pub fn try_clear_grads(&self) -> Result<()> {
+    pub fn clear_grads(&self) -> Result<()> {
         let mut poisoned_slot = false;
         self.lock_grad_slots()?.retain(|_, slot| {
             if let Some(slot) = slot.upgrade() {
@@ -767,13 +733,14 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let c = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
+    /// let c = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx)?;
     /// let z = x.add(&c).unwrap();
     ///
-    /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(z.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor {
+    pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf(Arc::clone(self), tensor, false)
     }
 
@@ -789,14 +756,15 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let p = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
+    /// let p = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
     /// let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
-    /// let grad = p.grad().unwrap();
+    /// let grad = p.grad().unwrap().unwrap();
     /// assert_eq!(grad.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor {
+    pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf(Arc::clone(self), tensor, true)
     }
 
@@ -850,16 +818,17 @@ impl EagerRuntime {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-/// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
+/// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx)?;
 /// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 /// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 ///
-/// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
+/// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
 /// x.clear_grad();
 ///
-/// assert!(x.grad().is_none());
+/// assert!(x.grad().unwrap().is_none());
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor {
@@ -869,7 +838,7 @@ pub struct EagerTensor {
     pub(crate) trace: Option<Trace<StdTensorOp>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
-    pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
+    pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     pub(crate) ctx: Arc<EagerRuntime>,
 }
 
@@ -896,11 +865,12 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
-    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Self {
+    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
         Self::new_leaf(ctx, tensor, false)
     }
 
@@ -913,25 +883,32 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
-    /// assert!(x.grad().is_none());
+    /// assert!(x.grad().unwrap().is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Self {
+    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
         Self::new_leaf(ctx, tensor, true)
     }
 
-    pub(crate) fn new_leaf(ctx: Arc<EagerRuntime>, tensor: Tensor, requires_grad: bool) -> Self {
+    pub(crate) fn new_leaf(
+        ctx: Arc<EagerRuntime>,
+        tensor: Tensor,
+        requires_grad: bool,
+    ) -> Result<Self> {
         let key = eager_val_key();
         let metadata_scope =
-            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
+            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
+                |err| Error::Internal(format!("eager leaf metadata registration failed: {err}")),
+            )?;
         let tensor = Arc::new(tensor);
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
-            ctx.register_grad_slot(&key, &grad_slot);
+            ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
 
-        Self {
+        Ok(Self {
             value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             materialized_cache: Arc::new(OnceLock::new()),
             key,
@@ -940,7 +917,7 @@ impl EagerTensor {
             grad_slot,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             ctx,
-        }
+        })
     }
 
     pub(crate) fn new_result(
@@ -949,8 +926,8 @@ impl EagerTensor {
         tensor: Tensor,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
-        metadata_scopes: Vec<Arc<MetadataScope>>,
-    ) -> Self {
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Result<Self> {
         Self::new_result_arc(
             ctx,
             key,
@@ -967,14 +944,14 @@ impl EagerTensor {
         tensor: Arc<Tensor>,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
-        metadata_scopes: Vec<Arc<MetadataScope>>,
-    ) -> Self {
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Result<Self> {
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
-            ctx.register_grad_slot(&key, &grad_slot);
+            ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
 
-        Self {
+        Ok(Self {
             value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             materialized_cache: Arc::new(OnceLock::new()),
             key,
@@ -983,7 +960,7 @@ impl EagerTensor {
             grad_slot,
             metadata_scopes,
             ctx,
-        }
+        })
     }
 
     pub(crate) fn new_result_value(
@@ -992,14 +969,14 @@ impl EagerTensor {
         value: TensorValue,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
-        metadata_scopes: Vec<Arc<MetadataScope>>,
-    ) -> Self {
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Result<Self> {
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
-            ctx.register_grad_slot(&key, &grad_slot);
+            ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
 
-        Self {
+        Ok(Self {
             value: Arc::new(value),
             materialized_cache: Arc::new(OnceLock::new()),
             key,
@@ -1008,10 +985,10 @@ impl EagerTensor {
             grad_slot,
             metadata_scopes,
             ctx,
-        }
+        })
     }
 
-    pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Self {
+    pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Result<Self> {
         Self::new_result(ctx, eager_val_key(), tensor, false, None, Vec::new())
     }
 
@@ -1040,11 +1017,12 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     /// let y = x.detach();
     ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-    /// assert!(y.grad().is_none());
+    /// assert_eq!(y.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert!(y.grad().unwrap().is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn detach(&self) -> Self {
         Self::new_untracked_value_result(self.ctx.clone(), self.value.as_ref().clone())
@@ -1061,17 +1039,18 @@ impl EagerTensor {
     ///
     /// let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx_a);
-    /// let d = x.detach_into(&ctx_b);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx_a)?;
+    /// let d = x.detach_into(&ctx_b)?;
     ///
     /// assert!(!d.tracks_grad());
     /// assert_eq!(d.ctx_id(), ctx_b.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn detach_into(&self, ctx: &Arc<EagerRuntime>) -> Self {
-        Self::new_untracked_value_result(Arc::clone(ctx), self.value.as_ref().clone())
+    pub fn detach_into(&self, ctx: &Arc<EagerRuntime>) -> Result<Self> {
+        Self::from_tensor_in(self.to_tensor()?, Arc::clone(ctx))
     }
 
-    /// Borrow the concrete tensor value.
+    /// Materialize and share the concrete tensor value.
     ///
     /// # Examples
     ///
@@ -1080,26 +1059,22 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]), ctx);
-    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[3.0]);
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(), ctx)?;
+    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn data(&self) -> &Tensor {
-        if let Some(tensor) = self.value.as_tensor_arc() {
-            return tensor.as_ref();
-        }
-        self.materialized_cache
-            .get_or_init(|| Arc::new(self.value.to_tensor()))
-            .as_ref()
+    pub fn materialized(&self) -> Result<Arc<Tensor>> {
+        self.materialized_arc()
     }
 
     /// Return this tensor's scalar dtype without materializing through
-    /// [`data`](Self::data).
+    /// [`materialized`](Self::materialized).
     pub fn dtype(&self) -> DType {
         self.value.dtype()
     }
 
     /// Return this tensor's logical shape without materializing through
-    /// [`data`](Self::data).
+    /// [`materialized`](Self::materialized).
     pub fn shape(&self) -> &[usize] {
         self.value.shape()
     }
@@ -1108,19 +1083,18 @@ impl EagerTensor {
     ///
     /// This is the preferred borrowed input boundary for executor calls. It
     /// preserves the option to replace eager storage with non-contiguous views
-    /// without forcing callers through [`data`](Self::data).
+    /// without forcing callers through [`materialized`](Self::materialized).
     pub fn tensor_read(&self) -> TensorRead<'_> {
         self.value.tensor_read()
     }
 
     /// Materialize this eager tensor as an owned [`Tensor`].
     ///
-    /// Today eager tensors are stored as compact tensors, so this clones the
-    /// current value. This method is the intended compatibility boundary for
-    /// callers that need owned materialized data after lazy view storage is
-    /// introduced.
+    /// This is the owned materialization boundary for callers that need a
+    /// standalone compact tensor. The operation is fallible because eager
+    /// values may be backed by lazy or backend-resident storage.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        self.value.try_to_tensor().map_err(Error::from)
+        self.value.to_tensor().map_err(Error::from)
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
@@ -1131,7 +1105,7 @@ impl EagerTensor {
             return Ok(Arc::clone(tensor));
         }
 
-        let materialized = Arc::new(self.value.try_to_tensor().map_err(Error::from)?);
+        let materialized = Arc::new(self.value.to_tensor().map_err(Error::from)?);
         let _ = self.materialized_cache.set(Arc::clone(&materialized));
         Ok(self
             .materialized_cache
@@ -1161,21 +1135,15 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx).unwrap();
     /// let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
-    /// let grad = x.grad().unwrap();
+    /// let grad = x.grad()?.unwrap();
     /// assert_eq!(grad.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn grad(&self) -> Option<Arc<Tensor>> {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_grad`; this boundary must not panic on poison.
-        self.try_grad().ok().flatten()
-    }
-
-    /// Fallibly return the accumulated gradient currently stored for this tensor.
-    pub fn try_grad(&self) -> Result<Option<Arc<Tensor>>> {
+    pub fn grad(&self) -> Result<Option<Arc<Tensor>>> {
         self.grad_slot
             .lock()
             .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))
@@ -1195,24 +1163,18 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
-    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
+    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx).unwrap();
     /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
-    /// x.clear_grad();
+    /// x.clear_grad()?;
     ///
-    /// assert!(x.grad().is_none());
-    /// assert!(y.grad().is_some());
+    /// assert!(x.grad()?.is_none());
+    /// assert!(y.grad()?.is_some());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn clear_grad(&self) {
-        // Compatibility wrapper: callers needing poison visibility should use
-        // `try_clear_grad`; this boundary must not panic on poison.
-        let _ = self.try_clear_grad();
-    }
-
-    /// Fallibly clear the accumulated gradient stored for this tensor.
-    pub fn try_clear_grad(&self) -> Result<()> {
+    pub fn clear_grad(&self) -> Result<()> {
         *self
             .grad_slot
             .lock()
@@ -1232,8 +1194,8 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let plain = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
-    /// let tracked = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
+    /// let plain = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
+    /// let tracked = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let detached = tracked.detach();
     ///
     /// assert!(!plain.tracks_grad());
@@ -1244,12 +1206,8 @@ impl EagerTensor {
         self.requires_grad
     }
 
-    /// Return the number of concrete values saved on this tensor's trace node.
-    ///
-    /// This is a diagnostic hook for extension-crate regression tests and is
-    /// not part of the stable eager tensor API.
-    #[doc(hidden)]
-    pub fn debug_trace_saved_value_count(&self) -> Option<usize> {
+    #[cfg(test)]
+    fn debug_trace_saved_value_count(&self) -> Option<usize> {
         self.trace.as_ref().map(|trace| trace.saved_values().len())
     }
 
@@ -1262,7 +1220,7 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx.clone());
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
     ///
     /// assert_eq!(x.ctx_id(), ctx.id());
     /// ```
@@ -1284,8 +1242,8 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx.clone());
-    /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), ctx);
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
+    /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
     ///
     /// assert!(x.same_context(&y));
     /// ```
@@ -1293,6 +1251,7 @@ impl EagerTensor {
         self.ctx_id() == other.ctx_id()
     }
 
+    #[cfg(test)]
     pub(crate) fn standard_graph_op(
         inputs: &[&Self],
         build_graph: impl FnOnce(&[TensorInputKey]) -> Result<Arc<Graph<StdTensorOp>>>,
@@ -1330,7 +1289,7 @@ impl EagerTensor {
         }
 
         if !inputs.iter().any(|input| input.requires_grad) {
-            return Ok(execution
+            return execution
                 .outputs
                 .into_iter()
                 .map(|output| {
@@ -1343,7 +1302,7 @@ impl EagerTensor {
                         Vec::new(),
                     )
                 })
-                .collect());
+                .collect();
         }
 
         let output_keys = graph
@@ -1351,7 +1310,8 @@ impl EagerTensor {
             .iter()
             .map(|&output_id| graph.values()[output_id].key.clone())
             .collect();
-        let recorded_graph = RecordedGraph::new(Arc::clone(&graph), graph_input_keys, output_keys);
+        let recorded_graph = RecordedGraph::new(Arc::clone(&graph), graph_input_keys, output_keys)
+            .map_err(eager_record_error)?;
         let recorded = record_eager_recorded_graph_outputs(
             &mut recorder,
             recorded_graph,
@@ -1374,7 +1334,7 @@ impl EagerTensor {
             }
         }
 
-        Ok(recorded
+        recorded
             .traces
             .into_iter()
             .zip(execution.outputs)
@@ -1388,7 +1348,7 @@ impl EagerTensor {
                     metadata_scopes.clone(),
                 )
             })
-            .collect())
+            .collect()
     }
 
     /// Run reverse-mode AD from this scalar output.
@@ -1408,13 +1368,13 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx).unwrap();
     /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
-    /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
+    /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// ```
     pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
         if !self.shape().is_empty() {
@@ -1426,7 +1386,7 @@ impl EagerTensor {
         let value = self.materialized_arc()?;
         let mut backend = self.ctx.lock_backend()?;
         let mut extension_executor = self.ctx.lock_extension_executor()?;
-        let seed = Arc::new(one_like_tensor(value.as_ref(), &mut *backend));
+        let seed = Arc::new(one_like_tensor(value.as_ref(), &mut *backend)?);
         let mut callbacks = TenferroBackwardCallbacks::new(
             &mut *backend,
             Some(&mut *extension_executor),
@@ -1436,15 +1396,20 @@ impl EagerTensor {
         if let Some(extension_rules) = &self.ctx.extension_rules {
             ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
         }
-        let cotangents = eager::try_backward(
+        let cotangents_result = eager::backward(
             &self.key,
             self.trace.as_ref(),
             seed,
             &mut callbacks,
             &mut ad_ctx,
-        )
-        .map_err(|err| Error::Internal(err.to_string()))?;
+        );
+        let callback_error = callbacks.take_error();
         drop(callbacks);
+        let cotangents = match (cotangents_result, callback_error) {
+            (_, Some(err)) => return Err(Error::Internal(err.to_string())),
+            (Err(err), None) => return Err(Error::Internal(err.to_string())),
+            (Ok(cotangents), None) => cotangents,
+        };
         self.ctx.store_grads(&cotangents, &mut backend)?;
         Ok(cotangents)
     }
@@ -1473,7 +1438,7 @@ pub(crate) fn eager_value(tensor: &EagerTensor) -> Result<EagerInput<StdTensorOp
 
 pub(crate) struct RecordedEagerOutputs {
     pub(crate) traces: Vec<EagerOutput<StdTensorOp>>,
-    pub(crate) metadata_scope: Arc<MetadataScope>,
+    pub(crate) metadata_scope: Arc<GlobalMetadataScope>,
 }
 
 pub(crate) fn record_eager_outputs(
@@ -1483,7 +1448,8 @@ pub(crate) fn record_eager_outputs(
 ) -> Result<RecordedEagerOutputs> {
     let mut recorder = Recorder::new(EagerTensorKeySource);
     let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
-    let graph = RecordedGraph::from_primitive(op.clone(), graph_input_keys);
+    let graph =
+        RecordedGraph::from_primitive(op.clone(), graph_input_keys).map_err(eager_record_error)?;
     let retained_values = graph
         .output_keys()
         .iter()
@@ -1504,7 +1470,9 @@ pub(crate) fn record_eager_recorded_graph_outputs(
         .iter()
         .map(|tensor| eager_value(tensor))
         .collect::<Result<_>>()?;
-    let traces = recorder.record_graph(graph, &input_values, outputs, retained_values);
+    let traces = recorder
+        .record_graph(graph, &input_values, outputs, retained_values)
+        .map_err(eager_record_error)?;
 
     let mut registrations = Vec::new();
     for trace in &traces {
@@ -1521,8 +1489,12 @@ pub(crate) fn record_eager_recorded_graph_outputs(
 
     Ok(RecordedEagerOutputs {
         traces,
-        metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)),
+        metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)?),
     })
+}
+
+fn eager_record_error(err: tidu::eager::EagerRecordError) -> Error {
+    Error::Internal(format!("invalid eager recording metadata: {err}"))
 }
 
 pub(crate) fn exec_single_output(
@@ -1563,29 +1535,28 @@ pub(crate) fn exec_single_output_read(
     ))
 }
 
-pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+pub(crate) fn zero_like_tensor<B: TensorBackend>(
+    input: &Tensor,
+    backend: &mut B,
+) -> Result<Tensor> {
     let host = match input {
-        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::Bool(tensor) => Tensor::Bool(TypedTensor::from_vec_col_major(
             tensor.shape().to_vec(),
             vec![false; tensor.n_elements()],
-        )),
-        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
+        )?),
+        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())?),
     };
-    backend
-        .upload_host_tensor(&host)
-        .unwrap_or_else(|err| panic!("zero_like upload failed: {}", err))
+    backend.upload_host_tensor(&host).map_err(Error::from)
 }
 
-pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
-    let zero = zero_like_tensor(input, backend);
-    backend
-        .exp(&zero)
-        .unwrap_or_else(|err| panic!("one_like exp failed: {}", err))
+pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Result<Tensor> {
+    let zero = zero_like_tensor(input, backend)?;
+    backend.exp(&zero).map_err(Error::from)
 }
 
 #[cfg(test)]

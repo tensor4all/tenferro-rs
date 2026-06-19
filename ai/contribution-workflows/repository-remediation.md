@@ -65,6 +65,10 @@ Proceed in this workflow when the fix stays within existing intended behavior:
 - missing required rustdoc examples for existing public items;
 - incorrect behavior covered by current API contracts, docs, or tests;
 - missing regression tests for an already intended behavior;
+- public API cleanup, removal, or reshaping needed to repair a confirmed bug
+  contract at its root cause;
+- `tidu` AD-transform API cleanup needed to express the confirmed tenferro bug
+  contract without lossy local adapters;
 - internal performance, layout, cache, or allocation problems;
 - hidden materialization or avoidable clones where the correct boundary is
   already defined by `REPOSITORY_RULES.md`;
@@ -102,9 +106,10 @@ misidentifying the same code as a bug.
 
 ### Design Gate
 
-Do not implement directly when a finding requires any of the following:
+Do not implement directly when a finding requires any of the following and the
+task or linked maintainer discussion has not explicitly authorized that scope:
 
-- new public API or removal of a public API with compatibility impact;
+- new public API unrelated to repairing the confirmed bug contract;
 - crate-boundary or publishability changes;
 - new operation family, backend, dependency, or feature flag;
 - AD semantics policy that current docs/tests do not define;
@@ -114,6 +119,17 @@ Do not implement directly when a finding requires any of the following:
 
 For design-gated findings, draft or update a focused issue or design document
 instead of stretching the remediation PR.
+
+For confirmed bug contracts, treat API design cleanup as the preferred repair
+path. Change the canonical public contract into the cleanest root-cause design
+instead of adding `try_*` escape hatches solely to preserve a legacy
+panic/defaulting wrapper. API compatibility is not a goal unless the task
+explicitly requires it; `try_*` may remain only when it is the canonical Rust API
+for that operation.
+If a tenferro remediation is blocked by an underspecified `tidu` API, reshape
+the `tidu` contract as the first-class repair path. Prefer the long-term clean,
+maintainable `tidu` API over tenferro-local string matching, generic
+`Internal` errors, or compatibility shims.
 
 ## Batch And Commit Rules
 

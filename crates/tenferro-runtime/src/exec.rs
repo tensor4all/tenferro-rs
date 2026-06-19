@@ -112,8 +112,8 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn into_tensor(self) -> Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),
-            Self::Value(value) => Ok(value.try_to_tensor()?),
-            Self::Read(read) => Ok(read.try_to_tensor()?),
+            Self::Value(value) => Ok(value.to_tensor()?),
+            Self::Read(read) => Ok(read.to_tensor()?),
         }
     }
 
@@ -121,7 +121,7 @@ impl<'a> ExecSlot<'a> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
-            Self::Read(read) => Ok(TensorValue::from_tensor(read.try_to_tensor()?)),
+            Self::Read(read) => Ok(TensorValue::from_tensor(read.to_tensor()?)),
         }
     }
 }
@@ -491,7 +491,7 @@ fn tensor_value_for_lazy_view<'input>(
             Ok(output)
         }
         Some(ExecSlot::Read(read)) => {
-            let output = TensorValue::from_tensor(read.try_to_tensor()?);
+            let output = TensorValue::from_tensor(read.to_tensor()?);
             slots[slot] = Some(ExecSlot::Read(read));
             Ok(output)
         }
@@ -520,7 +520,7 @@ pub(crate) fn resolve_tensor_shape_exprs(
     for &slot in input_slots {
         input_shapes.push(slot_ref(slots, slot, "input", "resolve_tensor_shape_exprs")?.shape());
     }
-    DimExpr::try_eval_all(exprs, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
         message: format!("shape expression evaluation failed: {err}"),
     })
 }
@@ -886,23 +886,23 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
         DType::F64 => Ok(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![],
             vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
-        ))),
+        )?)),
         DType::F32 => Ok(Tensor::F32(TypedTensor::from_vec_col_major(
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
-        ))),
+        )?)),
         DType::I32 => Ok(Tensor::I32(TypedTensor::from_vec_col_major(
             vec![],
             vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes)?)],
-        ))),
+        )?)),
         DType::I64 => Ok(Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes)?)],
-        ))),
+        )?)),
         DType::Bool => Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
             vec![],
             vec![exact_bytes::<1>(dtype, bytes)?[0] != 0],
-        ))),
+        )?)),
         DType::C64 => {
             let data = exact_bytes::<16>(dtype, bytes)?;
             let mut re_bytes = [0u8; 8];
@@ -914,7 +914,7 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             Ok(Tensor::C64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(re, im)],
-            )))
+            )?))
         }
         DType::C32 => {
             let data = exact_bytes::<8>(dtype, bytes)?;
@@ -927,7 +927,7 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Result<Tensor> {
             Ok(Tensor::C32(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex32::new(re, im)],
-            )))
+            )?))
         }
     }
 }

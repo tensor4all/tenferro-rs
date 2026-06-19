@@ -29,9 +29,9 @@ fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
     }
 
     match size_tensor {
-        Tensor::F64(inner) => Ok(inner.host_data()[0]),
-        Tensor::F32(inner) => Ok(inner.host_data()[0] as f64),
-        Tensor::I64(inner) => Ok(inner.host_data()[0] as f64),
+        Tensor::F64(inner) => Ok(inner.host_data()?[0]),
+        Tensor::F32(inner) => Ok(inner.host_data()?[0] as f64),
+        Tensor::I64(inner) => Ok(inner.host_data()?[0] as f64),
         _ => Err(Error::Internal(
             "DynamicTruncate size must be an f32, f64, or i64 scalar".into(),
         )),

@@ -20,7 +20,7 @@ fn bench_threads() -> usize {
 }
 
 fn cpu_ctx(threads: usize) -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads))
+    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap())
 }
 
 fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -28,7 +28,7 @@ fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
     let data = (0..len)
         .map(|idx| ((idx * 17 + seed * 31 + 7) % 997) as f64 / 997.0 - 0.5)
         .collect();
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -40,21 +40,23 @@ fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
             Complex64::new(re, im)
         })
         .collect();
-    Tensor::from_vec_col_major(shape, data)
+    Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor, Arc::clone(ctx))
+    EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap()
 }
 
 fn consume_f64(tensor: &EagerTensor) {
-    let data = tensor.data();
+    let materialized = tensor.materialized().unwrap();
+    let data = materialized.as_ref();
     black_box(data.shape());
     black_box(data.as_slice::<f64>().expect("f64 tensor")[0]);
 }
 
 fn consume_c64(tensor: &EagerTensor) {
-    let data = tensor.data();
+    let materialized = tensor.materialized().unwrap();
+    let data = materialized.as_ref();
     black_box(data.shape());
     black_box(data.as_slice::<Complex64>().expect("c64 tensor")[0]);
 }

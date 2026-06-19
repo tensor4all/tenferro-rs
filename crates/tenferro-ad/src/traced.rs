@@ -16,7 +16,7 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
-use tidu::{try_linear_transpose, try_linearize, ADRuleError};
+use tidu::{linear_transpose, linearize, ADRuleError};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -25,7 +25,7 @@ fn next_pass_id() -> u64 {
 }
 
 pub(crate) fn next_input_key() -> TensorInputKey {
-    tenferro_runtime::ad_support::fresh_input_key()
+    tenferro_runtime::ad_support::allocate_input_key()
 }
 
 fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
@@ -42,11 +42,15 @@ fn shape_guard_context(extension_rules: Option<&ExtensionRuleSet>) -> ShapeGuard
     }
 }
 
-fn vjp_error_from_linearize(err: ADRuleError) -> Error {
+fn ad_rule_error(transform: &'static str, err: ADRuleError) -> Error {
     match err {
         ADRuleError::Unsupported { op, .. } => {
-            Error::Internal(format!("unsupported vjp AD rule for {op}"))
+            Error::Internal(format!("unsupported {transform} AD rule for {op}"))
         }
+        ADRuleError::InvalidInput { op, message, .. } => Error::InvalidGraphBuild {
+            op: transform,
+            message: format!("{op}: {message}"),
+        },
     }
 }
 
@@ -64,12 +68,9 @@ pub(crate) fn jvp_with_rules(
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<TracedTensor> {
-    jvp_optional_result_with_rules(output, wrt, tangent, Some(extension_rules))?.ok_or_else(|| {
-        Error::Internal(format!(
-            "jvp output is inactive for {:?}",
-            leaf_input_key(wrt)
-        ))
-    })
+    let wrt_input_key = leaf_input_key(wrt)?;
+    jvp_optional_impl(output, wrt, tangent, Some(extension_rules))?
+        .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
 }
 
 pub(crate) fn grad_optional_with_rules(
@@ -83,9 +84,9 @@ pub(crate) fn grad_optional_with_rules(
         });
     }
 
-    let ones = ones_tensor(output.dtype, vec![]);
-    let seed = TracedTensor::from_tensor_concrete_shape(ones);
-    vjp_optional_result_with_rules(output, wrt, &seed, Some(extension_rules))
+    let ones = ones_tensor(output.dtype, vec![])?;
+    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
+    vjp_optional_impl(output, wrt, &seed, Some(extension_rules))
 }
 
 pub(crate) fn jvp_optional_with_rules(
@@ -94,7 +95,7 @@ pub(crate) fn jvp_optional_with_rules(
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<Option<TracedTensor>> {
-    jvp_optional_result_with_rules(output, wrt, tangent, Some(extension_rules))
+    jvp_optional_impl(output, wrt, tangent, Some(extension_rules))
 }
 
 pub(crate) fn vjp_with_rules(
@@ -103,14 +104,9 @@ pub(crate) fn vjp_with_rules(
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<TracedTensor> {
-    vjp_optional_result_with_rules(output, wrt, cotangent, Some(extension_rules))?.ok_or_else(
-        || {
-            Error::Internal(format!(
-                "vjp output is inactive for {:?}",
-                leaf_input_key(wrt)
-            ))
-        },
-    )
+    let wrt_input_key = leaf_input_key(wrt)?;
+    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules))?
+        .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
 }
 
 pub(crate) fn vjp_optional_with_rules(
@@ -119,7 +115,7 @@ pub(crate) fn vjp_optional_with_rules(
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<Option<TracedTensor>> {
-    vjp_optional_result_with_rules(output, wrt, cotangent, Some(extension_rules))
+    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules))
 }
 
 fn grad_with_optional_rules(
@@ -133,14 +129,11 @@ fn grad_with_optional_rules(
         });
     }
 
-    let ones = ones_tensor(output.dtype, vec![]);
-    let seed = TracedTensor::from_tensor_concrete_shape(ones);
-    vjp_optional_result_with_rules(output, wrt, &seed, extension_rules)?.ok_or_else(|| {
-        Error::Internal(format!(
-            "grad output is inactive for {:?}",
-            leaf_input_key(wrt)
-        ))
-    })
+    let ones = ones_tensor(output.dtype, vec![])?;
+    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
+    let wrt_input_key = leaf_input_key(wrt)?;
+    vjp_optional_impl(output, wrt, &seed, extension_rules)?
+        .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
 }
 
 /// Automatic differentiation helpers for [`TracedTensor`].
@@ -151,7 +144,7 @@ fn grad_with_optional_rules(
 /// use tenferro_ad::TracedTensorAdExt;
 /// use tenferro_runtime::TracedTensor;
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+/// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
 /// let loss = x.scale_real(2.0);
 /// let maybe_dx = loss.grad_optional(&x).unwrap();
 /// assert!(maybe_dx.is_some());
@@ -178,8 +171,8 @@ pub trait TracedTensorAdExt {
     ///     executor.run(&program).unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let loss = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let loss = (&x * &x).unwrap();
     /// let dx = loss.grad(&x).unwrap();
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[6.0]);
@@ -194,9 +187,9 @@ pub trait TracedTensorAdExt {
     /// use tenferro_ad::TracedTensorAdExt;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
-    /// let loss = &y * &y;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.grad_optional(&x).unwrap().is_none());
     /// ```
@@ -214,8 +207,8 @@ pub trait TracedTensorAdExt {
     ///
     /// let mut compiler = GraphCompiler::new();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let mut y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let mut y = (&x * &x).unwrap();
     ///
     /// y.checkpoint(&mut compiler, &mut executor).unwrap();
     ///
@@ -244,9 +237,9 @@ pub trait TracedTensorAdExt {
     ///     executor.run(&program).unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// let dy = y.jvp(&x, &tangent).unwrap();
     ///
     /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
@@ -261,47 +254,14 @@ pub trait TracedTensorAdExt {
     /// use tenferro_ad::TracedTensorAdExt;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
-    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let loss = &y * &y;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
     /// ```
     fn jvp_optional(
-        &self,
-        wrt: &TracedTensor,
-        tangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>>;
-
-    /// Fallible forward-mode Jacobian-vector product.
-    ///
-    /// This is an alias for [`jvp_optional`](Self::jvp_optional), retained for
-    /// callers that adopted the explicit fallible name before the compact
-    /// method became fallible.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-    ///
-    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
-    ///     let mut compiler = GraphCompiler::new();
-    ///     let program = compiler.compile(tensor).unwrap();
-    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
-    ///     executor.run(&program).unwrap()
-    /// }
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
-    /// let y = &x * &x;
-    /// let dy = y.jvp_optional_result(&x, &tangent).unwrap().unwrap();
-    ///
-    /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
-    /// ```
-    fn jvp_optional_result(
         &self,
         wrt: &TracedTensor,
         tangent: &TracedTensor,
@@ -328,9 +288,9 @@ pub trait TracedTensorAdExt {
     ///     executor.run(&program).unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// let dx = y.vjp(&x, &cotangent).unwrap();
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[3.0]);
@@ -345,52 +305,14 @@ pub trait TracedTensorAdExt {
     /// use tenferro_ad::TracedTensorAdExt;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]);
-    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let loss = &y * &y;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
     /// ```
     fn vjp_optional(
-        &self,
-        wrt: &TracedTensor,
-        cotangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>>;
-
-    /// Fallible reverse-mode vector-Jacobian product.
-    ///
-    /// This is an alias for [`vjp_optional`](Self::vjp_optional), retained for
-    /// callers that adopted the explicit fallible name before the compact
-    /// method became fallible.
-    ///
-    /// Complex cotangents use tenferro's Hermitian real-inner-product
-    /// convention. Non-real complex cotangent seeds therefore need an explicit
-    /// seed-convention comparison when matching JAX. See
-    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-    ///
-    /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
-    ///     let mut compiler = GraphCompiler::new();
-    ///     let program = compiler.compile(tensor).unwrap();
-    ///     let mut executor = GraphExecutor::new(CpuBackend::new());
-    ///     executor.run(&program).unwrap()
-    /// }
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
-    /// let y = &x * &x;
-    /// let dx = y.vjp_optional_result(&x, &cotangent).unwrap().unwrap();
-    ///
-    /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[12.0]);
-    /// ```
-    fn vjp_optional_result(
         &self,
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
@@ -409,9 +331,9 @@ impl TracedTensorAdExt for TracedTensor {
             });
         }
 
-        let ones = ones_tensor(self.dtype, vec![]);
-        let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        vjp_optional_result_with_rules(self, wrt, &seed, None)
+        let ones = ones_tensor(self.dtype, vec![])?;
+        let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
+        vjp_optional_impl(self, wrt, &seed, None)
     }
 
     fn checkpoint<B: TensorBackend>(
@@ -430,11 +352,9 @@ impl TracedTensorAdExt for TracedTensor {
     }
 
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor> {
+        let wrt_input_key = leaf_input_key(wrt)?;
         self.jvp_optional(wrt, tangent)?.ok_or_else(|| {
-            Error::Internal(format!(
-                "jvp output is inactive for {:?}",
-                leaf_input_key(wrt)
-            ))
+            Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key))
         })
     }
 
@@ -443,23 +363,13 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        self.jvp_optional_result(wrt, tangent)
-    }
-
-    fn jvp_optional_result(
-        &self,
-        wrt: &TracedTensor,
-        tangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>> {
-        jvp_optional_result_with_rules(self, wrt, tangent, None)
+        jvp_optional_impl(self, wrt, tangent, None)
     }
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
+        let wrt_input_key = leaf_input_key(wrt)?;
         self.vjp_optional(wrt, cotangent)?.ok_or_else(|| {
-            Error::Internal(format!(
-                "vjp output is inactive for {:?}",
-                leaf_input_key(wrt)
-            ))
+            Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key))
         })
     }
 
@@ -468,25 +378,17 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        self.vjp_optional_result(wrt, cotangent)
-    }
-
-    fn vjp_optional_result(
-        &self,
-        wrt: &TracedTensor,
-        cotangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>> {
-        vjp_optional_result_with_rules(self, wrt, cotangent, None)
+        vjp_optional_impl(self, wrt, cotangent, None)
     }
 }
 
-fn jvp_optional_result_with_rules(
+fn jvp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
-    let wrt_input_key = leaf_input_key(wrt);
+    let wrt_input_key = leaf_input_key(wrt)?;
     let output_key = output.graph().values()[output.val].key.clone();
     let checkpoint_chain = tensor_checkpoint_chain(output);
     let aliases = checkpoint_chain
@@ -501,7 +403,7 @@ fn jvp_optional_result_with_rules(
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
-    let linear = try_linearize(
+    let linear = linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&wrt_input_key),
@@ -509,11 +411,11 @@ fn jvp_optional_result_with_rules(
         &mut ad_ctx,
         &aliases,
     )
-    .map_err(|err| Error::Internal(err.to_string()))?;
+    .map_err(|err| ad_rule_error("jvp", err))?;
     let Some(tangent_output) = linear.tangent_outputs()[0] else {
         return Ok(None);
     };
-    let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
+    let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
     let tangent_data =
         tangent
             .attached_data()
@@ -528,7 +430,7 @@ fn jvp_optional_result_with_rules(
             ValueKey::Input(tangent_input_key.clone()),
             tensor_meta_from_tensor(tangent_data.as_ref()),
         )],
-    );
+    )?;
 
     let mut inputs_map = (*tensor_inputs_map(output)).clone();
     if let Some(chain) = &checkpoint_chain {
@@ -561,13 +463,13 @@ fn jvp_optional_result_with_rules(
     })))
 }
 
-fn vjp_optional_result_with_rules(
+fn vjp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
 ) -> Result<Option<TracedTensor>> {
-    let wrt_input_key = leaf_input_key(wrt);
+    let wrt_input_key = leaf_input_key(wrt)?;
     let output_key = output.graph().values()[output.val].key.clone();
     let checkpoint_chain = tensor_checkpoint_chain(output);
     let aliases = checkpoint_chain
@@ -582,7 +484,7 @@ fn vjp_optional_result_with_rules(
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
     let mut ad_ctx = shape_guard_context(extension_rules);
-    let linear = try_linearize(
+    let linear = linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&wrt_input_key),
@@ -590,23 +492,23 @@ fn vjp_optional_result_with_rules(
         &mut ad_ctx,
         &aliases,
     )
-    .map_err(vjp_error_from_linearize)?;
+    .map_err(|err| ad_rule_error("vjp", err))?;
     if linear.tangent_outputs()[0].is_none() {
         return Ok(None);
     }
-    let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1);
+    let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
     let linear_metadata_scope = register_scoped_graph_metadata(
         linear.as_graph(),
         vec![(
             ValueKey::Input(linear_seed_key),
-            registered_meta(&wrt.graph().values()[wrt.val].key),
+            registered_meta(&wrt.graph().values()[wrt.val].key)?,
         )],
-    );
+    )?;
     ad_ctx.refresh_global_metadata();
-    let transposed = try_linear_transpose(&linear, &mut ad_ctx)
-        .map_err(|err| Error::Internal(err.to_string()))?;
+    let transposed =
+        linear_transpose(&linear, &mut ad_ctx).map_err(|err| ad_rule_error("vjp", err))?;
     let cotangent_input_key =
-        linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1);
+        linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
     let cotangent_data =
         cotangent
             .attached_data()
@@ -621,7 +523,7 @@ fn vjp_optional_result_with_rules(
             ValueKey::Input(cotangent_input_key.clone()),
             tensor_meta_from_tensor(cotangent_data.as_ref()),
         )],
-    );
+    )?;
     let linear_graph = Arc::new(linear.into_graph());
     let Some(cotangent_output) = transposed.tangent_outputs()[0] else {
         return Ok(None);

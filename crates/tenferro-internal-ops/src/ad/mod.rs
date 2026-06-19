@@ -35,12 +35,21 @@ use computegraph::graph::GraphBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
 #[cfg(feature = "autodiff")]
 use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
+
+#[cfg(feature = "autodiff")]
+fn missing_primitive_kind(op: &StdTensorOp, rule: ADRuleKind) -> ADRuleError {
+    ADRuleError::invalid_input(
+        "tenferro-internal-ops primitive AD dispatch",
+        rule,
+        format!("non-extension operation has no primitive kind: {op:?}"),
+    )
+}
 
 /// Builder interface used by tenferro AD rules.
 ///
@@ -117,22 +126,6 @@ pub fn linearize(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
-    match try_linearize(op, builder, primal_in, primal_out, tangent_in, ctx) {
-        Ok(tangents) => tangents,
-        Err(err) => panic!("{err}"),
-    }
-}
-
-/// Fallible forward-mode AD (JVP) for `StdTensorOp`.
-#[cfg(feature = "autodiff")]
-pub fn try_linearize(
-    op: &StdTensorOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    primal_in: &[ValueKey<StdTensorOp>],
-    primal_out: &[ValueKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValueId>],
-    ctx: &mut context::ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
         return linearize_extension_rule(
@@ -147,7 +140,7 @@ pub fn try_linearize(
 
     let kind = op
         .primitive_kind()
-        .expect("non-extension StdTensorOp must have a primitive kind");
+        .ok_or_else(|| missing_primitive_kind(op, ADRuleKind::Jvp))?;
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Jvp))?;
     rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx)
@@ -161,22 +154,6 @@ pub fn try_linearize(
 /// here.
 #[cfg(feature = "autodiff")]
 pub fn transpose_rule(
-    op: &StdTensorOp,
-    builder: &mut impl PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    mode: &OperationRole,
-    ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
-    match try_transpose_rule(op, builder, cotangent_out, inputs, mode, ctx) {
-        Ok(cotangents) => cotangents,
-        Err(err) => panic!("{err}"),
-    }
-}
-
-/// Fallible reverse-mode AD (VJP) for `StdTensorOp`.
-#[cfg(feature = "autodiff")]
-pub fn try_transpose_rule(
     op: &StdTensorOp,
     builder: &mut impl PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
@@ -198,7 +175,7 @@ pub fn try_transpose_rule(
 
     let kind = op
         .primitive_kind()
-        .expect("non-extension StdTensorOp must have a primitive kind");
+        .ok_or_else(|| missing_primitive_kind(op, ADRuleKind::Transpose))?;
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Transpose))?;
     let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;

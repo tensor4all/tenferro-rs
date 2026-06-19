@@ -10,7 +10,7 @@ use tenferro_einsum::Subscripts;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::{register_extension_rule, ExtensionAdRule};
+use tenferro_ops::ext_op::ExtensionAdRule;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -23,7 +23,7 @@ use tenferro_runtime::{
 };
 #[cfg(not(feature = "autodiff"))]
 use tenferro_tensor::TensorBackend;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, Tensor, TensorRead};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::{TensorBackend, TensorScalar};
 #[cfg(feature = "autodiff")]
@@ -58,12 +58,28 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TropicalRuntime {
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.eager_execute(inputs)
     }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        // Tropical CPU kernels consume compact host tensors, so view
+        // materialization is an explicit runtime choice.
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
 }
 
 /// Register tropical extension runtimes on a graph or eager executor.
 ///
 /// The runtime executor is intentionally thin: it delegates to each tropical
-/// extension op's [`tenferro_runtime::extension::ExtensionOpTrait::eager_execute`].
+/// extension op's [`tenferro_runtime::extension::ExtensionOp::eager_execute`].
 /// AD rules are registered separately through `tropical_ad_rules` when the
 /// `autodiff` feature is enabled.
 ///
@@ -551,41 +567,6 @@ pub fn tropical_ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     Ok(rules)
 }
 
-/// Register tropical traced einsum AD rules in the process-global registry.
-///
-/// Prefer [`tropical_ad_rules`] with an explicit `tenferro_ad::AdContext` for
-/// tests and applications. This helper exists for compatibility with global
-/// extension-rule lookup and treats duplicate registration as success.
-///
-/// # Errors
-///
-/// Returns [`tenferro_ops::ExtensionRegistryError`] if a malformed family id is
-/// detected while registering the rules.
-///
-/// # Examples
-///
-/// ```
-/// tenferro_ext_tropical::register_tropical_ad_rules().unwrap();
-/// ```
-#[cfg(feature = "autodiff")]
-pub fn register_tropical_ad_rules() -> Result<(), ExtensionRegistryError> {
-    register_rule_idempotent(Arc::new(TropicalEinsumAdRule))?;
-    register_rule_idempotent(Arc::new(TropicalEinsumJvpAdRule))?;
-    Ok(())
-}
-
-#[cfg(feature = "autodiff")]
-fn register_rule_idempotent(rule: Arc<dyn ExtensionAdRule>) -> Result<(), ExtensionRegistryError> {
-    let family_id = rule.family_id();
-    match register_extension_rule(rule) {
-        Ok(()) => Ok(()),
-        Err(ExtensionRegistryError::DuplicateRule {
-            family_id: duplicate,
-        }) if duplicate == family_id => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
 fn infer_tropical_output_meta(
     subscripts: &Subscripts,
     input_dtypes: &[DType],
@@ -706,7 +687,7 @@ where
             *out_value += *tangent_value;
         }
     }
-    Ok(Tensor::from_vec_col_major(output_shape, out))
+    Ok(Tensor::from_vec_col_major(output_shape, out)?)
 }
 
 #[cfg(feature = "autodiff")]
@@ -746,7 +727,7 @@ where
         })?;
         *slot += ct;
     }
-    Ok(Tensor::from_vec_col_major(active_shape, out))
+    Ok(Tensor::from_vec_col_major(active_shape, out)?)
 }
 
 #[cfg(feature = "autodiff")]
@@ -804,7 +785,7 @@ fn typed_slice<'a, T>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::
 where
     T: TensorScalar,
 {
-    tensor.as_slice::<T>().ok_or_else(|| {
+    tensor.as_slice::<T>().map_err(|_| {
         invalid_config(
             op,
             format!("expected compact host {:?} tensor", tensor.dtype()),

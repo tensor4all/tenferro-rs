@@ -145,7 +145,7 @@ impl TensorStructural for EagerBackend {
         fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
-        fn convert(input: &Tensor, to: DType) -> TensorResult<Tensor>;
+        fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;

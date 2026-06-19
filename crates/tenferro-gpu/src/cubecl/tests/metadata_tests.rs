@@ -7,15 +7,14 @@ use crate::cubecl::dispatch::{
 };
 use crate::cubecl::CudaExtensionCache;
 use crate::{
-    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement,
-    TypedTensor,
+    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
 };
 
 #[test]
 fn cubecl_metadata_uses_dense_column_major_strides() {
-    assert_eq!(cubecl_shape_and_strides(&[]), (vec![1], vec![1]));
+    assert_eq!(cubecl_shape_and_strides(&[]).unwrap(), (vec![1], vec![1]));
     assert_eq!(
-        cubecl_shape_and_strides(&[2, 3, 4]),
+        cubecl_shape_and_strides(&[2, 3, 4]).unwrap(),
         (vec![2, 3, 4], vec![1, 2, 6])
     );
 }
@@ -56,8 +55,8 @@ fn cuda_extension_cache_is_type_indexed_and_lazy() {
 #[test]
 fn cuda_extension_cache_reports_stats_and_clear() {
     let cache = CudaExtensionCache::new();
-    assert_eq!(cache.stats().entries, 0);
-    assert_eq!(cache.stats().retained_bytes, 0);
+    assert_eq!(cache.stats().unwrap().entries, 0);
+    assert_eq!(cache.stats().unwrap().retained_bytes, 0);
 
     let _usize = cache.get_or_try_init::<usize>(|| Ok(17)).unwrap();
     drop(_usize);
@@ -66,17 +65,17 @@ fn cuda_extension_cache_reports_stats_and_clear() {
         .unwrap();
     drop(_string);
 
-    let stats = cache.stats();
+    let stats = cache.stats().unwrap();
     assert_eq!(stats.entries, 2);
     assert!(stats.retained_bytes >= std::mem::size_of::<usize>());
 
-    cache.clear();
-    assert!(cache.is_empty());
-    assert_eq!(cache.stats().entries, 0);
+    cache.clear().unwrap();
+    assert!(cache.is_empty().unwrap());
+    assert_eq!(cache.stats().unwrap().entries, 0);
 }
 
 #[test]
-fn cuda_extension_cache_try_methods_report_poisoned_lock() {
+fn cuda_extension_cache_methods_report_poisoned_lock() {
     let cache = CudaExtensionCache::new();
     let poisoned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         let _guard = cache.inner.lock().unwrap();
@@ -84,10 +83,10 @@ fn cuda_extension_cache_try_methods_report_poisoned_lock() {
     }));
     assert!(poisoned.is_err());
 
-    assert!(cache.try_is_empty().is_err());
-    assert!(cache.try_stats().is_err());
-    assert!(cache.try_clear().is_err());
-    assert!(cache.try_max_entries().is_err());
+    assert!(cache.is_empty().is_err());
+    assert!(cache.stats().is_err());
+    assert!(cache.clear().is_err());
+    assert!(cache.max_entries().is_err());
     assert!(cache.get_or_try_init::<usize>(|| Ok(17)).is_err());
 }
 
@@ -110,7 +109,7 @@ fn cuda_extension_cache_has_configurable_entry_bound() {
         .unwrap();
     assert_eq!(value.as_str(), "gpu");
     drop(value);
-    assert_eq!(cache.stats().entries, 1);
+    assert_eq!(cache.stats().unwrap().entries, 1);
 
     let value = cache
         .get_or_try_init::<usize>(|| {
@@ -176,10 +175,11 @@ fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
         Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len))),
         Placement {
             memory_kind: MemoryKind::Device,
-            device: Some(ComputeDevice {
+            device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },
     )
+    .unwrap()
 }

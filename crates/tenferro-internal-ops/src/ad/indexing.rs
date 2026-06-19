@@ -31,11 +31,13 @@
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{GatherConfig, ScatterConfig};
+use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
+use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
@@ -148,21 +150,27 @@ pub fn linearize_dynamic_update_slice(
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if tangent_in[0].is_none() && tangent_in[1].is_none() {
-        return vec![None];
+        return Ok(vec![None]);
     }
 
     let operand = ValueRef::External(primal_in[0].clone());
     let update = ValueRef::External(primal_in[1].clone());
-    let d_operand = tangent_in[0].unwrap_or_else(|| {
-        let meta = ctx.metadata_of(&operand);
-        build_zero_like(builder, meta.dtype, operand, meta.shape.len())
-    });
-    let d_update = tangent_in[1].unwrap_or_else(|| {
-        let meta = ctx.metadata_of(&update);
-        build_zero_like(builder, meta.dtype, update, meta.shape.len())
-    });
+    let d_operand = match tangent_in[0] {
+        Some(tangent) => tangent,
+        None => {
+            let meta = ctx.metadata_of(&operand)?;
+            build_zero_like(builder, meta.dtype, operand, meta.rank())
+        }
+    };
+    let d_update = match tangent_in[1] {
+        Some(tangent) => tangent,
+        None => {
+            let meta = ctx.metadata_of(&update)?;
+            build_zero_like(builder, meta.dtype, update, meta.rank())
+        }
+    };
 
     let out = builder.add_operation(
         StdTensorOp::DynamicUpdateSlice,
@@ -175,7 +183,7 @@ pub fn linearize_dynamic_update_slice(
             active_mask: vec![tangent_in[0].is_some(), tangent_in[1].is_some(), false],
         },
     );
-    vec![Some(out[0])]
+    Ok(vec![Some(out[0])])
 }
 
 /// Reverse-mode AD rule for `Gather(operand, start_indices, config)`.
@@ -195,19 +203,19 @@ pub fn transpose_gather(
     mode: &OperationRole,
     config: &GatherConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask.clone(),
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
 
     if !active_mask.first().copied().unwrap_or(false) {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     }
 
     let inverse_config = ScatterConfig {
@@ -217,8 +225,8 @@ pub fn transpose_gather(
         index_vector_dim: config.index_vector_dim,
     };
 
-    let operand_meta = ctx.metadata_of(&inputs[0]);
-    let operand_rank = operand_meta.shape.len();
+    let operand_meta = ctx.metadata_of(&inputs[0])?;
+    let operand_rank = operand_meta.rank();
     let operand_dtype = operand_meta.dtype;
     let zero_operand = build_zero_like(builder, operand_dtype, inputs[0].clone(), operand_rank);
 
@@ -234,7 +242,7 @@ pub fn transpose_gather(
         },
     );
 
-    vec![Some(out[0]), None]
+    Ok(vec![Some(out[0]), None])
 }
 
 /// Reverse-mode AD rule for `GatherDynamicSliceSizes`.
@@ -253,20 +261,20 @@ pub fn transpose_gather_dynamic_slice_sizes(
     start_index_map: &[usize],
     index_vector_dim: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let mut result = vec![None; inputs.len()];
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return result,
+        None => return Ok(result),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return result,
+        OperationRole::Primary => return Ok(result),
     };
 
     if !active_mask.first().copied().unwrap_or(false) {
-        return result;
+        return Ok(result);
     }
 
     let inverse_config = ScatterConfig {
@@ -276,8 +284,8 @@ pub fn transpose_gather_dynamic_slice_sizes(
         index_vector_dim,
     };
 
-    let operand_meta = ctx.metadata_of(&inputs[0]);
-    let operand_rank = operand_meta.shape.len();
+    let operand_meta = ctx.metadata_of(&inputs[0])?;
+    let operand_rank = operand_meta.rank();
     let operand_dtype = operand_meta.dtype;
     let zero_operand = build_zero_like(builder, operand_dtype, inputs[0].clone(), operand_rank);
 
@@ -294,7 +302,7 @@ pub fn transpose_gather_dynamic_slice_sizes(
     );
 
     result[0] = Some(out[0]);
-    result
+    Ok(result)
 }
 
 /// Reverse-mode AD rule for `DynamicSlice`.
@@ -307,26 +315,26 @@ pub fn transpose_dynamic_slice(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
     if !active_mask.first().copied().unwrap_or(false) {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     }
 
-    let operand_meta = ctx.metadata_of(&inputs[0]);
+    let operand_meta = ctx.metadata_of(&inputs[0])?;
     let zero_operand = build_zero_like(
         builder,
         operand_meta.dtype,
         inputs[0].clone(),
-        operand_meta.shape.len(),
+        operand_meta.rank(),
     );
     let out = builder.add_operation(
         StdTensorOp::DynamicUpdateSlice,
@@ -339,7 +347,7 @@ pub fn transpose_dynamic_slice(
             active_mask: vec![false, true, false],
         },
     );
-    vec![Some(out[0]), None]
+    Ok(vec![Some(out[0]), None])
 }
 
 /// Reverse-mode AD rule for `DynamicUpdateSlice`.
@@ -353,25 +361,25 @@ pub fn transpose_dynamic_update_slice(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None, None],
+        None => return Ok(vec![None, None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None, None],
+        OperationRole::Primary => return Ok(vec![None, None, None]),
     };
 
     let mut result = vec![None, None, None];
     if active_mask.first().copied().unwrap_or(false) {
-        let update_meta = ctx.metadata_of(&inputs[1]);
+        let update_meta = ctx.metadata_of(&inputs[1])?;
         let zero_update = build_zero_like(
             builder,
             update_meta.dtype,
             inputs[1].clone(),
-            update_meta.shape.len(),
+            update_meta.rank(),
         );
         let operand_ct = builder.add_operation(
             StdTensorOp::DynamicUpdateSlice,
@@ -388,9 +396,11 @@ pub fn transpose_dynamic_update_slice(
     }
 
     if active_mask.get(1).copied().unwrap_or(false) {
+        // DynamicSlice carries concrete slice sizes. If the update shape is not
+        // exact, this transpose path cannot safely encode the update cotangent.
         let Some(update_shape) = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose")
         else {
-            return result;
+            return Ok(result);
         };
         let update_ct = builder.add_operation(
             StdTensorOp::DynamicSlice {
@@ -404,7 +414,7 @@ pub fn transpose_dynamic_update_slice(
         result[1] = Some(update_ct);
     }
 
-    result
+    Ok(result)
 }
 
 /// Forward-mode AD rule for `Scatter(operand, scatter_indices, updates, config)`.
@@ -432,17 +442,17 @@ pub fn linearize_scatter(
     tangent_in: &[Option<LocalValueId>],
     config: &ScatterConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let d_operand = tangent_in[0];
     let d_updates = tangent_in[2];
 
     match (d_operand, d_updates) {
-        (None, None) => vec![None],
-        (Some(d_op), None) => vec![Some(d_op)],
+        (None, None) => Ok(vec![None]),
+        (Some(d_op), None) => Ok(vec![Some(d_op)]),
         (None, Some(d_up)) => {
             let operand_key = ValueRef::External(primal_in[0].clone());
-            let operand_meta = ctx.metadata_of(&operand_key);
-            let operand_rank = operand_meta.shape.len();
+            let operand_meta = ctx.metadata_of(&operand_key)?;
+            let operand_rank = operand_meta.rank();
             let operand_dtype = operand_meta.dtype;
             let zero_operand =
                 build_zero_like(builder, operand_dtype, operand_key.clone(), operand_rank);
@@ -457,7 +467,7 @@ pub fn linearize_scatter(
                     active_mask: vec![false, false, true],
                 },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
         (Some(d_op), Some(d_up)) => {
             let out = builder.add_operation(
@@ -471,7 +481,7 @@ pub fn linearize_scatter(
                     active_mask: vec![true, false, true],
                 },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
     }
 }
@@ -496,15 +506,15 @@ pub fn transpose_scatter(
     mode: &OperationRole,
     config: &ScatterConfig,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None, None],
+        None => return Ok(vec![None, None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask.clone(),
-        OperationRole::Primary => return vec![None, None, None],
+        OperationRole::Primary => return Ok(vec![None, None, None]),
     };
 
     let operand_active = active_mask.first().copied().unwrap_or(false);
@@ -517,12 +527,12 @@ pub fn transpose_scatter(
     }
 
     if updates_active {
-        let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
-        let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
+        let operand_rank = ctx.rank_of(&inputs[0])?;
+        let updates_extents = ctx.extents_of(&inputs[2])?.to_vec();
         let Some(inverse) =
-            compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2])
+            compute_inverse_gather(operand_rank, &updates_extents, config, &inputs[2])
         else {
-            return result;
+            return Ok(result);
         };
 
         let out = match inverse {
@@ -563,7 +573,7 @@ pub fn transpose_scatter(
         result[2] = Some(out[0]);
     }
 
-    result
+    Ok(result)
 }
 
 enum InverseGather {
@@ -587,12 +597,12 @@ enum InverseGather {
 ///   `(0..rank) \ inserted_window_dims`; the size comes from the primal
 ///   updates tensor at the corresponding `update_window_dims[k]` axis
 fn compute_inverse_gather(
-    operand_shape: &[SymDim],
-    updates_shape: &[SymDim],
+    operand_rank: usize,
+    updates_extents: &[ShapeExtent<SymDim>],
     config: &ScatterConfig,
     updates_ref: &ValueRef<StdTensorOp>,
 ) -> Option<InverseGather> {
-    let rank = operand_shape.len();
+    let rank = operand_rank;
     let operand_window_dims: Vec<usize> = (0..rank)
         .filter(|dim| !config.inserted_window_dims.contains(dim))
         .collect();
@@ -605,11 +615,17 @@ fn compute_inverse_gather(
     let mut has_dynamic_slice_size = false;
     for (k, &operand_dim) in operand_window_dims.iter().enumerate() {
         let update_axis = config.update_window_dims[k];
-        let dim = updates_shape.get(update_axis)?;
-        if let Some(value) = dim.constant_value() {
+        let extent = updates_extents.get(update_axis)?;
+        let exact_value = match extent {
+            ShapeExtent::Exact(dim) => dim.constant_value(),
+            ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => None,
+        };
+        if let Some(value) = exact_value {
             concrete_slice_sizes[operand_dim] = value;
             dynamic_slice_sizes[operand_dim] = DimExpr::Const(value);
         } else {
+            // Non-exact or symbolic update extents are read from the runtime
+            // updates tensor shape instead of being treated as concrete sizes.
             has_dynamic_slice_size = true;
             dynamic_slice_sizes[operand_dim] = DimExpr::InputDim {
                 input_idx: 2,
@@ -643,7 +659,8 @@ fn exact_usize_shape(
     value: &ValueRef<StdTensorOp>,
     _op_name: &'static str,
 ) -> Option<Vec<usize>> {
-    ctx.exact_shape_of(value)?
+    ctx.exact_shape_of(value)
+        .ok()??
         .into_iter()
         .map(|dim| dim.constant_value())
         .collect()

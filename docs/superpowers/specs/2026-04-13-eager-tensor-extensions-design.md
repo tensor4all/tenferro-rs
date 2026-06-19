@@ -130,22 +130,24 @@ Single-output linalg (`cholesky`, `triangular_solve`) uses `unary_op` or
 
 ## EagerRuntime Public API
 
-`EagerRuntime<B>` becomes `pub struct`. New constructors:
+`EagerRuntime` becomes `pub struct`. New constructors:
 
 ```rust
-impl<B: TensorBackend> EagerRuntime<B> {
-    pub fn with_backend(backend: B) -> Rc<Self>;
+impl EagerRuntime {
+    pub fn with_cpu_backend(backend: CpuBackend) -> Arc<Self>;
 }
 
-impl<B: TensorBackend> EagerTensor<B> {
-    pub fn from_tensor_in(tensor: Tensor, ctx: Rc<EagerRuntime<B>>) -> Self;
-    pub fn requires_grad_in(tensor: Tensor, ctx: Rc<EagerRuntime<B>>) -> Self;
+impl EagerTensor {
+    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self>;
+    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self>;
 }
 ```
 
-`with_backend` creates an `Rc<EagerRuntime<B>>`. The `_in` suffixed
+`with_cpu_backend` creates an `Arc<EagerRuntime>`. The `_in` suffixed
 constructors take a shared context, avoiding repeated `absorb_from()` calls
-when creating many tensors in the same computation.
+when creating many tensors in the same computation. Constructors return
+`Result` so metadata registration and backend/device failures can propagate
+instead of panicking.
 
 Existing `from_tensor` and `requires_grad` (CpuBackend-only convenience)
 remain unchanged.

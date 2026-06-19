@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_einsum::einsum;
+use tenferro_einsum::traced_tensor::einsum;
 use tenferro_runtime::{DType, GraphCompiler, GraphProgram, TracedTensor};
 
 const PHYS_DIM: usize = 2;
@@ -29,7 +29,8 @@ fn build_inner_product_graph(
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
-    let mut env = TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
+    let mut env =
+        TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
         env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
@@ -42,11 +43,11 @@ fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
     let shapes = mps_shapes(sites, PHYS_DIM, chi);
     let bra_placeholders = shapes
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
         .collect::<Vec<_>>();
     let ket_placeholders = shapes
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
         .collect::<Vec<_>>();
     let mut compiler = GraphCompiler::new();
     let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);

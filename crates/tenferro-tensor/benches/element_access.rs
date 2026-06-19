@@ -6,13 +6,13 @@ const INDEX_COUNT: usize = 4096;
 fn typed_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64> {
     let len = shape.iter().product();
     let data = (0..len).map(|value| value as f64).collect();
-    TypedTensor::from_vec_col_major(shape.to_vec(), data)
+    TypedTensor::from_vec_col_major(shape.to_vec(), data).unwrap()
 }
 
 fn dynamic_tensor<const R: usize>(shape: [usize; R]) -> Tensor {
     let len = shape.iter().product();
     let data = (0..len).map(|value| value as f64).collect();
-    Tensor::from_vec_col_major(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data).unwrap()
 }
 
 fn index_workload<const R: usize>(shape: [usize; R]) -> Vec<[usize; R]> {
@@ -48,7 +48,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
     let mut group = c.benchmark_group(format!("element_access/{name}/col_major"));
 
     group.bench_function(BenchmarkId::new("direct_slice", INDEX_COUNT), |b| {
-        let data = tensor.as_slice();
+        let data = tensor.as_slice().unwrap();
         b.iter(|| {
             let mut sum = 0.0;
             for &offset in &offsets {
@@ -62,7 +62,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
         b.iter_batched(
             || tensor.clone(),
             |mut tensor| {
-                let data = tensor.host_data_mut();
+                let data = tensor.host_data_mut().unwrap();
                 for &offset in &offsets {
                     data[black_box(offset)] += black_box(1.0);
                 }
@@ -76,7 +76,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
         b.iter(|| {
             let mut sum = 0usize;
             for index in &indices {
-                sum = sum.wrapping_add(tensor.linear_offset(black_box(index.as_slice())));
+                sum = sum.wrapping_add(tensor.linear_offset(black_box(index.as_slice())).unwrap());
             }
             black_box(sum)
         });
@@ -86,17 +86,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
         b.iter(|| {
             let mut sum = 0.0;
             for index in &indices {
-                sum += *black_box(tensor.get(black_box(index.as_slice())));
-            }
-            black_box(sum)
-        });
-    });
-
-    group.bench_function(BenchmarkId::new("try_get", INDEX_COUNT), |b| {
-        b.iter(|| {
-            let mut sum = 0.0;
-            for index in &indices {
-                sum += *black_box(tensor.try_get(black_box(index.as_slice())).unwrap());
+                sum += *black_box(tensor.get(black_box(index.as_slice())).unwrap());
             }
             black_box(sum)
         });
@@ -106,7 +96,9 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
         b.iter(|| {
             let mut sum = 0.0;
             for index in &indices {
-                sum += *black_box(unsafe { tensor.get_unchecked(black_box(index.as_slice())) });
+                sum += *black_box(unsafe {
+                    tensor.get_unchecked(black_box(index.as_slice())).unwrap()
+                });
             }
             black_box(sum)
         });
@@ -117,22 +109,9 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
             || tensor.clone(),
             |mut tensor| {
                 for index in &indices {
-                    *tensor.get_mut(black_box(index.as_slice())) += black_box(1.0);
+                    *tensor.get_mut(black_box(index.as_slice())).unwrap() += black_box(1.0);
                 }
-                black_box(tensor.as_slice()[0])
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group.bench_function(BenchmarkId::new("try_get_mut", INDEX_COUNT), |b| {
-        b.iter_batched(
-            || tensor.clone(),
-            |mut tensor| {
-                for index in &indices {
-                    *tensor.try_get_mut(black_box(index.as_slice())).unwrap() += black_box(1.0);
-                }
-                black_box(tensor.as_slice()[0])
+                black_box(tensor.as_slice().unwrap()[0])
             },
             BatchSize::SmallInput,
         );
@@ -144,10 +123,12 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
             |mut tensor| {
                 for index in &indices {
                     unsafe {
-                        *tensor.get_unchecked_mut(black_box(index.as_slice())) += black_box(1.0);
+                        *tensor
+                            .get_unchecked_mut(black_box(index.as_slice()))
+                            .unwrap() += black_box(1.0);
                     }
                 }
-                black_box(tensor.as_slice()[0])
+                black_box(tensor.as_slice().unwrap()[0])
             },
             BatchSize::SmallInput,
         );
@@ -175,7 +156,8 @@ fn bench_rank2_fixed(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0usize;
             for [i, j] in &indices {
-                sum = sum.wrapping_add(tensor.linear_offset2(black_box(*i), black_box(*j)));
+                sum =
+                    sum.wrapping_add(tensor.linear_offset2(black_box(*i), black_box(*j)).unwrap());
             }
             black_box(sum)
         });
@@ -185,7 +167,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0.0;
             for [i, j] in &indices {
-                sum += *black_box(tensor.get2(black_box(*i), black_box(*j)));
+                sum += *black_box(tensor.get2(black_box(*i), black_box(*j)).unwrap());
             }
             black_box(sum)
         });
@@ -196,9 +178,9 @@ fn bench_rank2_fixed(c: &mut Criterion) {
             || tensor.clone(),
             |mut tensor| {
                 for [i, j] in &indices {
-                    *tensor.get_mut2(black_box(*i), black_box(*j)) += black_box(1.0);
+                    *tensor.get_mut2(black_box(*i), black_box(*j)).unwrap() += black_box(1.0);
                 }
-                black_box(tensor.as_slice()[0])
+                black_box(tensor.as_slice().unwrap()[0])
             },
             BatchSize::SmallInput,
         );
@@ -217,11 +199,11 @@ fn bench_rank3_fixed(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0usize;
             for [i, j, k] in &indices {
-                sum = sum.wrapping_add(tensor.linear_offset3(
-                    black_box(*i),
-                    black_box(*j),
-                    black_box(*k),
-                ));
+                sum = sum.wrapping_add(
+                    tensor
+                        .linear_offset3(black_box(*i), black_box(*j), black_box(*k))
+                        .unwrap(),
+                );
             }
             black_box(sum)
         });
@@ -231,7 +213,11 @@ fn bench_rank3_fixed(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0.0;
             for [i, j, k] in &indices {
-                sum += *black_box(tensor.get3(black_box(*i), black_box(*j), black_box(*k)));
+                sum += *black_box(
+                    tensor
+                        .get3(black_box(*i), black_box(*j), black_box(*k))
+                        .unwrap(),
+                );
             }
             black_box(sum)
         });
@@ -242,9 +228,11 @@ fn bench_rank3_fixed(c: &mut Criterion) {
             || tensor.clone(),
             |mut tensor| {
                 for [i, j, k] in &indices {
-                    *tensor.get_mut3(black_box(*i), black_box(*j), black_box(*k)) += black_box(1.0);
+                    *tensor
+                        .get_mut3(black_box(*i), black_box(*j), black_box(*k))
+                        .unwrap() += black_box(1.0);
                 }
-                black_box(tensor.as_slice()[0])
+                black_box(tensor.as_slice().unwrap()[0])
             },
             BatchSize::SmallInput,
         );
@@ -263,6 +251,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
         b.iter(|| {
             let sum = tensor
                 .as_slice()
+                .unwrap()
                 .iter()
                 .fold(0.0, |acc, value| acc + black_box(*value));
             black_box(sum)
@@ -273,6 +262,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
         b.iter(|| {
             let sum = tensor
                 .iter()
+                .unwrap()
                 .fold(0.0, |acc, value| acc + black_box(*value));
             black_box(sum)
         });
@@ -292,10 +282,10 @@ fn bench_linear_iteration(c: &mut Criterion) {
         b.iter_batched(
             || tensor.clone(),
             |mut tensor| {
-                for value in tensor.iter_mut() {
+                for value in tensor.iter_mut().unwrap() {
                     *value += black_box(1.0);
                 }
-                black_box(tensor.as_slice()[0])
+                black_box(tensor.as_slice().unwrap()[0])
             },
             BatchSize::SmallInput,
         );

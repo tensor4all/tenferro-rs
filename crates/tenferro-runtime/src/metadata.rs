@@ -4,8 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tenferro_ops::ad::context::{
-    try_lookup_global_metadata, try_register_scoped_global_metadata_batch, GlobalMetadataScope,
-    TensorMeta,
+    lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -15,8 +14,6 @@ use tenferro_tensor::Tensor;
 
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
 use crate::{Error, Result};
-
-pub type MetadataScope = GlobalMetadataScope;
 
 pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
     TensorMeta::exact(dtype, shape)
@@ -42,43 +39,19 @@ pub fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
 pub fn register_scoped_value_metadata(
     key: ValueKey<StdTensorOp>,
     meta: TensorMeta,
-) -> MetadataScope {
-    // Compatibility wrapper for infallible constructors; new runtime paths
-    // should call `try_register_scoped_value_metadata` and propagate errors.
-    try_register_scoped_value_metadata(key, meta).unwrap_or_else(|err| panic!("{err}"))
-}
-
-pub fn try_register_scoped_value_metadata(
-    key: ValueKey<StdTensorOp>,
-    meta: TensorMeta,
-) -> Result<MetadataScope> {
-    try_register_scoped_global_metadata_batch([(key, meta)])
+) -> Result<GlobalMetadataScope> {
+    register_scoped_global_metadata_batch([(key, meta)])
         .map_err(|err| metadata_error(err.to_string()))
 }
 
 pub fn register_scoped_metadata_batch(
     entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> MetadataScope {
-    // Compatibility wrapper for infallible constructors; new runtime paths
-    // should call `try_register_scoped_metadata_batch` and propagate errors.
-    try_register_scoped_metadata_batch(entries).unwrap_or_else(|err| panic!("{err}"))
+) -> Result<GlobalMetadataScope> {
+    register_scoped_global_metadata_batch(entries).map_err(|err| metadata_error(err.to_string()))
 }
 
-pub fn try_register_scoped_metadata_batch(
-    entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> Result<MetadataScope> {
-    try_register_scoped_global_metadata_batch(entries)
-        .map_err(|err| metadata_error(err.to_string()))
-}
-
-pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> TensorMeta {
-    // Compatibility wrapper for legacy callers that require a value; use
-    // `try_registered_meta` on any path where metadata absence is recoverable.
-    try_registered_meta(key).unwrap_or_else(|err| panic!("{err}"))
-}
-
-pub fn try_registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
-    try_lookup_global_metadata(key)
+pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
+    lookup_global_metadata(key)
         .map_err(|err| metadata_error(err.to_string()))?
         .ok_or_else(|| metadata_error(format!("missing registered metadata for {:?}", key)))
 }
@@ -86,17 +59,8 @@ pub fn try_registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
 pub fn register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> MetadataScope {
-    // Compatibility wrapper for constructors that cannot return `Result`; new
-    // graph-building paths should call `try_register_scoped_graph_metadata`.
-    try_register_scoped_graph_metadata(graph, seeded).unwrap_or_else(|err| panic!("{err}"))
-}
-
-pub fn try_register_scoped_graph_metadata(
-    graph: &Graph<StdTensorOp>,
-    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> Result<MetadataScope> {
-    try_register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded)?)
+) -> Result<GlobalMetadataScope> {
+    register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded)?)
         .map_err(|err| metadata_error(err.to_string()))
 }
 
@@ -104,19 +68,8 @@ pub fn register_scoped_live_graph_metadata(
     graph: &Graph<StdTensorOp>,
     live_values: &HashSet<LocalValueId>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> MetadataScope {
-    // Compatibility wrapper for constructors that cannot return `Result`; new
-    // graph-building paths should call `try_register_scoped_live_graph_metadata`.
-    try_register_scoped_live_graph_metadata(graph, live_values, seeded)
-        .unwrap_or_else(|err| panic!("{err}"))
-}
-
-pub fn try_register_scoped_live_graph_metadata(
-    graph: &Graph<StdTensorOp>,
-    live_values: &HashSet<LocalValueId>,
-    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> Result<MetadataScope> {
-    try_register_scoped_global_metadata_batch(graph_metadata_registrations(
+) -> Result<GlobalMetadataScope> {
+    register_scoped_global_metadata_batch(graph_metadata_registrations(
         graph,
         Some(live_values),
         seeded,
@@ -125,21 +78,21 @@ pub fn try_register_scoped_live_graph_metadata(
 }
 
 pub fn metadata_scopes_with_new<'a>(
-    scope: MetadataScope,
-    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
-) -> Vec<Arc<MetadataScope>> {
+    scope: GlobalMetadataScope,
+    inherited: impl IntoIterator<Item = &'a [Arc<GlobalMetadataScope>]>,
+) -> Vec<Arc<GlobalMetadataScope>> {
     let scope = Arc::new(scope);
     metadata_scopes_with_scope(scope, inherited)
 }
 
-pub fn metadata_scopes_for_scope(scope: MetadataScope) -> Vec<Arc<MetadataScope>> {
+pub fn metadata_scopes_for_scope(scope: GlobalMetadataScope) -> Vec<Arc<GlobalMetadataScope>> {
     vec![Arc::new(scope)]
 }
 
 pub fn metadata_scopes_with_scope<'a>(
-    scope: Arc<MetadataScope>,
-    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
-) -> Vec<Arc<MetadataScope>> {
+    scope: Arc<GlobalMetadataScope>,
+    inherited: impl IntoIterator<Item = &'a [Arc<GlobalMetadataScope>]>,
+) -> Vec<Arc<GlobalMetadataScope>> {
     let mut scopes = Vec::new();
     let mut seen = HashSet::new();
     push_metadata_scope_seen(&mut scopes, &mut seen, scope);
@@ -147,16 +100,19 @@ pub fn metadata_scopes_with_scope<'a>(
     scopes
 }
 
-pub fn push_metadata_scope(scopes: &mut Vec<Arc<MetadataScope>>, scope: Arc<MetadataScope>) {
+pub fn push_metadata_scope(
+    scopes: &mut Vec<Arc<GlobalMetadataScope>>,
+    scope: Arc<GlobalMetadataScope>,
+) {
     if scopes.iter().all(|existing| !Arc::ptr_eq(existing, &scope)) {
         scopes.push(scope);
     }
 }
 
 fn push_metadata_scope_seen(
-    scopes: &mut Vec<Arc<MetadataScope>>,
-    seen: &mut HashSet<*const MetadataScope>,
-    scope: Arc<MetadataScope>,
+    scopes: &mut Vec<Arc<GlobalMetadataScope>>,
+    seen: &mut HashSet<*const GlobalMetadataScope>,
+    scope: Arc<GlobalMetadataScope>,
 ) {
     if seen.insert(Arc::as_ptr(&scope)) {
         scopes.push(scope);
@@ -164,9 +120,9 @@ fn push_metadata_scope_seen(
 }
 
 fn extend_metadata_scopes<'a>(
-    scopes: &mut Vec<Arc<MetadataScope>>,
-    seen: &mut HashSet<*const MetadataScope>,
-    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
+    scopes: &mut Vec<Arc<GlobalMetadataScope>>,
+    seen: &mut HashSet<*const GlobalMetadataScope>,
+    inherited: impl IntoIterator<Item = &'a [Arc<GlobalMetadataScope>]>,
 ) {
     for source in inherited {
         for scope in source {
@@ -212,7 +168,7 @@ fn graph_metadata_registrations(
                 if let Some(meta) = known.get(key).cloned() {
                     return Ok(meta);
                 }
-                try_lookup_global_metadata(key)
+                lookup_global_metadata(key)
                     .map_err(|err| metadata_error(err.to_string()))?
                     .ok_or_else(|| metadata_error(format!("missing input metadata for {:?}", key)))
             })
@@ -233,17 +189,15 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Ve
     let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
         .iter()
         .enumerate()
-        .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.shape.len()))
+        .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.rank()))
         .collect();
     let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
     let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
+    let resolved_inputs = resolved_bound_shapes(input_metas)?;
+    let resolved_input_refs: Vec<&[SymDim]> = resolved_inputs.iter().map(Vec::as_slice).collect();
 
     if let StdTensorOp::Extension(ext) = op {
         let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs)?;
-        let resolved_inputs: Vec<&[SymDim]> = input_metas
-            .iter()
-            .map(|meta| meta.shape.as_slice())
-            .collect();
         return Ok(metas
             .into_iter()
             .map(|(dtype, shape)| {
@@ -251,28 +205,37 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Ve
                     dtype,
                     shape
                         .iter()
-                        .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
+                        .map(|dim| SymDim::from_dim_expr(dim, &resolved_input_refs))
                         .collect(),
                 )
             })
             .collect());
     }
 
-    let output_dtype = infer_output_dtype(op, &input_dtypes);
+    let output_dtype = infer_output_dtype(op, &input_dtypes)?;
     Ok(infer_output_extents(op, &input_shape_refs)?
         .into_iter()
         .map(|extents| {
-            let resolved_inputs: Vec<&[SymDim]> = input_metas
-                .iter()
-                .map(|meta| meta.shape.as_slice())
-                .collect();
             let resolved_extents = extents
                 .into_iter()
-                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_inputs)))
+                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_input_refs)))
                 .collect();
             TensorMeta::with_extents(output_dtype, resolved_extents)
         })
         .collect())
+}
+
+fn resolved_bound_shapes(input_metas: &[TensorMeta]) -> Result<Vec<Vec<SymDim>>> {
+    input_metas
+        .iter()
+        .map(|meta| {
+            meta.bound_shape().ok_or_else(|| {
+                metadata_error(
+                    "metadata contains an unknown shape extent; cannot resolve output metadata",
+                )
+            })
+        })
+        .collect()
 }
 
 fn metadata_error(message: impl Into<String>) -> Error {

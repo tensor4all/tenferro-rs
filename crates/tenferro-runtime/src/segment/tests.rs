@@ -4,6 +4,49 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::{DType, Tensor};
 
+fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
+    shape.iter().copied().map(DimExpr::Const).collect()
+}
+
+fn exact_extents(shape: &[usize]) -> Vec<ShapeExtent<DimExpr>> {
+    dim_shape(shape)
+        .into_iter()
+        .map(ShapeExtent::exact)
+        .collect()
+}
+
+fn broadcast_with_shape(
+    input: usize,
+    output: usize,
+    shape: &[usize],
+    dims: Vec<usize>,
+) -> ExecInstruction {
+    ExecInstruction {
+        op: ExecOp::BroadcastInDim {
+            shape: dim_shape(shape),
+            dims,
+        },
+        input_slots: vec![input],
+        output_slots: vec![output],
+        dtype: DType::F64,
+        output_shapes: vec![dim_shape(shape)].into(),
+        output_extents: vec![exact_extents(shape)].into(),
+        last_use: vec![true],
+    }
+}
+
+fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> ExecInstruction {
+    ExecInstruction {
+        op: ExecOp::Multiply,
+        input_slots: vec![lhs, rhs],
+        output_slots: vec![output],
+        dtype: DType::F64,
+        output_shapes: vec![dim_shape(shape)].into(),
+        output_extents: vec![exact_extents(shape)].into(),
+        last_use: vec![true, true],
+    }
+}
+
 fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::BroadcastInDim {
@@ -141,10 +184,10 @@ fn segmented_eval_executes_single_broadcast_multiply_pairs() {
     };
     let mut backend = CpuBackend::new();
     let inputs = vec![
-        Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
-        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ];
 
     let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
@@ -168,9 +211,32 @@ fn segmented_eval_executes_reused_broadcast_multiply_pair() {
         n_slots: 3,
     };
     let mut backend = CpuBackend::new();
-    let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])];
+    let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()];
 
     let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
 
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 9.0, 4.0, 9.0]);
+}
+
+#[test]
+fn segmented_eval_executes_single_broadcast_multiply_with_implicit_scalar_other() {
+    let program = ExecProgram {
+        instructions: vec![
+            broadcast_with_shape(1, 2, &[3], vec![]),
+            multiply_with_shape(0, 2, 3, &[3]),
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+    let mut backend = CpuBackend::new();
+    let inputs = vec![
+        Tensor::from_vec_col_major(vec![], vec![10.0_f64]).unwrap(),
+        Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
+    ];
+
+    let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
+
+    assert_eq!(outputs[0].shape(), &[3]);
+    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[20.0, 20.0, 20.0]);
 }

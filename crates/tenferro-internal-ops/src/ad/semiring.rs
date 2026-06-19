@@ -1,4 +1,5 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{
@@ -127,13 +128,15 @@ pub fn linearize_conj(
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match tangent_in[0] {
         Some(dx) => {
-            let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()));
-            vec![Some(conjugate_linear_if_dtype_complex(builder, dx, dtype))]
+            let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
+            Ok(vec![Some(conjugate_linear_if_dtype_complex(
+                builder, dx, dtype,
+            ))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -142,13 +145,13 @@ pub fn transpose_add(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match cotangent_out[0] {
         Some(ct) => {
             let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
             let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
             let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
-            vec![
+            Ok(vec![
                 Some(project_linear_to_dtype(
                     builder,
                     ct,
@@ -161,9 +164,9 @@ pub fn transpose_add(
                     output_dtype,
                     rhs_dtype,
                 )),
-            ]
+            ])
         }
-        None => vec![None, None],
+        None => Ok(vec![None, None]),
     }
 }
 
@@ -173,15 +176,15 @@ pub fn transpose_mul(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
 
     let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
@@ -190,7 +193,7 @@ pub fn transpose_mul(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx);
+        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx)?;
         let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Mul,
@@ -208,7 +211,7 @@ pub fn transpose_mul(
     }
 
     if active_mask[1] {
-        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx);
+        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx)?;
         let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Mul,
@@ -225,7 +228,7 @@ pub fn transpose_mul(
         ));
     }
 
-    result
+    Ok(result)
 }
 
 pub fn transpose_neg(
@@ -252,12 +255,14 @@ pub fn transpose_conj(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let dtype = ctx.dtype_of(&inputs[0]);
-            vec![Some(conjugate_linear_if_dtype_complex(builder, ct, dtype))]
+            let dtype = ctx.dtype_of(&inputs[0])?;
+            Ok(vec![Some(conjugate_linear_if_dtype_complex(
+                builder, ct, dtype,
+            ))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }

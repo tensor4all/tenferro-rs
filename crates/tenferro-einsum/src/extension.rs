@@ -15,8 +15,6 @@ use computegraph::types::{ValueKey, ValueRef};
 use smallvec::SmallVec;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
-use tenferro_extension_macros::define_idempotent_rule_registration;
-#[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
@@ -28,6 +26,8 @@ use tenferro_ops::ext_op::{ExtensionLoweringError, ExtensionLoweringResult, Exte
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::extension::{
     ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
 };
@@ -304,11 +304,10 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
         .collect()
 }
 
+/// Return the explicit einsum extension AD rule set.
 #[cfg(feature = "autodiff")]
-define_idempotent_rule_registration! {
-    register_fn = ensure_einsum_extension_rule_registered,
-    rule_type = EinsumAdRule,
-    visibility = pub(crate),
+pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
+    ExtensionRuleSet::new().with_rule(Arc::new(EinsumAdRule))
 }
 
 #[derive(Debug)]
@@ -383,8 +382,8 @@ impl ExtensionAdRule for EinsumAdRule {
         };
         let primal_input_shapes: Vec<Vec<SymDim>> = inputs
             .iter()
-            .map(|input| ctx.shape_of(input).to_vec())
-            .collect();
+            .map(|input| ctx.shape_of(input).map(|shape| shape.to_vec()))
+            .collect::<Result<_, _>>()?;
         let cotangent_shape = op.output_shape_hint.clone().ok_or_else(|| {
             ADRuleError::unsupported(
                 "einsum VJP requires an output shape hint for cotangent planning",
@@ -427,7 +426,7 @@ impl ExtensionAdRule for EinsumAdRule {
                     builder,
                     inputs[input_idx].clone(),
                     ctx,
-                ));
+                )?);
             }
 
             let output_shape_hint = primal_input_shapes[active_idx].clone();
@@ -452,17 +451,14 @@ impl ExtensionAdRule for EinsumAdRule {
             );
             let mut cotangent = out[0];
             if vjp_output_labels != input_labels[active_idx] {
-                let Some(remapped) = broadcast_einsum_vjp_to_input_shape(
+                let remapped = broadcast_einsum_vjp_to_input_shape(
                     builder,
                     cotangent,
                     &vjp_output_labels,
                     &input_labels[active_idx],
                     inputs[active_idx].clone(),
                     &output_shape_hint,
-                ) else {
-                    result.push(None);
-                    continue;
-                };
+                )?;
                 cotangent = remapped;
             }
             result.push(Some(cotangent));
@@ -827,13 +823,21 @@ fn broadcast_einsum_vjp_to_input_shape(
     input_labels: &[u32],
     shape_source: ValueRef<StdTensorOp>,
     input_shape: &[SymDim],
-) -> Option<LocalValueId> {
+) -> ADRuleResult<LocalValueId> {
     let shape: Vec<DimExpr> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, _)| DimExpr::InputDim { input_idx: 1, axis })
         .collect();
-    let dims = map_label_occurrences(cotangent_labels, input_labels)?;
+    let dims = map_label_occurrences(cotangent_labels, input_labels).ok_or_else(|| {
+        ADRuleError::unsupported(
+            format!(
+                "einsum VJP broadcast remap failed for cotangent labels {cotangent_labels:?} \
+                 into active input labels {input_labels:?}"
+            ),
+            ADRuleKind::Transpose,
+        )
+    })?;
     let mut inputs = vec![ValueRef::Local(cotangent)];
     if !shape.is_empty() {
         inputs.push(shape_source);
@@ -845,7 +849,7 @@ fn broadcast_einsum_vjp_to_input_shape(
             active_mask: vec![true, false],
         },
     )[0];
-    Some(project_repeated_labels_to_diagonal(
+    Ok(project_repeated_labels_to_diagonal(
         builder,
         broadcast,
         input_labels,
@@ -1310,13 +1314,13 @@ fn conjugate_primal_if_complex(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
-) -> ValueRef<StdTensorOp> {
-    match ctx.dtype_of(&input) {
+) -> ADRuleResult<ValueRef<StdTensorOp>> {
+    Ok(match ctx.dtype_of(&input)? {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => input,
         DType::C32 | DType::C64 => ValueRef::Local(
             builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
         ),
-    }
+    })
 }
 
 fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {
@@ -1328,38 +1332,19 @@ fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {
 
 fn promote_dtype(lhs: DType, rhs: DType) -> DType {
     use DType::*;
-    if lhs == rhs {
-        return lhs;
-    }
-    let (a, b) = if promotion_rank(lhs) <= promotion_rank(rhs) {
-        (lhs, rhs)
-    } else {
-        (rhs, lhs)
-    };
-    match (a, b) {
-        (Bool, other) => other,
-        (I32, I64) => I64,
-        (I32 | I64, F32 | F64) => F64,
-        (I32 | I64, C32 | C64) => C64,
-        (F32, F64) => F64,
-        (F32, C32) => C32,
-        (F32, C64) => C64,
-        (F64, C32) => C64,
-        (F64, C64) => C64,
-        (C32, C64) => C64,
-        _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
-    }
-}
-
-fn promotion_rank(dt: DType) -> u8 {
-    match dt {
-        DType::Bool => 0,
-        DType::I32 => 1,
-        DType::I64 => 2,
-        DType::F32 => 3,
-        DType::F64 => 4,
-        DType::C32 => 5,
-        DType::C64 => 6,
+    match (lhs, rhs) {
+        (Bool, Bool) => Bool,
+        (Bool, other) | (other, Bool) => other,
+        (I32, I32) => I32,
+        (I32, I64) | (I64, I32) | (I64, I64) => I64,
+        (I32 | I64, F32 | F64) | (F32 | F64, I32 | I64) => F64,
+        (I32 | I64, C32 | C64) | (C32 | C64, I32 | I64) => C64,
+        (F32, F32) => F32,
+        (F32, F64) | (F64, F32) | (F64, F64) => F64,
+        (F32, C32) | (C32, F32) | (C32, C32) => C32,
+        (F32, C64) | (C64, F32) => C64,
+        (F64, C32 | C64) | (C32 | C64, F64) => C64,
+        (C32, C64) | (C64, C32) | (C64, C64) => C64,
     }
 }
 

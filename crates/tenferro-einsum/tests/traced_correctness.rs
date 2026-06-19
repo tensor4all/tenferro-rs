@@ -21,12 +21,12 @@ mod ported_and_paths;
 // ============================================================================
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner.host_data().unwrap(),
         _ => panic!("expected F64"),
     }
 }
@@ -53,7 +53,9 @@ fn einsum<C: TestEinsumContext>(
     inputs: &[&TracedTensor],
     subscripts: &str,
 ) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| tenferro_einsum::einsum(compiler, inputs, subscripts))
+    ctx.with_compiler(|compiler| {
+        tenferro_einsum::traced_tensor::einsum(compiler, inputs, subscripts)
+    })
 }
 
 fn einsum_with<C: TestEinsumContext>(
@@ -63,7 +65,7 @@ fn einsum_with<C: TestEinsumContext>(
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
     ctx.with_compiler(|compiler| {
-        tenferro_einsum::einsum_with(compiler, inputs, subscripts, optimize)
+        tenferro_einsum::traced_tensor::einsum_with(compiler, inputs, subscripts, optimize)
     })
 }
 
@@ -95,7 +97,7 @@ fn extension_cache_entries(compiler: &GraphCompiler) -> usize {
 /// Read a single element from a v2 Tensor by multi-index (col-major).
 fn get_v2(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
-        Tensor::F64(inner) => *inner.get(idx),
+        Tensor::F64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected F64"),
     }
 }
@@ -133,7 +135,7 @@ fn assert_close(a: f64, b: f64, label: &str) {
 
 fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
     input
-        .reshape_sym(&[input.sym_size(0), input.sym_size(1)])
+        .reshape_sym(&[input.sym_size(0).unwrap(), input.sym_size(1).unwrap()])
         .unwrap()
 }
 
@@ -144,8 +146,8 @@ fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
 #[test]
 fn traced_tensor_namespace_exposes_einsum() {
     let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(y.rank, 2);
@@ -156,11 +158,13 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
     let lhs = TracedTensor::from_vec_col_major(
         vec![2, 3, 4],
         (1..=24).map(f64::from).collect::<Vec<_>>(),
-    );
+    )
+    .unwrap();
     let rhs = TracedTensor::from_vec_col_major(
         vec![3, 4, 2],
         (1..=24).map(|value| f64::from(value) * 0.5).collect(),
-    );
+    )
+    .unwrap();
 
     let out =
         tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
@@ -176,8 +180,10 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
 
 #[test]
 fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
 
     let out = tenferro_einsum::traced_tensor::tensordot(
         &lhs,
@@ -197,8 +203,8 @@ fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
 
 #[test]
 fn traced_tensor_namespace_tensordot_rejects_invalid_axes() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
 
     let duplicate = match tenferro_einsum::traced_tensor::tensordot(
         &lhs,
@@ -244,7 +250,7 @@ fn einsum_identity() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ij->ij").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -266,7 +272,7 @@ fn einsum_transpose() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ij->ji").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -290,7 +296,7 @@ fn einsum_sum_reduce() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ij->i").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -306,7 +312,7 @@ fn einsum_full_contraction() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ij->").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -323,7 +329,7 @@ fn einsum_trace() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ii->").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -342,7 +348,7 @@ fn einsum_diagonal_extraction() {
     );
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = einsum(&mut engine, &[&ta], "ii->i").unwrap();
     let result = tb.run_with(&mut engine).unwrap();
 
@@ -359,7 +365,7 @@ fn einsum_diagonal_embedding() {
     let v = f64_tensor(vec![3], vec![2.0, 3.0, 5.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let tv = TracedTensor::from_tensor_concrete_shape(v);
+    let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
     let td = einsum(&mut engine, &[&tv], "i->ii").unwrap();
     let result = td.run_with(&mut engine).unwrap();
 
@@ -393,8 +399,8 @@ fn einsum_matmul() {
     );
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
     let tc = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik").unwrap();
     let result = tc.run_with(&mut engine).unwrap();
 
@@ -420,11 +426,13 @@ fn einsum_symbolic_matmul_matches_static_path() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    ))
+    .unwrap();
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
 
@@ -444,15 +452,18 @@ fn einsum_symbolic_three_tensor_chain_matches_static_path() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2],
         vec![1.0, -0.5, 2.0, 0.75],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2],
         vec![0.5, 1.5, -1.0, 0.25],
-    ));
+    ))
+    .unwrap();
     let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2],
         vec![2.0, -1.5, 0.75, 1.25],
-    ));
+    ))
+    .unwrap();
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
     let c_symbolic = symbolic_identity_2d(&c);
@@ -488,9 +499,9 @@ fn einsum_symbolic_explicit_path_matches_static_execution() {
     );
 
     let mut static_engine = GraphExecutor::new(CpuBackend::new());
-    let a_static = TracedTensor::from_tensor_concrete_shape(a_value.clone());
-    let b_static = TracedTensor::from_tensor_concrete_shape(b_value.clone());
-    let c_static = TracedTensor::from_tensor_concrete_shape(c_value.clone());
+    let a_static = TracedTensor::from_tensor_concrete_shape(a_value.clone()).unwrap();
+    let b_static = TracedTensor::from_tensor_concrete_shape(b_value.clone()).unwrap();
+    let c_static = TracedTensor::from_tensor_concrete_shape(c_value.clone()).unwrap();
     let expected = einsum_with(
         &mut static_engine,
         &[&a_static, &b_static, &c_static],
@@ -500,9 +511,9 @@ fn einsum_symbolic_explicit_path_matches_static_execution() {
     .unwrap();
     let expected = expected.run_with(&mut static_engine).unwrap().clone();
 
-    let a_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let actual = einsum_with(
         &mut compiler,
@@ -546,11 +557,13 @@ fn einsum_cache_reuses_contraction_path() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3, 4],
         (1..=36).map(|x| x as f64).collect(),
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![4, 5],
         (1..=20).map(|x| (x * 2) as f64).collect(),
-    ));
+    ))
+    .unwrap();
 
     let c1 = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
     assert_eq!(c1.rank, 2);
@@ -560,11 +573,13 @@ fn einsum_cache_reuses_contraction_path() {
     let a2 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3, 4],
         (21..=56).map(|x| x as f64).collect(),
-    ));
+    ))
+    .unwrap();
     let b2 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![4, 5],
         (41..=60).map(|x| x as f64).collect(),
-    ));
+    ))
+    .unwrap();
 
     let c2 = einsum(&mut compiler, &[&a2, &b2], "iij,jk->ik").unwrap();
     assert_eq!(c2.rank, 2);
@@ -573,11 +588,13 @@ fn einsum_cache_reuses_contraction_path() {
     let a3 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![5, 5, 6],
         (1..=150).map(|x| (x as f64) / 10.0).collect(),
-    ));
+    ))
+    .unwrap();
     let b3 = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![6, 7],
         (1..=42).map(|x| (x as f64) / 5.0).collect(),
-    ));
+    ))
+    .unwrap();
 
     let c3 = einsum(&mut compiler, &[&a3, &b3], "iij,jk->ik").unwrap();
     assert_eq!(c3.rank, 2);
@@ -591,8 +608,8 @@ fn einsum_outer_product() {
     let v = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let tu = TracedTensor::from_tensor_concrete_shape(u.clone());
-    let tv = TracedTensor::from_tensor_concrete_shape(v.clone());
+    let tu = TracedTensor::from_tensor_concrete_shape(u.clone()).unwrap();
+    let tv = TracedTensor::from_tensor_concrete_shape(v.clone()).unwrap();
     let tm = einsum(&mut engine, &[&tu, &tv], "i,j->ij").unwrap();
     let result = tm.run_with(&mut engine).unwrap();
 
@@ -616,8 +633,8 @@ fn einsum_dot_product() {
     let v = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let tu = TracedTensor::from_tensor_concrete_shape(u);
-    let tv = TracedTensor::from_tensor_concrete_shape(v);
+    let tu = TracedTensor::from_tensor_concrete_shape(u).unwrap();
+    let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
     let td = einsum(&mut engine, &[&tu, &tv], "i,i->").unwrap();
     let result = td.run_with(&mut engine).unwrap();
 
@@ -634,8 +651,8 @@ fn einsum_matvec() {
     let x = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tx = TracedTensor::from_tensor_concrete_shape(x.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tx = TracedTensor::from_tensor_concrete_shape(x.clone()).unwrap();
     let ty = einsum(&mut engine, &[&ta, &tx], "ij,j->i").unwrap();
     let result = ty.run_with(&mut engine).unwrap();
 
@@ -656,8 +673,8 @@ fn einsum_elementwise_mul() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
     let tc = einsum(&mut engine, &[&ta, &tb], "ij,ij->ij").unwrap();
     let result = tc.run_with(&mut engine).unwrap();
 
@@ -686,9 +703,9 @@ fn einsum_three_matrices() {
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
-    let tc = TracedTensor::from_tensor_concrete_shape(c.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
+    let tc = TracedTensor::from_tensor_concrete_shape(c.clone()).unwrap();
     let td = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il").unwrap();
     let result_d = td.run_with(&mut engine).unwrap();
 
@@ -696,14 +713,14 @@ fn einsum_three_matrices() {
 
     // Verify D = A @ B @ C by computing step-by-step
     // First: AB
-    let ta2 = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb2 = TracedTensor::from_tensor_concrete_shape(b.clone());
+    let ta2 = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb2 = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
     let tab = einsum(&mut engine, &[&ta2, &tb2], "ij,jk->ik").unwrap();
     let ab = tab.run_with(&mut engine).unwrap().clone();
 
     // Then: (AB) @ C
-    let tab2 = TracedTensor::from_tensor_concrete_shape(ab);
-    let tc2 = TracedTensor::from_tensor_concrete_shape(c);
+    let tab2 = TracedTensor::from_tensor_concrete_shape(ab).unwrap();
+    let tc2 = TracedTensor::from_tensor_concrete_shape(c).unwrap();
     let tabc = einsum(&mut engine, &[&tab2, &tc2], "ij,jk->ik").unwrap();
     let abc = tabc.run_with(&mut engine).unwrap();
 
@@ -726,19 +743,19 @@ fn einsum_batched_three_matrix_chain_matches_pairwise_reference() {
     let c = f64_tensor(vec![2, 4, 2], (37..=52).map(|x| x as f64).collect());
 
     let mut direct_engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
-    let tc = TracedTensor::from_tensor_concrete_shape(c.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
+    let tc = TracedTensor::from_tensor_concrete_shape(c.clone()).unwrap();
     let direct = einsum(&mut direct_engine, &[&ta, &tb, &tc], "bik,bkj,bjl->bil").unwrap();
     let direct_result = direct.run_with(&mut direct_engine).unwrap();
 
     let mut pairwise_engine = GraphExecutor::new(CpuBackend::new());
-    let pa = TracedTensor::from_tensor_concrete_shape(a);
-    let pb = TracedTensor::from_tensor_concrete_shape(b);
-    let pc = TracedTensor::from_tensor_concrete_shape(c);
+    let pa = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let pb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
+    let pc = TracedTensor::from_tensor_concrete_shape(c).unwrap();
     let first = einsum(&mut pairwise_engine, &[&pa, &pb], "bik,bkj->bij").unwrap();
     let first_result = first.run_with(&mut pairwise_engine).unwrap().clone();
-    let first_tensor = TracedTensor::from_tensor_concrete_shape(first_result);
+    let first_tensor = TracedTensor::from_tensor_concrete_shape(first_result).unwrap();
     let reference = einsum(&mut pairwise_engine, &[&first_tensor, &pc], "bij,bjl->bil").unwrap();
     let reference_result = reference.run_with(&mut pairwise_engine).unwrap();
 
@@ -782,16 +799,16 @@ fn einsum_with_path_matches_flat_nary() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     // Auto-optimized
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
-    let tc = TracedTensor::from_tensor_concrete_shape(c.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
+    let tc = TracedTensor::from_tensor_concrete_shape(c.clone()).unwrap();
     let auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il").unwrap();
     let auto_result = auto.run_with(&mut engine).unwrap().clone();
 
     // Explicit path: contract B*C first (positions 1,2), then A*result (positions 0,1)
-    let ta2 = TracedTensor::from_tensor_concrete_shape(a);
-    let tb2 = TracedTensor::from_tensor_concrete_shape(b);
-    let tc2 = TracedTensor::from_tensor_concrete_shape(c);
+    let ta2 = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb2 = TracedTensor::from_tensor_concrete_shape(b).unwrap();
+    let tc2 = TracedTensor::from_tensor_concrete_shape(c).unwrap();
     let via_path = einsum_with(
         &mut engine,
         &[&ta2, &tb2, &tc2],
@@ -838,9 +855,9 @@ fn contraction_tree_from_pairs() {
     );
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let tc = TracedTensor::from_tensor_concrete_shape(c);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
+    let tc = TracedTensor::from_tensor_concrete_shape(c).unwrap();
     let td = einsum_with(
         &mut engine,
         &[&ta, &tb, &tc],
@@ -871,7 +888,7 @@ fn einsum_partial_trace_with_free_index() {
     let t = f64_tensor(vec![2, 2, 3], data);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let tt = TracedTensor::from_tensor_concrete_shape(t.clone());
+    let tt = TracedTensor::from_tensor_concrete_shape(t.clone()).unwrap();
     let tv = einsum(&mut engine, &[&tt], "iij->j").unwrap();
     let result = tv.run_with(&mut engine).unwrap();
 
@@ -913,8 +930,8 @@ fn einsum_batched_matmul() {
     let b = f64_tensor(vec![2, 2, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb = TracedTensor::from_tensor_concrete_shape(b.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
     let tc = einsum(&mut engine, &[&ta, &tb], "bij,bjk->bik").unwrap();
     let result = tc.run_with(&mut engine).unwrap();
 
@@ -947,7 +964,7 @@ fn einsum_reduce_first_axis() {
     );
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
     let ty = einsum(&mut engine, &[&ta], "ij->j").unwrap();
     let result = ty.run_with(&mut engine).unwrap();
 
@@ -970,7 +987,7 @@ fn einsum_self_contraction_trace() {
     let t = f64_tensor(vec![2, 3, 2], data);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let tt = TracedTensor::from_tensor_concrete_shape(t.clone());
+    let tt = TracedTensor::from_tensor_concrete_shape(t.clone()).unwrap();
     let tv = einsum(&mut engine, &[&tt], "ijk->j").unwrap();
     let result = tv.run_with(&mut engine).unwrap();
 

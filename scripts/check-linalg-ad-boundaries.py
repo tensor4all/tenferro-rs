@@ -57,7 +57,7 @@ def main() -> int:
     for needle in [
         '#[cfg(feature = "autodiff")]\nmod ad;',
         '#[cfg(feature = "autodiff")]\npub mod eager_tensor;',
-        '#[cfg(feature = "autodiff")]\npub use ad::{ad_rules, register_extension_rule};',
+        '#[cfg(feature = "autodiff")]\npub use ad::ad_rules;',
     ]:
         if needle not in linalg_lib.read_text(encoding="utf-8"):
             findings.append(f"crates/tenferro-linalg/src/lib.rs missing gated item: {needle!r}")

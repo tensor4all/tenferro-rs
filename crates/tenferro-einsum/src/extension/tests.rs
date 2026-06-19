@@ -118,10 +118,9 @@ fn runtime_input_index_vec_stays_inline_for_common_arity() {
 
 #[test]
 fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
-    let base = Arc::new(Tensor::from_vec_col_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let base = Arc::new(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    );
     let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
     let input = TensorRead::from_view(view.tensor_view());
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
@@ -239,6 +238,27 @@ fn repeated_label_projection_projects_each_extra_occurrence() {
             },
         ]
     );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn vjp_broadcast_remap_failure_returns_error() {
+    let mut builder = RecordingRuleBuilder::default();
+
+    let err = broadcast_einsum_vjp_to_input_shape(
+        &mut builder,
+        0,
+        &[0, 2],
+        &[0, 1],
+        ValueRef::Local(1),
+        &[SymDim::from(2usize), SymDim::from(3usize)],
+    )
+    .expect_err("unmappable VJP labels should be an AD rule error");
+
+    let message = err.to_string();
+    assert!(message.contains("einsum VJP broadcast remap"));
+    assert!(message.contains("cotangent"));
+    assert!(builder.ops.is_empty());
 }
 
 #[cfg(feature = "autodiff")]

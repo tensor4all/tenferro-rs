@@ -53,7 +53,8 @@ jobs:
   # coverage, dependency-boundary, docs). The heavy workspace test matrix lives
   # in `ci-pr-workspace-tests.yml` so it runs once per PR rather than also on
   # every push to `main` (where the merged PR already gated it). GPU tests run in
-  # `CI_gpu.yml`. Do not re-add a workspace test job here without removing it from
+  # `CI_gpu.yml` only after the repository rules LLM review and cheap non-GPU CI
+  # checks pass. Do not re-add a workspace test job here without removing it from
   # `ci-pr-workspace-tests.yml` first — otherwise the suite runs twice per PR.
 
   test-inject-blas:

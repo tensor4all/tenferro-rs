@@ -40,7 +40,7 @@ an extension crate.
 |---|---|---|---|---|
 | `zeros` / `ones` | ✅ | · | (`constant_from`) | · |
 | `full` | · | · | · | · |
-| `from_vec_row_major` / `from_vec_col_major` | ✅ | ✅ | (`constant_from`/`variable_from`) | ✅ |
+| `from_vec_col_major` | ✅ | ✅ | (`constant_from`/`variable_from`) | ✅ |
 | `arange` | · | · | — | — |
 | `eye` / `identity` | · | · | · | · |
 
@@ -96,6 +96,13 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 | `pad` | ✅ | ⬜ | Traced only has `pad_to_match`; needs general `pad` |
 | `reverse` / `flip` | ✅ | ⬜ | gap on Traced |
 | `repeat` / `tile` | ⬜ | ⬜ | |
+
+## 5a. DType / value conversion
+
+| Operation | Eager | Traced | Notes |
+|---|---|---|---|
+| `convert` | ✅ | ✅ | checked conversion accepted by the dtype-promotion lattice; returns a typed error otherwise |
+| `cast` | ✅ | ✅ | explicit lossy dtype projection; required when callers intentionally request truncation, precision narrowing, complex projection, or boolean truthiness |
 
 ## 6. Indexing / data movement
 

@@ -7,8 +7,8 @@
 //! use tenferro_tensor::{Tensor, TensorBackend, TensorElementwise};
 //!
 //! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 //! let c = backend.add(&a, &b)?;
 //! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 //! let direct = add(&a, &b)?;
@@ -162,7 +162,7 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
         return Err(cpu_backend_buffer_error(op));
     }
     StridedView::new(
-        view.as_physical_slice(),
+        view.host_storage()?,
         view.shape(),
         view.strides(),
         view.offset(),
@@ -260,7 +260,9 @@ where
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
+    // Invariant: `StridedArray` owns data whose length matches its validated dimensions.
     TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())
+        .expect("strided array dimensions match owned data length")
 }
 
 pub(crate) fn default_placement() -> Placement {

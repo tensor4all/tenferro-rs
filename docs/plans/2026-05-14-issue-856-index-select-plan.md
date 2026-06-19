@@ -885,7 +885,7 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
     let loss = (&selected * &weights).reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
 
-    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[0.0, 30.0, 30.0], TOL);
+    assert_close_slice(f64_data(x.grad().unwrap().unwrap().as_ref()), &[0.0, 30.0, 30.0], TOL);
 }
 ```
 

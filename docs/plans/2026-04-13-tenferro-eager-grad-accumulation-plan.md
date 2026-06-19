@@ -27,11 +27,11 @@ fn eager_repeated_backward_accumulates_across_calls() {
 
     let loss = (&x * &x).reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
-    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+    assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
     let loss = (&x * &x).reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
-    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
+    assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
 }
 ```
 
@@ -63,13 +63,13 @@ fn eager_einsum_ad_backward_accumulates_across_calls() {
     let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
-    let grad_a_once = a.grad().unwrap();
+    let grad_a_once = a.grad().unwrap().unwrap();
 
     let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
-    let grad_a_twice = a.grad().unwrap();
+    let grad_a_twice = a.grad().unwrap().unwrap();
     assert_eq!(
         grad_a_twice.as_slice::<f64>().unwrap(),
         &grad_a_once
@@ -324,14 +324,14 @@ use tenferro::{EagerTensor, Tensor};
 let x = EagerTensor::requires_grad(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 let _ = loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 let _ = loss.backward().unwrap();
-assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0]);
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0]);
 
 x.clear_grad();
-assert!(x.grad().is_none());
+assert!(x.grad().unwrap().is_none());
 ```
 
 Also update the "When to use eager vs lazy" table so it distinguishes:

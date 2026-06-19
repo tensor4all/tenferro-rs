@@ -29,7 +29,7 @@ macro_rules! impl_real_qr {
                 let n_i32 = dim_i32(n, "qr")?;
                 let k_i32 = dim_i32(k, "qr")?;
 
-                let mut qr = input.host_data().to_vec();
+                let mut qr = input.host_data()?.to_vec();
                 let mut tau = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
@@ -72,8 +72,8 @@ macro_rules! impl_real_qr {
                 check_lapack_info("qr", $orgqr_name, info)?;
 
                 Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], q, input),
-                    tensor_from_vec_with_template(vec![k, n], r, input),
+                    tensor_from_vec_with_template(vec![m, k], q, input)?,
+                    tensor_from_vec_with_template(vec![k, n], r, input)?,
                 ])
             }
         }
@@ -93,7 +93,7 @@ macro_rules! impl_complex_qr {
                 let n_i32 = dim_i32(n, "qr")?;
                 let k_i32 = dim_i32(k, "qr")?;
 
-                let mut qr = input.host_data().to_vec();
+                let mut qr = input.host_data()?.to_vec();
                 let mut tau = vec![<$complex>::new(0.0, 0.0); k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut info = 0;
@@ -136,8 +136,8 @@ macro_rules! impl_complex_qr {
                 check_lapack_info("qr", $ungqr_name, info)?;
 
                 Ok(vec![
-                    tensor_from_vec_with_template(vec![m, k], q, input),
-                    tensor_from_vec_with_template(vec![k, n], r, input),
+                    tensor_from_vec_with_template(vec![m, k], q, input)?,
+                    tensor_from_vec_with_template(vec![k, n], r, input)?,
                 ])
             }
         }
@@ -182,12 +182,12 @@ pub(crate) fn qr<T: LapackQr>(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(k, n, batch_shape),
                 Vec::new(),
                 input,
-            ),
+            )?,
         ]);
     }
     batched_multi("qr", buffers, input, qr_2d)

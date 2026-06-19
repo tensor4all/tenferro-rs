@@ -6,16 +6,14 @@ use crate::{Error, GraphCompiler, TracedTensor};
 
 #[test]
 fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let y = &x + &x;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
         .unwrap();
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(
-        vec![4],
-        vec![1.0, 2.0, 3.0, 4.0],
-    ));
+    let input =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     assert_eq!(executor.borrowed_slot_workspace_capacity, 0);
@@ -36,16 +34,14 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
 
 #[test]
 fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let y = x.transpose(&[1, 0]);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let y = x.transpose(&[1, 0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
         .unwrap();
-    let input = Tensor::F64(TypedTensor::from_vec_col_major(
-        vec![2, 2],
-        vec![1.0, 2.0, 3.0, 4.0],
-    ));
+    let input =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let outputs = executor
@@ -78,8 +74,8 @@ fn borrowed_input_workspace_does_not_retype_static_slot_vec() {
 
 #[test]
 fn compile_with_input_specs_rejects_computed_placeholder_specs() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let y = &x + &x;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let err = compiler

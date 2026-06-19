@@ -5,15 +5,14 @@ use tenferro_runtime::{Result, TracedTensor};
 
 /// Explicit automatic-differentiation context.
 ///
-/// `AdContext` owns the extension AD rules used by traced AD transforms. It is
-/// the preferred alternative to process-global extension rule registration.
+/// `AdContext` owns the extension AD rules used by traced AD transforms.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use tenferro_ad::AdContext;
 ///
-/// let ad = AdContext::builder().with_core_rules().build().unwrap();
+/// let ad = AdContext::builder().build().unwrap();
 /// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
 /// ```
 #[derive(Clone, Debug)]
@@ -66,9 +65,9 @@ impl AdContext {
     /// use tenferro_ad::AdContext;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let ad = AdContext::builder().with_core_rules().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let loss = &x * &x;
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let loss = (&x * &x).unwrap();
     /// let grad = ad.grad(&loss, &x).unwrap();
     /// assert_eq!(grad.rank, 0);
     /// ```
@@ -85,8 +84,8 @@ impl AdContext {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let loss = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let loss = (&x * &x).unwrap();
     /// assert!(ad.grad_optional(&loss, &x).unwrap().is_some());
     /// ```
     pub fn grad_optional(
@@ -106,9 +105,9 @@ impl AdContext {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// let dy = ad.jvp(&y, &x, &dx).unwrap();
     /// assert_eq!(dy.rank, 0);
     /// ```
@@ -130,9 +129,9 @@ impl AdContext {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// assert!(ad.jvp_optional(&y, &x, &dx).unwrap().is_some());
     /// ```
     pub fn jvp_optional(
@@ -158,9 +157,9 @@ impl AdContext {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// let dx = ad.vjp(&y, &x, &dy).unwrap();
     /// assert_eq!(dx.rank, 0);
     /// ```
@@ -182,9 +181,9 @@ impl AdContext {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let y = &x * &x;
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let y = (&x * &x).unwrap();
     /// assert!(ad.vjp_optional(&y, &x, &dy).unwrap().is_some());
     /// ```
     pub fn vjp_optional(
@@ -204,7 +203,7 @@ impl AdContext {
 /// ```rust
 /// use tenferro_ad::AdContextBuilder;
 ///
-/// let ad = AdContextBuilder::new().with_core_rules().build().unwrap();
+/// let ad = AdContextBuilder::new().build().unwrap();
 /// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
 /// ```
 #[derive(Clone, Debug, Default)]
@@ -224,23 +223,6 @@ impl AdContextBuilder {
     /// ```
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Include tenferro's built-in tensor primitive rules.
-    ///
-    /// Built-in rules are always available through `tenferro-ad`; this method
-    /// exists to make explicit-context construction read naturally next to
-    /// extension rule registration.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::AdContext;
-    ///
-    /// let _ad = AdContext::builder().with_core_rules().build().unwrap();
-    /// ```
-    pub fn with_core_rules(self) -> Self {
-        self
     }
 
     /// Include an owned extension rule set.

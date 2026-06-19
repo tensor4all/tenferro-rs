@@ -64,6 +64,8 @@ pub(crate) mod util;
 
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
 pub use error::{Error, Result};
+#[cfg(feature = "autodiff")]
+pub use extension::ad_rules;
 pub use extension::register_runtime;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
@@ -71,7 +73,6 @@ pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
-pub use traced::{einsum, einsum_subscripts, einsum_subscripts_with, einsum_with};
 
 #[cfg(test)]
 mod tests;

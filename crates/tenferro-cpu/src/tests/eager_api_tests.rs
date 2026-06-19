@@ -6,8 +6,8 @@ use tenferro_tensor::{
 
 #[test]
 fn tensor_new_and_typed_tensor_as_slice_work() {
-    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let typed = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![7.0, 8.0]);
+    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let typed = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap();
 
     assert_eq!(tensor.shape(), &[2, 3]);
     assert_eq!(
@@ -23,8 +23,8 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
     fn needs_backend(_ctx: &mut impl TensorBackend) {}
     needs_backend(&mut ctx);
 
-    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let sum = ctx.add(&a, &b).unwrap();
     let product = ctx.mul(&a, &b).unwrap();
     let negated = ctx.neg(&a).unwrap();
@@ -39,11 +39,11 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
         Some([-1.0, -2.0, -3.0].as_slice())
     );
 
-    let matrix = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let matrix = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let transposed = ctx.transpose(&matrix, &[1, 0]).unwrap();
     let reshaped = ctx.reshape(&matrix, &[3, 2]).unwrap();
     let reduced = ctx.reduce_sum(&matrix, &[1]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let matmul_config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],

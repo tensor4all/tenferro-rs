@@ -570,8 +570,23 @@ fn single_broadcast_multiply_pair<'a>(
     }
 }
 
-fn identity_dims(rank: usize) -> Vec<usize> {
-    (0..rank).collect()
+// Single-broadcast multiply still has Mul's implicit right-aligned broadcasting
+// on the non-BroadcastInDim operand, so its backend dims must come from shape.
+fn aligned_broadcast_dims(source_shape: &[usize], target_shape: &[usize]) -> Option<Vec<usize>> {
+    if source_shape.len() > target_shape.len() {
+        return None;
+    }
+    let offset = target_shape.len() - source_shape.len();
+    let mut dims = Vec::with_capacity(source_shape.len());
+    for (source_axis, &source_dim) in source_shape.iter().enumerate() {
+        let target_axis = offset + source_axis;
+        let target_dim = target_shape[target_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return None;
+        }
+        dims.push(target_axis);
+    }
+    Some(dims)
 }
 
 fn read_slot<'slot, 'input>(
@@ -606,7 +621,6 @@ fn try_execute_single_broadcast_multiply_segment(
     };
 
     let target_shape = resolve_tensor_shape_exprs(slots, &broadcast.input_slots, shape)?;
-    let full_dims = identity_dims(target_shape.len());
     let broadcast_read = get_read(slots, &broadcast.input_slots, 0)?;
 
     match pair {
@@ -623,23 +637,34 @@ fn try_execute_single_broadcast_multiply_segment(
             other_slot,
             broadcast_is_lhs,
             ..
-        } if broadcast_is_lhs => Ok(exec.execute_broadcast_multiply(
-            broadcast_read,
-            &target_shape,
-            dims,
-            read_slot(slots, other_slot)?,
-            &target_shape,
-            &full_dims,
-        )?),
-        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => Ok(exec
-            .execute_broadcast_multiply(
-                read_slot(slots, other_slot)?,
-                &target_shape,
-                &full_dims,
+        } if broadcast_is_lhs => {
+            let other_read = read_slot(slots, other_slot)?;
+            let Some(other_dims) = aligned_broadcast_dims(other_read.shape(), &target_shape) else {
+                return Ok(None);
+            };
+            Ok(exec.execute_broadcast_multiply(
                 broadcast_read,
                 &target_shape,
                 dims,
-            )?),
+                other_read,
+                &target_shape,
+                &other_dims,
+            )?)
+        }
+        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => {
+            let other_read = read_slot(slots, other_slot)?;
+            let Some(other_dims) = aligned_broadcast_dims(other_read.shape(), &target_shape) else {
+                return Ok(None);
+            };
+            Ok(exec.execute_broadcast_multiply(
+                other_read,
+                &target_shape,
+                &other_dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?)
+        }
     }
 }
 
@@ -724,7 +749,6 @@ fn try_execute_terminal_single_broadcast_multiply_value_segment(
     };
 
     let target_shape = resolve_tensor_shape_exprs(slots, &broadcast.input_slots, shape)?;
-    let full_dims = identity_dims(target_shape.len());
     let broadcast_read = get_read(slots, &broadcast.input_slots, 0)?;
 
     match pair {
@@ -741,23 +765,34 @@ fn try_execute_terminal_single_broadcast_multiply_value_segment(
             other_slot,
             broadcast_is_lhs,
             ..
-        } if broadcast_is_lhs => Ok(exec.execute_broadcast_multiply_value(
-            broadcast_read,
-            &target_shape,
-            dims,
-            read_slot(slots, other_slot)?,
-            &target_shape,
-            &full_dims,
-        )?),
-        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => Ok(exec
-            .execute_broadcast_multiply_value(
-                read_slot(slots, other_slot)?,
-                &target_shape,
-                &full_dims,
+        } if broadcast_is_lhs => {
+            let other_read = read_slot(slots, other_slot)?;
+            let Some(other_dims) = aligned_broadcast_dims(other_read.shape(), &target_shape) else {
+                return Ok(None);
+            };
+            Ok(exec.execute_broadcast_multiply_value(
                 broadcast_read,
                 &target_shape,
                 dims,
-            )?),
+                other_read,
+                &target_shape,
+                &other_dims,
+            )?)
+        }
+        SingleBroadcastMultiplyPair::WithOther { other_slot, .. } => {
+            let other_read = read_slot(slots, other_slot)?;
+            let Some(other_dims) = aligned_broadcast_dims(other_read.shape(), &target_shape) else {
+                return Ok(None);
+            };
+            Ok(exec.execute_broadcast_multiply_value(
+                other_read,
+                &target_shape,
+                &other_dims,
+                broadcast_read,
+                &target_shape,
+                dims,
+            )?)
+        }
     }
 }
 

@@ -25,49 +25,49 @@ use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor}
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
-        Tensor::F64(inner) => *inner.get(idx),
+        Tensor::F64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected F64 tensor"),
     }
 }
 
 fn get_c64(t: &Tensor, idx: &[usize]) -> Complex64 {
     match t {
-        Tensor::C64(inner) => *inner.get(idx),
+        Tensor::C64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected C64 tensor"),
     }
 }
 
 fn get_f32(t: &Tensor, idx: &[usize]) -> f32 {
     match t {
-        Tensor::F32(inner) => *inner.get(idx),
+        Tensor::F32(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected F32 tensor"),
     }
 }
 
 fn get_c32(t: &Tensor, idx: &[usize]) -> Complex32 {
     match t {
-        Tensor::C32(inner) => *inner.get(idx),
+        Tensor::C32(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected C32 tensor"),
     }
 }
 
 fn get_i64(t: &Tensor, idx: &[usize]) -> i64 {
     match t {
-        Tensor::I64(inner) => *inner.get(idx),
+        Tensor::I64(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected I64 tensor"),
     }
 }
 
 fn get_i32(t: &Tensor, idx: &[usize]) -> i32 {
     match t {
-        Tensor::I32(inner) => *inner.get(idx),
+        Tensor::I32(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected I32 tensor"),
     }
 }
 
 fn get_bool(t: &Tensor, idx: &[usize]) -> bool {
     match t {
-        Tensor::Bool(inner) => *inner.get(idx),
+        Tensor::Bool(inner) => *inner.get(idx).unwrap(),
         _ => panic!("expected Bool tensor"),
     }
 }

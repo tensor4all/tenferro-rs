@@ -24,8 +24,8 @@
 //! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //! use tenferro_cpu::CpuBackend;
 //!
-//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-//! let y = &x + &x;
+//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
 //! let out = GraphExecutor::new(CpuBackend::default()).run(&program).unwrap();

@@ -3,19 +3,20 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::extension_runtime::ExtensionExecutor;
-use computegraph::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use computegraph::{GraphOperation, LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
-use tidu::{PrimitiveBuilder, PrimitiveValue};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 
-pub struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
-    pub backend: &'a mut B,
-    pub extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-    pub external_data: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
-    pub results: Vec<Arc<Tensor>>,
+pub(crate) struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
+    pub(crate) backend: &'a mut B,
+    pub(crate) extension_executor: Option<&'a mut ExtensionExecutor<B>>,
+    pub(crate) external_data: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    pub(crate) results: Vec<Arc<Tensor>>,
+    error: Option<ADRuleError>,
 }
 
 impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
@@ -25,21 +26,23 @@ impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
             .field("has_extension_executor", &self.extension_executor.is_some())
             .field("external_data_len", &self.external_data.len())
             .field("results_len", &self.results.len())
+            .field("has_error", &self.error.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
-    pub fn new(backend: &'a mut B) -> Self {
+    pub(crate) fn new(backend: &'a mut B) -> Self {
         Self {
             backend,
             extension_executor: None,
             external_data: HashMap::new(),
             results: Vec::new(),
+            error: None,
         }
     }
 
-    pub fn with_extension_executor(
+    pub(crate) fn with_extension_executor(
         backend: &'a mut B,
         extension_executor: &'a mut ExtensionExecutor<B>,
     ) -> Self {
@@ -48,32 +51,56 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
             extension_executor: Some(extension_executor),
             external_data: HashMap::new(),
             results: Vec::new(),
+            error: None,
         }
     }
 
-    pub fn push_tensor(&mut self, tensor: Arc<Tensor>) -> LocalValueId {
+    pub(crate) fn push_tensor(&mut self, tensor: Arc<Tensor>) -> LocalValueId {
         let id = self.results.len();
         self.results.push(tensor);
         id
     }
 
-    pub fn tensor(&self, id: LocalValueId) -> Arc<Tensor> {
-        Arc::clone(&self.results[id])
+    pub(crate) fn tensor(&self, id: LocalValueId) -> ADRuleResult<Arc<Tensor>> {
+        self.results.get(id).cloned().ok_or_else(|| {
+            eager_builder_error(format!("missing local eager primitive result {id}"))
+        })
     }
 
-    fn external_tensor(&mut self, key: &ValueKey<StdTensorOp>) -> Arc<Tensor> {
+    pub(crate) fn take_error(&mut self) -> Option<ADRuleError> {
+        self.error.take()
+    }
+
+    fn record_error(&mut self, err: ADRuleError) {
+        if self.error.is_none() {
+            self.error = Some(err);
+        }
+    }
+
+    fn dummy_output_ids(&self, operation: &StdTensorOp) -> Vec<LocalValueId> {
+        (0..operation.output_count()).collect()
+    }
+
+    fn external_tensor(&mut self, key: &ValueKey<StdTensorOp>) -> ADRuleResult<Arc<Tensor>> {
         if let Some(tensor) = self.external_data.get(key) {
-            return Arc::clone(tensor);
+            return Ok(Arc::clone(tensor));
         }
 
-        let base_key = missing_tangent_base_key(key)
-            .unwrap_or_else(|| panic!("EagerPrimitiveBuilder: missing external {:?}", key));
-        let base = self.external_data.get(&base_key).unwrap_or_else(|| {
-            panic!("EagerPrimitiveBuilder: missing tangent base {:?}", base_key)
-        });
-        let zero = Arc::new(zero_like_tensor(base.as_ref(), self.backend));
+        let base_key = missing_tangent_base_key(key).ok_or_else(|| {
+            eager_builder_error(format!("missing external eager value for {key:?}"))
+        })?;
+        let base = self.external_data.get(&base_key).ok_or_else(|| {
+            eager_builder_error(format!("missing tangent base eager value for {base_key:?}"))
+        })?;
+        let zero = Arc::new(
+            zero_like_tensor(base.as_ref(), self.backend).map_err(|err| {
+                eager_builder_error(format!(
+                    "failed to create eager primitive tangent zero: {err}"
+                ))
+            })?,
+        );
         self.external_data.insert(key.clone(), Arc::clone(&zero));
-        zero
+        Ok(zero)
     }
 
     fn execute_operation(
@@ -81,13 +108,26 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
         operation: StdTensorOp,
         inputs: Vec<ValueRef<StdTensorOp>>,
     ) -> Vec<LocalValueId> {
-        let concrete_values: Vec<Arc<Tensor>> = inputs
-            .iter()
-            .map(|value| match value {
-                ValueRef::Local(id) => Arc::clone(&self.results[*id]),
+        if self.error.is_some() {
+            return self.dummy_output_ids(&operation);
+        }
+
+        let mut concrete_values = Vec::with_capacity(inputs.len());
+        for value in &inputs {
+            let resolved = match value {
+                ValueRef::Local(id) => self.results.get(*id).cloned().ok_or_else(|| {
+                    eager_builder_error(format!("missing local eager primitive value {id}"))
+                }),
                 ValueRef::External(key) => self.external_tensor(key),
-            })
-            .collect();
+            };
+            match resolved {
+                Ok(tensor) => concrete_values.push(tensor),
+                Err(err) => {
+                    self.record_error(err);
+                    return self.dummy_output_ids(&operation);
+                }
+            }
+        }
         let concrete: Vec<&Tensor> = concrete_values
             .iter()
             .map(|tensor| tensor.as_ref())
@@ -103,7 +143,15 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
         } else {
             exec_op_on_tensors(&operation, &concrete, self.backend)
         }
-        .unwrap_or_else(|err| panic!("eager exec failed for {:?}: {}", operation, err));
+        .map_err(|err| eager_builder_error(format!("eager exec failed for {operation:?}: {err}")));
+
+        let outputs = match outputs {
+            Ok(outputs) => outputs,
+            Err(err) => {
+                self.record_error(err);
+                return self.dummy_output_ids(&operation);
+            }
+        };
 
         let base = self.results.len();
         for output in outputs {
@@ -135,22 +183,27 @@ fn missing_tangent_base_key(key: &ValueKey<StdTensorOp>) -> Option<ValueKey<StdT
     Some(ValueKey::Input((**of).clone()))
 }
 
-fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+fn eager_builder_error(message: impl Into<String>) -> ADRuleError {
+    ADRuleError::invalid_input("tenferro-ad.eager", ADRuleKind::Transpose, message)
+}
+
+fn zero_like_tensor<B: TensorBackend>(
+    input: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
     let host = match input {
-        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::Bool(tensor) => Tensor::Bool(TypedTensor::from_vec_col_major(
             tensor.shape().to_vec(),
             vec![false; tensor.n_elements()],
-        )),
-        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
-        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
+        )?),
+        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())?),
+        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())?),
     };
-    backend
-        .upload_host_tensor(&host)
-        .unwrap_or_else(|err| panic!("eager primitive zero_like upload failed: {}", err))
+    backend.upload_host_tensor(&host)
 }
 
 #[cfg(test)]

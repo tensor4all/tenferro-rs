@@ -8,11 +8,11 @@ use crate::backend::ElementwiseFusionPlan;
 use crate::cubecl::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, ensure_resident_on_runtime,
 };
-use crate::cubecl::runtime::CubeclRuntime;
+use crate::cubecl::runtime::CudaRuntime;
 use crate::types::TypedTensor;
 
 pub(crate) fn launch<T>(
-    runtime: &CubeclRuntime,
+    runtime: &CudaRuntime,
     classified: ClassifiedFusion<'_, T>,
 ) -> crate::Result<Vec<TypedTensor<T>>>
 where
