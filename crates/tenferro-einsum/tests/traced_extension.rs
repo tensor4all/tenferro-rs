@@ -1,6 +1,7 @@
 #[cfg(feature = "autodiff")]
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
 
 #[test]
@@ -9,7 +10,7 @@ fn concrete_traced_einsum_executes_without_extension_runtime() {
     let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
+    let c = compiler.einsum(&[&a, &b], "iij,jk->ik").unwrap();
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -26,7 +27,7 @@ fn traced_binary_col_major_matmul_uses_direct_dot_general_without_extension_runt
     let b = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ji,kj->ki").unwrap();
+    let c = compiler.einsum(&[&a, &b], "ji,kj->ki").unwrap();
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -48,13 +49,13 @@ fn traced_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension
     let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b],
-        "ji,kj->ki",
-        tenferro_einsum::EinsumOptimize::Tree(tree),
-    )
-    .unwrap();
+    let c = compiler
+        .einsum_with(
+            &[&a, &b],
+            "ji,kj->ki",
+            tenferro_einsum::EinsumOptimize::Tree(tree),
+        )
+        .unwrap();
     let program = compiler.compile(&c).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -71,7 +72,7 @@ fn traced_einsum_final_permutation_can_return_lazy_value() {
         .unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let out = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a], "ij->ji").unwrap();
+    let out = compiler.einsum(&[&a], "ij->ji").unwrap();
     let program = compiler.compile(&out).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -104,13 +105,13 @@ fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_
     let tree = tenferro_einsum::ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let c = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b],
-        "ji,kj->ki",
-        tenferro_einsum::EinsumOptimize::Tree(tree),
-    )
-    .unwrap();
+    let c = compiler
+        .einsum_with(
+            &[&a, &b],
+            "ji,kj->ki",
+            tenferro_einsum::EinsumOptimize::Tree(tree),
+        )
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(&c, &[(&a, DType::F64, &[2, 3]), (&b, DType::F64, &[4, 2])])
         .unwrap();
@@ -147,8 +148,7 @@ fn runtime_einsum_caches_are_extension_owned() {
     let y = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let dot =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&x, &y], "iij,jk->ik").unwrap();
+    let dot = compiler.einsum(&[&x, &y], "iij,jk->ik").unwrap();
     let program = compiler
         .compile_with_input_specs(
             &dot,
@@ -179,13 +179,13 @@ fn traced_einsum_grad_uses_extension_ad_rule() {
         .unwrap();
     let mut compiler = GraphCompiler::new();
 
-    let y = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b],
-        "ij,jk->ik",
-        tenferro_einsum::EinsumOptimize::Path(vec![(0, 1)]),
-    )
-    .unwrap();
+    let y = compiler
+        .einsum_with(
+            &[&a, &b],
+            "ij,jk->ik",
+            tenferro_einsum::EinsumOptimize::Path(vec![(0, 1)]),
+        )
+        .unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).unwrap().grad(&a).unwrap();
     let program = compiler.compile(&grad_a).unwrap();
 

@@ -30,6 +30,7 @@ class GuideCase:
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::{EagerEinsumExt, GraphCompilerEinsumExt};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let mut compiler = GraphCompiler::new();
-    let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")?;
+    let c = compiler.einsum(&[&a, &b], "ij,jk->ik")?;
     let program = compiler.compile(&c)?;
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor.register_extension(tenferro_einsum::register_runtime)?;
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new();
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
-    let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij")?;
+    let outer = [&u, &v].einsum("i,j->ij")?;
     assert_eq!(outer.shape(), &[2, 3]);
 
     Ok(())
@@ -152,7 +153,7 @@ FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{traced_tensor, FftNorm};
+use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -166,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(4.0, 0.0),
         ],
     )?;
-    let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
+    let y = x.fft(None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

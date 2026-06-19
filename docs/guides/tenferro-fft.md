@@ -2,7 +2,7 @@
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
 crate imported directly alongside `tenferro-runtime`: users add the package,
-import its `traced_tensor` functions, and use them with `TracedTensor` graphs.
+import `TracedTensorFftExt`, and use FFT methods with `TracedTensor` graphs.
 
 The current implementation provides one-dimensional CPU-host transforms backed
 by `rustfft` through tenferro extension operations. The public functions are
@@ -48,7 +48,7 @@ normalization modes are:
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{traced_tensor, FftNorm};
+use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )
     .unwrap();
-    let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
+    let y = x.fft(None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

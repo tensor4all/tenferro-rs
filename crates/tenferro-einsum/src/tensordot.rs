@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::{DotGeneralConfig, TracedTensor};
 
-/// Axis specification for [`tensordot`](crate::traced_tensor::tensordot)
+/// Axis specification for [`TracedTensorEinsumExt::tensordot`](crate::TracedTensorEinsumExt::tensordot)
 /// contraction sugar.
 ///
 /// `Count(n)` contracts the last `n` axes of the left operand with the first

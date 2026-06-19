@@ -6,11 +6,8 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
-    traced_tensor, CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
-    TypedTensor,
+    CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
 };
-
-use tenferro_ad::eager_tensor;
 
 #[derive(Clone, Debug)]
 struct TestExtensionOp;
@@ -60,7 +57,7 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     let lhs = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs =
         TracedTensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
-    let y = traced_tensor::add(&lhs, &rhs).unwrap();
+    let y = lhs.add(&rhs).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
@@ -75,32 +72,32 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 }
 
 #[test]
-fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
+fn traced_tensor_methods_cover_core_elementwise_surface() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt).unwrap();
 
-    let _ = traced_tensor::sub(&x, &y).unwrap();
-    let _ = traced_tensor::mul(&x, &y).unwrap();
-    let _ = traced_tensor::div(&x, &y).unwrap();
-    let _ = traced_tensor::pow(&x, &y).unwrap();
-    let _ = traced_tensor::maximum(&x, &y).unwrap();
-    let _ = traced_tensor::minimum(&x, &y).unwrap();
-    let _ = traced_tensor::where_select(&cond, &x, &y).unwrap();
-    let _ = traced_tensor::clamp(&x, &y, &x).unwrap();
-    let _ = traced_tensor::neg(&x);
-    let _ = traced_tensor::abs(&x);
-    let _ = traced_tensor::sign(&x);
-    let _ = traced_tensor::conj(&x);
-    let _ = traced_tensor::exp(&x);
-    let _ = traced_tensor::log(&x);
-    let _ = traced_tensor::sin(&x);
-    let _ = traced_tensor::cos(&x);
-    let _ = traced_tensor::tanh(&x);
-    let _ = traced_tensor::sqrt(&x);
-    let _ = traced_tensor::rsqrt(&x);
-    let _ = traced_tensor::expm1(&x);
-    let _ = traced_tensor::log1p(&x);
+    let _ = x.sub(&y).unwrap();
+    let _ = x.mul(&y).unwrap();
+    let _ = x.div(&y).unwrap();
+    let _ = x.pow(&y).unwrap();
+    let _ = x.maximum(&y).unwrap();
+    let _ = x.minimum(&y).unwrap();
+    let _ = TracedTensor::where_select(&cond, &x, &y).unwrap();
+    let _ = x.clamp(&y, &x).unwrap();
+    let _ = x.neg();
+    let _ = x.abs();
+    let _ = x.sign();
+    let _ = x.conj();
+    let _ = x.exp();
+    let _ = x.log();
+    let _ = x.sin();
+    let _ = x.cos();
+    let _ = x.tanh();
+    let _ = x.sqrt();
+    let _ = x.rsqrt();
+    let _ = x.expm1();
+    let _ = x.log1p();
 }
 
 #[test]
@@ -150,10 +147,10 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
 fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt).unwrap();
     assert_eq!(cond.dtype, DType::Bool);
 
-    let selected = traced_tensor::where_select(&cond, &x, &y).unwrap();
+    let selected = TracedTensor::where_select(&cond, &x, &y).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let cond_program = compiler.compile(&cond).unwrap();
@@ -184,7 +181,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     )
     .unwrap();
 
-    let out = eager_tensor::add(&lhs, &rhs).unwrap();
+    let out = lhs.add(&rhs).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -198,7 +195,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 }
 
 #[test]
-fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
+fn eager_tensor_methods_cover_core_elementwise_surface() {
     let ctx = EagerRuntime::new();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
@@ -210,33 +207,33 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
         ctx,
     )
     .unwrap();
-    let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt).unwrap();
 
-    let _ = eager_tensor::sub(&x, &y).unwrap();
-    let _ = eager_tensor::mul(&x, &y).unwrap();
-    let _ = eager_tensor::div(&x, &y).unwrap();
-    let _ = eager_tensor::pow(&x, &y).unwrap();
-    let _ = eager_tensor::maximum(&x, &y).unwrap();
-    let _ = eager_tensor::minimum(&x, &y).unwrap();
-    let _ = eager_tensor::where_select(&cond, &x, &y).unwrap();
-    let _ = eager_tensor::clamp(&x, &y, &x).unwrap();
-    let _ = eager_tensor::neg(&x).unwrap();
-    let _ = eager_tensor::abs(&x).unwrap();
-    let _ = eager_tensor::sign(&x).unwrap();
-    let _ = eager_tensor::conj(&x).unwrap();
-    let _ = eager_tensor::exp(&x).unwrap();
-    let _ = eager_tensor::log(&x).unwrap();
-    let _ = eager_tensor::sin(&x).unwrap();
-    let _ = eager_tensor::cos(&x).unwrap();
-    let _ = eager_tensor::tanh(&x).unwrap();
-    let _ = eager_tensor::sqrt(&x).unwrap();
-    let _ = eager_tensor::rsqrt(&x).unwrap();
-    let _ = eager_tensor::expm1(&x).unwrap();
-    let _ = eager_tensor::log1p(&x).unwrap();
+    let _ = x.sub(&y).unwrap();
+    let _ = x.mul(&y).unwrap();
+    let _ = x.div(&y).unwrap();
+    let _ = x.pow(&y).unwrap();
+    let _ = x.maximum(&y).unwrap();
+    let _ = x.minimum(&y).unwrap();
+    let _ = EagerTensor::where_select(&cond, &x, &y).unwrap();
+    let _ = x.clamp(&y, &x).unwrap();
+    let _ = x.neg().unwrap();
+    let _ = x.abs().unwrap();
+    let _ = x.sign().unwrap();
+    let _ = x.conj().unwrap();
+    let _ = x.exp().unwrap();
+    let _ = x.log().unwrap();
+    let _ = x.sin().unwrap();
+    let _ = x.cos().unwrap();
+    let _ = x.tanh().unwrap();
+    let _ = x.sqrt().unwrap();
+    let _ = x.rsqrt().unwrap();
+    let _ = x.expm1().unwrap();
+    let _ = x.log1p().unwrap();
 }
 
 #[test]
-fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
+fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
@@ -244,7 +241,7 @@ fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
     )
     .unwrap();
 
-    let converted = eager_tensor::convert(&x, DType::C64).unwrap();
+    let converted = x.convert(DType::C64).unwrap();
     assert_eq!(converted.dtype(), DType::C64);
     assert_eq!(
         converted
@@ -255,27 +252,29 @@ fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
         &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
     );
 
-    let convert_err = eager_tensor::convert(&x, DType::I32).unwrap_err();
+    let convert_err = x.convert(DType::I32).unwrap_err();
     assert!(convert_err
         .to_string()
         .contains("unsupported dtype conversion"));
 
-    let casted = eager_tensor::cast(&x, DType::I32).unwrap();
+    let casted = x.cast(DType::I32).unwrap();
     assert_eq!(
         casted.materialized().unwrap().as_slice::<i32>().unwrap(),
         &[1, 2]
     );
 
-    let negated = eager_tensor::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
+    let negated = tenferro_ad::extension::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
     assert_eq!(
         negated.materialized().unwrap().as_slice::<f64>().unwrap(),
         &[-1.0, -2.0]
     );
 
-    let extension_err =
-        eager_tensor::apply_standard_op(StdTensorOp::Extension(Arc::new(TestExtensionOp)), &[&x])
-            .err()
-            .unwrap();
+    let extension_err = tenferro_ad::extension::apply_standard_op(
+        StdTensorOp::Extension(Arc::new(TestExtensionOp)),
+        &[&x],
+    )
+    .err()
+    .unwrap();
     assert!(
         extension_err
             .to_string()
@@ -293,7 +292,7 @@ fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
         ctx.clone(),
     )
     .unwrap();
-    let product = eager_tensor::matmul(&a, &b).unwrap();
+    let product = a.matmul(&b).unwrap();
     assert_eq!(product.shape(), &[2, 2]);
     assert_eq!(
         product.materialized().unwrap().as_slice::<f64>().unwrap(),
@@ -306,7 +305,7 @@ fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
         other_ctx,
     )
     .unwrap();
-    let err = eager_tensor::add(&x, &other).err().unwrap();
+    let err = x.add(&other).err().unwrap();
     assert!(matches!(err, tenferro_ad::Error::ContextMismatch { .. }));
 }
 
@@ -324,8 +323,8 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     )
     .unwrap();
 
-    let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
-    let selected = eager_tensor::where_select(&cond, &x, &y).unwrap();
+    let cond = x.compare(&y, CompareDir::Gt).unwrap();
+    let selected = EagerTensor::where_select(&cond, &x, &y).unwrap();
 
     assert_eq!(cond.dtype(), DType::Bool);
     assert_eq!(

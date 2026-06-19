@@ -31,6 +31,43 @@ use crate::optimize::{
 };
 use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes};
 
+/// Eager einsum extension methods for slices or arrays of [`EagerTensor`] refs.
+pub trait EagerEinsumExt {
+    fn einsum(&self, subscripts: &str) -> Result<EagerTensor>;
+    fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor>;
+}
+
+impl EagerEinsumExt for [&EagerTensor] {
+    fn einsum(&self, subscripts: &str) -> Result<EagerTensor> {
+        einsum(self, subscripts)
+    }
+
+    fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor> {
+        einsum_subscripts(self, subscripts)
+    }
+}
+
+impl<const N: usize> EagerEinsumExt for [&EagerTensor; N] {
+    fn einsum(&self, subscripts: &str) -> Result<EagerTensor> {
+        einsum(self.as_slice(), subscripts)
+    }
+
+    fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor> {
+        einsum_subscripts(self.as_slice(), subscripts)
+    }
+}
+
+/// Eager tensor contraction-sugar methods.
+pub trait EagerTensorEinsumExt {
+    fn tensordot(&self, rhs: &EagerTensor, axes: TensorDotAxes<'_>) -> Result<EagerTensor>;
+}
+
+impl EagerTensorEinsumExt for EagerTensor {
+    fn tensordot(&self, rhs: &EagerTensor, axes: TensorDotAxes<'_>) -> Result<EagerTensor> {
+        tensordot(self, rhs, axes)
+    }
+}
+
 /// Execute an einsum eagerly on [`EagerTensor`] values.
 ///
 /// # Examples
@@ -38,7 +75,7 @@ use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes
 /// ```
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_einsum::eager_tensor;
+/// use tenferro_einsum::EagerEinsumExt;
 /// use tenferro_tensor::Tensor;
 ///
 /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
@@ -50,7 +87,7 @@ use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     runtime,
 /// ).unwrap();
-/// let out = eager_tensor::einsum(&[&a, &b], "ij,jk->ik")?;
+/// let out = [&a, &b].einsum("ij,jk->ik")?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
@@ -67,7 +104,7 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// ```
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_einsum::{eager_tensor, parse_einsum_subscripts};
+/// use tenferro_einsum::{EagerEinsumExt, parse_einsum_subscripts};
 /// use tenferro_tensor::Tensor;
 ///
 /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
@@ -80,7 +117,7 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 ///     runtime,
 /// ).unwrap();
 /// let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
-/// let out = eager_tensor::einsum_subscripts(&[&a, &b], &subscripts)?;
+/// let out = [&a, &b].einsum_subscripts(&subscripts)?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
@@ -207,7 +244,7 @@ fn try_whole_program_untracked(
 /// ```
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_einsum::{eager_tensor, ContractionTree, Subscripts};
+/// use tenferro_einsum::{ContractionTree, Subscripts};
 /// use tenferro_tensor::Tensor;
 ///
 /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
@@ -221,7 +258,7 @@ fn try_whole_program_untracked(
 /// ).unwrap();
 /// let subs = Subscripts::parse("ij,jk->ik").unwrap();
 /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
-/// let out = eager_tensor::einsum_whole_program_untracked(&[&a, &b], &tree)?;
+/// let out = einsum_whole_program_untracked(&[&a, &b], &tree)?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
@@ -426,7 +463,7 @@ fn execute_eager_einsum_program(
             .collect::<Result<_>>()?;
         let input_refs: Vec<&EagerTensor> = input_values.iter().collect();
         let output =
-            tenferro_ad::eager_tensor::apply_standard_op(instr.operation.clone(), &input_refs)?;
+            tenferro_ad::extension::apply_standard_op(instr.operation.clone(), &input_refs)?;
         slots[instr.outputs[0]] = Some(output);
         instruction_idx += 1;
     }
@@ -688,7 +725,7 @@ fn infer_eager_output_shape(
 
 /// Execute a NumPy-style tensor contraction on [`EagerTensor`] values.
 ///
-/// This helper lives in the einsum extension namespace because it is
+/// This helper lives in the einsum extension trait surface because it is
 /// contraction sugar over `dot_general`, not a linear algebra facade.
 ///
 /// # Examples
@@ -697,7 +734,7 @@ fn infer_eager_output_shape(
 /// use tenferro_tensor::Tensor;
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
-/// use tenferro_einsum::{eager_tensor, TensorDotAxes};
+/// use tenferro_einsum::{EagerTensorEinsumExt, TensorDotAxes};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let lhs = EagerTensor::from_tensor_in(
@@ -708,7 +745,7 @@ fn infer_eager_output_shape(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let out = eager_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(1)).unwrap();
+/// let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 ///
 /// assert_eq!(out.shape(), &[2, 4]);
 /// ```

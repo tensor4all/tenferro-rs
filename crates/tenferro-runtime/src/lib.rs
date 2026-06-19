@@ -51,7 +51,6 @@ mod shape_packing;
 pub mod sym_dim;
 pub mod tensor;
 pub mod traced;
-pub mod traced_tensor;
 pub mod typed_tensor;
 
 pub use compiler::{CompilerOptions, OptimizerConfig};

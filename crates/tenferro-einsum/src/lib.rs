@@ -10,13 +10,12 @@
 //!   `"i->ii"` embeds a vector on a diagonal
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
-//! - **Tensordot sugar**: NumPy-style axis-pair contraction helpers in the
-//!   traced and eager tensor namespaces, implemented as contraction sugar
-//!   rather than as linear algebra APIs.
+//! - **Tensordot sugar**: NumPy-style axis-pair contraction extension methods,
+//!   implemented as contraction sugar rather than as linear algebra APIs.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
-//! - **Traced tensor namespace**: graph-building helpers are available under
-//!   `tenferro_einsum::traced_tensor`.
+//! - **Tensor extension traits**: graph-building helpers are available as
+//!   methods on `GraphCompiler`, eager input slices, and tensor receivers.
 //!
 //! # Examples
 //!
@@ -47,7 +46,7 @@ mod builder;
 mod cache;
 mod eager;
 #[cfg(feature = "autodiff")]
-pub mod eager_tensor;
+mod eager_ad;
 mod error;
 mod extension;
 pub mod lowering;
@@ -57,12 +56,13 @@ mod subscripts;
 mod syntax;
 mod tensordot;
 mod traced;
-pub mod traced_tensor;
 #[cfg(test)]
 mod typed_eager;
 pub(crate) mod util;
 
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
+#[cfg(feature = "autodiff")]
+pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
 pub use error::{Error, Result};
 #[cfg(feature = "autodiff")]
 pub use extension::ad_rules;
@@ -73,6 +73,7 @@ pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
+pub use traced::{GraphCompilerEinsumExt, TracedTensorEinsumExt};
 
 #[cfg(test)]
 mod tests;

@@ -101,18 +101,18 @@ print("</ul>")
 PY
 }
 
-echo "[1/8] Checking user-facing snippets"
+echo "[1/9] Checking user-facing snippets"
 python3 "$ROOT_DIR/scripts/check-doc-snippets.py" --root-dir "$ROOT_DIR" --check
 python3 "$ROOT_DIR/scripts/check-guide-dependency-snippets.py" --root-dir "$ROOT_DIR"
 
-echo "[2/8] Building rustdoc"
+echo "[2/9] Building rustdoc"
 rm -rf "$DOC_ROOT"
 cargo doc --workspace --no-deps
 
-echo "[3/8] Copying rustdoc output"
+echo "[3/9] Copying rustdoc output"
 cp -a "$DOC_ROOT/." "$API_DIR/"
 
-echo "[4/8] Generating optional dependency graph"
+echo "[4/9] Generating optional dependency graph"
 if [[ -x "$ROOT_DIR/scripts/gen_dep_graph.py" || -f "$ROOT_DIR/scripts/gen_dep_graph.py" ]]; then
   if command -v dot >/dev/null 2>&1; then
     python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" | dot -Tsvg > "$API_DIR/dep_graph.svg"
@@ -127,7 +127,7 @@ else
   echo "  No scripts/gen_dep_graph.py found; skipping dependency graph."
 fi
 
-echo "[5/8] Rendering API landing page"
+echo "[5/9] Rendering API landing page"
 OVERVIEW_HTML="$(render_overview_html)"
 CRATE_INVENTORY_HTML="$(render_crate_inventory_html)"
 {
@@ -161,7 +161,7 @@ HEADER
 FOOTER
 } >"$API_DIR/index.html"
 
-echo "[6/8] Rendering design docs if configured"
+echo "[6/9] Rendering design docs if configured"
 if [[ -f "$ROOT_DIR/docs/_quarto.yml" ]]; then
   if command -v quarto >/dev/null 2>&1; then
     quarto render "$ROOT_DIR/docs"
@@ -176,10 +176,13 @@ else
   echo "  No docs/_quarto.yml found; skipping design docs render."
 fi
 
-echo "[7/8] Verifying docs site links and API inventory"
+echo "[7/9] Checking rendered operation surface references"
+python3 "$ROOT_DIR/scripts/check-operation-categories.py" --fail-on-findings --include-rendered
+
+echo "[8/9] Verifying docs site links and API inventory"
 python3 "$ROOT_DIR/scripts/check-docs-site.py" --root-dir "$ROOT_DIR" --site-index "$API_DIR/index.html"
 
-echo "[8/8] Verifying site top page"
+echo "[9/9] Verifying site top page"
 REPO_TITLE="$(basename "$ROOT_DIR")"
 if [[ -f "$OUT_DIR/index.html" ]]; then
   echo "  Using Quarto-rendered site index."

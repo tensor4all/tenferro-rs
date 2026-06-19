@@ -12,6 +12,8 @@ once with three. No re-trace or recompile is needed between the two executions.
 <!-- snippet-source: docs/tutorial-code/src/bin/dynamic_shape_truncated_svd.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{
     CompareDir, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
 };
@@ -71,7 +73,7 @@ fn run_case(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4])?;
-    let (u, s, vt) = tenferro_linalg::traced_tensor::svd_with_eps(&x, 1.0e-12)?;
+    let (u, s, vt) = x.svd_with_eps(1.0e-12)?;
 
     let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s
@@ -84,8 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vt_truncated = vt.dynamic_truncate(&keep_count, 0)?;
 
     let mut compiler = GraphCompiler::new();
-    let reconstructed = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
+    let reconstructed = compiler.einsum_with(
         &[&u_truncated, &s_truncated, &vt_truncated],
         "ik,k,kj->ij",
         tenferro_einsum::EinsumOptimize::Path(vec![(0, 1), (0, 1)]),

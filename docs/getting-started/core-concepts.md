@@ -84,8 +84,8 @@ project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
 Einsum is provided by the `tenferro-einsum` standard extension. Traced code
-uses `tenferro_einsum::traced_tensor::einsum` and registers
-`tenferro_einsum::register_runtime` on the executor.
+uses `GraphCompilerEinsumExt` and registers `tenferro_einsum::register_runtime`
+on the executor.
 
 ## Eager Execution And Backward
 

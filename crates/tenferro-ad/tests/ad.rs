@@ -23,7 +23,6 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::compile_std_to_exec;
 use tenferro_runtime::extension::{infer_output_dtype, infer_output_extents};
-use tenferro_runtime::traced_tensor::{self, matmul};
 use tenferro_runtime::{GraphExecutor, TracedTensor};
 use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
@@ -917,7 +916,7 @@ fn grad_matmul_sum() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
-    let loss = matmul(&a, &b).unwrap().reduce_sum(&[0, 1]).unwrap();
+    let loss = a.matmul(&b).unwrap().reduce_sum(&[0, 1]).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
@@ -929,7 +928,7 @@ fn grad_matmul_sum() {
             TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec())).unwrap();
         let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()))
             .unwrap();
-        eval_scalar(matmul(&a, &b).unwrap().reduce_sum(&[0, 1]).unwrap())
+        eval_scalar(a.matmul(&b).unwrap().reduce_sum(&[0, 1]).unwrap())
     };
 
     for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
@@ -1282,7 +1281,7 @@ fn elementwise_extrema_ties_split_cotangents_like_jax() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![30.0, 40.0])).unwrap();
     let cotangent =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 6.0])).unwrap();
-    let maximum = traced_tensor::maximum(&x, &y).unwrap();
+    let maximum = x.maximum(&y).unwrap();
 
     let max_jvp_x = maximum.jvp(&x, &dx).unwrap();
     let max_jvp_y = maximum.jvp(&y, &dy).unwrap();
@@ -1293,7 +1292,7 @@ fn elementwise_extrema_ties_split_cotangents_like_jax() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
     let min_rhs =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 4.0])).unwrap();
-    let minimum = traced_tensor::minimum(&min_lhs, &min_rhs).unwrap();
+    let minimum = min_lhs.minimum(&min_rhs).unwrap();
     let min_vjp_lhs = minimum.vjp(&min_lhs, &cotangent).unwrap();
     let min_vjp_rhs = minimum.vjp(&min_rhs, &cotangent).unwrap();
 
@@ -1342,7 +1341,7 @@ fn clamp_ad_uses_strict_jax_boundary_masks() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![10.0, 20.0, 30.0, 40.0]))
             .unwrap();
 
-    let clamped = traced_tensor::clamp(&input, &lower, &upper).unwrap();
+    let clamped = input.clamp(&lower, &upper).unwrap();
     let input_jvp = clamped.jvp(&input, &d_input).unwrap();
     let lower_jvp = clamped.jvp(&lower, &d_lower).unwrap();
     let upper_jvp = clamped.jvp(&upper, &d_upper).unwrap();

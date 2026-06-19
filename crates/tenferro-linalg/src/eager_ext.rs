@@ -7,6 +7,92 @@ use tenferro_ad::EagerTensor;
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 use crate::register_runtime;
 
+/// Linear algebra extension methods for [`EagerTensor`].
+pub trait EagerTensorLinalgExt {
+    fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
+    fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
+    fn full_piv_lu(
+        &self,
+    ) -> Result<(
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+    )>;
+    fn full_piv_lu_solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    fn cholesky(&self) -> Result<EagerTensor>;
+    fn eigh(&self) -> Result<(EagerTensor, EagerTensor)>;
+    fn eig(&self) -> Result<(EagerTensor, EagerTensor)>;
+    fn triangular_solve(
+        &self,
+        b: &EagerTensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<EagerTensor>;
+}
+
+impl EagerTensorLinalgExt for EagerTensor {
+    fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+        svd(self)
+    }
+
+    fn qr(&self) -> Result<(EagerTensor, EagerTensor)> {
+        qr(self)
+    }
+
+    fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
+        lu(self)
+    }
+
+    fn full_piv_lu(
+        &self,
+    ) -> Result<(
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+    )> {
+        full_piv_lu(self)
+    }
+
+    fn full_piv_lu_solve(&self, b: &EagerTensor) -> Result<EagerTensor> {
+        full_piv_lu_solve(self, b)
+    }
+
+    fn solve(&self, b: &EagerTensor) -> Result<EagerTensor> {
+        solve(self, b)
+    }
+
+    fn cholesky(&self) -> Result<EagerTensor> {
+        cholesky(self)
+    }
+
+    fn eigh(&self) -> Result<(EagerTensor, EagerTensor)> {
+        eigh(self)
+    }
+
+    fn eig(&self) -> Result<(EagerTensor, EagerTensor)> {
+        eig(self)
+    }
+
+    fn triangular_solve(
+        &self,
+        b: &EagerTensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<EagerTensor> {
+        triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+}
+
 fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     if let Some(first) = inputs.first() {
         first
@@ -23,13 +109,14 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (_u, s, _vt) = tenferro_linalg::eager_tensor::svd(&a)?;
+/// let (_u, s, _vt) = a.svd()?;
 /// assert_eq!(s.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -54,13 +141,14 @@ pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (q, r) = tenferro_linalg::eager_tensor::qr(&a)?;
+/// let (q, r) = a.qr()?;
 /// assert_eq!(q.shape(), &[2, 2]);
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -75,13 +163,14 @@ pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (_p, l, u, parity) = tenferro_linalg::eager_tensor::lu(&a)?;
+/// let (_p, l, u, parity) = a.lu()?;
 /// assert_eq!(l.shape(), &[2, 2]);
 /// assert_eq!(u.shape(), &[2, 2]);
 /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -114,13 +203,14 @@ pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, Eag
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (p, _l, _u, q, parity) = tenferro_linalg::eager_tensor::full_piv_lu(&a)?;
+/// let (p, _l, _u, q, parity) = a.full_piv_lu()?;
 /// assert_eq!(p.shape(), &[2, 2]);
 /// assert_eq!(q.shape(), &[2, 2]);
 /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -157,6 +247,7 @@ pub fn full_piv_lu(
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
@@ -167,7 +258,7 @@ pub fn full_piv_lu(
 ///     Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let x = tenferro_linalg::eager_tensor::full_piv_lu_solve(&a, &b)?;
+/// let x = a.full_piv_lu_solve(&b)?;
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -184,6 +275,7 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
@@ -194,7 +286,7 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 ///     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let x = tenferro_linalg::eager_tensor::solve(&a, &b)?;
+/// let x = a.solve(&b)?;
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -231,13 +323,14 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let l = tenferro_linalg::eager_tensor::cholesky(&a)?;
+/// let l = a.cholesky()?;
 /// assert_eq!(l.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -251,13 +344,14 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (values, vectors) = tenferro_linalg::eager_tensor::eigh(&a)?;
+/// let (values, vectors) = a.eigh()?;
 /// assert_eq!(values.shape(), &[2]);
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -275,13 +369,14 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (values, vectors) = tenferro_linalg::eager_tensor::eig(&a)?;
+/// let (values, vectors) = a.eig()?;
 /// assert_eq!(values.shape(), &[2]);
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -304,6 +399,7 @@ pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
@@ -314,9 +410,7 @@ pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///     Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let x = tenferro_linalg::eager_tensor::triangular_solve(
-///     &a, &b, true, true, false, false,
-/// )?;
+/// let x = a.triangular_solve(&b, true, true, false, false)?;
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```

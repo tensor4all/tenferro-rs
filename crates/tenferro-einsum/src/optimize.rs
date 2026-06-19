@@ -23,15 +23,14 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_einsum::EinsumOptimize;
+/// use tenferro_einsum::{EinsumOptimize, GraphCompilerEinsumExt};
 /// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
 /// let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
-/// let out = tenferro_einsum::traced_tensor::einsum_with(
-///     &mut compiler,
+/// let out = compiler.einsum_with(
 ///     &[&lhs, &rhs],
 ///     "ij,jk->ik",
 ///     EinsumOptimize::False,

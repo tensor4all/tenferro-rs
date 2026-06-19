@@ -114,5 +114,6 @@ jobs:
           python3 scripts/test-doc-consistency.py
           python3 scripts/test-repository-rules-review.py
           python3 scripts/check-guide-dependency-snippets.py
+          python3 scripts/check-operation-categories.py --fail-on-findings
       - name: Build docs site
         run: bash scripts/build_docs_site.sh

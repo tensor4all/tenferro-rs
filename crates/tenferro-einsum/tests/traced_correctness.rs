@@ -6,6 +6,8 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::EinsumOptimize;
+use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_einsum::TracedTensorEinsumExt;
 use tenferro_einsum::{
     ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
 };
@@ -53,9 +55,7 @@ fn einsum<C: TestEinsumContext>(
     inputs: &[&TracedTensor],
     subscripts: &str,
 ) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| {
-        tenferro_einsum::traced_tensor::einsum(compiler, inputs, subscripts)
-    })
+    ctx.with_compiler(|compiler| compiler.einsum(inputs, subscripts))
 }
 
 fn einsum_with<C: TestEinsumContext>(
@@ -64,9 +64,7 @@ fn einsum_with<C: TestEinsumContext>(
     subscripts: &str,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| {
-        tenferro_einsum::traced_tensor::einsum_with(compiler, inputs, subscripts, optimize)
-    })
+    ctx.with_compiler(|compiler| compiler.einsum_with(inputs, subscripts, optimize))
 }
 
 trait RunTraced {
@@ -144,17 +142,17 @@ fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
 // ============================================================================
 
 #[test]
-fn traced_tensor_namespace_exposes_einsum() {
+fn graph_compiler_einsum_ext_exposes_einsum() {
     let mut compiler = GraphCompiler::new();
     let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let y = compiler.einsum(&[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(y.rank, 2);
 }
 
 #[test]
-fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
+fn traced_tensor_einsum_ext_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
     let lhs = TracedTensor::from_vec_col_major(
         vec![2, 3, 4],
         (1..=24).map(f64::from).collect::<Vec<_>>(),
@@ -166,8 +164,7 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
     )
     .unwrap();
 
-    let out =
-        tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
+    let out = lhs.tensordot(&rhs, TensorDotAxes::Count(2)).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let result = out.run_with(&mut executor).unwrap();
 
@@ -179,21 +176,21 @@ fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axe
 }
 
 #[test]
-fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
+fn traced_tensor_einsum_ext_tensordot_explicit_axes_accept_negative_indices() {
     let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
         .unwrap();
     let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
         .unwrap();
 
-    let out = tenferro_einsum::traced_tensor::tensordot(
-        &lhs,
-        &rhs,
-        TensorDotAxes::Axes {
-            lhs: &[-1],
-            rhs: &[0],
-        },
-    )
-    .unwrap();
+    let out = lhs
+        .tensordot(
+            &rhs,
+            TensorDotAxes::Axes {
+                lhs: &[-1],
+                rhs: &[0],
+            },
+        )
+        .unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let result = out.run_with(&mut executor).unwrap();
 
@@ -202,12 +199,11 @@ fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
 }
 
 #[test]
-fn traced_tensor_namespace_tensordot_rejects_invalid_axes() {
+fn traced_tensor_einsum_ext_tensordot_rejects_invalid_axes() {
     let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
 
-    let duplicate = match tenferro_einsum::traced_tensor::tensordot(
-        &lhs,
+    let duplicate = match lhs.tensordot(
         &rhs,
         TensorDotAxes::Axes {
             lhs: &[0, 0],
@@ -219,15 +215,13 @@ fn traced_tensor_namespace_tensordot_rejects_invalid_axes() {
     };
     assert!(duplicate.to_string().contains("duplicate lhs axis"));
 
-    let out_of_bounds =
-        match tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(3)) {
-            Ok(_) => panic!("expected Count(3) tensordot axis error"),
-            Err(err) => err,
-        };
+    let out_of_bounds = match lhs.tensordot(&rhs, TensorDotAxes::Count(3)) {
+        Ok(_) => panic!("expected Count(3) tensordot axis error"),
+        Err(err) => err,
+    };
     assert!(out_of_bounds.to_string().contains("Count(3)"));
 
-    let explicit_out_of_bounds = match tenferro_einsum::traced_tensor::tensordot(
-        &lhs,
+    let explicit_out_of_bounds = match lhs.tensordot(
         &rhs,
         TensorDotAxes::Axes {
             lhs: &[2],
@@ -515,13 +509,13 @@ fn einsum_symbolic_explicit_path_matches_static_execution() {
     let b_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let c_symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
-    let actual = einsum_with(
-        &mut compiler,
-        &[&a_symbolic, &b_symbolic, &c_symbolic],
-        "ij,jk,kl->il",
-        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
-    )
-    .unwrap();
+    let actual = compiler
+        .einsum_with(
+            &[&a_symbolic, &b_symbolic, &c_symbolic],
+            "ij,jk,kl->il",
+            EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+        )
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &actual,
@@ -565,7 +559,7 @@ fn einsum_cache_reuses_contraction_path() {
     ))
     .unwrap();
 
-    let c1 = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").unwrap();
+    let c1 = compiler.einsum(&[&a, &b], "iij,jk->ik").unwrap();
     assert_eq!(c1.rank, 2);
     let entries_after_first = extension_cache_entries(&compiler);
     assert!(entries_after_first >= 2);
@@ -581,7 +575,7 @@ fn einsum_cache_reuses_contraction_path() {
     ))
     .unwrap();
 
-    let c2 = einsum(&mut compiler, &[&a2, &b2], "iij,jk->ik").unwrap();
+    let c2 = compiler.einsum(&[&a2, &b2], "iij,jk->ik").unwrap();
     assert_eq!(c2.rank, 2);
     assert_eq!(extension_cache_entries(&compiler), entries_after_first);
 
@@ -596,7 +590,7 @@ fn einsum_cache_reuses_contraction_path() {
     ))
     .unwrap();
 
-    let c3 = einsum(&mut compiler, &[&a3, &b3], "iij,jk->ik").unwrap();
+    let c3 = compiler.einsum(&[&a3, &b3], "iij,jk->ik").unwrap();
     assert_eq!(c3.rank, 2);
     assert!(extension_cache_entries(&compiler) > entries_after_first);
 }

@@ -24,8 +24,8 @@ Choose the tensor API first, then choose the operation entry point.
 | --- | --- | --- | --- |
 | `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; selected `tenferro_runtime::typed_tensor` wrappers for dynamic-rank `TypedTensor<T>` | No |
 | `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `tenferro_runtime::tensor` functions with an explicit backend | No |
-| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `tenferro_ad::eager_tensor` functions and methods | Yes, for tracked values |
-| `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `tenferro_runtime::traced_tensor` functions and methods | Yes, through graph transforms |
+| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `EagerTensor` methods and associated functions | Yes, for tracked values |
+| `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `TracedTensor` methods and associated functions | Yes, through graph transforms |
 
 For most code without autodiff, start with `TypedTensor<T, R>` when the scalar type is
 known in Rust, and use `Tensor` when the dtype must remain dynamic. `Tensor`
@@ -242,12 +242,12 @@ Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{traced_tensor, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
-let sum = traced_tensor::add(&a, &b);
-let product = traced_tensor::mul(&a, &b);
+let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+let sum = (&a + &b).unwrap();
+let product = (&a * &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile_many(&[&sum, &product]).unwrap();
@@ -261,11 +261,11 @@ assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ## Elementwise Math Functions
 
 ```rust
-use tenferro_ad::{eager_tensor, EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = eager_tensor::exp(&x).unwrap();
+let y = x.exp().unwrap();
 
 let data = y.materialized().unwrap().as_slice::<f64>().unwrap();
 

@@ -1,8 +1,7 @@
 # Operation Categories And Surface Parity
 
-**Status:** draft contract, to be ratified and implemented (see the operation-category
-issue). This document is the **user-facing** operation contract. It is fixed here
-*before* implementation so the public surface grows by spec, not ad hoc.
+**Status:** v0.1 public-surface contract. This document is the **user-facing**
+operation contract so the public surface grows by spec, not ad hoc.
 
 Related:
 
@@ -24,6 +23,17 @@ Related:
 and `DynRank` (default). `DynRank` is the canonical rank for AD and traced execution
 (`TracedTensor`/`EagerTensor` are rank-erased); do not push const-generic `Rank<N>`
 through the AD/traced surfaces. This is current design intent, not a frozen contract.
+
+**API style.** Core AD operations on `EagerTensor` and `TracedTensor` are methods
+or associated functions, not module free functions. Single-output operations use
+methods (`x.exp()`, `x.matmul(&y)`, `x.gather(&idx, config)`); operations with no
+natural receiver use associated functions (`TracedTensor::concatenate(...)`,
+`EagerTensor::where_select(...)`). Non-AD concrete operations stay as
+backend-explicit module functions on `tenferro_runtime::tensor` and selected
+`typed_tensor` wrappers. Extension families use crate-root extension traits
+because Rust does not let extension crates add inherent methods to external
+tensor types: linalg/FFT are tensor receiver methods, eager einsum is an input
+slice/array method, and traced einsum is a `GraphCompiler` method.
 
 **Parity rule (the core of the contract):** every operation in the Elementwise,
 Reductions, Shape/structural, and Indexing categories **must be exposed on both
@@ -52,10 +62,10 @@ an extension crate.
 | `abs` `sign` | ✅ | ✅ | |
 | `conj` | ✅ | ✅ | complex |
 | `pow` | ✅ | ✅ | |
-| `compare(dir)` | · | ✅ | produces `Bool` |
-| `select` | ✅ | ⬜ | gap on Traced |
-| `clamp` | ✅ | ⬜ | gap on Traced |
-| `maximum` `minimum` | ✅ | ⬜ | gap on Traced |
+| `compare(dir)` | ✅ | ✅ | produces `Bool` |
+| `select` / `where_select` | ✅ | ✅ | associated function |
+| `clamp` | ✅ | ✅ | |
+| `maximum` `minimum` | ✅ | ✅ | |
 
 ## 3. Elementwise — analytic (ufunc catalog)
 
@@ -67,7 +77,7 @@ surfaces — see Section 10.
 |---|---|---|
 | `exp` `log` `sin` `cos` `tanh` `sqrt` `rsqrt` | ✅ | ✅ |
 | `expm1` (`expm`) | ✅ | ✅ |
-| `log1p` | · | · |
+| `log1p` | ✅ | ✅ |
 
 **Parallelism.** The elementwise categories (2 and 3) are embarrassingly parallel.
 Their CPU kernels are data-parallel via rayon behind the `parallel` feature (the
@@ -90,11 +100,11 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 | `reshape` | ✅ | ✅ | Traced also `reshape_sym` |
 | `transpose` / `permute` | ✅ | ✅ | |
 | `broadcast` / `broadcast_in_dim` | ✅ | ✅ | Traced also `_sym` |
-| `concatenate` | ✅ | ⬜ | op exists in vocabulary; Traced method missing |
-| `stack` | ✅ | ⬜ | currently only via `shape_packing` (`dim: isize`); needs a clean general form |
+| `concatenate` | ✅ | ✅ | associated function |
+| `stack` | ✅ | ✅ | associated function (`dim: isize`) |
 | `split` | ⬜ | ⬜ | |
-| `pad` | ✅ | ⬜ | Traced only has `pad_to_match`; needs general `pad` |
-| `reverse` / `flip` | ✅ | ⬜ | gap on Traced |
+| `pad` | ✅ | ✅ | |
+| `reverse` / `flip` | ✅ | ✅ | |
 | `repeat` / `tile` | ⬜ | ⬜ | |
 
 ## 5a. DType / value conversion
@@ -108,21 +118,21 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 
 | Operation | Eager | Traced | Notes |
 |---|---|---|---|
-| `slice` | ✅ | ⬜ | Traced has `dynamic_truncate`, not general `slice` |
-| `dynamic_slice` | ✅ | ⬜ | |
+| `slice` | ✅ | ✅ | |
+| `dynamic_slice` | ✅ | ✅ | |
 | `dynamic_update_slice` | · | · | |
-| `gather` | ✅ | ⬜ | |
-| `scatter` | ✅ | ⬜ | |
+| `gather` | ✅ | ✅ | |
+| `scatter` | ✅ | ✅ | |
 | `take` | · | · | |
 | `extract_diag` / `embed_diag` | ✅ | ✅ | |
-| `tril` / `triu` | ✅ | ⬜ | |
+| `tril` / `triu` | ✅ | ✅ | |
 
 ## 7. Contraction core
 
 | Operation | Eager | Traced |
 |---|---|---|
 | `dot_general` | ✅ | ✅ |
-| `matmul` (sugar over `dot_general`) | ✅ | ⬜ |
+| `matmul` (rank-2 sugar over `dot_general`) | ✅ | ✅ |
 
 ## 8. Extension operation families
 
@@ -130,9 +140,13 @@ Provided by extension crates, operating on the same tensor types on both the eag
 and traced surfaces (subject to the same parity rule within each family):
 
 - **Linalg** (`tenferro-linalg`): `svd`, `qr`, `eig`, `eigh`, `solve`,
-  `triangular_solve`, `cholesky`, `lu`, `full_piv_lu`.
+  `triangular_solve`, `cholesky`, `lu`, `full_piv_lu` through
+  `TracedTensorLinalgExt` / `EagerTensorLinalgExt`.
 - **Einsum** (`tenferro-einsum`): `einsum` + contraction planning.
-- **FFT** (`tenferro-fft`): `fft`, `rfft`, `irfft`.
+  Traced graph construction uses `GraphCompilerEinsumExt`; eager inputs use
+  `EagerEinsumExt`; `tensordot` sugar uses tensor extension traits.
+- **FFT** (`tenferro-fft`): `fft`, `rfft`, `irfft` through
+  `TracedTensorFftExt`.
 
 ## 9. AD transforms
 

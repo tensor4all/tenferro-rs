@@ -4,6 +4,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
+use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
@@ -147,7 +148,7 @@ fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
     ))
     .unwrap();
 
-    let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
+    let (_u, s, _vt) = a.svd().unwrap();
     let y = s.reduce_sum(&[0]).unwrap();
     let dy = ad.jvp(&y, &a, &da).unwrap();
     let out = eval(&dy);
@@ -165,7 +166,7 @@ fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0])).unwrap();
 
-    let x = tenferro_linalg::traced_tensor::full_piv_lu_solve(&a, &b).unwrap();
+    let x = a.full_piv_lu_solve(&b).unwrap();
     let loss = x.reduce_sum(&[0, 1]).unwrap();
     let grad_b = ad.grad(&loss, &b).unwrap();
     let out = eval(&grad_b);
@@ -178,7 +179,7 @@ fn full_piv_lu_solve_grad_rejects_rank1_operands_without_panic() {
     let ad = ad_context();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 9.0])).unwrap();
-    let x = tenferro_linalg::traced_tensor::full_piv_lu_solve(&a, &b).unwrap();
+    let x = a.full_piv_lu_solve(&b).unwrap();
     let loss = reduce_all(&x);
 
     let result = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
@@ -196,8 +197,7 @@ fn triangular_solve_grad_rejects_rank1_operands_without_panic() {
     let ad = ad_context();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 9.0])).unwrap();
-    let x =
-        tenferro_linalg::traced_tensor::triangular_solve(&a, &b, true, true, false, false).unwrap();
+    let x = a.triangular_solve(&b, true, true, false, false).unwrap();
     let loss = reduce_all(&x);
 
     let result = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
@@ -225,7 +225,7 @@ fn full_piv_lu_solve_jvp_rejects_non_square_lhs_without_panic() {
         vec![0.1, 0.0, 0.0, 0.0, 0.1, 0.0],
     ))
     .unwrap();
-    let x = tenferro_linalg::traced_tensor::full_piv_lu_solve(&a, &b).unwrap();
+    let x = a.full_piv_lu_solve(&b).unwrap();
     let loss = reduce_all(&x);
 
     let result = catch_unwind(AssertUnwindSafe(|| ad.jvp(&loss, &a, &da)));
@@ -248,8 +248,7 @@ fn triangular_solve_jvp_rejects_non_square_lhs_without_panic() {
         vec![0.1, 0.0, 0.0, 0.0, 0.1, 0.0],
     ))
     .unwrap();
-    let x =
-        tenferro_linalg::traced_tensor::triangular_solve(&a, &b, true, true, false, false).unwrap();
+    let x = a.triangular_solve(&b, true, true, false, false).unwrap();
     let loss = reduce_all(&x);
 
     let result = catch_unwind(AssertUnwindSafe(|| ad.jvp(&loss, &a, &da)));
@@ -263,7 +262,7 @@ fn svd_values_grad_matches_finite_diff() {
     let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone())).unwrap();
 
-    let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
+    let (_u, s, _vt) = a.svd().unwrap();
     let loss = s.reduce_sum(&[0]).unwrap();
     let grad = ad.grad(&loss, &a).unwrap();
     let out = eval(&grad);
@@ -276,7 +275,7 @@ fn svd_values_grad_matches_finite_diff() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                         .unwrap();
-                let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&input).unwrap();
+                let (_u, s, _vt) = input.svd().unwrap();
                 get_f64_data(&eval(&s.reduce_sum(&[0]).unwrap()))[0]
             },
             &data,
@@ -303,8 +302,7 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], tangent_data.clone()))
             .unwrap();
 
-    let norm =
-        tenferro_linalg::traced_tensor::norm(&matrix, Some(2.0), Some(&[0, 1]), false).unwrap();
+    let norm = matrix.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
     let actual = eval(&ad.jvp(&norm, &matrix, &tangent).unwrap());
 
     assert_close_scalar(
@@ -315,9 +313,7 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                         .unwrap();
-                let norm =
-                    tenferro_linalg::traced_tensor::norm(&input, Some(2.0), Some(&[0, 1]), false)
-                        .unwrap();
+                let norm = input.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
                 get_f64_data(&eval(&norm))[0]
             },
             &data,
@@ -355,35 +351,35 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
     let drhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], drhs_data.clone()))
         .unwrap();
 
-    let chol_loss = reduce_all(&tenferro_linalg::traced_tensor::cholesky(&spd).unwrap());
+    let chol_loss = reduce_all(&spd.cholesky().unwrap());
     let chol_tangent = ad.jvp(&chol_loss, &spd, &dspd).unwrap();
 
-    let (q, r) = tenferro_linalg::traced_tensor::qr(&general).unwrap();
+    let (q, r) = general.qr().unwrap();
     let qr_loss = (&reduce_all(&q) + &reduce_all(&r)).unwrap();
     let qr_tangent = ad.jvp(&qr_loss, &general, &dgeneral).unwrap();
 
-    let (eigh_values, _eigh_vectors) = tenferro_linalg::traced_tensor::eigh(&spd).unwrap();
+    let (eigh_values, _eigh_vectors) = spd.eigh().unwrap();
     let eigh_loss = reduce_all(&eigh_values);
     let eigh_tangent = ad.jvp(&eigh_loss, &spd, &dspd).unwrap();
 
-    let (eig_values, _eig_vectors) = tenferro_linalg::traced_tensor::eig(&general).unwrap();
+    let (eig_values, _eig_vectors) = general.eig().unwrap();
     let eig_loss = reduce_all(&eig_values);
     let eig_tangent = ad.jvp(&eig_loss, &general, &dgeneral).unwrap();
 
-    let solve_loss = reduce_all(&tenferro_linalg::traced_tensor::solve(&general, &rhs).unwrap());
+    let solve_loss = reduce_all(&general.solve(&rhs).unwrap());
     let solve_tangent = ad.jvp(&solve_loss, &rhs, &drhs).unwrap();
     let triangular_loss = reduce_all(
-        &tenferro_linalg::traced_tensor::triangular_solve(&general, &rhs, true, true, false, false)
+        &general
+            .triangular_solve(&rhs, true, true, false, false)
             .unwrap(),
     );
     let triangular_tangent = ad.jvp(&triangular_loss, &rhs, &drhs).unwrap();
 
-    let (_p, lu_l, lu_u, _parity) = tenferro_linalg::traced_tensor::lu(&general).unwrap();
+    let (_p, lu_l, lu_u, _parity) = general.lu().unwrap();
     let lu_loss = (&reduce_all(&lu_l) + &reduce_all(&lu_u)).unwrap();
     let lu_tangent = ad.jvp(&lu_loss, &general, &dgeneral).unwrap();
 
-    let (_p, full_lu_l, full_lu_u, _q, _full_parity) =
-        tenferro_linalg::traced_tensor::full_piv_lu(&general).unwrap();
+    let (_p, full_lu_l, full_lu_u, _q, _full_parity) = general.full_piv_lu().unwrap();
     let full_lu_loss = (&reduce_all(&full_lu_l) + &reduce_all(&full_lu_u)).unwrap();
     let full_lu_tangent = ad.jvp(&full_lu_loss, &general, &dgeneral).unwrap();
 
@@ -407,7 +403,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let loss = reduce_all(&tenferro_linalg::traced_tensor::cholesky(&input).unwrap());
+                let loss = reduce_all(&input.cholesky().unwrap());
                 get_f64_data(&eval(&loss))[0]
             },
             &spd_data,
@@ -424,7 +420,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let (q, r) = tenferro_linalg::traced_tensor::qr(&input).unwrap();
+                let (q, r) = input.qr().unwrap();
                 let loss = (&reduce_all(&q) + &reduce_all(&r)).unwrap();
                 get_f64_data(&eval(&loss))[0]
             },
@@ -442,7 +438,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let (values, _vectors) = tenferro_linalg::traced_tensor::eigh(&input).unwrap();
+                let (values, _vectors) = input.eigh().unwrap();
                 get_f64_data(&eval(&reduce_all(&values)))[0]
             },
             &spd_data,
@@ -459,7 +455,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let (values, _vectors) = tenferro_linalg::traced_tensor::eig(&input).unwrap();
+                let (values, _vectors) = input.eig().unwrap();
                 get_c64_data(&eval(&reduce_all(&values)))[0]
             },
             &general_data,
@@ -476,8 +472,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let rhs =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], xs.to_vec()))
                         .unwrap();
-                let loss =
-                    reduce_all(&tenferro_linalg::traced_tensor::solve(&general, &rhs).unwrap());
+                let loss = reduce_all(&general.solve(&rhs).unwrap());
                 get_f64_data(&eval(&loss))[0]
             },
             &rhs_data,
@@ -495,10 +490,9 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], xs.to_vec()))
                         .unwrap();
                 let loss = reduce_all(
-                    &tenferro_linalg::traced_tensor::triangular_solve(
-                        &general, &rhs, true, true, false, false,
-                    )
-                    .unwrap(),
+                    &general
+                        .triangular_solve(&rhs, true, true, false, false)
+                        .unwrap(),
                 );
                 get_f64_data(&eval(&loss))[0]
             },
@@ -516,7 +510,7 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let (_p, l, u, _parity) = tenferro_linalg::traced_tensor::lu(&input).unwrap();
+                let (_p, l, u, _parity) = input.lu().unwrap();
                 let loss = (&reduce_all(&l) + &reduce_all(&u)).unwrap();
                 get_f64_data(&eval(&loss))[0]
             },
@@ -542,7 +536,7 @@ fn eigvalsh_jvp_matches_finite_diff_through_values_only_eigh() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], tangent_data.clone()))
             .unwrap();
 
-    let values = tenferro_linalg::traced_tensor::eigvalsh(&matrix).unwrap();
+    let values = matrix.eigvalsh().unwrap();
     let loss = reduce_all(&values);
     let actual = eval(&ad.jvp(&loss, &matrix, &tangent).unwrap());
 
@@ -554,7 +548,7 @@ fn eigvalsh_jvp_matches_finite_diff_through_values_only_eigh() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let values = tenferro_linalg::traced_tensor::eigvalsh(&input).unwrap();
+                let values = input.eigvalsh().unwrap();
                 get_f64_data(&eval(&reduce_all(&values)))[0]
             },
             &data,
@@ -576,7 +570,7 @@ fn eigvals_jvp_matches_finite_diff() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], tangent_data.clone()))
             .unwrap();
 
-    let values = tenferro_linalg::traced_tensor::eigvals(&matrix).unwrap();
+    let values = matrix.eigvals().unwrap();
     let loss = reduce_all(&values);
     let actual = eval(&ad.jvp(&loss, &matrix, &tangent).unwrap());
 
@@ -588,7 +582,7 @@ fn eigvals_jvp_matches_finite_diff() {
                 let input =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let values = tenferro_linalg::traced_tensor::eigvals(&input).unwrap();
+                let values = input.eigvals().unwrap();
                 get_c64_data(&eval(&reduce_all(&values)))[0]
             },
             &data,
@@ -617,7 +611,7 @@ fn solve_matrix_operand_jvp_matches_finite_diff() {
     let rhs =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], rhs_data.clone())).unwrap();
 
-    let loss = reduce_all(&tenferro_linalg::traced_tensor::solve(&matrix, &rhs).unwrap());
+    let loss = reduce_all(&matrix.solve(&rhs).unwrap());
     let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
     let result = eval(&tangent);
 
@@ -634,8 +628,7 @@ fn solve_matrix_operand_jvp_matches_finite_diff() {
                     rhs_data.clone(),
                 ))
                 .unwrap();
-                let loss =
-                    reduce_all(&tenferro_linalg::traced_tensor::solve(&matrix, &rhs).unwrap());
+                let loss = reduce_all(&matrix.solve(&rhs).unwrap());
                 get_f64_data(&eval(&loss))[0]
             },
             &matrix_data,
@@ -665,7 +658,8 @@ fn triangular_solve_matrix_operand_jvp_matches_finite_diff() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], rhs_data.clone())).unwrap();
 
     let loss = reduce_all(
-        &tenferro_linalg::traced_tensor::triangular_solve(&matrix, &rhs, true, true, false, false)
+        &matrix
+            .triangular_solve(&rhs, true, true, false, false)
             .unwrap(),
     );
     let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
@@ -685,10 +679,9 @@ fn triangular_solve_matrix_operand_jvp_matches_finite_diff() {
                 ))
                 .unwrap();
                 let loss = reduce_all(
-                    &tenferro_linalg::traced_tensor::triangular_solve(
-                        &matrix, &rhs, true, true, false, false,
-                    )
-                    .unwrap(),
+                    &matrix
+                        .triangular_solve(&rhs, true, true, false, false)
+                        .unwrap(),
                 );
                 get_f64_data(&eval(&loss))[0]
             },
@@ -717,7 +710,7 @@ fn svd_vector_observable_jvp_matches_finite_diff() {
     ))
     .unwrap();
 
-    let (u, _s, vt) = tenferro_linalg::traced_tensor::svd(&matrix).unwrap();
+    let (u, _s, vt) = matrix.svd().unwrap();
     let u_loss = weighted_square_sum(&u, vec![3, 2], u_weights.clone());
     let vt_loss = weighted_square_sum(&vt, vec![2, 2], vt_weights.clone());
     let loss = (&u_loss + &vt_loss).unwrap();
@@ -732,7 +725,7 @@ fn svd_vector_observable_jvp_matches_finite_diff() {
                 let matrix =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                         .unwrap();
-                let (u, _s, vt) = tenferro_linalg::traced_tensor::svd(&matrix).unwrap();
+                let (u, _s, vt) = matrix.svd().unwrap();
                 let u_loss = weighted_square_sum(&u, vec![3, 2], u_weights.clone());
                 let vt_loss = weighted_square_sum(&vt, vec![2, 2], vt_weights.clone());
                 let loss = (&u_loss + &vt_loss).unwrap();
@@ -762,7 +755,7 @@ fn eigh_vector_observable_jvp_matches_finite_diff() {
     ))
     .unwrap();
 
-    let (_values, vectors) = tenferro_linalg::traced_tensor::eigh(&matrix).unwrap();
+    let (_values, vectors) = matrix.eigh().unwrap();
     let loss = weighted_square_sum(&vectors, vec![2, 2], vector_weights.clone());
     let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
     let result = eval(&tangent);
@@ -775,7 +768,7 @@ fn eigh_vector_observable_jvp_matches_finite_diff() {
                 let matrix =
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()))
                         .unwrap();
-                let (_values, vectors) = tenferro_linalg::traced_tensor::eigh(&matrix).unwrap();
+                let (_values, vectors) = matrix.eigh().unwrap();
                 let loss = weighted_square_sum(&vectors, vec![2, 2], vector_weights.clone());
                 get_f64_data(&eval(&loss))[0]
             },
@@ -797,13 +790,10 @@ fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![4.0, 8.0])).unwrap();
 
-    let solve_loss = reduce_all(&tenferro_linalg::traced_tensor::solve(&a, &b).unwrap());
+    let solve_loss = reduce_all(&a.solve(&b).unwrap());
     let solve_grad_b = ad.grad(&solve_loss, &b).unwrap();
 
-    let triangular_loss = reduce_all(
-        &tenferro_linalg::traced_tensor::triangular_solve(&a, &b, true, true, false, false)
-            .unwrap(),
-    );
+    let triangular_loss = reduce_all(&a.triangular_solve(&b, true, true, false, false).unwrap());
     let triangular_grad_b = ad.grad(&triangular_loss, &b).unwrap();
 
     let results = eval_many(&[&solve_grad_b, &triangular_grad_b]);
@@ -826,7 +816,7 @@ fn complex_eigh_values_grad_executes_with_complex_input_dtype() {
         ],
     ))
     .unwrap();
-    let (values, _vectors) = tenferro_linalg::traced_tensor::eigh(&h).unwrap();
+    let (values, _vectors) = h.eigh().unwrap();
     let loss = values.reduce_sum(&[0]).unwrap();
 
     let grad = ad.grad(&loss, &h).unwrap();
@@ -852,7 +842,7 @@ fn batched_solve_sum_grad_wrt_matrix_uses_native_batch_layout() {
     ))
     .unwrap();
 
-    let x = tenferro_linalg::traced_tensor::solve(&a, &b).unwrap();
+    let x = a.solve(&b).unwrap();
     let loss = x.reduce_sum(&[0, 1, 2]).unwrap();
     let grad_a = ad.grad(&loss, &a).unwrap();
     let out = eval(&grad_a);

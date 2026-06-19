@@ -1,4 +1,5 @@
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -27,9 +28,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
     let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
     let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone()).unwrap();
-    let out1 =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&ta1, &tb1, &tc1], "ij,jk,kl->il")
-            .unwrap();
+    let out1 = compiler
+        .einsum(&[&ta1, &tb1, &tc1], "ij,jk,kl->il")
+        .unwrap();
     let program1 = compiler.compile(&out1).unwrap();
 
     let result1 = engine.run(&program1).unwrap();
@@ -41,9 +42,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let ta2 = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb2 = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let tc2 = TracedTensor::from_tensor_concrete_shape(c).unwrap();
-    let out2 =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&ta2, &tb2, &tc2], "ij,jk,kl->il")
-            .unwrap();
+    let out2 = compiler
+        .einsum(&[&ta2, &tb2, &tc2], "ij,jk,kl->il")
+        .unwrap();
     let program2 = compiler.compile(&out2).unwrap();
 
     let result2 = engine.run(&program2).unwrap();

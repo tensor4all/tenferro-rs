@@ -141,3 +141,16 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
         })
         .collect()
 }
+
+/// Apply one standard tensor op eagerly and record it for AD when needed.
+///
+/// Extension crates use this when an extension-level eager operation expands
+/// into ordinary `StdTensorOp` nodes instead of a custom extension primitive.
+pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<EagerTensor> {
+    if matches!(op, StdTensorOp::Extension(_)) {
+        return Err(Error::Internal(
+            "extension::apply_standard_op does not accept Extension ops".into(),
+        ));
+    }
+    EagerTensor::nary_op(inputs, op)
+}

@@ -283,7 +283,7 @@ pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     try_pad(input, config)
 }
 
-pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     with_local_pool(|buffers| try_pad_with_pool(buffers, input, config))
 }
 

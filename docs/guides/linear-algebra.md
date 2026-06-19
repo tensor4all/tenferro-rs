@@ -1,8 +1,8 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `LinalgBackend` for direct execution without autodiff, `EagerTensor` helpers for
-immediate forward execution under an `EagerRuntime`, and `TracedTensor` helpers
+Use `LinalgBackend` for direct execution without autodiff, `EagerTensorLinalgExt`
+for immediate forward execution under an `EagerRuntime`, and `TracedTensorLinalgExt`
 when the operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated
 compile/run workflow.
 
@@ -24,8 +24,8 @@ when they do not need eager linalg helpers or linalg AD rules.
 | Layer | Linear algebra style |
 | --- | --- |
 | Concrete `Tensor` | `tenferro_linalg::LinalgBackend` methods on a backend |
-| `EagerTensor` | `tenferro_linalg::eager_tensor` helpers behind `autodiff`; tracked variables record gradients for scalar losses where AD rules support the operation |
-| `TracedTensor` | `tenferro_linalg::traced_tensor` helpers for graph execution and `grad`/`vjp`/`jvp` workflows |
+| `EagerTensor` | `EagerTensorLinalgExt` methods behind `autodiff`; tracked variables record gradients for scalar losses where AD rules support the operation |
+| `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 `TracedTensor` paths. It is not a separate linear algebra layer. See
@@ -48,8 +48,8 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Determinants | `det`, `slogdet` | - | `det`, `slogdet` |
 | Norms | `norm` | - | `norm` |
 
-Concrete methods are exposed by `LinalgBackend`; eager and traced helpers live
-under `tenferro_linalg::eager_tensor` and `tenferro_linalg::traced_tensor`.
+Concrete methods are exposed by `LinalgBackend`; eager and traced tensor APIs
+are crate-root extension traits.
 
 ## Concrete Solve
 
@@ -240,10 +240,10 @@ assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_linalg::traced_tensor::cholesky;
+use tenferro_linalg::TracedTensorLinalgExt;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let factor = cholesky(&a).unwrap();
+let factor = a.cholesky().unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&factor).unwrap();
@@ -260,11 +260,11 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_linalg::traced_tensor::solve;
+use tenferro_linalg::TracedTensorLinalgExt;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
 let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]);
-let x = solve(&a, &b).unwrap();
+let x = a.solve(&b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&x).unwrap();

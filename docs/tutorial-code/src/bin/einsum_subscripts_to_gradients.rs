@@ -1,6 +1,8 @@
 use tenferro_ad::{EagerRuntime, TracedTensorAdExt};
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::EagerEinsumExt;
 use tenferro_einsum::EinsumOptimize;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -47,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new();
     let a = runtime.variable_from(matrix_a()?)?;
     let b = runtime.variable_from(matrix_b()?)?;
-    let product = tenferro_einsum::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")?;
+    let product = [&a, &b].einsum("ij,jk->ik")?;
 
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(
@@ -60,18 +62,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = matrix_c()?;
 
     let mut compiler = GraphCompiler::new();
-    let auto = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b, &c],
-        "ij,jk,kl->il",
-        EinsumOptimize::default(),
-    )?;
-    let left_to_right = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b, &c],
-        "ij,jk,kl->il",
-        EinsumOptimize::False,
-    )?;
+    let auto = compiler.einsum_with(&[&a, &b, &c], "ij,jk,kl->il", EinsumOptimize::default())?;
+    let left_to_right =
+        compiler.einsum_with(&[&a, &b, &c], "ij,jk,kl->il", EinsumOptimize::False)?;
 
     let auto_value = run(&auto)?;
     let left_to_right_value = run(&left_to_right)?;
@@ -84,12 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[250.0, 601.0, 372.0, 894.0],
     );
 
-    let y = tenferro_einsum::traced_tensor::einsum_with(
-        &mut compiler,
-        &[&a, &b],
-        "ij,jk->ik",
-        EinsumOptimize::Path(vec![(0, 1)]),
-    )?;
+    let y = compiler.einsum_with(&[&a, &b], "ij,jk->ik", EinsumOptimize::Path(vec![(0, 1)]))?;
     let grad_a = y.reduce_sum(&[0, 1])?.grad(&a)?;
     let grad_value = run(&grad_a)?;
 

@@ -252,8 +252,7 @@ it iterates quickly.
   ecosystems), and by JAX/PyTorch for the eager/traced/AD split.
 - **Generic autodiff.** Autodiff is built on `tidu`, a tensor4all crate providing
   `Primitive`-generic graph transforms (`linearize` / `linear_transpose`) that are
-  **not tied to tensors** and can drive autodiff for other domains; alongside the
-  `strided` and `computegraph` foundation crates.
+  **not tied to tensors** and can drive autodiff for other domains.
 
 Thanks to these projects, communities, and their maintainers.
 

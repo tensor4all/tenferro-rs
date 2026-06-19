@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{traced_tensor, FftNorm};
+use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )
     .unwrap();
-    let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
+    let y = x.fft(None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

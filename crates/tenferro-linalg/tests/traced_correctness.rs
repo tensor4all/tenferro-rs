@@ -1,5 +1,6 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
+use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -25,9 +26,9 @@ fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
 }
 
 #[test]
-fn traced_tensor_namespace_exposes_svd() {
+fn traced_tensor_linalg_ext_exposes_svd() {
     let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
-    let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
+    let (_u, s, _vt) = a.svd().unwrap();
 
     assert_eq!(s.rank, 1);
 }
@@ -37,7 +38,7 @@ fn svd_traced_tensor_returns_three_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]))
             .unwrap();
-    let (u, s, vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
+    let (u, s, vt) = a.svd().unwrap();
     let results = run_many(&[&u, &s, &vt]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -54,7 +55,7 @@ fn qr_traced_tensor_returns_q_and_r() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]))
             .unwrap();
-    let (q, r) = tenferro_linalg::traced_tensor::qr(&a).unwrap();
+    let (q, r) = a.qr().unwrap();
     let results = run_many(&[&q, &r]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -68,7 +69,7 @@ fn eigh_traced_tensor_returns_values_and_vectors() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
             .unwrap();
-    let (values, vectors) = tenferro_linalg::traced_tensor::eigh(&a).unwrap();
+    let (values, vectors) = a.eigh().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -87,10 +88,9 @@ fn linalg_single_output_traced_tensor_functions_eval() {
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0])).unwrap();
 
-    let chol = tenferro_linalg::traced_tensor::cholesky(&a).unwrap();
-    let solved = tenferro_linalg::traced_tensor::solve(&a, &b).unwrap();
-    let triangular =
-        tenferro_linalg::traced_tensor::triangular_solve(&a, &b, true, true, false, false).unwrap();
+    let chol = a.cholesky().unwrap();
+    let solved = a.solve(&b).unwrap();
+    let triangular = a.triangular_solve(&b, true, true, false, false).unwrap();
     let results = run_many(&[&chol, &solved, &triangular]);
 
     assert_eq!(get_f64_data(&results[0]), &[2.0, 0.0, 0.0, 3.0]);
@@ -103,7 +103,7 @@ fn lu_traced_tensor_returns_four_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))
             .unwrap();
-    let (p, l, u, parity) = tenferro_linalg::traced_tensor::lu(&a).unwrap();
+    let (p, l, u, parity) = a.lu().unwrap();
     let results = run_many(&[&p, &l, &u, &parity]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -120,7 +120,7 @@ fn full_piv_lu_solve_traced_tensor_eval() {
             .unwrap();
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0])).unwrap();
-    let x = tenferro_linalg::traced_tensor::full_piv_lu_solve(&a, &b).unwrap();
+    let x = a.full_piv_lu_solve(&b).unwrap();
     let results = run_many(&[&x]);
 
     assert_eq!(results[0].shape(), &[2, 1]);
@@ -132,7 +132,7 @@ fn eig_traced_tensor_returns_complex_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
             .unwrap();
-    let (values, vectors) = tenferro_linalg::traced_tensor::eig(&a).unwrap();
+    let (values, vectors) = a.eig().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -154,11 +154,11 @@ fn determinant_inverse_and_eigenvalue_helpers_eval() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
             .unwrap();
 
-    let (sign, logabsdet) = tenferro_linalg::traced_tensor::slogdet(&a).unwrap();
-    let determinant = tenferro_linalg::traced_tensor::det(&a).unwrap();
-    let inverse = tenferro_linalg::traced_tensor::inv(&a).unwrap();
-    let eigvals = tenferro_linalg::traced_tensor::eigvals(&a).unwrap();
-    let eigvalsh = tenferro_linalg::traced_tensor::eigvalsh(&a).unwrap();
+    let (sign, logabsdet) = a.slogdet().unwrap();
+    let determinant = a.det().unwrap();
+    let inverse = a.inv().unwrap();
+    let eigvals = a.eigvals().unwrap();
+    let eigvalsh = a.eigvalsh().unwrap();
     let results = run_many(&[
         &sign,
         &logabsdet,
@@ -193,8 +193,8 @@ fn pseudoinverse_and_norm_eval() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
             .unwrap();
 
-    let pseudo_inverse = tenferro_linalg::traced_tensor::pinv(&a).unwrap();
-    let frob = tenferro_linalg::traced_tensor::norm(&a, None, Some(&[0, 1]), false).unwrap();
+    let pseudo_inverse = a.pinv().unwrap();
+    let frob = a.norm(None, Some(&[0, 1]), false).unwrap();
     let results = run_many(&[&pseudo_inverse, &frob]);
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.5, 0.0, 0.0, 0.25]);
@@ -210,22 +210,15 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]))
             .unwrap();
 
-    let zero_norm =
-        tenferro_linalg::traced_tensor::norm(&vector, Some(0.0), Some(&[0]), false).unwrap();
-    let matrix_one =
-        tenferro_linalg::traced_tensor::norm(&matrix, Some(1.0), Some(&[0, 1]), false).unwrap();
-    let matrix_neg_one =
-        tenferro_linalg::traced_tensor::norm(&matrix, Some(-1.0), Some(&[0, 1]), false).unwrap();
-    let matrix_inf =
-        tenferro_linalg::traced_tensor::norm(&matrix, Some(f64::INFINITY), Some(&[0, 1]), false)
-            .unwrap();
-    let matrix_neg_inf = tenferro_linalg::traced_tensor::norm(
-        &matrix,
-        Some(f64::NEG_INFINITY),
-        Some(&[0, 1]),
-        false,
-    )
-    .unwrap();
+    let zero_norm = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+    let matrix_one = matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap();
+    let matrix_neg_one = matrix.norm(Some(-1.0), Some(&[0, 1]), false).unwrap();
+    let matrix_inf = matrix
+        .norm(Some(f64::INFINITY), Some(&[0, 1]), false)
+        .unwrap();
+    let matrix_neg_inf = matrix
+        .norm(Some(f64::NEG_INFINITY), Some(&[0, 1]), false)
+        .unwrap();
     let results = run_many(&[
         &zero_norm,
         &matrix_one,

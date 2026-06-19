@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::eager_tensor::{einsum, einsum_subscripts, tensordot};
+use tenferro_einsum::{EagerEinsumExt, EagerTensorEinsumExt};
 use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
 use tenferro_runtime::Tensor;
 
@@ -34,7 +34,7 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     )
     .unwrap();
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
     assert_eq!(
@@ -62,7 +62,7 @@ fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
     )
     .unwrap();
 
-    let out = tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
+    let out = lhs.tensordot(&rhs, TensorDotAxes::Count(2)).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
@@ -85,15 +85,15 @@ fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
     )
     .unwrap();
 
-    let out = tensordot(
-        &lhs,
-        &rhs,
-        TensorDotAxes::Axes {
-            lhs: &[-1],
-            rhs: &[0],
-        },
-    )
-    .unwrap();
+    let out = lhs
+        .tensordot(
+            &rhs,
+            TensorDotAxes::Axes {
+                lhs: &[-1],
+                rhs: &[0],
+            },
+        )
+        .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
@@ -116,7 +116,7 @@ fn eager_tensor_tensordot_rejects_shape_mismatch() {
     )
     .unwrap();
 
-    let err = match tensordot(&lhs, &rhs, TensorDotAxes::Count(1)) {
+    let err = match lhs.tensordot(&rhs, TensorDotAxes::Count(1)) {
         Ok(_) => panic!("expected tensordot shape mismatch"),
         Err(err) => err,
     };
@@ -138,8 +138,7 @@ fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
     )
     .unwrap();
 
-    let err = match tensordot(
-        &lhs,
+    let err = match lhs.tensordot(
         &rhs,
         TensorDotAxes::Axes {
             lhs: &[2],
@@ -168,7 +167,7 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
     .unwrap();
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 
-    let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
+    let c = [&a, &b].einsum_subscripts(&subscripts).unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
     assert_eq!(
@@ -191,7 +190,7 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     )
     .unwrap();
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -218,7 +217,7 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     )
     .unwrap();
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -230,7 +229,7 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -257,7 +256,7 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     )
     .unwrap();
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
@@ -266,7 +265,7 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     assert!(a.grad().unwrap().is_none());
     assert!(b.grad().unwrap().is_none());
 
-    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = [&a, &b].einsum("ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
