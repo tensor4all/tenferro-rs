@@ -41,6 +41,20 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     }
 }
 
+fn matmul2(lhs: &[f64], rhs: &[f64]) -> [f64; 4] {
+    let mut out = [0.0; 4];
+    for col in 0..2 {
+        for row in 0..2 {
+            out[row + 2 * col] = lhs[row] * rhs[2 * col] + lhs[row + 2] * rhs[1 + 2 * col];
+        }
+    }
+    out
+}
+
+fn transpose2(matrix: &[f64]) -> [f64; 4] {
+    [matrix[0], matrix[2], matrix[1], matrix[3]]
+}
+
 fn well_conditioned_4x4() -> Vec<f64> {
     let n = 4;
     let mut data: Vec<f64> = (0..n * n)
@@ -167,6 +181,32 @@ fn full_piv_lu_solve_returns_expected_solution() {
 }
 
 #[test]
+fn full_piv_lu_reconstructs_input() {
+    let data = vec![0.0_f64, 2.0, 1.0, 3.0];
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], data.clone()).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
+
+    assert_eq!(p.shape(), &[2, 2]);
+    assert_eq!(l.shape(), &[2, 2]);
+    assert_eq!(u.shape(), &[2, 2]);
+    assert_eq!(q.shape(), &[2, 2]);
+    assert_eq!(parity.shape(), &[] as &[usize]);
+
+    let p = p.materialized().unwrap();
+    let l = l.materialized().unwrap();
+    let u = u.materialized().unwrap();
+    let q = q.materialized().unwrap();
+    let lu = matmul2(f64_data(l.as_ref()), f64_data(u.as_ref()));
+    let luq = matmul2(&lu, f64_data(q.as_ref()));
+    let reconstructed = matmul2(&transpose2(f64_data(p.as_ref())), &luq);
+    assert_close_slice(&reconstructed, &data, 1.0e-12);
+}
+
+#[test]
 fn solve_returns_expected_solution() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
@@ -216,6 +256,24 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
 }
 
 #[test]
+fn eigh_returns_expected_values_for_diagonal_matrix() {
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let (values, vectors) = a.eigh().unwrap();
+
+    assert_eq!(values.shape(), &[2]);
+    assert_eq!(vectors.shape(), &[2, 2]);
+    assert_close_slice(
+        f64_data(values.materialized().unwrap().as_ref()),
+        &[1.0, 3.0],
+        1.0e-12,
+    );
+}
+
+#[test]
 fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
@@ -236,6 +294,28 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     assert_eq!(
         sorted,
         vec![Complex64::new(1.0, 0.0), Complex64::new(3.0, 0.0)]
+    );
+}
+
+#[test]
+fn triangular_solve_returns_expected_solution() {
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let x = a.triangular_solve(&b, true, true, false, false).unwrap();
+
+    assert_eq!(x.shape(), &[2, 1]);
+    assert_close_slice(
+        f64_data(x.materialized().unwrap().as_ref()),
+        &[1.0, 2.0],
+        1.0e-12,
     );
 }
 
