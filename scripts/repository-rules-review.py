@@ -528,11 +528,16 @@ def extract_json_payload(text: str) -> dict[str, Any]:
 
     try:
         parsed = json.loads(stripped)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as err:
         match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
         if not match:
-            raise
-        parsed = json.loads(match.group(0))
+            raise ValueError(f"model response was not valid JSON: {err}") from err
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError as embedded_err:
+            raise ValueError(
+                f"model response was not valid JSON: {embedded_err}"
+            ) from embedded_err
 
     if not isinstance(parsed, dict):
         raise ValueError("parsed JSON must be an object")

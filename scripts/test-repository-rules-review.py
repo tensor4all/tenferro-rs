@@ -170,6 +170,18 @@ def test_extract_json_payload_strips_fence() -> None:
     assert parsed["verdict"] == "pass"
 
 
+def test_extract_json_payload_reports_malformed_embedded_object() -> None:
+    mod = load_module()
+    try:
+        mod.extract_json_payload(
+            'prefix {"verdict": "fail", "findings": [{"summary": "unterminated]} suffix'
+        )
+    except ValueError as err:
+        assert "model response was not valid JSON" in str(err)
+    else:
+        raise AssertionError("malformed embedded JSON should raise ValueError")
+
+
 def test_parse_findings_caps_model_output() -> None:
     mod = load_module()
     raw = {
@@ -478,6 +490,7 @@ def main() -> int:
         test_select_rule_sections_includes_ad_for_tenferro_ad_crate,
         test_select_rule_sections_includes_performance_for_tensor_crates,
         test_extract_json_payload_strips_fence,
+        test_extract_json_payload_reports_malformed_embedded_object,
         test_parse_findings_caps_model_output,
         test_parse_findings_normalizes_common_severity_aliases,
         test_llm_response_error_finding_blocks_with_diagnostic,
