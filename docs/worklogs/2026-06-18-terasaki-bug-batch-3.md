@@ -66,6 +66,18 @@ instead of preserving them behind `try_*` or alias wrappers.
   doctest hidden result tails, and private-helper dead-code guesses.
 - Fixed stale `TracedTensor::concrete_shape` rustdoc that still said symbolic
   dimensions panic even though the API now returns a typed error.
+- Continued the public panic API cleanup after the interrupted Codex process:
+  removed `EagerTensor::data()`, made eager tensor import/materialization paths
+  return `Result`, kept `EagerPrimitiveBuilder` crate-private and fallible, and
+  removed hidden eager graph/broadcast helper exports that were only sibling
+  reach-through.
+- Replaced the ad hoc untracked broadcast helper with one narrow documented
+  extension contract, `tenferro_ad::extension::adopt_untracked_eager_value`,
+  so operation-family crates can adopt lazy backend `TensorValue`s without
+  exposing operation-specific eager internals.
+- Closed the prototype `einsum_whole_program_untracked` public eager API; it is
+  now test-only, while user-facing eager einsum remains through `einsum`,
+  `einsum_subscripts`, and `tensordot`.
 
 ## Rule Updates
 
@@ -86,6 +98,12 @@ instead of preserving them behind `try_*` or alias wrappers.
 - The review-bot prompt now encodes the corresponding audit heuristics so future
   repository-rule runs do not rediscover compatibility-shim and doctest
   false positives as blockers.
+- `REPOSITORY_RULES.md` now states that `#[doc(hidden)] pub` is not privacy and
+  that public infallible accessors/constructors must not remain when
+  materialization, metadata registration, validation, backend transfer, or lock
+  state can fail.
+- Source-contract tests now forbid reintroducing the removed eager public
+  panic/accessor helpers and the closed eager einsum prototype helper.
 
 ## Verification
 
@@ -123,6 +141,23 @@ Local verification before push:
 - `cargo check -p tenferro-runtime --all-targets`
 - `cargo check -p tenferro-einsum --features autodiff --all-targets`
 - `cargo check -p tenferro-fft --features autodiff --all-targets`
+
+Additional local verification after the public API cleanup:
+
+- `cargo fmt --all --check`
+- `cargo test -p tenferro-ad --test fallible_api eager_public_tensor_accessors_are_fallible_source_contract -- --nocapture`
+- `cargo test -p tenferro-ad eager_backward_transpose_runs_without_extension_executor -- --nocapture`
+- `cargo test -p tenferro-ad eager_backward_zero_from_exact_metadata_covers_dtypes_and_dynamic_none -- --nocapture`
+- `cargo test -p tenferro-einsum --test public_surface_contract -- --nocapture`
+- `cargo test -p tenferro-einsum --features autodiff whole_program_untracked_matches_per_op_nary_result -- --nocapture`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`
+- `cargo test --workspace --release`
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+- `python3 scripts/check-coverage.py coverage.json`
+- `cargo doc --workspace --no-deps`
+- `python3 scripts/check-docs-site.py`
+- `git diff --check`
 
 No successful cloud GPU runtime check had completed at the time of this local
 verification; GPU coverage here is local source-contract tests plus CUDA feature

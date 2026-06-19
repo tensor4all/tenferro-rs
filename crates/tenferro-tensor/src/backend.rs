@@ -2,6 +2,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use crate::validate::validate_convert_dtype;
 use crate::{RuntimeCacheControl, Tensor, TensorRead, TensorValue};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
@@ -395,7 +396,47 @@ pub trait TensorStructural {
         self.broadcast_in_dim(read_tensor("broadcast_in_dim", input)?, shape, dims)
     }
 
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor>;
+    /// Cast a tensor to another dtype using explicit dtype projection.
+    ///
+    /// Backends may truncate, narrow precision, project complex values, or use
+    /// boolean truthiness according to their documented cast support.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorStructural};
+    ///
+    /// fn cast_to_i32<B: TensorStructural>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.cast(input, DType::I32)
+    /// }
+    /// ```
+    fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor>;
+
+    /// Convert a tensor to another dtype using checked dtype conversion.
+    ///
+    /// `convert` accepts only conversions allowed by tenferro's dtype-promotion
+    /// lattice. Use [`TensorStructural::cast`] for explicit lossy projection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorStructural};
+    ///
+    /// fn convert_to_f64<B: TensorStructural>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.convert(input, DType::F64)
+    /// }
+    /// ```
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
+        validate_convert_dtype("convert", input.dtype(), to)?;
+        self.cast(input, to)
+    }
+
     fn extract_diagonal(
         &mut self,
         input: &Tensor,

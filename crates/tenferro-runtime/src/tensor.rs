@@ -8,12 +8,9 @@ use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Error, Result, Tensor
 
 pub use tenferro_tensor::Tensor;
 
-/// Convert a tensor to a different dtype.
+/// Convert a tensor to a different dtype using the checked conversion lattice.
 ///
-/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
-/// conversion sets the imaginary part to zero; complex-to-real or
-/// complex-to-integer conversion uses the real part. Boolean conversion uses
-/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+/// Use [`cast`] for explicit lossy dtype projection.
 ///
 /// # Examples
 ///
@@ -22,10 +19,42 @@ pub use tenferro_tensor::Tensor;
 /// use tenferro_runtime::{tensor, DType, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-/// let y = tensor::convert(&x, DType::F32, &mut backend).unwrap();
+/// let y = tensor::convert(&x, DType::C64, &mut backend).unwrap();
+/// assert_eq!(y.dtype(), DType::C64);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error when the requested conversion is outside tenferro's checked
+/// dtype-promotion lattice, or when the backend does not support the requested
+/// conversion.
 pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
     backend.with_backend_session(|exec| exec.convert(input, to))
+}
+
+/// Cast a tensor to a different dtype using explicit dtype projection.
+///
+/// Unlike [`convert`], `cast` may truncate, narrow precision, project complex
+/// values to their real component, or use boolean truthiness where the backend
+/// supports the requested projection.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, DType, Tensor};
+/// # let mut backend = CpuBackend::new();
+/// # let x = Tensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
+/// let y = tensor::cast(&x, DType::I32, &mut backend).unwrap();
+/// assert_eq!(y.as_slice::<i32>().unwrap(), &[1, -2]);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when the backend does not support the requested explicit
+/// dtype projection.
+pub fn cast(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
+    backend.with_backend_session(|exec| exec.cast(input, to))
 }
 
 /// Elementwise addition with NumPy-style broadcasting.

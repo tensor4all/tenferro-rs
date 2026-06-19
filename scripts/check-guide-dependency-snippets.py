@@ -50,10 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(executor.run(&program)?.shape(), &[2, 2]);
 
     let ctx = EagerRuntime::new();
-    let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
-    let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?);
+    let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
     let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij")?;
-    assert_eq!(outer.data().shape(), &[2, 3]);
+    assert_eq!(outer.shape(), &[2, 3]);
 
     Ok(())
 }
@@ -140,8 +140,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new();
-    let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
-    assert_eq!(tracked.data().shape(), &[1]);
+    let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    assert_eq!(tracked.shape(), &[1]);
 
     Ok(())
 }

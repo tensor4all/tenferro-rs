@@ -31,6 +31,10 @@ rules from `tensor4all-agent-rules`.
   contracts. If an item is primarily for tests, benchmarks, internal planning,
   execution dispatch, lowering, caching, or backend glue, it should normally be
   private or `pub(crate)`.
+- `#[doc(hidden)] pub` is not a substitute for privacy. Use hidden public items
+  only for explicitly supported macro output, required trait contracts, or
+  documented extension contracts; otherwise make the item private or
+  `pub(crate)`.
 - Do not keep low-level execution helpers, dispatch entrypoints, cache plumbing,
   or internal IR evaluators public only for tests, parity checks, convenience,
   or sibling-crate reach-through. When another crate genuinely needs access,
@@ -74,6 +78,16 @@ rules from `tensor4all-agent-rules`.
   compatibility escape; normally make the canonical operation return a typed
   `Result`. Keep `try_*` names only when they are the intended canonical Rust
   API, not a workaround for avoiding a cleaner API change.
+- Do not keep public infallible accessors or constructors for operations that
+  can fail through materialization, metadata registration, backend/device
+  transfer, validation, or lock state. Replace the canonical API with a
+  `Result`-returning method and update callers, docs, and tests directly; do
+  not leave deprecated panicking shims behind unless maintainers explicitly
+  require a compatibility window.
+- Public dtype conversion, promotion, and explicit lossy cast semantics must be
+  specified under `docs/spec/` before implementation. Keep checked `convert`
+  separate from explicit `cast`, and keep CPU/GPU/eager/traced behavior aligned
+  unless the owning spec names a backend limitation and its typed error.
 - If the cleanest fix requires reshaping `tidu` AD-transform APIs used by
   tenferro, make that upstream API cleanup the preferred repair path and
   optimize for the long-term clean `tidu` contract first. Do not hide a

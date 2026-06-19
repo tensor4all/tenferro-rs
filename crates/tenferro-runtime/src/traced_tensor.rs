@@ -10,12 +10,9 @@ use crate::{CompareDir, DType, DotGeneralConfig, Error, Result};
 
 pub use crate::traced::{TracedTensor, TracedTensorId};
 
-/// Convert a traced tensor to a different dtype.
+/// Convert a traced tensor to a different dtype using checked conversion.
 ///
-/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
-/// conversion sets the imaginary part to zero; complex-to-real or
-/// complex-to-integer conversion uses the real part. Boolean conversion uses
-/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+/// Use [`cast`] when a lossy dtype projection is intended.
 ///
 /// # Examples
 ///
@@ -23,11 +20,31 @@ pub use crate::traced::{TracedTensor, TracedTensorId};
 /// use tenferro_runtime::{traced_tensor, DType, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-/// let y = traced_tensor::convert(&x, DType::C64);
+/// let y = traced_tensor::convert(&x, DType::C64).unwrap();
 /// assert_eq!(y.dtype, DType::C64);
 /// ```
-pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
+///
+/// # Errors
+///
+/// Returns an error when the requested conversion is outside tenferro's checked
+/// dtype-promotion lattice.
+pub fn convert(input: &TracedTensor, to: DType) -> Result<TracedTensor> {
     input.convert(to)
+}
+
+/// Cast a traced tensor to a different dtype using explicit dtype projection.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::{traced_tensor, DType, TracedTensor};
+///
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
+/// let y = traced_tensor::cast(&x, DType::I32);
+/// assert_eq!(y.dtype, DType::I32);
+/// ```
+pub fn cast(input: &TracedTensor, to: DType) -> TracedTensor {
+    input.cast(to)
 }
 
 /// Elementwise addition with NumPy-style broadcasting.

@@ -1,4 +1,4 @@
-//! Singular-matrix validation helpers shared across backends and exec layers.
+//! Validation helpers shared across backends and exec layers.
 //!
 //! # Examples
 //!
@@ -12,7 +12,77 @@
 
 use num_complex::{Complex32, Complex64};
 
-use crate::{Error, Result, Tensor, TypedTensor};
+use crate::{DType, Error, Result, Tensor, TypedTensor};
+
+/// Promote two dtypes according to tenferro's public dtype-promotion lattice.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::promote_dtype;
+/// use tenferro_tensor::DType;
+///
+/// assert_eq!(promote_dtype(DType::I32, DType::F32), DType::F64);
+/// ```
+pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
+    use DType::*;
+    match (lhs, rhs) {
+        (Bool, Bool) => Bool,
+        (Bool, other) | (other, Bool) => other,
+        (I32, I32) => I32,
+        (I32, I64) | (I64, I32) | (I64, I64) => I64,
+        (I32 | I64, F32 | F64) | (F32 | F64, I32 | I64) => F64,
+        (I32 | I64, C32 | C64) | (C32 | C64, I32 | I64) => C64,
+        (F32, F32) => F32,
+        (F32, F64) | (F64, F32) | (F64, F64) => F64,
+        (F32, C32) | (C32, F32) | (C32, C32) => C32,
+        (F32, C64) | (C64, F32) => C64,
+        (F64, C32 | C64) | (C32 | C64, F64) => C64,
+        (C32, C64) | (C64, C32) | (C64, C64) => C64,
+    }
+}
+
+/// Return whether public `convert` may change `from` into `to`.
+///
+/// Checked conversion follows the same dtype lattice as implicit promotion.
+/// Use explicit `cast` for value-changing projections outside this lattice.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::can_convert_dtype;
+/// use tenferro_tensor::DType;
+///
+/// assert!(can_convert_dtype(DType::F32, DType::F64));
+/// assert!(!can_convert_dtype(DType::F64, DType::I32));
+/// ```
+pub fn can_convert_dtype(from: DType, to: DType) -> bool {
+    promote_dtype(from, to) == to
+}
+
+/// Validate a public checked dtype conversion.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::validate_convert_dtype;
+/// use tenferro_tensor::DType;
+///
+/// assert!(validate_convert_dtype("convert", DType::F32, DType::F64).is_ok());
+/// assert!(validate_convert_dtype("convert", DType::C64, DType::F64).is_err());
+/// ```
+pub fn validate_convert_dtype(op: &'static str, from: DType, to: DType) -> Result<()> {
+    if can_convert_dtype(from, to) {
+        return Ok(());
+    }
+
+    Err(Error::UnsupportedDTypeConversion {
+        op,
+        from,
+        to,
+        message: "checked convert only accepts conversions allowed by dtype promotion; use explicit cast for lossy dtype projection".to_string(),
+    })
+}
 
 /// Trait for detecting singular or non-finite diagonal entries.
 ///

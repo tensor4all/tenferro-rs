@@ -709,7 +709,8 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -820,7 +821,8 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         empty_ctx,
-    );
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -844,7 +846,8 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -868,9 +871,10 @@ fn assert_probe_identity_eager_backward(probe: Tensor) {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let probe_shape = probe.shape().to_vec();
-    let probe = EagerTensor::from_tensor_in(probe, ctx);
+    let probe = EagerTensor::from_tensor_in(probe, ctx).unwrap();
     let y = apply_eager(Arc::new(TestProbeIdentity { probe_shape }), &[&x, &probe])
         .expect("probe identity eager apply")
         .into_iter()
@@ -941,7 +945,8 @@ fn missing_extension_rule_errors_in_eager_backward() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
         .expect("forward-only eager extension apply")
         .into_iter()

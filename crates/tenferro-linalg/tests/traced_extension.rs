@@ -32,14 +32,15 @@ fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
                 .unwrap(),
         ),
     };
-    TracedTensor::from_tensor_concrete_shape(tensor)
+    TracedTensor::from_tensor_concrete_shape(tensor).unwrap()
 }
 
 #[test]
 fn svd_executes_after_runtime_registration() {
     let a = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
-    );
+    )
+    .unwrap();
     let (u, s, vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -69,13 +70,15 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
             ],
         )
         .unwrap(),
-    ));
+    ))
+    .unwrap();
     let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&a).unwrap();
     assert_eq!(s.dtype, DType::F64);
 
     let weights = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 2.0]).unwrap(),
-    );
+    )
+    .unwrap();
     let weighted = (&s * &weights).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -96,7 +99,8 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
 fn missing_runtime_reports_linalg_family() {
     let a = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
-    );
+    )
+    .unwrap();
     let y = tenferro_linalg::traced_tensor::cholesky(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -114,7 +118,8 @@ fn missing_runtime_reports_linalg_family() {
 fn full_piv_lu_multi_output_slots_are_preserved() {
     let a = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
-    );
+    )
+    .unwrap();
     let (p, l, u, q, parity) = tenferro_linalg::traced_tensor::full_piv_lu(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -136,16 +141,20 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
 fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
     let rectangular = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![3, 4, 2], vec![1.0_f64; 24]).unwrap(),
-    );
+    )
+    .unwrap();
     let square = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![3, 3, 2], vec![1.0_f64; 18]).unwrap(),
-    );
+    )
+    .unwrap();
     let complex_square = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4]).unwrap(),
-    ));
+    ))
+    .unwrap();
     let ints = TracedTensor::from_tensor_concrete_shape(Tensor::I64(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]).unwrap(),
-    ));
+    ))
+    .unwrap();
 
     let (u, s, vt) = tenferro_linalg::traced_tensor::svd(&rectangular).unwrap();
     assert_eq!(u.concrete_shape().unwrap(), vec![3, 3, 2]);
@@ -289,7 +298,7 @@ fn traced_inv_rejects_rank_less_than_two_without_panicking() {
 
 #[test]
 fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
-    let matrix = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let matrix = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
 
     for (op, result) in [
         ("inv", tenferro_linalg::traced_tensor::inv(&matrix)),

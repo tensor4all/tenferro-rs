@@ -132,7 +132,7 @@ impl TensorStructural for CpuExecSession<'_> {
         structural::broadcast_in_dim_with_pool(self.buffers, &input, shape, dims)
     }
 
-    delegate_with_pool!(convert(input: &Tensor, to: crate::DType) => structural::convert_with_pool);
+    delegate_with_pool!(cast(input: &Tensor, to: crate::DType) => structural::cast_with_pool);
     delegate_with_pool!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal_with_pool);
     delegate_with_pool!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal_with_pool);
     delegate_with_pool!(tril(input: &Tensor, k: i64) => structural::tril_with_pool);

@@ -919,8 +919,8 @@ impl TensorStructural for CpuBackend {
         self.broadcast_in_dim(&input, shape, dims)
     }
 
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::convert_with_pool(buffers, input, to))
+    fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| structural::cast_with_pool(buffers, input, to))
     }
 
     fn extract_diagonal(

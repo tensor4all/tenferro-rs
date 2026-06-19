@@ -637,8 +637,8 @@ fn rfft(
 
 /// Build a one-dimensional inverse real FFT along `axis`.
 ///
-/// If `n` is `None`, the output length is inferred as
-/// `2 * (input_len - 1)`.
+/// If `n` is `None`, the output length is inferred as twice one less than the
+/// input spectrum length.
 ///
 /// # Examples
 ///
@@ -798,7 +798,16 @@ fn output_shape_c2r(
             message: "input spectrum axis length must be positive".to_string(),
         });
     }
-    let len = n.unwrap_or_else(|| 2 * (input_len - 1));
+    let len = match n {
+        Some(len) => len,
+        None => input_len
+            .checked_sub(1)
+            .and_then(|len| len.checked_mul(2))
+            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                op: "irfft",
+                message: "default output length overflows usize".to_string(),
+            })?,
+    };
     if len == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: "irfft",
@@ -831,6 +840,46 @@ fn validate_axis(op: &'static str, shape: &[usize], axis: usize) -> tenferro_ten
         });
     }
     Ok(())
+}
+
+fn checked_shape_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> tenferro_tensor::Result<usize> {
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!("{role} shape product overflows usize"),
+        })
+}
+
+fn checked_mul(
+    op: &'static str,
+    role: &'static str,
+    lhs: usize,
+    rhs: usize,
+) -> tenferro_tensor::Result<usize> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!("{role} overflows usize"),
+        })
+}
+
+fn checked_add(
+    op: &'static str,
+    role: &'static str,
+    lhs: usize,
+    rhs: usize,
+) -> tenferro_tensor::Result<usize> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!("{role} overflows usize"),
+        })
 }
 
 fn uninit_output_vec<T>(len: usize) -> Vec<MaybeUninit<T>> {
@@ -866,7 +915,8 @@ where
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
     let input_data = input.host_data()?;
-    let mut output = uninit_output_vec(out_shape.iter().product());
+    let output_len = checked_shape_product("fft", "output", &out_shape)?;
+    let mut output = uninit_output_vec(output_len);
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = if forward {
         planner.plan_fft_forward(fft_len)
@@ -880,7 +930,7 @@ where
         lane.fill(Complex::zero());
         let copy_len = lane_ctx.in_axis_len.min(fft_len);
         for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
-            *slot = input_data[lane_ctx.input_offset(k)];
+            *slot = input_data[lane_ctx.input_offset(k)?];
         }
         fft_plan.process(&mut lane);
         if scale != T::one() {
@@ -889,9 +939,10 @@ where
             }
         }
         for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)].write(value);
+            output[lane_ctx.output_offset(k)?].write(value);
         }
-    });
+        Ok(())
+    })?;
 
     // SAFETY: `for_axis_lane` covers every element in the compact column-major
     // output exactly once, and each lane writes all `out_axis_len` positions.
@@ -913,7 +964,8 @@ where
     let out_shape = output_shape_r2c(in_shape, axis, n, onesided)?;
     let out_axis_len = out_shape[axis];
     let input_data = input.host_data()?;
-    let mut output = uninit_output_vec(out_shape.iter().product());
+    let output_len = checked_shape_product("rfft", "output", &out_shape)?;
+    let mut output = uninit_output_vec(output_len);
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_forward(fft_len);
     let scale: T = scale_for(norm, true, fft_len)?;
@@ -923,7 +975,7 @@ where
         lane.fill(Complex::zero());
         let copy_len = lane_ctx.in_axis_len.min(fft_len);
         for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
-            *slot = Complex::new(input_data[lane_ctx.input_offset(k)], T::zero());
+            *slot = Complex::new(input_data[lane_ctx.input_offset(k)?], T::zero());
         }
         fft_plan.process(&mut lane);
         if scale != T::one() {
@@ -932,9 +984,10 @@ where
             }
         }
         for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)].write(value);
+            output[lane_ctx.output_offset(k)?].write(value);
         }
-    });
+        Ok(())
+    })?;
 
     // SAFETY: `for_axis_lane` covers every element in the compact column-major
     // output exactly once, and each lane writes all `out_axis_len` positions.
@@ -955,7 +1008,8 @@ where
     let out_axis_len = out_shape[axis];
     let expected_half = out_axis_len / 2 + 1;
     let input_data = input.host_data()?;
-    let mut output = uninit_output_vec(out_shape.iter().product());
+    let output_len = checked_shape_product("irfft", "output", &out_shape)?;
+    let mut output = uninit_output_vec(output_len);
     let mut planner = FftPlanner::<T>::new();
     let fft_plan = planner.plan_fft_inverse(out_axis_len);
     let scale: T = scale_for(norm, false, out_axis_len)?;
@@ -965,7 +1019,7 @@ where
         lane.fill(Complex::zero());
         let copy_len = lane_ctx.in_axis_len.min(expected_half);
         for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
-            *slot = input_data[lane_ctx.input_offset(k)];
+            *slot = input_data[lane_ctx.input_offset(k)?];
         }
         for k in expected_half..out_axis_len {
             let mirror = out_axis_len - k;
@@ -975,9 +1029,10 @@ where
         }
         fft_plan.process(&mut lane);
         for (k, value) in lane.iter().take(out_axis_len).enumerate() {
-            output[lane_ctx.output_offset(k)].write(value.re * scale);
+            output[lane_ctx.output_offset(k)?].write(value.re * scale);
         }
-    });
+        Ok(())
+    })?;
 
     // SAFETY: `for_axis_lane` covers every element in the compact column-major
     // output exactly once, and each lane writes all `out_axis_len` positions.
@@ -1008,12 +1063,19 @@ struct LaneContext {
 }
 
 impl LaneContext {
-    fn input_offset(self, k: usize) -> usize {
-        self.input_base + k * self.axis_stride
+    fn input_offset(self, k: usize) -> tenferro_tensor::Result<usize> {
+        let lane_offset = checked_mul("fft", "input lane offset", k, self.axis_stride)?;
+        checked_add("fft", "input element offset", self.input_base, lane_offset)
     }
 
-    fn output_offset(self, k: usize) -> usize {
-        self.output_base + k * self.axis_stride
+    fn output_offset(self, k: usize) -> tenferro_tensor::Result<usize> {
+        let lane_offset = checked_mul("fft", "output lane offset", k, self.axis_stride)?;
+        checked_add(
+            "fft",
+            "output element offset",
+            self.output_base,
+            lane_offset,
+        )
     }
 }
 
@@ -1021,26 +1083,31 @@ fn for_axis_lane(
     in_shape: &[usize],
     axis: usize,
     out_axis_len: usize,
-    mut f: impl FnMut(LaneContext),
-) {
+    mut f: impl FnMut(LaneContext) -> tenferro_tensor::Result<()>,
+) -> tenferro_tensor::Result<()> {
     let in_axis_len = in_shape[axis];
-    let axis_stride: usize = in_shape[..axis].iter().product();
-    let outer: usize = in_shape[axis + 1..].iter().product();
-    let in_block = axis_stride * in_axis_len;
-    let out_block = axis_stride * out_axis_len;
+    let axis_stride = checked_shape_product("fft", "axis stride", &in_shape[..axis])?;
+    let outer = checked_shape_product("fft", "outer lane count", &in_shape[axis + 1..])?;
+    let in_block = checked_mul("fft", "input lane block", axis_stride, in_axis_len)?;
+    let out_block = checked_mul("fft", "output lane block", axis_stride, out_axis_len)?;
+    let _input_len = checked_mul("fft", "input lane coverage", outer, in_block)?;
+    let _output_len = checked_mul("fft", "output lane coverage", outer, out_block)?;
 
     for outer_idx in 0..outer {
-        let in_outer_base = outer_idx * in_block;
-        let out_outer_base = outer_idx * out_block;
+        let in_outer_base = checked_mul("fft", "input outer base", outer_idx, in_block)?;
+        let out_outer_base = checked_mul("fft", "output outer base", outer_idx, out_block)?;
         for inner in 0..axis_stride {
+            let input_base = checked_add("fft", "input lane base", in_outer_base, inner)?;
+            let output_base = checked_add("fft", "output lane base", out_outer_base, inner)?;
             f(LaneContext {
-                input_base: in_outer_base + inner,
-                output_base: out_outer_base + inner,
+                input_base,
+                output_base,
                 axis_stride,
                 in_axis_len,
-            });
+            })?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1060,5 +1127,29 @@ mod tests {
         assert!(bad_axis
             .infer_output_meta(&[DType::C64], &[&shape])
             .is_empty());
+    }
+
+    #[test]
+    fn checked_shape_product_rejects_overflow_before_allocation() {
+        let err = checked_shape_product("fft", "output", &[usize::MAX, 2])
+            .expect_err("overflowing output shape should be rejected");
+
+        assert!(err.to_string().contains("overflows usize"), "{err}");
+    }
+
+    #[test]
+    fn irfft_default_output_length_rejects_overflow() {
+        let err = output_shape_c2r(&[usize::MAX], 0, None)
+            .expect_err("default irfft output length should reject overflow");
+
+        assert!(err.to_string().contains("overflows usize"), "{err}");
+    }
+
+    #[test]
+    fn axis_lane_layout_rejects_stride_overflow() {
+        let err = for_axis_lane(&[usize::MAX, 2], 1, 2, |_| Ok(()))
+            .expect_err("lane layout should reject stride overflow");
+
+        assert!(err.to_string().contains("overflows usize"), "{err}");
     }
 }

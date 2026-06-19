@@ -127,7 +127,8 @@ impl TracedTensor {
     ///
     /// let x = TracedTensor::from_tensor_concrete_shape(
     ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
-    /// );
+    /// )
+    /// .unwrap();
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
@@ -143,7 +144,7 @@ impl TracedTensor {
             Error::Internal("index_select currently requires a concrete shape hint".into())
         })?;
         let (indices_tensor, config, out_shape) = index_select_config(&shape, axis, positions)?;
-        let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor);
+        let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor)?;
         Ok(apply_binary_preserve_input_dtypes(
             StdTensorOp::Gather(config),
             self,
@@ -162,8 +163,8 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
-    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap());
-    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap());
+    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()).unwrap();
+    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap()).unwrap();
     /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&stacked).unwrap();
@@ -219,7 +220,7 @@ fn apply_nary_concatenate(
         .iter()
         .map(|tensor| {
             if tensor.dtype != out_dtype {
-                tensor.convert(out_dtype)
+                tensor.cast(out_dtype)
             } else {
                 (*tensor).clone()
             }

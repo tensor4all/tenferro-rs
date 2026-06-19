@@ -176,17 +176,23 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let rhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let out = eager_tensor::add(&lhs, &rhs).unwrap();
 
-    assert_eq!(out.data().shape(), &[3, 4]);
+    assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.data().clone().into_vec_col_major::<f64>().unwrap().1,
+        out.to_tensor()
+            .unwrap()
+            .into_vec_col_major::<f64>()
+            .unwrap()
+            .1,
         vec![11.0, 12.0, 13.0, 21.0, 22.0, 23.0, 31.0, 32.0, 33.0, 41.0, 42.0, 43.0,]
     );
 }
@@ -197,11 +203,13 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
     let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
 
     let _ = eager_tensor::sub(&x, &y).unwrap();
@@ -228,19 +236,41 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
 }
 
 #[test]
-fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
+fn eager_tensor_module_covers_conversion_matmul_and_standard_op() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
+    )
+    .unwrap();
+
+    let converted = eager_tensor::convert(&x, DType::C64).unwrap();
+    assert_eq!(converted.dtype(), DType::C64);
+    assert_eq!(
+        converted
+            .materialized()
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
     );
 
-    let converted = eager_tensor::convert(&x, DType::F32).unwrap();
-    assert_eq!(converted.data().dtype(), DType::F32);
-    assert_eq!(converted.data().as_slice::<f32>().unwrap(), &[1.0, 2.0]);
+    let convert_err = eager_tensor::convert(&x, DType::I32).unwrap_err();
+    assert!(convert_err
+        .to_string()
+        .contains("unsupported dtype conversion"));
+
+    let casted = eager_tensor::cast(&x, DType::I32).unwrap();
+    assert_eq!(
+        casted.materialized().unwrap().as_slice::<i32>().unwrap(),
+        &[1, 2]
+    );
 
     let negated = eager_tensor::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
-    assert_eq!(negated.data().as_slice::<f64>().unwrap(), &[-1.0, -2.0]);
+    assert_eq!(
+        negated.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[-1.0, -2.0]
+    );
 
     let extension_err =
         eager_tensor::apply_standard_op(StdTensorOp::Extension(Arc::new(TestExtensionOp)), &[&x])
@@ -256,62 +286,26 @@ fn eager_tensor_module_covers_conversion_matmul_standard_op_and_fusion() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let b = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
-    );
-    let product = eager_tensor::matmul(&a, &b).unwrap();
-    assert_eq!(product.data().shape(), &[2, 2]);
-    assert_eq!(
-        product.data().as_slice::<f64>().unwrap(),
-        &[22.0, 28.0, 49.0, 64.0]
-    );
-
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        ctx.clone(),
-    );
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap(),
-        ctx.clone(),
-    );
-    let fused = eager_tensor::backend_broadcast_multiply_untracked(
-        &lhs,
-        &[2, 3],
-        &[0],
-        &rhs,
-        &[2, 3],
-        &[1],
-    )
-    .unwrap()
-    .expect("CPU backend should fuse broadcast multiply for untracked tensors");
-    assert_eq!(fused.data().shape(), &[2, 3]);
-    assert_eq!(
-        fused.data().as_slice::<f64>().unwrap(),
-        &[10.0, 15.0, 14.0, 21.0, 22.0, 33.0]
-    );
-
-    let tracked = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        ctx.clone(),
-    );
-    let skipped = eager_tensor::backend_broadcast_multiply_untracked(
-        &tracked,
-        &[2, 3],
-        &[0],
-        &rhs,
-        &[2, 3],
-        &[1],
     )
     .unwrap();
-    assert!(skipped.is_none());
+    let product = eager_tensor::matmul(&a, &b).unwrap();
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_eq!(
+        product.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
 
     let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let other = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         other_ctx,
-    );
+    )
+    .unwrap();
     let err = eager_tensor::add(&x, &other).err().unwrap();
     assert!(matches!(err, tenferro_ad::Error::ContextMismatch { .. }));
 }
@@ -322,21 +316,26 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),
-    );
+    )
+    .unwrap();
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
     let selected = eager_tensor::where_select(&cond, &x, &y).unwrap();
 
-    assert_eq!(cond.data().dtype(), DType::Bool);
-    assert_eq!(cond.data().as_slice::<bool>().unwrap(), &[true, false]);
+    assert_eq!(cond.dtype(), DType::Bool);
+    assert_eq!(
+        cond.materialized().unwrap().as_slice::<bool>().unwrap(),
+        &[true, false]
+    );
     assert_eq!(
         selected
-            .data()
-            .clone()
+            .to_tensor()
+            .unwrap()
             .into_vec_col_major::<f64>()
             .unwrap()
             .1,

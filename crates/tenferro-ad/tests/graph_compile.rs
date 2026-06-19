@@ -77,7 +77,7 @@ fn graph_compiler_compiles_without_backend() {
 
 #[test]
 fn graph_compiler_validates_placeholder_specs() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -93,7 +93,7 @@ fn graph_compiler_validates_placeholder_specs() {
         .unwrap_err();
     assert!(format!("{err}").contains("dtype"));
 
-    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]);
+    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let err = compiler
         .compile_with_input_specs(&z.neg(), &[(&z, DType::F64, &[2])])
         .unwrap_err();
@@ -102,7 +102,7 @@ fn graph_compiler_validates_placeholder_specs() {
 
 #[test]
 fn graph_program_input_accessors_report_compiled_contract() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.neg();
 
     let mut compiler = GraphCompiler::new();
@@ -158,7 +158,7 @@ fn graph_compiler_cache_distinguishes_symbolic_input_shapes() {
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
 
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let _ = compiler

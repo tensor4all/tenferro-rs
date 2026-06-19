@@ -61,14 +61,6 @@ fn promote_dtypes_fold() {
 }
 
 #[test]
-fn promotion_rank_ordering() {
-    assert!(promotion_rank(DType::I64) < promotion_rank(DType::F32));
-    assert!(promotion_rank(DType::F32) < promotion_rank(DType::F64));
-    assert!(promotion_rank(DType::F64) < promotion_rank(DType::C32));
-    assert!(promotion_rank(DType::C32) < promotion_rank(DType::C64));
-}
-
-#[test]
 fn invalid_shape_configs_return_errors_instead_of_panicking() {
     let shape = DimExpr::from_concrete(&[2, 3]);
 

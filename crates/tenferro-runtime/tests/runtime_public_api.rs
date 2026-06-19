@@ -1,7 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    tensor, DType, DotGeneralConfig, Error, GraphCompiler, GraphExecutor, Tensor, TensorRead,
-    TensorValue, TracedTensor,
+    tensor, traced_tensor, DType, DotGeneralConfig, Error, GraphCompiler, GraphExecutor, Tensor,
+    TensorRead, TensorValue, TracedTensor,
 };
 
 #[test]
@@ -22,10 +22,15 @@ fn runtime_crate_exposes_traced_graph_execution_api() {
 fn tensor_module_free_functions_cover_eager_runtime_paths() {
     let mut backend = CpuBackend::new();
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 
-    let converted = tensor::convert(&input, DType::F32, &mut backend).unwrap();
-    assert_eq!(converted.dtype(), DType::F32);
-    assert_eq!(converted.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    let converted = tensor::convert(&f32_input, DType::F64, &mut backend).unwrap();
+    assert_eq!(converted.dtype(), DType::F64);
+    assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let casted = tensor::cast(&input, DType::F32, &mut backend).unwrap();
+    assert_eq!(casted.dtype(), DType::F32);
+    assert_eq!(casted.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
     let reshaped = tensor::reshape(&input, &[4], &mut backend).unwrap();
     assert_eq!(reshaped.shape(), &[4]);
@@ -41,8 +46,29 @@ fn tensor_module_free_functions_cover_eager_runtime_paths() {
 }
 
 #[test]
+fn traced_tensor_module_free_functions_cover_wrappers_and_rank_errors() {
+    let scalar = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let vector = TracedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.75]).unwrap();
+
+    let converted = traced_tensor::convert(&vector, DType::C64).unwrap();
+    assert_eq!(converted.dtype, DType::C64);
+
+    let casted = traced_tensor::cast(&vector, DType::I32);
+    assert_eq!(casted.dtype, DType::I32);
+
+    let err = traced_tensor::matmul(&scalar, &vector).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidGraphBuild {
+            op: "traced_tensor::matmul",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(&[0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -62,7 +88,7 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
 
 #[test]
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
     let z = (&x + &y).unwrap();
@@ -90,8 +116,8 @@ fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
 
 #[test]
 fn graph_executor_runs_dot_general_with_borrowed_inputs() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -133,7 +159,7 @@ fn graph_executor_runs_dot_general_with_borrowed_inputs() {
 
 #[test]
 fn graph_executor_can_return_final_transpose_as_lazy_value() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap().transpose(&[1, 0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -179,7 +205,7 @@ fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
         Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap()
     ]);
 
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler

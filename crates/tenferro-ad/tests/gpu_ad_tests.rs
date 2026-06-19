@@ -62,6 +62,7 @@ fn eval_gpu_tensor(engine: &mut GraphExecutor<CudaBackend>, tensor: &mut TracedT
 
 fn upload_traced(backend: &CudaBackend, tensor: &Tensor) -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape(upload_tensor(backend.runtime(), tensor).unwrap())
+        .unwrap()
 }
 
 fn matmul(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
@@ -108,9 +109,9 @@ fn test_gpu_matmul_vjp() {
         ],
     );
 
-    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone());
-    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone());
-    let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone());
+    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone()).unwrap();
+    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone()).unwrap();
+    let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone()).unwrap();
     let mut cpu_engine = GraphExecutor::new(CpuBackend::new());
     let y_cpu = matmul(&a_cpu, &b_cpu);
     let mut grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();

@@ -290,8 +290,8 @@ impl TensorStructural for NoBroadcastMaterializationBackend {
         ))
     }
 
-    fn convert(&mut self, _input: &Tensor, _to: tenferro_tensor::DType) -> Result<Tensor> {
-        Err(unexpected("convert"))
+    fn cast(&mut self, _input: &Tensor, _to: tenferro_tensor::DType) -> Result<Tensor> {
+        Err(unexpected("cast"))
     }
 
     fn extract_diagonal(

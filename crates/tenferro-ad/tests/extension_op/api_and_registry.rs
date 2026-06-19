@@ -34,7 +34,8 @@ fn apply_eager_rejects_wrong_input_count() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
         Ok(_) => panic!("wrong eager extension input count unexpectedly succeeded"),
@@ -51,11 +52,13 @@ fn apply_eager_rejects_cross_context_inputs() {
     let lhs = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         lhs_ctx,
-    );
+    )
+    .unwrap();
     let rhs = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
         rhs_ctx,
-    );
+    )
+    .unwrap();
 
     let err = match apply_eager(Arc::new(TestSwap), &[&lhs, &rhs]) {
         Ok(_) => panic!("cross-context eager extension inputs unexpectedly succeeded"),
@@ -74,7 +77,8 @@ fn apply_eager_reports_missing_extension_runtime() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let err = match apply_eager(Arc::new(TestScaleBy2), &[&x]) {
         Ok(_) => panic!("unregistered eager extension runtime unexpectedly succeeded"),
@@ -96,7 +100,8 @@ fn apply_eager_untracked_forward_returns_untracked_result() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let y = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("untracked eager extension apply")
@@ -106,7 +111,10 @@ fn apply_eager_untracked_forward_returns_untracked_result() {
 
     assert!(!y.tracks_grad());
     assert_eq!(y.shape(), &[3]);
-    assert_eq!(f64_slice(y.data()), &[2.0, 4.0, 6.0]);
+    assert_eq!(
+        f64_slice(y.materialized().unwrap().as_ref()),
+        &[2.0, 4.0, 6.0]
+    );
 }
 
 #[test]
@@ -139,7 +147,8 @@ fn apply_eager_rejects_mismatched_output_count() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx,
-    );
+    )
+    .unwrap();
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {
         Ok(_) => panic!("bad eager extension output count unexpectedly succeeded"),
@@ -160,7 +169,7 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
     // Same loss but with an input_symbolic_shape placeholder so the AD
     // path exercises the deferred zero-tangent policy (spec
     // Section 10).
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
         .unwrap()
         .into_iter()

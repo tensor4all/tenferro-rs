@@ -6,7 +6,7 @@ use crate::{Error, GraphCompiler, TracedTensor};
 
 #[test]
 fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -34,7 +34,7 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
 
 #[test]
 fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = x.transpose(&[1, 0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -74,7 +74,7 @@ fn borrowed_input_workspace_does_not_retype_static_slot_vec() {
 
 #[test]
 fn compile_with_input_specs_rejects_computed_placeholder_specs() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
 

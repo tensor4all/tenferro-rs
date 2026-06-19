@@ -43,11 +43,11 @@ fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
     let shapes = mps_shapes(sites, PHYS_DIM, chi);
     let bra_placeholders = shapes
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
         .collect::<Vec<_>>();
     let ket_placeholders = shapes
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
         .collect::<Vec<_>>();
     let mut compiler = GraphCompiler::new();
     let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);

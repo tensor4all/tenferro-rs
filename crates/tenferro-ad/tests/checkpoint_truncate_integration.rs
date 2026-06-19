@@ -31,9 +31,10 @@ fn checkpoint_truncate_loop_grad() {
     let mut compiler = GraphCompiler::new();
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value));
-    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
-    let mut x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value)).unwrap();
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let mut x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone())).unwrap();
 
     for _ in 0..steps {
         x = (&a * &x).unwrap();

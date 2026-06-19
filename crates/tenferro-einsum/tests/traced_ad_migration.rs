@@ -91,11 +91,13 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75],
-    ));
+    ))
+    .unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5],
-    ));
+    ))
+    .unwrap();
     let mut compiler = GraphCompiler::new();
 
     let y = tenferro_einsum::traced_tensor::einsum_with(
@@ -119,8 +121,10 @@ fn grad_einsum_matmul_real_uses_extension_ad_rule() {
 fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
     let a_data = vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75];
     let b_data = vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5];
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let y = tenferro_einsum::traced_tensor::einsum_with(
@@ -135,8 +139,10 @@ fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
     let grad_b = run_traced(&loss.grad(&b).unwrap());
 
     let eval_loss = |lhs: &[f64], rhs: &[f64]| {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], lhs.to_vec()));
-        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], rhs.to_vec()));
+        let a =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], lhs.to_vec())).unwrap();
+        let b =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], rhs.to_vec())).unwrap();
         let mut compiler = GraphCompiler::new();
         let y = tenferro_einsum::traced_tensor::einsum_with(
             &mut compiler,
@@ -168,9 +174,9 @@ fn grad_einsum_matmul_real_matches_finite_diff_for_both_inputs() {
 
 #[test]
 fn symbolic_grad_einsum_with_explicit_path_uses_extension_ad_rule() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let y = tenferro_einsum::traced_tensor::einsum_with(

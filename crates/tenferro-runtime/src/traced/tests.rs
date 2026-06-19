@@ -89,8 +89,8 @@ fn symbolic_axis_accessors_reject_invalid_axes() {
 
 #[test]
 fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let target_shape = [lhs.axis_sym_dim(0).unwrap(), rhs.axis_sym_dim(0).unwrap()];
 
     let err = lhs
@@ -104,4 +104,35 @@ fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
             && message.contains("shape_refs"),
         "{message}"
     );
+}
+
+#[test]
+fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
+    let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+
+    let rank_mismatch = x.broadcast_in_dim(&[2, 3, 4], &[0]).unwrap_err();
+    assert!(
+        rank_mismatch
+            .to_string()
+            .contains("dims length 1 must match input rank 2"),
+        "{rank_mismatch}"
+    );
+
+    let out_of_bounds = x.broadcast_in_dim(&[2, 3, 4], &[0, 3]).unwrap_err();
+    assert!(
+        out_of_bounds
+            .to_string()
+            .contains("broadcast dim 3 out of bounds for output rank 3"),
+        "{out_of_bounds}"
+    );
+
+    let duplicate = x.broadcast_in_dim(&[2, 3, 4], &[1, 1]).unwrap_err();
+    assert!(
+        duplicate.to_string().contains("duplicate broadcast dim 1"),
+        "{duplicate}"
+    );
+
+    let valid = x.broadcast_in_dim(&[2, 3, 4], &[0, 1]).unwrap();
+    assert_eq!(valid.rank, 3);
+    assert_eq!(valid.try_concrete_shape().unwrap(), &[2, 3, 4]);
 }

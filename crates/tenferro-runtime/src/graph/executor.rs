@@ -301,7 +301,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -329,7 +329,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -365,7 +365,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorView, TracedTensor, TypedTensorView,
     /// };
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -399,7 +399,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     TypedTensorView,
     /// };
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -433,7 +433,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let sum = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -462,7 +462,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorValue, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -500,7 +500,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     DType, GraphCompiler, GraphExecutor, TensorRead, TensorView, TracedTensor, TypedTensorView,
     /// };
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let y = (&x + &x).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -534,7 +534,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     TypedTensorView,
     /// };
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// let y = x.transpose(&[1, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
@@ -962,7 +962,7 @@ fn resolve_input(
         (*bound).clone()
     } else if let Some(default) = &input.default_tensor {
         resolve_default_tensor(default.as_ref(), backend)?
-    } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings, defaults) {
+    } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings, defaults)? {
         zero
     } else {
         return Err(Error::UnboundPlaceholder {
@@ -987,7 +987,7 @@ fn resolve_input_read<'a>(
         } else {
             ExecSlot::Read(TensorRead::from_tensor(default))
         }
-    } else if let Some(zero) = deferred_zero_for_tangent_key_read(&input.key, bindings, defaults) {
+    } else if let Some(zero) = deferred_zero_for_tangent_key_read(&input.key, bindings, defaults)? {
         ExecSlot::Owned(zero)
     } else {
         return Err(Error::UnboundPlaceholder {
@@ -1124,64 +1124,64 @@ fn deferred_zero_for_tangent_key(
     key: &TensorInputKey,
     bindings: &HashMap<TensorInputKey, &Tensor>,
     defaults: &HashMap<TensorInputKey, &Tensor>,
-) -> Option<Tensor> {
+) -> Result<Option<Tensor>> {
     if !key.is_tangent() {
-        return None;
+        return Ok(None);
     }
     let root = tangent_primal_root(key);
-    let primal = bindings.get(root).or_else(|| defaults.get(root))?;
-    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
+    let Some(primal) = bindings.get(root).or_else(|| defaults.get(root)) else {
+        return Ok(None);
+    };
+    zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some)
 }
 
 fn deferred_zero_for_tangent_key_read<'a>(
     key: &TensorInputKey,
     bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
     defaults: &HashMap<TensorInputKey, &'a Tensor>,
-) -> Option<Tensor> {
+) -> Result<Option<Tensor>> {
     if !key.is_tangent() {
-        return None;
+        return Ok(None);
     }
     let root = tangent_primal_root(key);
     if let Some(primal) = bindings.get(root) {
-        return Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()));
+        return zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some);
     }
-    let primal = defaults.get(root)?;
-    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
+    let Some(primal) = defaults.get(root) else {
+        return Ok(None);
+    };
+    zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some)
 }
 
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     key.primal_root()
 }
 
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
-    // Invariant: executor deferred zeros are derived from already-validated tensor shapes.
+fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
-        DType::F32 => {
-            Tensor::F32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
-        DType::F64 => {
-            Tensor::F64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
-        DType::I32 => {
-            Tensor::I32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
-        DType::I64 => {
-            Tensor::I64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
+        DType::F32 => Ok(Tensor::F32(TypedTensor::zeros(shape)?)),
+        DType::F64 => Ok(Tensor::F64(TypedTensor::zeros(shape)?)),
+        DType::I32 => Ok(Tensor::I32(TypedTensor::zeros(shape)?)),
+        DType::I64 => Ok(Tensor::I64(TypedTensor::zeros(shape)?)),
         DType::Bool => {
-            let len = shape.iter().product();
-            Tensor::Bool(
-                TypedTensor::from_vec_col_major(shape, vec![false; len])
-                    .expect("validated bool default tensor shape"),
-            )
+            let len = checked_default_element_count(&shape)?;
+            Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
+                shape,
+                vec![false; len],
+            )?))
         }
-        DType::C32 => {
-            Tensor::C32(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
-        DType::C64 => {
-            Tensor::C64(TypedTensor::zeros(shape).expect("validated default tensor shape"))
-        }
+        DType::C32 => Ok(Tensor::C32(TypedTensor::zeros(shape)?)),
+        DType::C64 => Ok(Tensor::C64(TypedTensor::zeros(shape)?)),
     }
+}
+
+fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| Error::InvalidCompiledGraph {
+                message: format!("deferred zero shape product overflows usize for shape {shape:?}"),
+            })
+    })
 }
 
 #[cfg(test)]

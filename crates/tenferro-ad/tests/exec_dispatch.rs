@@ -212,8 +212,8 @@ impl TensorStructural for FakeTensorBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         self.result("broadcast_in_dim", 25.0)
     }
-    fn convert(&mut self, _input: &Tensor, _to: DType) -> tenferro_tensor::Result<Tensor> {
-        self.result("convert", 25.5)
+    fn cast(&mut self, _input: &Tensor, _to: DType) -> tenferro_tensor::Result<Tensor> {
+        self.result("cast", 25.5)
     }
     fn extract_diagonal(
         &mut self,
@@ -355,7 +355,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "broadcast_in_dim",
             25.0,
         ),
-        (ExecOp::Convert { to: DType::C64 }, 1, "convert", 25.5),
+        (ExecOp::Convert { to: DType::C64 }, 1, "cast", 25.5),
         (
             ExecOp::DotGeneral(DotGeneralConfig {
                 lhs_contracting_dims: vec![0],
@@ -648,7 +648,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
 
 #[test]
 fn graph_executor_does_not_reclaim_borrowed_input_slots() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap().neg();
     let mut compiler = GraphCompiler::new();
     let program = compiler

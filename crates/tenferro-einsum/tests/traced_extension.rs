@@ -95,8 +95,8 @@ fn traced_einsum_final_permutation_can_return_lazy_value() {
 #[test]
 fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_extension_runtime()
 {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let subs = tenferro_einsum::Subscripts::parse("ji,kj->ki").unwrap();
     let lhs_shape = [2, 3];
     let rhs_shape = [4, 2];
@@ -143,8 +143,8 @@ fn runtime_registration_is_idempotent() {
 
 #[test]
 fn runtime_einsum_caches_are_extension_owned() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 3);
-    let y = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let y = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let dot =

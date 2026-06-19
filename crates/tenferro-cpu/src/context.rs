@@ -37,9 +37,7 @@ impl CpuContext {
     /// assert!(ctx.num_threads() >= 1);
     /// ```
     pub fn from_env() -> Self {
-        Self::try_from_env().unwrap_or_else(|_| {
-            Self::with_threads(super::affinity::available_parallelism()).unwrap()
-        })
+        Self::try_from_env().unwrap_or_else(|_| Self::single_threaded())
     }
 
     /// Try to create a CPU context from `RAYON_NUM_THREADS`.
@@ -113,6 +111,13 @@ impl CpuContext {
             ))
         };
         Ok(Self { num_threads, pool })
+    }
+
+    fn single_threaded() -> Self {
+        Self {
+            num_threads: 1,
+            pool: None,
+        }
     }
 
     /// Return this context's CPU parallelism hint.

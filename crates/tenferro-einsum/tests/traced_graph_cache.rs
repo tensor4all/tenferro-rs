@@ -56,8 +56,8 @@ fn runtime_matmul_values(rows: usize, cols: usize, mid: usize) -> (Tensor, Tenso
 }
 
 fn compile_runtime_planned_matmul(rows: usize, cols: usize, mid: usize) -> RuntimePlannedMatmul {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 3);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let out = einsum(&mut compiler, &[&a, &b], "iij,jk->ik").expect("einsum");
     let program = compiler
@@ -97,24 +97,28 @@ fn run_eager_extension_matmul(
     cols: usize,
     mid: usize,
 ) -> Tensor {
-    let a = ctx.constant_from(
-        Tensor::from_vec_col_major(
-            vec![rows, rows, mid],
-            (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+    let a = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(
+                vec![rows, rows, mid],
+                (0..rows * rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
-    let b = ctx.constant_from(
-        Tensor::from_vec_col_major(
-            vec![mid, cols],
-            (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
+        .unwrap();
+    let b = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(
+                vec![mid, cols],
+                (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    );
+        .unwrap();
     eager_einsum(&[&a, &b], "iij,jk->ik")
         .expect("eager einsum")
-        .data()
-        .clone()
+        .to_tensor()
+        .unwrap()
 }
 
 fn extension_cache_entries(compiler: &GraphCompiler) -> usize {
@@ -249,9 +253,9 @@ fn traced_static_tree_einsum_expands_without_runtime_exec_program_cache() {
         &[(1, 2), (0, 3)],
     )
     .unwrap();
-    let a = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
-    let b = TracedTensor::input_concrete_shape(DType::F64, &[3, 4]);
-    let c = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]);
+    let a = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let b = TracedTensor::input_concrete_shape(DType::F64, &[3, 4]).unwrap();
+    let c = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]).unwrap();
     let mut compiler = GraphCompiler::new();
     let out = einsum_with(
         &mut compiler,
@@ -294,9 +298,9 @@ fn traced_static_tree_einsum_expands_without_runtime_exec_program_cache() {
 
 #[test]
 fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let default_auto = einsum_with(
@@ -366,9 +370,9 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
 
 #[test]
 fn runtime_planned_einsum_honors_explicit_path_execution_order() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let left_to_right = einsum_with(
@@ -545,8 +549,8 @@ fn concrete_traced_einsum_static_cache_distinguishes_plan_spec() {
 
 #[test]
 fn symbolic_einsum_accepts_non_default_optimizer_strategy() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(&mut compiler, &[&a, &b], "ij,jk->ik", EinsumOptimize::False);
@@ -559,8 +563,8 @@ fn symbolic_einsum_accepts_non_default_optimizer_strategy() {
 
 #[test]
 fn symbolic_einsum_accepts_custom_auto_options() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(
@@ -584,9 +588,9 @@ fn symbolic_einsum_rejects_precomputed_tree() {
     let concrete_subs = tenferro_einsum::Subscripts::parse("ij,jk,kl->il").unwrap();
     let tree = ContractionTree::optimize(&concrete_subs, &[&[2, 3][..], &[3, 4][..], &[4, 5][..]])
         .unwrap();
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(
@@ -608,8 +612,8 @@ fn symbolic_einsum_rejects_precomputed_tree() {
 
 #[test]
 fn symbolic_einsum_rejects_nan_auto_options() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let result = einsum_with(

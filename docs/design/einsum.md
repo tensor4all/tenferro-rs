@@ -77,8 +77,8 @@ use tenferro_einsum::eager_tensor::einsum;
 let ctx = EagerRuntime::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let a = ctx.constant_from(a);
-let b = ctx.constant_from(b);
+let a = ctx.constant_from(a).unwrap();
+let b = ctx.constant_from(b).unwrap();
 let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);

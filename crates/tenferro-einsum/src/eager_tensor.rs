@@ -11,12 +11,13 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager;
+use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ExtensionCacheKey;
+use tenferro_tensor::TensorFusion;
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
@@ -44,13 +45,13 @@ use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
-/// );
+/// ).unwrap();
 /// let b = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     runtime,
-/// );
+/// ).unwrap();
 /// let out = eager_tensor::einsum(&[&a, &b], "ij,jk->ik")?;
-/// assert_eq!(out.data().shape(), &[2, 4]);
+/// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
 pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
@@ -73,14 +74,14 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
-/// );
+/// ).unwrap();
 /// let b = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     runtime,
-/// );
+/// ).unwrap();
 /// let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
 /// let out = eager_tensor::einsum_subscripts(&[&a, &b], &subscripts)?;
-/// assert_eq!(out.data().shape(), &[2, 4]);
+/// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
 pub fn einsum_subscripts(
@@ -181,11 +182,15 @@ fn try_whole_program_untracked(
     }
 
     let subs = Subscripts::from(subscripts);
-    let tensors: Vec<_> = inputs.iter().map(|tensor| tensor.data()).collect();
+    let tensor_arcs = inputs
+        .iter()
+        .map(|tensor| tensor.materialized())
+        .collect::<Result<Vec<_>>>()?;
+    let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
     let result = runtime.with_backend_mut(|backend| {
         crate::eager::eager_einsum_subscripts(backend, &tensors, &subs)
     })??;
-    Ok(Some(EagerTensor::from_tensor_in(result, runtime.clone())))
+    Ok(Some(EagerTensor::from_tensor_in(result, runtime.clone())?))
 }
 
 /// Run an untracked whole-program eager einsum on an explicit contraction tree.
@@ -209,18 +214,19 @@ fn try_whole_program_untracked(
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
-/// );
+/// ).unwrap();
 /// let b = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     runtime,
-/// );
+/// ).unwrap();
 /// let subs = Subscripts::parse("ij,jk->ik").unwrap();
 /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
 /// let out = eager_tensor::einsum_whole_program_untracked(&[&a, &b], &tree)?;
-/// assert_eq!(out.data().shape(), &[2, 4]);
+/// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_ad::error::Error>(())
 /// ```
-pub fn einsum_whole_program_untracked(
+#[cfg(test)]
+fn einsum_whole_program_untracked(
     inputs: &[&EagerTensor],
     tree: &crate::ContractionTree,
 ) -> Result<EagerTensor> {
@@ -241,11 +247,15 @@ pub fn einsum_whole_program_untracked(
             "whole-program eager einsum requires inputs from one runtime".into(),
         ));
     }
-    let tensors: Vec<_> = inputs.iter().map(|tensor| tensor.data()).collect();
+    let tensor_arcs = inputs
+        .iter()
+        .map(|tensor| tensor.materialized())
+        .collect::<Result<Vec<_>>>()?;
+    let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
     let result = runtime.with_backend_mut(|backend| {
         crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
     })??;
-    Ok(EagerTensor::from_tensor_in(result, runtime.clone()))
+    EagerTensor::from_tensor_in(result, runtime.clone())
 }
 
 fn try_expand_eager_einsum(
@@ -263,11 +273,6 @@ fn try_expand_eager_einsum(
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
     let subs = Subscripts::from(subscripts);
     let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
-    if inputs.iter().any(|tensor| tensor.tracks_grad()) {
-        let tree = resolve_plan_spec(&plan_spec, &subs, &shape_refs)
-            .map_err(|err| Error::ContractionError(err.to_string()))?;
-        return execute_tracked_eager_einsum_graph(inputs, &tree, &shapes).map(Some);
-    }
 
     let program = cached_expanded_eager_program(
         inputs[0].runtime(),
@@ -278,34 +283,6 @@ fn try_expand_eager_einsum(
         &shapes,
     )?;
     execute_eager_einsum_program(inputs, &program)
-}
-
-fn execute_tracked_eager_einsum_graph(
-    inputs: &[&EagerTensor],
-    tree: &crate::ContractionTree,
-    shapes: &[Vec<usize>],
-) -> Result<EagerTensor> {
-    let mut outputs =
-        tenferro_ad::eager_tensor::apply_standard_graph(inputs, |graph_input_keys| {
-            let mut builder = GraphBuilder::<StdTensorOp>::new();
-            let input_vals = graph_input_keys
-                .iter()
-                .cloned()
-                .map(|key| ValueRef::Local(builder.add_input(key)))
-                .collect::<Vec<_>>();
-            let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
-                .map_err(|err| Error::ContractionError(err.to_string()))?;
-            let ValueRef::Local(result_local) = result_ref else {
-                return Err(Error::Internal(
-                    "tracked eager einsum graph returned an external value".into(),
-                ));
-            };
-            builder.set_outputs(vec![result_local]);
-            Ok(Arc::new(builder.build()))
-        })?;
-    outputs
-        .pop()
-        .ok_or_else(|| Error::Internal("tracked eager einsum graph produced no output".into()))
 }
 
 struct ExpandedEagerProgram {
@@ -585,14 +562,47 @@ fn try_execute_eager_broadcast_multiply_pattern(
     let rhs = slot_tensor(slots, rhs_bc.inputs[0])?;
     let lhs_shape = eval_shape_exprs(slots, &lhs_bc.inputs, lhs_shape_exprs)?;
     let rhs_shape = eval_shape_exprs(slots, &rhs_bc.inputs, rhs_shape_exprs)?;
-    let Some(output) = tenferro_ad::eager_tensor::backend_broadcast_multiply_untracked(
-        lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims,
-    )?
+    let Some(output) =
+        backend_broadcast_multiply_untracked(lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims)?
     else {
         return Ok(None);
     };
 
     Ok(Some((multiply.outputs[0], output)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn backend_broadcast_multiply_untracked(
+    lhs: &EagerTensor,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &EagerTensor,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> Result<Option<EagerTensor>> {
+    if !Arc::ptr_eq(lhs.runtime(), rhs.runtime()) {
+        return Err(Error::ContextMismatch {
+            lhs: lhs.ctx_id(),
+            rhs: rhs.ctx_id(),
+        });
+    }
+    if lhs.tracks_grad() || rhs.tracks_grad() {
+        return Ok(None);
+    }
+
+    let runtime = lhs.runtime();
+    let value = runtime.with_backend_mut(|backend| {
+        backend.execute_broadcast_multiply_value(
+            lhs.tensor_read(),
+            lhs_shape,
+            lhs_dims,
+            rhs.tensor_read(),
+            rhs_shape,
+            rhs_dims,
+        )
+    })??;
+
+    Ok(value.map(|value| adopt_untracked_eager_value(runtime.clone(), value)))
 }
 
 fn eval_shape_exprs(
@@ -693,14 +703,14 @@ fn infer_eager_output_shape(
 /// let lhs = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     ctx.clone(),
-/// );
+/// ).unwrap();
 /// let rhs = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
 ///     ctx,
-/// );
+/// ).unwrap();
 /// let out = eager_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(1)).unwrap();
 ///
-/// assert_eq!(out.data().shape(), &[2, 4]);
+/// assert_eq!(out.shape(), &[2, 4]);
 /// ```
 pub fn tensordot(
     lhs: &EagerTensor,

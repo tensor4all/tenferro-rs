@@ -118,10 +118,10 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
     ///     ctx,
-    /// );
+    /// ).unwrap();
     /// let y = x.take_axis(0, &[2, 0]).unwrap();
     ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
     pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
         let axis = isize::try_from(axis).map_err(|_| {
@@ -145,11 +145,11 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
-    /// );
+    /// ).unwrap();
     /// let y = x.take_rows(&[1]).unwrap();
     ///
-    /// assert_eq!(y.data().shape(), &[1, 2]);
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// assert_eq!(y.shape(), &[1, 2]);
+    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
     pub fn take_rows(&self, rows: &[usize]) -> Result<Self> {
         self.take_axis(0, rows)
@@ -167,11 +167,11 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
-    /// );
+    /// ).unwrap();
     /// let y = x.take_cols(&[1]).unwrap();
     ///
-    /// assert_eq!(y.data().shape(), &[2, 1]);
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    /// assert_eq!(y.shape(), &[2, 1]);
+    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// ```
     pub fn take_cols(&self, cols: &[usize]) -> Result<Self> {
         self.take_axis(1, cols)
@@ -193,11 +193,11 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
-    /// );
+    /// ).unwrap();
     /// let y = x.take_block(&[1], &[0]).unwrap();
     ///
-    /// assert_eq!(y.data().shape(), &[1, 1]);
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[2.0]);
+    /// assert_eq!(y.shape(), &[1, 1]);
+    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
     pub fn take_block(&self, rows: &[usize], cols: &[usize]) -> Result<Self> {
         self.take_rows(rows)?.take_cols(cols)
@@ -215,10 +215,10 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
     ///     ctx,
-    /// );
+    /// ).unwrap();
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
@@ -230,7 +230,7 @@ impl EagerTensor {
                 .map_err(|_| Error::Internal("backend lock poisoned".to_string()))?;
             backend.upload_host_tensor(&indices)?
         };
-        let indices = self.ctx.constant_from(indices);
+        let indices = self.ctx.constant_from(indices)?;
         self.gather(&indices, config)
     }
 
@@ -246,12 +246,12 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(), ctx.clone());
-    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(), ctx);
+    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
+    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(), ctx).unwrap();
     /// let out = EagerTensor::stack(&[&a, &b], -1).unwrap();
     ///
-    /// assert_eq!(out.data().shape(), &[2]);
-    /// assert_eq!(out.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(out.shape(), &[2]);
+    /// assert_eq!(out.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
     pub fn stack(tensors: &[&Self], dim: isize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {

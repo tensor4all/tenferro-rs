@@ -24,9 +24,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
         .register_extension(tenferro_einsum::register_runtime)
         .unwrap();
 
-    let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone());
-    let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone());
+    let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone()).unwrap();
+    let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone()).unwrap();
     let out1 =
         tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&ta1, &tb1, &tc1], "ij,jk,kl->il")
             .unwrap();
@@ -38,9 +38,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let pooled_after_first = engine.backend().buffer_pool_len();
     assert!(pooled_after_first > 0);
 
-    let ta2 = TracedTensor::from_tensor_concrete_shape(a);
-    let tb2 = TracedTensor::from_tensor_concrete_shape(b);
-    let tc2 = TracedTensor::from_tensor_concrete_shape(c);
+    let ta2 = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb2 = TracedTensor::from_tensor_concrete_shape(b).unwrap();
+    let tc2 = TracedTensor::from_tensor_concrete_shape(c).unwrap();
     let out2 =
         tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&ta2, &tb2, &tc2], "ij,jk,kl->il")
             .unwrap();

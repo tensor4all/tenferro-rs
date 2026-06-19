@@ -103,8 +103,8 @@ This is not the forward-mode AD/JVP API. Use `TracedTensor` for `grad`, `vjp`,
 use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
-let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
+let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
@@ -120,9 +120,9 @@ program on a backend.
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
-let sum = &a + &b;
+let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+let sum = (&a + &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&sum).unwrap();
@@ -134,3 +134,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
 Traced mode is the right API for `grad`, `vjp`, `jvp`, and HVP via composition
 on traced graphs, symbolic inputs, graph optimization, and repeated execution.
+Core primitive AD rules are available by default. Extension operation families
+that provide AD rules, such as `tenferro-linalg`, require enabling that crate's
+`autodiff` feature and registering the extension rule set with
+`with_extension_rules`.

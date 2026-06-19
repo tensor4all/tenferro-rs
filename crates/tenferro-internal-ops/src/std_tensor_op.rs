@@ -243,7 +243,7 @@ impl PartialEq for StdTensorOp {
             | (Self::DynamicTruncate { axis: a }, Self::DynamicTruncate { axis: b })
             | (Self::PadToMatch { axis: a }, Self::PadToMatch { axis: b }) => a == b,
             (Self::Extension(a), Self::Extension(b)) => ext_op_eq(a.as_ref(), b.as_ref()),
-            _ => unreachable!("discriminant mismatch should be caught earlier"),
+            _ => false,
         }
     }
 }

@@ -513,7 +513,7 @@ fn execute_convert(
     let ExecOp::Convert { to } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Convert, &inst.op));
     };
-    Ok(exec.convert(get(slots, &inst.input_slots, 0)?, *to)?)
+    Ok(exec.cast(get(slots, &inst.input_slots, 0)?, *to)?)
 }
 
 fn execute_reduce_sum(

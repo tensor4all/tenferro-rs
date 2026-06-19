@@ -72,7 +72,7 @@ impl GraphProgram {
     /// ```
     /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[4])])
@@ -154,7 +154,7 @@ impl GraphProgramInput {
     /// ```
     /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])

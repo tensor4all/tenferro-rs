@@ -3,35 +3,53 @@
 //! Core eager tensor types are re-exported here. Extension crates provide
 //! operation-specific helpers outside this runtime crate.
 
-use std::sync::Arc;
-
-use computegraph::graph::Graph;
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
-use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::TensorFusion;
 
 pub use crate::eager::{EagerRuntime, EagerTensor};
 use crate::error::{Error, Result};
 use crate::CompareDir;
 
-/// Convert an eager tensor to a different dtype.
+/// Convert an eager tensor to a different dtype using checked conversion.
 ///
-/// Numeric casts follow Rust primitive cast semantics. Real-to-complex
-/// conversion sets the imaginary part to zero; complex-to-real or
-/// complex-to-integer conversion uses the real part. Boolean conversion uses
-/// nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
+/// Use [`cast`] when a lossy dtype projection is intended.
 ///
 /// # Examples
 ///
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, DType, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx);
-/// let y = eager_tensor::convert(&x, DType::F32).unwrap();
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx).unwrap();
+/// let y = eager_tensor::convert(&x, DType::C64).unwrap();
+/// assert_eq!(y.dtype(), DType::C64);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error when the requested conversion is outside tenferro's checked
+/// dtype-promotion lattice, or when execution fails.
 pub fn convert(input: &EagerTensor, to: crate::DType) -> Result<EagerTensor> {
     input.convert(to)
+}
+
+/// Cast an eager tensor to a different dtype using explicit dtype projection.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_ad::{eager_tensor, DType, EagerRuntime, EagerTensor, Tensor};
+/// # let ctx = EagerRuntime::new();
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap(), ctx).unwrap();
+/// let y = eager_tensor::cast(&x, DType::I32).unwrap();
+/// assert_eq!(y.materialized().unwrap().as_slice::<i32>().unwrap(), &[1, -2]);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when execution fails or the backend does not support the
+/// requested explicit dtype projection.
+pub fn cast(input: &EagerTensor, to: crate::DType) -> Result<EagerTensor> {
+    input.cast(to)
 }
 
 /// Elementwise addition with NumPy-style broadcasting.
@@ -41,8 +59,8 @@ pub fn convert(input: &EagerTensor, to: crate::DType) -> Result<EagerTensor> {
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone());
-/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx);
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
+/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx).unwrap();
 /// let z = eager_tensor::add(&x, &y).unwrap();
 /// ```
 pub fn add(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
@@ -59,7 +77,7 @@ macro_rules! unary_fn {
         /// ```rust
         /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
         /// # let ctx = EagerRuntime::new();
-        /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap(), ctx);
+        /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap(), ctx).unwrap();
         #[doc = concat!("let y = eager_tensor::", stringify!($name), "(&x).unwrap();")]
         /// ```
         pub fn $name(input: &EagerTensor) -> Result<EagerTensor> {
@@ -77,8 +95,8 @@ macro_rules! binary_method_fn {
         /// ```rust
         /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
         /// # let ctx = EagerRuntime::new();
-        /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone());
-        /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx);
+        /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+        /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx).unwrap();
         #[doc = concat!("let z = eager_tensor::", stringify!($name), "(&x, &y).unwrap();")]
         /// ```
         pub fn $name(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
@@ -131,8 +149,8 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone());
-/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx);
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx).unwrap();
 /// let z = eager_tensor::sub(&x, &y).unwrap();
 /// ```
 pub fn sub(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
@@ -149,10 +167,10 @@ pub fn sub(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone());
-/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx);
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx).unwrap();
 /// let z = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
-/// assert_eq!(z.data().as_slice::<bool>().unwrap(), &[true, false]);
+/// assert_eq!(z.materialized().unwrap().as_slice::<bool>().unwrap(), &[true, false]);
 /// ```
 pub fn compare(lhs: &EagerTensor, rhs: &EagerTensor, dir: CompareDir) -> Result<EagerTensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs)?;
@@ -168,8 +186,8 @@ pub fn compare(lhs: &EagerTensor, rhs: &EagerTensor, dir: CompareDir) -> Result<
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone());
-/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx);
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+/// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(), ctx).unwrap();
 /// # let condition = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
 /// let z = eager_tensor::where_select(&condition, &x, &y).unwrap();
 /// ```
@@ -189,9 +207,9 @@ pub fn where_select(
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]).unwrap(), ctx.clone());
-/// # let lower = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap(), ctx.clone());
-/// # let upper = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(), ctx);
+/// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+/// # let lower = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap(), ctx.clone()).unwrap();
+/// # let upper = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(), ctx).unwrap();
 /// let z = eager_tensor::clamp(&x, &lower, &upper).unwrap();
 /// ```
 pub fn clamp(input: &EagerTensor, lower: &EagerTensor, upper: &EagerTensor) -> Result<EagerTensor> {
@@ -208,8 +226,8 @@ pub fn clamp(input: &EagerTensor, lower: &EagerTensor, upper: &EagerTensor) -> R
 /// ```rust
 /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
-/// # let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(), ctx.clone());
-/// # let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap(), ctx);
+/// # let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(), ctx.clone()).unwrap();
+/// # let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap(), ctx).unwrap();
 /// let c = eager_tensor::matmul(&a, &b).unwrap();
 /// ```
 pub fn matmul(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
@@ -227,53 +245,6 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<Eag
         ));
     }
     EagerTensor::nary_op(inputs, op)
-}
-
-/// Apply a standard `StdTensorOp` graph eagerly and record it as one AD node.
-///
-/// This is a low-level extension hook for composite eager operations. The
-/// callback receives graph-local input keys, must build a graph whose inputs
-/// use those keys in order, and must set the graph outputs.
-#[doc(hidden)]
-pub fn apply_standard_graph(
-    inputs: &[&EagerTensor],
-    build_graph: impl FnOnce(&[TensorInputKey]) -> Result<Arc<Graph<StdTensorOp>>>,
-) -> Result<Vec<EagerTensor>> {
-    EagerTensor::standard_graph_op(inputs, build_graph)
-}
-
-/// Execute a backend fused broadcast-multiply for untracked eager tensors.
-///
-/// Returns `None` when either input participates in AD or the backend does not
-/// provide a fused implementation, so callers can fall back to ordinary eager
-/// `StdTensorOp` execution without changing gradients.
-#[doc(hidden)]
-#[allow(clippy::too_many_arguments)]
-pub fn backend_broadcast_multiply_untracked(
-    lhs: &EagerTensor,
-    lhs_shape: &[usize],
-    lhs_dims: &[usize],
-    rhs: &EagerTensor,
-    rhs_shape: &[usize],
-    rhs_dims: &[usize],
-) -> Result<Option<EagerTensor>> {
-    ensure_same_context(lhs, rhs)?;
-    if lhs.tracks_grad() || rhs.tracks_grad() {
-        return Ok(None);
-    }
-
-    let value = lhs.runtime().with_backend_mut(|backend| {
-        backend.execute_broadcast_multiply_value(
-            lhs.tensor_read(),
-            lhs_shape,
-            lhs_dims,
-            rhs.tensor_read(),
-            rhs_shape,
-            rhs_dims,
-        )
-    })??;
-
-    Ok(value.map(|value| EagerTensor::new_untracked_value_result(lhs.runtime().clone(), value)))
 }
 
 fn broadcast_binary(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {

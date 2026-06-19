@@ -128,7 +128,7 @@ fn traced_tensor_namespace_exposes_fft() {
 
 #[test]
 fn registered_runtime_reports_gpu_input_as_unsupported() {
-    let x = TracedTensor::input_concrete_shape(DType::C64, &[2]);
+    let x = TracedTensor::input_concrete_shape(DType::C64, &[2]).unwrap();
     let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler

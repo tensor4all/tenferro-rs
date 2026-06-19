@@ -169,8 +169,8 @@ impl TensorStructural for DefaultReadBackend {
         Ok(marker())
     }
 
-    fn convert(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
-        self.calls.push("convert");
+    fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
+        self.calls.push("cast");
         Ok(marker())
     }
 

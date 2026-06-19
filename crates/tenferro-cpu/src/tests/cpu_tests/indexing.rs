@@ -279,7 +279,25 @@ fn test_structural_convert_helper_returns_result() {
 }
 
 #[test]
-fn test_backend_convert_supports_real_complex_and_precision_changes() {
+fn test_structural_convert_rejects_lossy_dtype_projection() {
+    let input =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap());
+
+    let err = crate::structural::convert(&input, DType::I32).unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::UnsupportedDTypeConversion {
+            op: "convert",
+            from: DType::F64,
+            to: DType::I32,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_backend_cast_supports_real_complex_and_precision_changes() {
     let mut backend = CpuBackend::new();
     let f32_input =
         Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap());
@@ -331,7 +349,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
     ];
 
     for (input, to) in cases {
-        let output = backend.convert(input, to).unwrap();
+        let output = backend.cast(input, to).unwrap();
         assert_eq!(output.shape(), &[2]);
         assert_eq!(output.dtype(), to);
 
@@ -421,7 +439,7 @@ fn test_cpu_supports_i32_and_bool_structural_paths() {
     let mut backend = CpuBackend::new();
 
     let i32_tensor = Tensor::from_vec_col_major(vec![2], vec![-1_i32, 0]).unwrap();
-    let i32_as_bool = backend.convert(&i32_tensor, DType::Bool).unwrap();
+    let i32_as_bool = backend.cast(&i32_tensor, DType::Bool).unwrap();
     assert_eq!(i32_as_bool.as_slice::<bool>().unwrap(), &[true, false]);
 
     let bool_tensor = Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();

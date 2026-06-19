@@ -27,13 +27,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = runtime.variable_from(Tensor::from_vec_col_major(
         vec![3],
         vec![1.0_f64, 2.0, 3.0],
-    )?);
+    )?)?;
 
     let prediction = x.mul(&x).unwrap();
     let loss = prediction.reduce_sum(&[0])?;
 
-    assert_eq!(loss.data().shape(), &[]);
-    assert_close(loss.data().as_slice::<f64>().unwrap(), &[14.0]);
+    assert_eq!(loss.shape(), &[]);
+    assert_close(loss.materialized()?.as_slice::<f64>().unwrap(), &[14.0]);
 
     loss.backward()?;
 

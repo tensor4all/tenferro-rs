@@ -43,8 +43,8 @@ fn test_faer_gemm_basic_f64() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -65,8 +65,8 @@ fn test_faer_gemm_basic_f32() {
     let a = f32_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f32_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -95,8 +95,8 @@ fn test_faer_gemm_identity() {
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
     );
 
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let ti = TracedTensor::from_tensor_concrete_shape(i);
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let ti = TracedTensor::from_tensor_concrete_shape(i).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -136,8 +136,8 @@ fn test_batched_gemm() {
         vec![5.0, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
     );
 
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1], // contract over dim 1 (K)
         rhs_contracting_dims: vec![0], // contract over dim 0 (K)
@@ -178,8 +178,8 @@ fn test_strided_input_via_transpose_and_dot_general() {
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let ta_t = ta.transpose(&[1, 0]).unwrap();
     let tc = ta_t
         .dot_general(
@@ -209,8 +209,8 @@ fn test_vector_dot_product() {
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let w = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
-    let tv = TracedTensor::from_tensor_concrete_shape(v);
-    let tw = TracedTensor::from_tensor_concrete_shape(w);
+    let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
+    let tw = TracedTensor::from_tensor_concrete_shape(w).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0],
         rhs_contracting_dims: vec![0],

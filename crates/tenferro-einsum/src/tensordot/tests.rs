@@ -31,8 +31,8 @@ fn dot_general_config_rejects_invalid_count_and_explicit_axes() {
 
 #[test]
 fn validate_traced_contract_dims_allows_symbolic_and_rejects_concrete_mismatch() {
-    let lhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2);
-    let rhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2);
+    let lhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2).unwrap();
     let config = dot_general_config(
         TensorDotAxes::Axes {
             lhs: &[1],

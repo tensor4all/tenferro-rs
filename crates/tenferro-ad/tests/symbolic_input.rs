@@ -23,7 +23,7 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 
 #[test]
 fn identity_on_symbolic_input_rank_1() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -38,8 +38,8 @@ fn identity_on_symbolic_input_rank_1() {
 
 #[test]
 fn addition_of_two_symbolic_inputs() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&a + &b).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -55,7 +55,7 @@ fn addition_of_two_symbolic_inputs() {
 
 #[test]
 fn matrix_symbolic_input_uses_column_major_values() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -72,7 +72,7 @@ fn matrix_symbolic_input_uses_column_major_values() {
 #[test]
 fn same_symbolic_graph_reused_with_different_shapes() {
     // Build the graph once.
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let graph = (&x + &x).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -98,7 +98,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
 
 #[test]
 fn concrete_shape_placeholder_accepts_exact_shape() {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     assert!(x.is_concrete_shape());
     let y = x.clone();
 
@@ -119,7 +119,7 @@ fn mixed_graph_static_and_placeholder_inputs() {
     // to match or be concrete, so we use `input_concrete_shape` for the
     // placeholder here.
     let static_leaf = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]).unwrap();
-    let placeholder = TracedTensor::input_concrete_shape(DType::F64, &[2]);
+    let placeholder = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
     let sum = (&static_leaf + &placeholder).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -148,7 +148,7 @@ fn eval_with_empty_bindings_behaves_like_eval_for_all_static_graph() {
 
 #[test]
 fn concrete_placeholder_is_concrete_shape_true() {
-    let x = TracedTensor::input_concrete_shape(DType::F32, &[3, 4]);
+    let x = TracedTensor::input_concrete_shape(DType::F32, &[3, 4]).unwrap();
     assert!(x.is_concrete_shape());
     assert_eq!(x.rank, 2);
     assert_eq!(x.dtype, DType::F32);
@@ -156,7 +156,7 @@ fn concrete_placeholder_is_concrete_shape_true() {
 
 #[test]
 fn symbolic_placeholder_is_concrete_shape_false() {
-    let x = TracedTensor::input_symbolic_shape(DType::C64, 3);
+    let x = TracedTensor::input_symbolic_shape(DType::C64, 3).unwrap();
     assert!(!x.is_concrete_shape());
     assert_eq!(x.rank, 3);
     assert_eq!(x.dtype, DType::C64);
@@ -165,7 +165,7 @@ fn symbolic_placeholder_is_concrete_shape_false() {
 #[test]
 fn from_tensor_symbolic_shape_drops_shape_but_keeps_data() {
     let tensor = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let x = TracedTensor::from_tensor_symbolic_shape(tensor);
+    let x = TracedTensor::from_tensor_symbolic_shape(tensor).unwrap();
     assert!(!x.is_concrete_shape());
 
     // Even though shape is advertised as symbolic, data is attached so plain

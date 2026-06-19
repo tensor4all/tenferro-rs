@@ -81,7 +81,7 @@ impl TensorStructural for WrongDTypeBackend {
         transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
-        convert(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
+        cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;

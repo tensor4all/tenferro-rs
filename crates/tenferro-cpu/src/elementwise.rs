@@ -160,13 +160,11 @@ impl_compare_elem_ord!(i32);
 impl_compare_elem_ord!(i64);
 impl_compare_elem_ord!(bool);
 
-fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
+fn complex_scalar_tensor<T>(scalar: T) -> crate::Result<TypedTensor<Complex<T>>>
 where
     T: Copy + Clone + Zero,
 {
-    // Invariant: scalar shape `[]` always requires exactly one value.
     TypedTensor::from_vec_col_major(vec![], vec![Complex::new(scalar, T::zero())])
-        .expect("scalar complex tensor has a valid compact shape")
 }
 
 fn complex_scalar_tensor_from_tensor<T>(
@@ -175,7 +173,7 @@ fn complex_scalar_tensor_from_tensor<T>(
 where
     T: Copy + Clone + Zero,
 {
-    Ok(complex_scalar_tensor(typed_host_data("add", input)?[0]))
+    complex_scalar_tensor(typed_host_data("add", input)?[0])
 }
 
 fn complex_scalar_tensor_from_view<T, R>(
@@ -185,9 +183,7 @@ where
     T: Copy + Clone + Zero + 'static,
     R: TensorRank,
 {
-    Ok(complex_scalar_tensor(
-        typed_view_from_view("add", input)?.get(&[]),
-    ))
+    complex_scalar_tensor(typed_view_from_view("add", input)?.get(&[]))
 }
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -226,19 +222,19 @@ pub(crate) fn add_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0])?;
             Ok(Tensor::C32(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0])?;
             Ok(Tensor::C32(typed_add_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0])?;
             Ok(Tensor::C64(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0])?;
             Ok(Tensor::C64(typed_add_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -422,19 +418,19 @@ pub(crate) fn mul_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0])?;
             Ok(Tensor::C32(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0])?;
             Ok(Tensor::C32(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0])?;
             Ok(Tensor::C64(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0])?;
             Ok(Tensor::C64(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -1516,19 +1512,19 @@ pub(crate) fn div_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0])?;
             Ok(Tensor::C32(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0])?;
             Ok(Tensor::C32(typed_div_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0])?;
             Ok(Tensor::C64(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
-            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0])?;
             Ok(Tensor::C64(typed_div_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {

@@ -27,9 +27,9 @@ fn concrete_traced_nary_einsum_expands_to_standard_graph() {
 
 #[test]
 fn symbolic_path_traced_nary_einsum_expands_to_standard_graph() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let out = einsum_with(
@@ -54,9 +54,9 @@ fn symbolic_path_traced_nary_einsum_expands_to_standard_graph() {
 
 #[test]
 fn symbolic_auto_traced_nary_einsum_remains_extension() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
 
     let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();

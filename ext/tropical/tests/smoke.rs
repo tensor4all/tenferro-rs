@@ -18,7 +18,7 @@ fn traced_einsum_validation_rejects_inputs_before_extension_shape_inference() {
     let f64_lhs = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     let f64_rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let f32_rhs = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32; 4]).unwrap();
-    let i32_rhs = TracedTensor::input_concrete_shape(DType::I32, &[2, 2]);
+    let i32_rhs = TracedTensor::input_concrete_shape(DType::I32, &[2, 2]).unwrap();
     let matmul = Subscripts::parse("ij,jk->ik").unwrap();
     let missing_output = Subscripts::parse("ij,jk->ix").unwrap();
 
@@ -41,8 +41,8 @@ fn traced_einsum_validation_rejects_inputs_before_extension_shape_inference() {
 
 #[test]
 fn traced_einsum_accepts_symbolic_shapes_without_panicking() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let matmul = Subscripts::parse("ij,jk->ik").unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -57,10 +57,10 @@ fn traced_einsum_accepts_symbolic_shapes_without_panicking() {
 
 #[test]
 fn fused_dot_general_validates_inputs() {
-    let scalar = TracedTensor::input_concrete_shape(DType::F64, &[]);
-    let matrix = TracedTensor::input_concrete_shape(DType::F64, &[2, 2]);
-    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
-    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]);
+    let scalar = TracedTensor::input_concrete_shape(DType::F64, &[]).unwrap();
+    let matrix = TracedTensor::input_concrete_shape(DType::F64, &[2, 2]).unwrap();
+    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]).unwrap();
 
     assert!(tropical_dot_general_fused(&scalar, &matrix).is_err());
     assert!(tropical_dot_general_fused(&lhs, &rhs).is_err());

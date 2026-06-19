@@ -38,9 +38,9 @@ fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
+    let c = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
     let product =
         tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il")?;
 

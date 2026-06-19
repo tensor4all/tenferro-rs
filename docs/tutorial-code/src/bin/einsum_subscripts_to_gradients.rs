@@ -45,18 +45,18 @@ fn run(tensor: &TracedTensor) -> Result<Tensor, Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new();
-    let a = runtime.variable_from(matrix_a()?);
-    let b = runtime.variable_from(matrix_b()?);
+    let a = runtime.variable_from(matrix_a()?)?;
+    let b = runtime.variable_from(matrix_b()?)?;
     let product = tenferro_einsum::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")?;
 
-    assert_eq!(product.data().shape(), &[2, 2]);
+    assert_eq!(product.shape(), &[2, 2]);
     assert_close(
-        product.data().as_slice::<f64>().unwrap(),
+        product.materialized()?.as_slice::<f64>().unwrap(),
         &[58.0, 139.0, 64.0, 154.0],
     );
 
-    let a = TracedTensor::from_tensor_concrete_shape(matrix_a()?);
-    let b = TracedTensor::from_tensor_concrete_shape(matrix_b()?);
+    let a = TracedTensor::from_tensor_concrete_shape(matrix_a()?)?;
+    let b = TracedTensor::from_tensor_concrete_shape(matrix_b()?)?;
     let c = matrix_c()?;
 
     let mut compiler = GraphCompiler::new();

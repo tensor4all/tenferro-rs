@@ -132,7 +132,7 @@ fn test_structural_transpose_acquires_output_from_pool() {
 }
 
 #[test]
-fn test_convert_acquires_output_from_dtype_pool() {
+fn test_cast_acquires_output_from_dtype_pool() {
     let mut backend = CpuBackend::new();
     backend.reclaim_buffer(Tensor::F32(
         TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
@@ -141,7 +141,7 @@ fn test_convert_acquires_output_from_dtype_pool() {
 
     let input =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![1.25, 2.5, 3.75, 4.0]).unwrap());
-    let out = backend.convert(&input, DType::F32).unwrap();
+    let out = backend.cast(&input, DType::F32).unwrap();
 
     assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f32(&out, &[0]), 1.25);
@@ -419,7 +419,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
-        convert(input: &Tensor, to: DType) -> crate::Result<Tensor>;
+        cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
@@ -526,7 +526,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
-        convert(input: &Tensor, to: DType) -> crate::Result<Tensor>;
+        cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
@@ -1007,14 +1007,15 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
         &[7.0, 7.0, 7.0, 7.0]
     );
 
+    let mut backend = CpuBackend::new();
     let i64_matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-    let as_c64 = crate::structural::convert(&i64_matrix, DType::C64).unwrap();
+    let as_c64 = backend.cast(&i64_matrix, DType::C64).unwrap();
     assert_eq!(as_c64.dtype(), DType::C64);
-    let as_f32 = crate::structural::convert(&as_c64, DType::F32).unwrap();
+    let as_f32 = backend.cast(&as_c64, DType::F32).unwrap();
     assert_eq!(as_f32.dtype(), DType::F32);
-    let as_c32 = crate::structural::convert(&matrix, DType::C32).unwrap();
+    let as_c32 = backend.cast(&matrix, DType::C32).unwrap();
     assert_eq!(as_c32.dtype(), DType::C32);
-    let as_i64 = crate::structural::convert(&as_c32, DType::I64).unwrap();
+    let as_i64 = backend.cast(&as_c32, DType::I64).unwrap();
     assert_eq!(as_i64.as_slice::<i64>().unwrap(), &[1, 2, 3, 4]);
 
     let diag = extract_diagonal(&matrix, 0, 1).unwrap();

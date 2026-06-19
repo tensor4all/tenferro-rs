@@ -11,13 +11,16 @@ gradient accumulation and `backward()`.
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "../crates/tenferro-runtime" }
-tenferro-cpu = { path = "../crates/tenferro-cpu" }
-tenferro-tensor = { path = "../crates/tenferro-tensor" }
-tenferro-ad = { path = "../crates/tenferro-ad" }
-tenferro-linalg = { path = "../crates/tenferro-linalg" }
-tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
+tenferro-runtime = "..."
+tenferro-cpu = "..."
+tenferro-tensor = "..."
+tenferro-ad = "..."
+tenferro-linalg = "..."
+tenferro-einsum = { version = "...", features = ["autodiff"] }
 ```
+
+When working from a local checkout, replace the versions with `path = "..."`
+entries that match your project layout.
 
 Most direct tensor examples start by importing the CPU backend and concrete
 tensor types:
@@ -56,7 +59,7 @@ loss functions need:
 | Matrix products | `matmul`, `dot_general`, `dot_general_with_conj` |
 | Shape/layout | `reshape`, `transpose`, `broadcast_in_dim`, `slice`, `pad`, `reverse`, `concatenate` |
 | Indexing/diagonal | `gather`, `scatter`, `dynamic_slice`, `extract_diag`, `embed_diag`, `tril`, `triu` |
-| DType | `convert` |
+| DType | checked `convert`, explicit lossy `cast` |
 
 Operation-family crates add their own eager helpers. For example,
 `tenferro_linalg::eager_tensor` owns linalg eager helpers and
@@ -223,8 +226,8 @@ use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
 let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
-let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
+let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
+let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
 let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
@@ -254,19 +257,19 @@ use tenferro_cpu::CpuBackend;
 
 let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let a = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ctx.clone(),
-);
+).unwrap();
 let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]),
+    Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap(),
     ctx.clone(),
-);
+).unwrap();
 
 let y = a.matmul(&x).unwrap();
-assert_eq!(y.data().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
+assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = y.mul(&y).unwrap().reduce_sum(&[0, 1]).unwrap();
-assert_eq!(loss.data().as_slice::<f64>().unwrap(), &[1685.0]);
+assert_eq!(loss.materialized().unwrap().as_slice::<f64>().unwrap(), &[1685.0]);
 
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);

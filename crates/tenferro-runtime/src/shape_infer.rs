@@ -29,29 +29,7 @@ use crate::{Error, Result};
 ///
 /// [#811]: https://github.com/tensor4all/tenferro-rs/issues/811
 pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
-    use DType::*;
-    if lhs == rhs {
-        return lhs;
-    }
-    // Reorder so smaller-promotion-rank type comes first.
-    let (a, b) = if promotion_rank(lhs) <= promotion_rank(rhs) {
-        (lhs, rhs)
-    } else {
-        (rhs, lhs)
-    };
-    match (a, b) {
-        (Bool, other) => other,
-        (I32, I64) => I64,
-        (I32 | I64, F32 | F64) => F64,
-        (I32 | I64, C32 | C64) => C64,
-        (F32, F64) => F64,
-        (F32, C32) => C32,
-        (F32, C64) => C64,
-        (F64, C32) => C64,
-        (F64, C64) => C64,
-        (C32, C64) => C64,
-        _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
-    }
+    tenferro_tensor::validate::promote_dtype(lhs, rhs)
 }
 
 /// Promote an arbitrary number of dtypes by folding [`promote_dtype`].
@@ -69,19 +47,6 @@ pub fn promote_dtype_for_binary_op(op: &StdTensorOp, lhs: DType, rhs: DType) -> 
     match op {
         StdTensorOp::Div | StdTensorOp::Pow => promote_dtype_div_like(lhs, rhs),
         _ => promote_dtype(lhs, rhs),
-    }
-}
-
-/// Internal promotion ordering: Bool < I32 < I64 < F32 < F64 < C32 < C64.
-fn promotion_rank(dt: DType) -> u8 {
-    match dt {
-        DType::Bool => 0,
-        DType::I32 => 1,
-        DType::I64 => 2,
-        DType::F32 => 3,
-        DType::F64 => 4,
-        DType::C32 => 5,
-        DType::C64 => 6,
     }
 }
 

@@ -169,7 +169,11 @@ fn lower_instruction(
         GraphOpView::DotGeneral { config } => {
             lower_dot_general(config, &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Extension { .. } => unreachable!("extension instructions are handled first"),
+        GraphOpView::Extension { .. } => {
+            return Err(Error::InvalidProgram {
+                message: "extension instruction reached builtin lowering arm".to_string(),
+            });
+        }
         GraphOpView::Unsupported { name } => {
             return Err(Error::UnsupportedOp {
                 op: name,

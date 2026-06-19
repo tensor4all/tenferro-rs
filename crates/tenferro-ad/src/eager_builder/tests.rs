@@ -20,7 +20,7 @@ fn debug_summarizes_builder_without_tensor_payloads() {
     let id = builder.push_tensor(Arc::new(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ));
-    let _tensor = builder.tensor(id);
+    let _tensor = builder.tensor(id).unwrap();
 
     let debug = format!("{builder:?}");
 
@@ -61,7 +61,11 @@ fn new_builder_executes_standard_primitives_without_extension_executor() {
 
     assert_eq!(outputs.len(), 1);
     assert_eq!(
-        builder.tensor(outputs[0]).as_slice::<f64>().unwrap(),
+        builder
+            .tensor(outputs[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[4.0, 6.0]
     );
 }
@@ -88,9 +92,32 @@ fn missing_tangent_external_uses_zero_like_primal_fallback() {
     assert_eq!(outputs.len(), 1);
     assert!(builder.external_data.contains_key(&tangent_key));
     assert_eq!(
-        builder.tensor(outputs[0]).as_slice::<f64>().unwrap(),
+        builder
+            .tensor(outputs[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[0.0, 0.0]
     );
+}
+
+#[test]
+fn missing_non_tangent_external_records_error_without_panicking() {
+    let mut backend = CpuBackend::new();
+    let mut builder = EagerPrimitiveBuilder::new(&mut backend);
+    let missing_key = ValueKey::Input(TensorInputKey::User { id: 19 });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        PrimitiveBuilder::add_primitive(
+            &mut builder,
+            StdTensorOp::Neg,
+            vec![PrimitiveValue::External(missing_key)],
+            OperationRole::Primary,
+        )
+    }));
+
+    assert!(result.is_ok());
+    assert!(builder.take_error().is_some());
 }
 
 #[test]

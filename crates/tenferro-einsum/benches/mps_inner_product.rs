@@ -75,12 +75,12 @@ fn compile_mps_inner_product(fixture: &MpsFixture) -> GraphProgram {
     let bra_placeholders: Vec<_> = fixture
         .bra_tensors
         .iter()
-        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()))
+        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()).unwrap())
         .collect();
     let ket_placeholders: Vec<_> = fixture
         .ket_tensors
         .iter()
-        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()))
+        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()).unwrap())
         .collect();
 
     let mut compiler = GraphCompiler::new();

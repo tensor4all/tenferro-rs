@@ -192,12 +192,12 @@ Arbitrary non-numeric Rust structs can be useful as host-side typed storage,
 but they are not part of backend math, CUDA execution, AD, or the runtime-dtype
 `Tensor` operation API.
 
-Runtime-dtype `convert` follows Rust primitive cast semantics for real,
-integer, and precision-changing casts. Real and integer values convert to
-`bool` by nonzero testing, and `bool` converts to numeric dtypes as `0` or `1`.
-Real-to-complex conversion sets the imaginary part to zero. Complex-to-real or
-complex-to-integer conversion uses the real part; complex-to-`bool` is true
-when either the real or imaginary part is nonzero.
+Runtime-dtype `convert` is checked against tenferro's dtype-promotion lattice.
+It accepts promotion-compatible conversions such as real-to-wider-real,
+real-to-complex, integer-to-promoted numeric dtype, and `bool` to numeric dtype.
+It returns a typed error for lossy projections such as float or complex to
+integer, complex to real, integer to `bool`, and precision narrowing. Use
+explicit `cast` when that lossy projection is intended.
 
 ## Runtime-DType Tensor Example
 
@@ -229,7 +229,7 @@ gradients.
 use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let y = (&x * &x).reduce_sum(&[0]).unwrap();
 
 y.backward().unwrap();
@@ -264,10 +264,10 @@ assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 use tenferro_ad::{eager_tensor, EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]));
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
 let y = eager_tensor::exp(&x).unwrap();
 
-let data = y.data().as_slice::<f64>().unwrap();
+let data = y.materialized().unwrap().as_slice::<f64>().unwrap();
 
 assert!((data[0] - 1.0).abs() < 1e-12);
 assert!((data[1] - std::f64::consts::E).abs() < 1e-12);
@@ -300,11 +300,11 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
 use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let repeated = v.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 
-assert_eq!(repeated.data().shape(), &[3, 2]);
-assert_eq!(repeated.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+assert_eq!(repeated.shape(), &[3, 2]);
+assert_eq!(repeated.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
 ```
 
 ## Reduce Over Axes

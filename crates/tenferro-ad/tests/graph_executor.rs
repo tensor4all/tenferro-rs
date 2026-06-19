@@ -84,7 +84,7 @@ fn checkpoint_gradient_runs_through_graph_executor() {
 
 #[test]
 fn graph_executor_validates_runtime_bindings() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -106,7 +106,7 @@ fn graph_executor_validates_runtime_bindings() {
 
 #[test]
 fn graph_executor_rejects_invalid_runtime_bindings() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -130,7 +130,7 @@ fn graph_executor_rejects_invalid_runtime_bindings() {
         "got {err:?}"
     );
 
-    let other = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let other = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let err = executor
         .run_with_inputs(&program, &[(&other, &bound)])
         .unwrap_err();
@@ -224,7 +224,7 @@ fn graph_executor_runtime_cache_controls_are_available() {
 
 #[test]
 fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let loss = (&x * &x).unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 

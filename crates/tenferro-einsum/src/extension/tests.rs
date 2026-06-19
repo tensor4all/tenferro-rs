@@ -240,6 +240,27 @@ fn repeated_label_projection_projects_each_extra_occurrence() {
     );
 }
 
+#[test]
+#[cfg(feature = "autodiff")]
+fn vjp_broadcast_remap_failure_returns_error() {
+    let mut builder = RecordingRuleBuilder::default();
+
+    let err = broadcast_einsum_vjp_to_input_shape(
+        &mut builder,
+        0,
+        &[0, 2],
+        &[0, 1],
+        ValueRef::Local(1),
+        &[SymDim::from(2usize), SymDim::from(3usize)],
+    )
+    .expect_err("unmappable VJP labels should be an AD rule error");
+
+    let message = err.to_string();
+    assert!(message.contains("einsum VJP broadcast remap"));
+    assert!(message.contains("cotangent"));
+    assert!(builder.ops.is_empty());
+}
+
 #[cfg(feature = "autodiff")]
 #[derive(Default)]
 struct RecordingRuleBuilder {

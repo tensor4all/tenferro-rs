@@ -2097,7 +2097,7 @@ fn validate_nonsingular_gpu(backend: &mut CudaBackend, u: &Tensor) -> Result<()>
     // abs — convert complex to real first (complex abs not supported)
     let abs_diag = match &diag {
         Tensor::C32(_) | Tensor::C64(_) => {
-            let real_diag = backend.convert(&diag, DType::F64)?;
+            let real_diag = backend.cast(&diag, DType::F64)?;
             backend.abs(&real_diag)?
         }
         _ => backend.abs(&diag)?,

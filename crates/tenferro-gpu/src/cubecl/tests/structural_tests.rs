@@ -208,8 +208,8 @@ fn test_cubecl_convert_matches_cpu() {
     let gpu_real = upload(&gpu, &real);
     let gpu_complex = upload(&gpu, &complex);
 
-    let expected = cpu.convert(&real, DType::F32).unwrap();
-    let gpu_out = gpu.convert(&gpu_real, DType::F32).unwrap();
+    let expected = cpu.cast(&real, DType::F32).unwrap();
+    let gpu_out = gpu.cast(&gpu_real, DType::F32).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-6);
 
@@ -218,8 +218,8 @@ fn test_cubecl_convert_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu.convert(&complex, DType::F64).unwrap();
-    let gpu_out = gpu.convert(&gpu_complex, DType::F64).unwrap();
+    let expected = cpu.cast(&complex, DType::F64).unwrap();
+    let gpu_out = gpu.cast(&gpu_complex, DType::F64).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 }

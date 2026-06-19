@@ -88,7 +88,7 @@ fn eager_index_select_uploads_hidden_indices_before_importing_constant() {
         index_select,
         &[
             "backend.upload_host_tensor(&indices)?",
-            "self.ctx.constant_from(indices)",
+            "self.ctx.constant_from(indices)?",
             "self.gather(&indices, config)",
         ],
     );

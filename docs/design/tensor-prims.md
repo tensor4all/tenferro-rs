@@ -54,7 +54,8 @@ execution pipeline:
 | --- | --- |
 | Elementwise | `add`, `mul`, `neg`, `div`, `abs`, `maximum`, `minimum`, `compare`, `select`, `clamp` |
 | Analytic | `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `pow`, `expm1`, `log1p` |
-| Structural | `transpose`, `reshape`, `broadcast_in_dim`, `convert`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` |
+| Structural | `transpose`, `reshape`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` |
+| DType / value conversion | checked `convert`, explicit lossy `cast` |
 | Reductions | `reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min` |
 | Contraction | `dot_general` |
 | Indexing | `gather`, `scatter`, `slice`, `dynamic_slice`, `pad`, `concatenate`, `reverse` |

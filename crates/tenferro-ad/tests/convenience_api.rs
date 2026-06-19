@@ -41,7 +41,7 @@ fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
     assert_eq!(a.axis_sym_dim(0).unwrap().constant_value(), Some(2));
     assert_eq!(a.sym_shape().unwrap().len(), 2);
 
-    let symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     assert_eq!(symbolic.try_concrete_shape(), None);
     assert!(symbolic.sym_shape().is_none());
     assert!(symbolic.axis_sym_dim(1).unwrap().constant_value().is_none());
@@ -52,7 +52,7 @@ fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
     let broad = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b]).unwrap();
     assert_eq!(broad.rank, 3);
 
-    assert_eq!(a.broadcast_in_dim(&[2, 3], &[0, 1]).rank, 2);
+    assert_eq!(a.broadcast_in_dim(&[2, 3], &[0, 1]).unwrap().rank, 2);
     assert_eq!(a.reduce_max(&[0]).unwrap().rank, 1);
     assert_eq!(a.reduce_min(&[1]).unwrap().rank, 1);
     assert_eq!(a.reduce_prod(&[0, 1]).unwrap().rank, 0);
@@ -62,38 +62,42 @@ fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
 fn traced_tensor_scaling_covers_dtype_specific_constants() {
     let f32_tensor = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
-    );
+    )
+    .unwrap();
     assert_eq!(f32_tensor.scale_real(2.5).dtype, DType::F32);
 
     let i64_tensor = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![2_i64]).unwrap(),
-    );
+    )
+    .unwrap();
     assert_eq!(i64_tensor.scale_real(2.5).dtype, DType::I64);
 
     let real_complex_scaled = i64_tensor.scale_complex(Complex64::new(0.0, 1.0));
-    assert_eq!(real_complex_scaled.dtype, DType::C64);
-    let mut engine = tenferro_runtime::GraphExecutor::new(CpuBackend::new());
-    let real_complex_result = real_complex_scaled.run_with(&mut engine).unwrap();
-    assert_eq!(
-        real_complex_result.as_slice::<Complex64>().unwrap(),
-        &[Complex64::new(0.0, 2.0)]
-    );
+    assert!(real_complex_scaled.is_err());
 
     let c64_tensor = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap(),
-    );
+    )
+    .unwrap();
     assert_eq!(c64_tensor.scale_real(2.0).dtype, DType::C64);
     assert_eq!(
-        c64_tensor.scale_complex(Complex64::new(0.0, 1.0)).dtype,
+        c64_tensor
+            .scale_complex(Complex64::new(0.0, 1.0))
+            .unwrap()
+            .dtype,
         DType::C64
     );
 
     let c32_tensor = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]).unwrap(),
-    );
+    )
+    .unwrap();
     assert_eq!(c32_tensor.scale_real(2.0).dtype, DType::C32);
     assert_eq!(
-        c32_tensor.scale_complex(Complex64::new(0.0, 1.0)).dtype,
+        c32_tensor
+            .scale_complex(Complex64::new(0.0, 1.0))
+            .unwrap()
+            .dtype,
         DType::C32
     );
 }

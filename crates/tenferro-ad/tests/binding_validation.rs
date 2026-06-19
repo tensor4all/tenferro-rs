@@ -28,7 +28,7 @@ fn unexpected_binding_for_data_carrying_leaf() {
 
 #[test]
 fn unbound_placeholder() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -44,7 +44,7 @@ fn unbound_placeholder() {
 
 #[test]
 fn duplicate_binding() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -58,7 +58,7 @@ fn duplicate_binding() {
 
 #[test]
 fn placeholder_dtype_mismatch() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
@@ -81,7 +81,7 @@ fn placeholder_dtype_mismatch() {
 
 #[test]
 fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     let y = x.clone();
 
     let wrong_shape = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
@@ -101,7 +101,7 @@ fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
 
 #[test]
 fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = x.clone();
 
     let wrong_rank = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
@@ -125,7 +125,7 @@ fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
 #[test]
 fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
     // Sanity check that with the right rank + dtype, binding succeeds.
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -138,7 +138,7 @@ fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
 
 #[test]
 fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
@@ -170,7 +170,7 @@ fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
 
 #[test]
 fn compile_with_input_specs_validates_specs_without_tensor_values() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let shape = [2usize];
 
@@ -203,7 +203,7 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
         }
     ));
 
-    let concrete = TracedTensor::input_concrete_shape(DType::F64, &[2]);
+    let concrete = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
     let concrete_y = concrete.clone();
     let wrong_shape = [3usize];
     let err = compiler

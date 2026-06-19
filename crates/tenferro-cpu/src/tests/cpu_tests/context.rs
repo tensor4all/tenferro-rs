@@ -17,10 +17,34 @@ fn cpu_context_from_env_falls_back_to_affinity_when_rayon_num_threads_is_absent(
 }
 
 #[test]
+fn cpu_context_from_env_falls_back_to_single_threaded_when_rayon_num_threads_is_invalid() {
+    with_rayon_num_threads(Some("not-a-number"), || {
+        let ctx = CpuContext::from_env();
+        assert_eq!(ctx.num_threads(), 1);
+    });
+}
+
+#[test]
 fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
     with_rayon_num_threads(Some("not-a-number"), || {
         assert!(CpuContext::try_from_env().is_err());
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn cpu_context_try_from_env_rejects_non_unicode_rayon_num_threads() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = RayonNumThreadsEnvGuard::new(None);
+    std::env::set_var("RAYON_NUM_THREADS", OsString::from_vec(vec![0xff]));
+
+    let err = CpuContext::try_from_env().unwrap_err();
+
+    assert!(
+        err.to_string().contains("failed to read RAYON_NUM_THREADS"),
+        "{err}"
+    );
 }
 
 #[test]

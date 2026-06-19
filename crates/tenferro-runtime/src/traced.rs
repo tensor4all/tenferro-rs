@@ -117,7 +117,7 @@ pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> Res
     } else {
         tensor.reshape(&plan.source_shape)
     };
-    Ok(source.broadcast_in_dim(target_shape, &plan.dims))
+    source.broadcast_in_dim(target_shape, &plan.dims)
 }
 
 /// Broadcast two tensors to a common shape.
@@ -169,6 +169,30 @@ fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
         input.rank,
         input.shape_hint.clone(),
     )
+}
+
+fn inferred_output_dtype_or_fallback(
+    op: &StdTensorOp,
+    inputs: &[DType],
+    fallback: DType,
+    context: &'static str,
+) -> DType {
+    match crate::shape_infer::infer_output_dtype(op, inputs) {
+        Ok(dtype) => dtype,
+        Err(err) => {
+            debug_assert!(
+                false,
+                "{context}: built-in traced dtype inference failed for {op:?}: {err}"
+            );
+            fallback
+        }
+    }
+}
+
+fn register_metadata_or_internal(
+    result: std::result::Result<GlobalMetadataScope, impl std::fmt::Display>,
+) -> Result<GlobalMetadataScope> {
+    result.map_err(|err| Error::Internal(format!("metadata registration failed: {err}")))
 }
 
 fn reduction_output_meta(
@@ -251,6 +275,62 @@ fn validate_traced_perm(rank: usize, perm: &[usize], op: &'static str) -> Result
     Ok(())
 }
 
+fn validate_broadcast_in_dim_args(
+    input: &TracedTensor,
+    output_shape: &[SymDim],
+    dims: &[usize],
+    op: &'static str,
+) -> Result<()> {
+    if dims.len() != input.rank {
+        return Err(Error::InvalidGraphBuild {
+            op,
+            message: format!(
+                "dims length {} must match input rank {}",
+                dims.len(),
+                input.rank
+            ),
+        });
+    }
+
+    let mut seen = vec![false; output_shape.len()];
+    for &dim in dims {
+        if dim >= output_shape.len() {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!(
+                    "broadcast dim {dim} out of bounds for output rank {}",
+                    output_shape.len()
+                ),
+            });
+        }
+        if seen[dim] {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("duplicate broadcast dim {dim}"),
+            });
+        }
+        seen[dim] = true;
+    }
+
+    if let Some(input_shape) = input.shape_hint.as_ref() {
+        for (input_axis, &output_axis) in dims.iter().enumerate() {
+            let input_dim = &input_shape[input_axis];
+            let output_dim = &output_shape[output_axis];
+            if input_dim != output_dim && input_dim.constant_value() != Some(1) {
+                return Err(Error::InvalidGraphBuild {
+                    op,
+                    message: format!(
+                        "input axis {input_axis} with dim {input_dim:?} cannot broadcast to \
+                         output axis {output_axis} with dim {output_dim:?}"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl std::ops::Add for &TracedTensor {
     type Output = Result<TracedTensor>;
 
@@ -328,7 +408,7 @@ impl TracedTensor {
     /// let concrete = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// assert!(concrete.attached_data().is_some());
     ///
-    /// let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// assert!(placeholder.attached_data().is_none());
     /// ```
     pub fn attached_data(&self) -> Option<&Arc<Tensor>> {
@@ -350,11 +430,12 @@ impl TracedTensor {
     ///
     /// let a = TracedTensor::from_tensor_concrete_shape(
     ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-    /// );
+    /// )
+    /// .unwrap();
     /// assert_eq!(a.rank, 2);
     /// assert!(a.is_concrete_shape());
     /// ```
-    pub fn from_tensor_concrete_shape(tensor: Tensor) -> Self {
+    pub fn from_tensor_concrete_shape(tensor: Tensor) -> Result<Self> {
         let shape = tensor.shape().to_vec();
         let rank = shape.len();
         let dtype = tensor.dtype();
@@ -366,17 +447,15 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
-        )
-        // Fresh input keys are unique within this constructor.
-        .expect("fresh concrete traced input metadata registration failed");
+        ))?;
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
-        Self {
+        Ok(Self {
             id,
             rank,
             dtype,
@@ -388,7 +467,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
-        }
+        })
     }
 
     /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`] but advertise
@@ -406,11 +485,12 @@ impl TracedTensor {
     ///
     /// let t = TracedTensor::from_tensor_symbolic_shape(
     ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-    /// );
+    /// )
+    /// .unwrap();
     /// assert_eq!(t.rank, 2);
     /// assert!(!t.is_concrete_shape());
     /// ```
-    pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Self {
+    pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Result<Self> {
         let rank = tensor.shape().len();
         let dtype = tensor.dtype();
         let key = next_input_key();
@@ -421,17 +501,15 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
-        )
-        // Fresh input keys are unique within this constructor.
-        .expect("fresh symbolic traced input metadata registration failed");
+        ))?;
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
-        Self {
+        Ok(Self {
             id,
             rank,
             dtype,
@@ -443,7 +521,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
-        }
+        })
     }
 
     /// Build a data-less placeholder leaf with a fixed (concrete) shape.
@@ -458,11 +536,11 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
+    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     /// assert_eq!(x.rank, 2);
     /// assert!(x.is_concrete_shape());
     /// ```
-    pub fn input_concrete_shape(dtype: DType, shape: &[usize]) -> Self {
+    pub fn input_concrete_shape(dtype: DType, shape: &[usize]) -> Result<Self> {
         let shape = shape.to_vec();
         let rank = shape.len();
         let key = next_input_key();
@@ -472,14 +550,12 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
-        )
-        // Fresh input keys are unique within this constructor.
-        .expect("fresh concrete traced placeholder metadata registration failed");
+        ))?;
 
-        Self {
+        Ok(Self {
             id,
             rank,
             dtype,
@@ -491,7 +567,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
-        }
+        })
     }
 
     /// Build a data-less placeholder leaf with the given rank but fully
@@ -506,11 +582,11 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro_runtime::TracedTensor;
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert_eq!(x.rank, 2);
     /// assert!(!x.is_concrete_shape());
     /// ```
-    pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Self {
+    pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Result<Self> {
         let key = next_input_key();
         let id = next_traced_id();
 
@@ -518,14 +594,12 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
-        )
-        // Fresh input keys are unique within this constructor.
-        .expect("fresh symbolic traced placeholder metadata registration failed");
+        ))?;
 
-        Self {
+        Ok(Self {
             id,
             rank,
             dtype,
@@ -537,7 +611,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
-        }
+        })
     }
 
     /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
@@ -558,9 +632,7 @@ impl TracedTensor {
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Result<Self> {
-        Ok(Self::from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(shape, data)?,
-        ))
+        Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data)?)
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
@@ -573,7 +645,7 @@ impl TracedTensor {
     /// use tenferro_runtime::TracedTensor;
     ///
     /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert!(a.is_concrete_shape());
     /// assert!(!b.is_concrete_shape());
     /// ```
@@ -598,7 +670,7 @@ impl TracedTensor {
     /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
     ///
-    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert!(b.try_concrete_shape().is_none());
     /// ```
     pub fn try_concrete_shape(&self) -> Option<Vec<usize>> {
@@ -797,9 +869,8 @@ impl TracedTensor {
 
     /// Scale by a complex scalar: `y = factor * x`.
     ///
-    /// Real and bool tensors are promoted to `C64` before scaling. For a real
-    /// scalar factor that should preserve the input dtype, prefer
-    /// [`scale_real`](Self::scale_real).
+    /// Only complex tensors support complex scaling. For a real scalar factor
+    /// that should preserve the input dtype, prefer [`scale_real`](Self::scale_real).
     ///
     /// # Examples
     ///
@@ -811,18 +882,20 @@ impl TracedTensor {
     /// #     vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     /// # )
     /// # .unwrap();
-    /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
+    /// let y = x.scale_complex(Complex64::new(0.0, 1.0)).unwrap(); // multiply by i
     /// ```
-    pub fn scale_complex(&self, factor: Complex64) -> TracedTensor {
+    pub fn scale_complex(&self, factor: Complex64) -> Result<TracedTensor> {
         match self.dtype {
-            DType::C64 => scale_with_constant(self, StdTensorOp::constant(factor)),
-            DType::C32 => scale_with_constant(
+            DType::C64 => Ok(scale_with_constant(self, StdTensorOp::constant(factor))),
+            DType::C32 => Ok(scale_with_constant(
                 self,
                 StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
-            ),
+            )),
             DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
-                let promoted = self.convert(DType::C64);
-                scale_with_constant(&promoted, StdTensorOp::constant(factor))
+                Err(Error::InvalidGraphBuild {
+                    op: "scale_complex",
+                    message: format!("requires complex tensor dtype, got {:?}", self.dtype),
+                })
             }
         }
     }
@@ -965,13 +1038,9 @@ impl TracedTensor {
         self.apply_same_shape_unary(StdTensorOp::Log1p)
     }
 
-    /// Convert the tensor to a different dtype.
+    /// Convert the tensor to a different dtype using checked conversion.
     ///
-    /// Numeric casts follow Rust primitive cast semantics. Real-to-complex
-    /// conversion embeds real values as `x + 0i`. Complex-to-real or
-    /// complex-to-integer conversion uses the real part. Boolean conversion
-    /// uses nonzero testing, and `bool` converts to numeric dtypes as `0` or
-    /// `1`.
+    /// Use [`cast`](Self::cast) when a lossy dtype projection is intended.
     ///
     /// # Examples
     ///
@@ -980,9 +1049,36 @@ impl TracedTensor {
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     ///
-    /// let y = x.convert(DType::C64);
+    /// let y = x.convert(DType::C64)?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn convert(&self, to: DType) -> TracedTensor {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested conversion is outside tenferro's
+    /// checked dtype-promotion lattice. Use [`cast`](Self::cast) for explicit
+    /// lossy dtype projection.
+    pub fn convert(&self, to: DType) -> Result<TracedTensor> {
+        tenferro_tensor::validate::validate_convert_dtype("TracedTensor::convert", self.dtype, to)?;
+        Ok(self.cast(to))
+    }
+
+    /// Cast the tensor to a different dtype using explicit dtype projection.
+    ///
+    /// `cast` may truncate, narrow precision, project complex values to their
+    /// real component, or use boolean truthiness where the backend supports the
+    /// requested projection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::DType;
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
+    ///
+    /// let y = x.cast(DType::I32);
+    /// ```
+    pub fn cast(&self, to: DType) -> TracedTensor {
         if self.dtype == to {
             return self.clone();
         }
@@ -1265,7 +1361,7 @@ impl TracedTensor {
     /// // Concrete axis: reports the constant size.
     /// assert_eq!(a.axis_sym_dim(0).unwrap().constant_value(), Some(2));
     ///
-    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// // Fully symbolic leaf: reports a TensorAxis reference.
     /// assert!(b.axis_sym_dim(0).unwrap().constant_value().is_none());
     /// ```
@@ -1299,7 +1395,7 @@ impl TracedTensor {
     /// assert!(a.sym_shape().is_some());
     /// assert_eq!(a.sym_shape().unwrap().len(), 2);
     ///
-    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert!(b.sym_shape().is_none());
     /// ```
     pub fn sym_shape(&self) -> Option<&[SymDim]> {
@@ -1340,19 +1436,32 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
-    /// let y = x.broadcast_in_dim(&[2, 3], &[1]);
-    /// let y2 = x.broadcast_in_dim(&[2, 3], &[1]);
+    /// let y = x.broadcast_in_dim(&[2, 3], &[1])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
-        apply_unary(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `dims` is not a duplicate-free mapping from every
+    /// input axis into the output rank, or when a known input dimension cannot
+    /// broadcast to the corresponding output dimension.
+    pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Result<TracedTensor> {
+        let out_shape_hint: Vec<SymDim> = shape.iter().copied().map(SymDim::from).collect();
+        validate_broadcast_in_dim_args(
+            self,
+            &out_shape_hint,
+            dims,
+            "TracedTensor::broadcast_in_dim",
+        )?;
+        Ok(apply_unary(
             StdTensorOp::BroadcastInDim {
                 shape: DimExpr::from_concrete(shape),
                 dims: dims.to_vec(),
             },
             self,
             shape.len(),
-            Some(shape.iter().copied().map(SymDim::from).collect()),
-        )
+            Some(out_shape_hint),
+        ))
     }
 
     /// Broadcast into a symbolic target shape with explicit dimension
@@ -1394,6 +1503,8 @@ impl TracedTensor {
         dims: &[usize],
         shape_refs: &[&TracedTensor],
     ) -> Result<TracedTensor> {
+        validate_broadcast_in_dim_args(self, shape, dims, "TracedTensor::broadcast_in_dim_sym")?;
+
         // Build a dedup'd list of shape-reference tensors (first occurrence
         // wins) and index them starting at 1 — the primary input `self`
         // is at 0.
@@ -1661,9 +1772,8 @@ pub(crate) fn apply_unary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[input.dtype])
-        // Traced unary builders only pass built-in unary ops with one input dtype.
-        .expect("built-in traced unary dtype inference failed");
+    let out_dtype =
+        inferred_output_dtype_or_fallback(&op, &[input.dtype], input.dtype, "apply_unary");
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
@@ -1810,18 +1920,21 @@ pub(crate) fn apply_binary(
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
     let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
-    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[lhs.dtype, rhs.dtype])
-        // Traced binary builders only pass built-in binary ops with both input dtypes.
-        .expect("built-in traced binary dtype inference failed");
+    let out_dtype = inferred_output_dtype_or_fallback(
+        &op,
+        &[lhs.dtype, rhs.dtype],
+        input_dtype,
+        "apply_binary",
+    );
 
     // Insert Convert ops when an input dtype differs from the primitive input dtype.
     let lhs = if lhs.dtype != input_dtype {
-        lhs.convert(input_dtype)
+        lhs.cast(input_dtype)
     } else {
         lhs.clone()
     };
     let rhs = if rhs.dtype != input_dtype {
-        rhs.convert(input_dtype)
+        rhs.cast(input_dtype)
     } else {
         rhs.clone()
     };
@@ -1880,20 +1993,24 @@ pub(crate) fn apply_ternary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype =
-        crate::shape_infer::infer_output_dtype(&op, &[first.dtype, second.dtype, third.dtype])
-            // Traced ternary builders only pass built-in ternary ops with all input dtypes.
-            .expect("built-in traced ternary dtype inference failed");
+    let fallback_dtype =
+        crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
+    let out_dtype = inferred_output_dtype_or_fallback(
+        &op,
+        &[first.dtype, second.dtype, third.dtype],
+        fallback_dtype,
+        "apply_ternary",
+    );
     let (first, second, third) = match op {
         StdTensorOp::Select => {
             let value_dtype = crate::shape_infer::promote_dtype(second.dtype, third.dtype);
             let second = if second.dtype != value_dtype {
-                second.convert(value_dtype)
+                second.cast(value_dtype)
             } else {
                 second.clone()
             };
             let third = if third.dtype != value_dtype {
-                third.convert(value_dtype)
+                third.cast(value_dtype)
             } else {
                 third.clone()
             };
@@ -1903,17 +2020,17 @@ pub(crate) fn apply_ternary(
             let input_dtype =
                 crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
             let first = if first.dtype != input_dtype {
-                first.convert(input_dtype)
+                first.cast(input_dtype)
             } else {
                 first.clone()
             };
             let second = if second.dtype != input_dtype {
-                second.convert(input_dtype)
+                second.cast(input_dtype)
             } else {
                 second.clone()
             };
             let third = if third.dtype != input_dtype {
-                third.convert(input_dtype)
+                third.cast(input_dtype)
             } else {
                 third.clone()
             };

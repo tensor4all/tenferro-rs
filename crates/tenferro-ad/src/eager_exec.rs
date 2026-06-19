@@ -439,7 +439,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
         StdTensorOp::Convert { to, .. } => {
             let input = concrete_tensor_read(inputs[0].clone())?;
-            vec![exec.convert(input.tensor(), *to)?]
+            vec![exec.cast(input.tensor(), *to)?]
         }
         StdTensorOp::Constant { .. } => {
             return Err(Error::Internal(
@@ -666,8 +666,12 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::ReduceMin { axes, .. } => vec![exec.reduce_min(inputs[0], axes)?],
             StdTensorOp::Expm1 => vec![exec.expm1(inputs[0])?],
             StdTensorOp::Log1p => vec![exec.log1p(inputs[0])?],
-            StdTensorOp::Convert { to, .. } => vec![exec.convert(inputs[0], *to)?],
-            StdTensorOp::Constant { .. } => unreachable!("handled before backend session"),
+            StdTensorOp::Convert { to, .. } => vec![exec.cast(inputs[0], *to)?],
+            StdTensorOp::Constant { .. } => {
+                return Err(Error::Internal(
+                    "Constant reached eager backend session after dispatcher handling".to_string(),
+                ));
+            }
             StdTensorOp::Select => {
                 let value_dtype =
                     crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
@@ -724,7 +728,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
             }
-            StdTensorOp::ShapeOf { .. } => unreachable!("handled before backend session"),
+            StdTensorOp::ShapeOf { .. } => {
+                return Err(Error::Internal(
+                    "ShapeOf reached eager backend session after dispatcher handling".to_string(),
+                ));
+            }
             StdTensorOp::DynamicTruncate { axis } => {
                 let input = inputs[0];
                 if *axis >= input.shape().len() {
@@ -777,7 +785,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 }
             }
             StdTensorOp::Extension(_) => {
-                unreachable!("Extension is handled before opening an exec session")
+                return Err(Error::Internal(
+                    "Extension reached eager backend session after extension dispatch".to_string(),
+                ));
             }
         };
         Ok(result)

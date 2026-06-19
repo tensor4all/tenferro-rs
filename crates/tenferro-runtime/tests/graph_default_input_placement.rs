@@ -75,7 +75,7 @@ impl TensorStructural for UploadRejectingBackend {
         transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
-        convert(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
+        cast(input: &Tensor, to: DType) -> tenferro_tensor::Result<Tensor>;
         extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
@@ -120,7 +120,8 @@ impl TensorBackend for UploadRejectingBackend {}
 fn scalar_default_program() -> tenferro_runtime::GraphProgram {
     let scalar = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
-    );
+    )
+    .unwrap();
     GraphCompiler::new().compile(&scalar).unwrap()
 }
 
@@ -146,7 +147,7 @@ fn scalar_default_input_is_uploaded_for_borrowed_execution() {
 
 #[test]
 fn explicit_scalar_binding_is_not_auto_uploaded() {
-    let scalar = TracedTensor::input_symbolic_shape(DType::F64, 0);
+    let scalar = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
     let program = GraphCompiler::new()
         .compile_with_input_specs(&scalar, &[(&scalar, DType::F64, &[])])
         .unwrap();
@@ -167,7 +168,8 @@ fn explicit_scalar_binding_is_not_auto_uploaded() {
 fn non_scalar_default_input_is_not_auto_uploaded() {
     let vector = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
-    );
+    )
+    .unwrap();
     let program = GraphCompiler::new().compile(&vector).unwrap();
 
     let owned = GraphExecutor::new(UploadRejectingBackend)
@@ -194,7 +196,7 @@ fn backend_resident_scalar_default_input_is_not_reuploaded() {
         )
         .unwrap(),
     );
-    let scalar = TracedTensor::from_tensor_concrete_shape(tensor);
+    let scalar = TracedTensor::from_tensor_concrete_shape(tensor).unwrap();
     let program = GraphCompiler::new().compile(&scalar).unwrap();
 
     let owned = GraphExecutor::new(UploadRejectingBackend)

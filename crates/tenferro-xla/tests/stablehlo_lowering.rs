@@ -3,7 +3,7 @@ use tenferro_xla::lower_to_stablehlo;
 
 #[test]
 fn lowers_elementwise_reduce_and_static_shapes() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(&[0]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -22,13 +22,15 @@ fn lowers_elementwise_reduce_and_static_shapes() {
 
 #[test]
 fn lowers_structural_ops_and_convert() {
-    let x = TracedTensor::input_symbolic_shape(DType::F32, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
     let y = x
         .broadcast_in_dim(&[2, 3], &[1])
+        .unwrap()
         .transpose(&[1, 0])
         .unwrap()
         .reshape(&[6])
-        .convert(DType::F64);
+        .convert(DType::F64)
+        .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F32, &[3])])
@@ -48,8 +50,8 @@ fn lowers_structural_ops_and_convert() {
 
 #[test]
 fn lowers_unbatched_dot_general() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -110,9 +112,9 @@ fn lowers_concrete_nary_einsum_via_standard_ops() {
 
 #[test]
 fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let mid = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let mid = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let product =
         tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
@@ -139,8 +141,8 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
 
 #[test]
 fn batched_dot_general_transposes_stablehlo_batch_first_result() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
     let product = lhs
         .dot_general(
             &rhs,

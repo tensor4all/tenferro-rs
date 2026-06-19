@@ -124,7 +124,7 @@ impl Default for ExtensionCacheLimits {
     fn default() -> Self {
         Self {
             max_entries: NonZeroUsize::new(DEFAULT_EXTENSION_CACHE_CAPACITY)
-                .expect("DEFAULT_EXTENSION_CACHE_CAPACITY must be non-zero"),
+                .unwrap_or(NonZeroUsize::MIN),
         }
     }
 }

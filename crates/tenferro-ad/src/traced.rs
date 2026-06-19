@@ -85,7 +85,7 @@ pub(crate) fn grad_optional_with_rules(
     }
 
     let ones = ones_tensor(output.dtype, vec![])?;
-    let seed = TracedTensor::from_tensor_concrete_shape(ones);
+    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
     vjp_optional_impl(output, wrt, &seed, Some(extension_rules))
 }
 
@@ -130,7 +130,7 @@ fn grad_with_optional_rules(
     }
 
     let ones = ones_tensor(output.dtype, vec![])?;
-    let seed = TracedTensor::from_tensor_concrete_shape(ones);
+    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
     let wrt_input_key = leaf_input_key(wrt)?;
     vjp_optional_impl(output, wrt, &seed, extension_rules)?
         .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
@@ -332,7 +332,7 @@ impl TracedTensorAdExt for TracedTensor {
         }
 
         let ones = ones_tensor(self.dtype, vec![])?;
-        let seed = TracedTensor::from_tensor_concrete_shape(ones);
+        let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
         vjp_optional_impl(self, wrt, &seed, None)
     }
 

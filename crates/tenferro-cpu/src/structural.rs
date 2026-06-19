@@ -211,11 +211,41 @@ pub(crate) fn broadcast_in_dim_with_pool(
     ))
 }
 
+/// Convert a tensor to another dtype using checked dtype conversion.
+///
+/// Use `TensorStructural::cast` when an explicit lossy dtype projection is
+/// intended.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_tensor::{DType, Tensor, TensorStructural};
+///
+/// let mut backend = CpuBackend::new();
+/// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+/// let y = backend.convert(&x, DType::F64).unwrap();
+/// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when the requested conversion is outside tenferro's checked
+/// dtype-promotion lattice.
 pub fn convert(input: &Tensor, to: DType) -> crate::Result<Tensor> {
     with_local_pool(|buffers| convert_with_pool(buffers, input, to))
 }
 
 pub(crate) fn convert_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    to: DType,
+) -> crate::Result<Tensor> {
+    tenferro_tensor::validate::validate_convert_dtype("convert", input.dtype(), to)?;
+    cast_with_pool(buffers, input, to)
+}
+
+pub(crate) fn cast_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     to: DType,

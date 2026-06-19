@@ -334,10 +334,9 @@ impl CudaExtensionCache {
     /// assert!(cache.is_empty());
     /// ```
     pub fn new() -> Self {
-        Self::with_max_entries(
-            NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
-                .expect("default CUDA extension cache capacity is non-zero"),
-        )
+        let max_entries = NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
+            .unwrap_or(NonZeroUsize::MIN);
+        Self::with_max_entries(max_entries)
     }
 
     /// Create an empty extension cache with an explicit entry bound.
@@ -2087,16 +2086,16 @@ impl TensorStructural for CudaBackend {
         }
     }
 
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
+    fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
         match (input, to) {
             (Tensor::F32(t), crate::DType::F32) => Ok(Tensor::F32(t.clone())),
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
             (Tensor::F32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("convert", to))
+                Err(unsupported_dtype("cast", to))
             }
-            (Tensor::F32(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
+            (Tensor::F32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
             (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
             (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
             (Tensor::F64(t), crate::DType::F32) => {
@@ -2104,23 +2103,23 @@ impl TensorStructural for CudaBackend {
             }
             (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
             (Tensor::F64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("convert", to))
+                Err(unsupported_dtype("cast", to))
             }
-            (Tensor::F64(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
+            (Tensor::F64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
             (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
             (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
             (Tensor::I32(t), crate::DType::I32) => Ok(Tensor::I32(t.clone())),
-            (Tensor::I32(_), _) => Err(unsupported_dtype("convert", input.dtype())),
+            (Tensor::I32(_), _) => Err(unsupported_dtype("cast", input.dtype())),
             (Tensor::I64(_), crate::DType::I64) => Ok(input.clone()),
-            (Tensor::I64(_), _) => Err(unsupported_dtype("convert", input.dtype())),
+            (Tensor::I64(_), _) => Err(unsupported_dtype("cast", input.dtype())),
             (Tensor::Bool(t), crate::DType::Bool) => Ok(Tensor::Bool(t.clone())),
-            (Tensor::Bool(_), _) => Err(unsupported_dtype("convert", input.dtype())),
+            (Tensor::Bool(_), _) => Err(unsupported_dtype("cast", input.dtype())),
             (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
             (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
             (Tensor::C32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("convert", to))
+                Err(unsupported_dtype("cast", to))
             }
-            (Tensor::C32(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
+            (Tensor::C32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
             (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
             (Tensor::C32(t), crate::DType::C64) => self
                 .convert_complex_to_complex::<Complex32, Complex64>(t)
@@ -2128,9 +2127,9 @@ impl TensorStructural for CudaBackend {
             (Tensor::C64(t), crate::DType::F32) => self.convert_c64_to_f32(t).map(Tensor::F32),
             (Tensor::C64(t), crate::DType::F64) => self.convert_c64_to_f64(t).map(Tensor::F64),
             (Tensor::C64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("convert", to))
+                Err(unsupported_dtype("cast", to))
             }
-            (Tensor::C64(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
+            (Tensor::C64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
             (Tensor::C64(t), crate::DType::C32) => self
                 .convert_complex_to_complex::<Complex64, Complex32>(t)
                 .map(Tensor::C32),

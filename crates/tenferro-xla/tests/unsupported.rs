@@ -50,7 +50,7 @@ impl ExtensionOp for RuntimeOnlyExtension {
 
 #[test]
 fn rejects_i64_dtype_before_emitting_mlir() {
-    let x = TracedTensor::input_symbolic_shape(DType::I64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::I64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -70,8 +70,8 @@ fn rejects_i64_dtype_before_emitting_mlir() {
 
 #[test]
 fn rejects_dynamic_upper_bound_extents() {
-    let data = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let size = TracedTensor::input_symbolic_shape(DType::F64, 0);
+    let data = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let size = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
     let y = data.dynamic_truncate(&size, 0).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -92,7 +92,7 @@ fn rejects_dynamic_upper_bound_extents() {
 
 #[test]
 fn rejects_unsupported_static_op() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.exp();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -106,7 +106,7 @@ fn rejects_unsupported_static_op() {
 
 #[test]
 fn rejects_extension_without_standard_op_lowering() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let outputs = apply(Arc::new(RuntimeOnlyExtension), &[&x]).unwrap();
     let y = outputs.into_iter().next().unwrap();
     let mut compiler = GraphCompiler::new();

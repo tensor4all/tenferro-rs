@@ -7,7 +7,13 @@ pub(crate) fn static_output_shape(
     output_index: usize,
     input_shapes: &[&[usize]],
 ) -> Result<Vec<usize>> {
-    match inst.static_output_shape(output_index, input_shapes) {
+    map_static_output_shape_result(inst.static_output_shape(output_index, input_shapes))
+}
+
+fn map_static_output_shape_result(
+    result: std::result::Result<Vec<usize>, GraphProgramLoweringShapeError>,
+) -> Result<Vec<usize>> {
+    match result {
         Ok(shape) => Ok(shape),
         Err(GraphProgramLoweringShapeError::MissingOutput { op, output_index }) => {
             Err(Error::InvalidProgram {

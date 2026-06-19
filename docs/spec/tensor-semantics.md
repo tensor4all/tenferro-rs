@@ -144,6 +144,23 @@ for downcasting and execution.
 - backend traits
 - host/runtime views used by kernels
 
+### DType conversion
+
+Runtime dtype conversion has two public meanings:
+
+- `convert(dtype)` is checked. It accepts conversions that are valid according
+  to tenferro's dtype-promotion lattice and returns a typed error for lossy
+  conversions such as float or complex to integer, complex to real, integer to
+  boolean, or precision narrowing.
+- `cast(dtype)` is explicit. It may perform lossy dtype projection and is the
+  API callers use when they intentionally want truncation, precision narrowing,
+  complex projection, or boolean truthiness.
+
+The internal primitive and execution IR may continue to use the legacy
+`Convert` operation name for dtype projection, including AD cotangent
+projection, but public APIs must keep checked `convert` separate from explicit
+lossy `cast`.
+
 CPU backend implementations, CPU kernels, and CPU resource pools belong in
 `tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in
 `tenferro-gpu`.

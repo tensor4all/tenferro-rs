@@ -455,11 +455,12 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     let abs_s = s.abs();
     let s_max = abs_s.reduce_max(&[0])?;
     let s_max_shape = s_max.concrete_shape()?;
-    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max_shape)?;
+    let threshold_scalar = broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0))?, &s_max_shape)?;
+    let threshold = (&s_max * &threshold_scalar)?;
     let s_shape = s.concrete_shape()?;
-    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold?, &s_shape)?;
+    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape)?;
     let mask = abs_s.compare(&threshold, CompareDir::Gt)?;
-    let mask = mask.convert(s.dtype);
+    let mask = mask.convert(s.dtype)?;
     let ones = ones_like(&s)?;
     let denom = (&s + &(&ones + &(-&mask))?)?;
     let s_inv = (&mask / &denom)?;
@@ -597,33 +598,16 @@ fn five_outputs(
     }
 }
 
-fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
+fn scalar_real(dtype: DType, value: f64) -> Result<TracedTensor> {
     match dtype {
-        // Rank-0 scalar constants always have exactly one element.
-        DType::F64 => {
-            TracedTensor::from_vec_col_major(vec![], vec![value]).expect("scalar constant")
-        }
-        // Rank-0 scalar constants always have exactly one element.
-        DType::F32 => {
-            TracedTensor::from_vec_col_major(vec![], vec![value as f32]).expect("scalar constant")
-        }
-        // Rank-0 scalar constants always have exactly one element.
-        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32])
-            .expect("scalar constant"),
-        // Rank-0 scalar constants always have exactly one element.
-        DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64])
-            .expect("scalar constant"),
-        // Rank-0 scalar constants always have exactly one element.
-        DType::Bool => {
-            TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]).expect("scalar constant")
-        }
-        // Rank-0 scalar constants always have exactly one element.
-        DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)])
-            .expect("scalar constant"),
-        // Rank-0 scalar constants always have exactly one element.
+        DType::F64 => TracedTensor::from_vec_col_major(vec![], vec![value]),
+        DType::F32 => TracedTensor::from_vec_col_major(vec![], vec![value as f32]),
+        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32]),
+        DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64]),
+        DType::Bool => TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]),
+        DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
-                .expect("scalar constant")
         }
     }
 }
@@ -668,24 +652,24 @@ fn require_concrete_shape(op: &'static str, input: &TracedTensor) -> Result<Vec<
     })
 }
 
-fn zero_scalar(dtype: DType) -> TracedTensor {
+fn zero_scalar(dtype: DType) -> Result<TracedTensor> {
     scalar_real(dtype, 0.0)
 }
 
-fn one_scalar(dtype: DType) -> TracedTensor {
+fn one_scalar(dtype: DType) -> Result<TracedTensor> {
     scalar_real(dtype, 1.0)
 }
 
 fn ones_like(input: &TracedTensor) -> Result<TracedTensor> {
     let shape = input.concrete_shape()?;
-    broadcast_scalar(one_scalar(input.dtype), &shape)
+    broadcast_scalar(one_scalar(input.dtype)?, &shape)
 }
 
 fn eye_like(anchor: &TracedTensor, size: usize) -> Result<TracedTensor> {
     let mut vector_shape = vec![size];
     let anchor_shape = anchor.concrete_shape()?;
     vector_shape.extend_from_slice(&anchor_shape[2..]);
-    let diagonal = broadcast_scalar(one_scalar(anchor.dtype), &vector_shape)?;
+    let diagonal = broadcast_scalar(one_scalar(anchor.dtype)?, &vector_shape)?;
     diagonal.embed_diag(0, 1)
 }
 
@@ -694,7 +678,7 @@ fn broadcast_scalar(input: TracedTensor, shape: &[usize]) -> Result<TracedTensor
     if input_shape == shape {
         return Ok(input);
     }
-    Ok(input.broadcast_in_dim(shape, &[]))
+    input.broadcast_in_dim(shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(
@@ -706,7 +690,7 @@ fn broadcast_batch_scalar_to_leading_axis(
         return Ok(input.clone());
     }
     let dims: Vec<usize> = (1..shape.len()).collect();
-    Ok(input.broadcast_in_dim(shape, &dims))
+    input.broadcast_in_dim(shape, &dims)
 }
 
 fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
@@ -730,13 +714,13 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 }
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    let squared = abs.pow(&scalar_real(abs.dtype, 2.0))?;
+    let squared = abs.pow(&scalar_real(abs.dtype, 2.0)?)?;
     Ok(squared.reduce_sum(axes)?.sqrt())
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
-    let power = abs.pow(&scalar_real(abs.dtype, p))?;
-    let inv_p = scalar_real(abs.dtype, 1.0 / p);
+    let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
+    let inv_p = scalar_real(abs.dtype, 1.0 / p)?;
     power.reduce_sum(axes)?.pow(&inv_p)
 }
 
@@ -822,13 +806,13 @@ fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<T
     let dims: Vec<usize> = (0..matrix_shape.len()).collect();
     let scale = scale
         .reshape(&scale_shape)
-        .broadcast_in_dim(&matrix_shape, &dims);
+        .broadcast_in_dim(&matrix_shape, &dims)?;
     matrix * &scale
 }
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    let mask = abs.compare(&zero_scalar(abs.dtype), CompareDir::Gt)?;
-    mask.convert(abs.dtype).reduce_sum(axes)
+    let mask = abs.compare(&zero_scalar(abs.dtype)?, CompareDir::Gt)?;
+    mask.convert(abs.dtype)?.reduce_sum(axes)
 }
 
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {

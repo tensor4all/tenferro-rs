@@ -170,7 +170,7 @@ Legend:
 | `pow` | `F32`, `F64` | Same dtype inputs only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
 | `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Structural tensor operations; `Bool` is not implemented |
-| `convert` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I32`, `I64`, and `Bool` identity only | Conversion to or from integer or `Bool` dtypes is not implemented except identity |
+| checked `convert`, explicit `cast` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I32`, `I64`, and `Bool` identity only | `convert` applies the public checked conversion contract before backend dispatch; `cast` is explicit dtype projection. Conversion to or from integer or `Bool` dtypes is not implemented on CUDA except identity |
 | `reduce_sum`, `reduce_prod` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Multi-axis reductions are composed from single-axis kernels; `Bool` is not implemented |
 | `reduce_max`, `reduce_min` | `F32`, `F64` | Complex ordering is not defined; integer and `Bool` min/max are not implemented |
 | `dot_general` | `F32`, `F64`, `C32`, `C64` | cuTENSOR-backed contraction; same dtype inputs only |

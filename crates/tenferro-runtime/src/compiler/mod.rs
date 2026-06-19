@@ -750,11 +750,14 @@ fn sort_contracting_dims(config: &mut DotGeneralConfig) {
 }
 
 fn consecutive_if_sorted(dims: &[usize]) -> bool {
-    if dims.is_empty() {
+    let Some((&first, rest)) = dims.split_first() else {
         return true;
-    }
-    let min_val = *dims.iter().min().expect("non-empty");
-    let max_val = *dims.iter().max().expect("non-empty");
+    };
+    let (min_val, max_val) = rest
+        .iter()
+        .fold((first, first), |(min_val, max_val), &dim| {
+            (min_val.min(dim), max_val.max(dim))
+        });
     max_val - min_val == dims.len() - 1
 }
 

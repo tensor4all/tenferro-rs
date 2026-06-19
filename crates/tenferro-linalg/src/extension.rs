@@ -550,38 +550,19 @@ fn promote_dtypes(dtypes: &[DType]) -> DType {
 
 fn promote_dtype(lhs: DType, rhs: DType) -> DType {
     use DType::*;
-    if lhs == rhs {
-        return lhs;
-    }
-    let (a, b) = if promotion_rank(lhs) <= promotion_rank(rhs) {
-        (lhs, rhs)
-    } else {
-        (rhs, lhs)
-    };
-    match (a, b) {
-        (Bool, other) => other,
-        (I32, I64) => I64,
-        (I32 | I64, F32 | F64) => F64,
-        (I32 | I64, C32 | C64) => C64,
-        (F32, F64) => F64,
-        (F32, C32) => C32,
-        (F32, C64) => C64,
-        (F64, C32) => C64,
-        (F64, C64) => C64,
-        (C32, C64) => C64,
-        _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
-    }
-}
-
-fn promotion_rank(dtype: DType) -> u8 {
-    match dtype {
-        DType::Bool => 0,
-        DType::I32 => 1,
-        DType::I64 => 2,
-        DType::F32 => 3,
-        DType::F64 => 4,
-        DType::C32 => 5,
-        DType::C64 => 6,
+    match (lhs, rhs) {
+        (Bool, Bool) => Bool,
+        (Bool, other) | (other, Bool) => other,
+        (I32, I32) => I32,
+        (I32, I64) | (I64, I32) | (I64, I64) => I64,
+        (I32 | I64, F32 | F64) | (F32 | F64, I32 | I64) => F64,
+        (I32 | I64, C32 | C64) | (C32 | C64, I32 | I64) => C64,
+        (F32, F32) => F32,
+        (F32, F64) | (F64, F32) | (F64, F64) => F64,
+        (F32, C32) | (C32, F32) | (C32, C32) => C32,
+        (F32, C64) | (C64, F32) => C64,
+        (F64, C32 | C64) | (C32 | C64, F64) => C64,
+        (C32, C64) | (C64, C32) | (C64, C64) => C64,
     }
 }
 

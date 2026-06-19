@@ -78,8 +78,8 @@ fn run_hlo_module(config: &XlaToolConfig, prefix: &str, module: &tenferro_xla::S
 }
 
 fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
     let dot = lhs
         .dot_general(
             &rhs,
@@ -103,9 +103,9 @@ fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
 }
 
 fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2);
-    let mid = TracedTensor::input_symbolic_shape(DType::F32, 2);
-    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
+    let mid = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let product =
         tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")

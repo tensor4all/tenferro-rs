@@ -2,6 +2,33 @@ use num_complex::{Complex32, Complex64};
 
 use super::*;
 
+#[test]
+fn checked_convert_follows_dtype_promotion_lattice() {
+    assert!(can_convert_dtype(DType::F32, DType::F64));
+    assert!(can_convert_dtype(DType::F64, DType::C64));
+    assert!(can_convert_dtype(DType::Bool, DType::I64));
+
+    assert!(!can_convert_dtype(DType::F64, DType::F32));
+    assert!(!can_convert_dtype(DType::F64, DType::I32));
+    assert!(!can_convert_dtype(DType::C64, DType::F64));
+    assert!(!can_convert_dtype(DType::I32, DType::Bool));
+}
+
+#[test]
+fn validate_convert_dtype_reports_typed_error() {
+    let err = validate_convert_dtype("convert", DType::C64, DType::I32).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::UnsupportedDTypeConversion {
+            op: "convert",
+            from: DType::C64,
+            to: DType::I32,
+            ..
+        }
+    ));
+}
+
 macro_rules! float_singular_tests {
     ($mod_name:ident, $t:ty) => {
         mod $mod_name {

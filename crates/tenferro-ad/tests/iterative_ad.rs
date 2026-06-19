@@ -86,7 +86,7 @@ fn fixed_point_traced(
     conv_tol: f64,
     engine: &mut GraphExecutor<CpuBackend>,
 ) -> (TracedTensor, usize) {
-    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0));
+    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0)).unwrap();
     let mut prev_val = x0;
 
     for iter in 1..=max_iter {
@@ -113,7 +113,7 @@ fn fixed_point_traced(
 
 #[test]
 fn eval_mid_loop_preserves_graph_connectivity() {
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
@@ -142,7 +142,7 @@ fn iterative_ad_gradient_matches_finite_diff() {
     let conv_tol = 1e-12;
 
     // --- AD gradient ---
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &mut engine);
 
@@ -170,7 +170,7 @@ fn iterative_ad_gradient_matches_finite_diff() {
 #[test]
 fn eval_all_evaluates_primal_and_gradient() {
     let a_val = 0.8_f64;
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
@@ -209,8 +209,8 @@ fn graph_size_grows_linearly() {
     // Run with a fixed number of iterations (no convergence check)
     // and measure graph op count.
     fn ops_for_k_iters(k: usize) -> usize {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
-        let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
+        let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5)).unwrap();
         for _ in 0..k {
             x = (&a * &x.cos()).unwrap();
         }

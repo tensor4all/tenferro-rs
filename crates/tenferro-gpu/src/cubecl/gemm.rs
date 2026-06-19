@@ -363,7 +363,15 @@ fn build_layout<T>(
         next_mode += 1;
         lhs_modes[lhs_axis] = mode;
         rhs_modes[rhs_axis] = mode;
-        contracting_elements *= lhs.shape()[lhs_axis];
+        contracting_elements = contracting_elements
+            .checked_mul(lhs.shape()[lhs_axis])
+            .ok_or_else(|| Error::InvalidConfig {
+                op: OP,
+                message: format!(
+                    "contracting dimension product overflows usize for lhs shape {:?}",
+                    lhs.shape()
+                ),
+            })?;
     }
 
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {

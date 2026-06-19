@@ -63,6 +63,24 @@ The default stratum is internal.
 5. Standard operation families are first-class crates, not modules under a
    broad facade.
 
+## DType Conversion Rules
+
+1. `convert(dtype)` is the checked dtype-conversion API. It may only build or
+   execute conversions that are accepted by tenferro's dtype-promotion lattice.
+   Unsupported conversions return typed errors instead of truncating,
+   saturating, dropping imaginary components, or using Rust primitive `as`
+   semantics.
+2. `cast(dtype)` is the explicit lossy dtype-cast API. It is the public name for
+   value-changing dtype projection when callers intentionally request
+   truncation, precision narrowing, complex projection, or boolean truthiness.
+3. Internal AD and compiler dtype projections may use the same primitive
+   lowering as `cast`, but public APIs must keep the checked `convert` contract
+   separate from explicit lossy `cast`.
+4. DType conversion is not a metadata-only structural operation. It changes
+   element representation and belongs to the dtype/value-conversion operation
+   category even when the internal primitive catalog keeps a legacy `Convert`
+   operation name.
+
 ## Documentation Checks
 
 1. `README.md`, `docs/index.md`, `docs/guides/`,

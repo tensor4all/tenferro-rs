@@ -10,7 +10,8 @@ fn eager_runtime_replaces_eager_context_public_name() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         runtime.clone(),
-    );
+    )
+    .unwrap();
     let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
 
     loss.backward().unwrap();

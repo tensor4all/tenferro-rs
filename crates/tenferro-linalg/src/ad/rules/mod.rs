@@ -301,14 +301,20 @@ pub(crate) fn linearize_eig(
     let rank = input_shape.len();
     let v = ValueRef::External(primal_out[1].clone());
     let da_complex = match input_dtype {
-        DType::F64 | DType::F32 => builder.add_operation(
+        DType::F64 => builder.add_operation(
             StdTensorOp::Convert {
                 from: input_dtype,
-                to: match input_dtype {
-                    DType::F64 => DType::C64,
-                    DType::F32 => DType::C32,
-                    _ => unreachable!("real dtype branch"),
-                },
+                to: DType::C64,
+            },
+            vec![ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::F32 => builder.add_operation(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: DType::C32,
             },
             vec![ValueRef::Local(da)],
             OperationRole::Linearized {
@@ -354,14 +360,20 @@ pub(crate) fn linearize_eig_values(
     );
     let v = ValueRef::Local(eig_outputs[1]);
     let da_complex = match input_dtype {
-        DType::F64 | DType::F32 => builder.add_operation(
+        DType::F64 => builder.add_operation(
             StdTensorOp::Convert {
                 from: input_dtype,
-                to: match input_dtype {
-                    DType::F64 => DType::C64,
-                    DType::F32 => DType::C32,
-                    _ => unreachable!("real dtype branch"),
-                },
+                to: DType::C64,
+            },
+            vec![ValueRef::Local(da)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::F32 => builder.add_operation(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: DType::C32,
             },
             vec![ValueRef::Local(da)],
             OperationRole::Linearized {

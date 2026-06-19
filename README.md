@@ -150,6 +150,10 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 
 ## Minimal CPU Example
 
+Create a binary crate that depends on `tenferro-runtime` and `tenferro-cpu`.
+The same runnable example lives at
+`crates/tenferro-runtime/examples/cpu_quickstart.rs`.
+
 <!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;

@@ -57,13 +57,13 @@ fn run_case(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4])?;
     let (u, s, vt) = tenferro_linalg::traced_tensor::svd_with_eps(&x, 1.0e-12)?;
 
     let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s
         .compare(&threshold, CompareDir::Gt)?
-        .convert(DType::F64)
+        .convert(DType::F64)?
         .reduce_sum(&[0])?;
 
     let u_truncated = u.dynamic_truncate(&keep_count, 1)?;

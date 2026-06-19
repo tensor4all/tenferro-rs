@@ -166,7 +166,7 @@ impl GraphCompiler {
     /// ```
     /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler
     ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[3])])
@@ -519,7 +519,7 @@ fn descriptor_for_input(
                 default_tensor: Some(Arc::new(zeros_tensor(
                     tensor.dtype(),
                     tensor.shape().to_vec(),
-                ))),
+                )?)),
             });
         }
         if let Some(spec) = binding_specs.get(root) {
@@ -530,7 +530,10 @@ fn descriptor_for_input(
                 default_tensor: spec
                     .default_tensor
                     .as_ref()
-                    .map(|tensor| Arc::new(zeros_tensor(tensor.dtype(), tensor.shape().to_vec()))),
+                    .map(|tensor| {
+                        zeros_tensor(tensor.dtype(), tensor.shape().to_vec()).map(Arc::new)
+                    })
+                    .transpose()?,
             });
         }
     }
@@ -570,35 +573,32 @@ fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     key.primal_root()
 }
 
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
-    // Invariant: compiler default zeros are derived from already-validated tensor shapes.
+fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
-        DType::F32 => Tensor::F32(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
-        DType::F64 => Tensor::F64(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
-        DType::I32 => Tensor::I32(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
-        DType::I64 => Tensor::I64(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
+        DType::F32 => Ok(Tensor::F32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::F64 => Ok(Tensor::F64(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::I32 => Ok(Tensor::I32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::I64 => Ok(Tensor::I64(tenferro_tensor::TypedTensor::zeros(shape)?)),
         DType::Bool => {
-            let len = shape.iter().product();
-            Tensor::Bool(
-                tenferro_tensor::TypedTensor::from_vec_col_major(shape, vec![false; len])
-                    .expect("validated bool default tensor shape"),
-            )
+            let len = checked_default_element_count(&shape)?;
+            Ok(Tensor::Bool(
+                tenferro_tensor::TypedTensor::from_vec_col_major(shape, vec![false; len])?,
+            ))
         }
-        DType::C32 => Tensor::C32(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
-        DType::C64 => Tensor::C64(
-            tenferro_tensor::TypedTensor::zeros(shape).expect("validated default tensor shape"),
-        ),
+        DType::C32 => Ok(Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)?)),
+        DType::C64 => Ok(Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)?)),
     }
+}
+
+fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| Error::InvalidCompiledGraph {
+                message: format!(
+                    "default tensor shape product overflows usize for shape {shape:?}"
+                ),
+            })
+    })
 }
 
 #[cfg(test)]

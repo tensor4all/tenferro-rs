@@ -97,6 +97,13 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 | `reverse` / `flip` | ✅ | ⬜ | gap on Traced |
 | `repeat` / `tile` | ⬜ | ⬜ | |
 
+## 5a. DType / value conversion
+
+| Operation | Eager | Traced | Notes |
+|---|---|---|---|
+| `convert` | ✅ | ✅ | checked conversion accepted by the dtype-promotion lattice; returns a typed error otherwise |
+| `cast` | ✅ | ✅ | explicit lossy dtype projection; required when callers intentionally request truncation, precision narrowing, complex projection, or boolean truthiness |
+
 ## 6. Indexing / data movement
 
 | Operation | Eager | Traced | Notes |

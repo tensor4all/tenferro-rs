@@ -234,6 +234,23 @@ fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tens
     }
 }
 
+fn eig_imag_is_effectively_zero(real: f64, imag: f64, eps: f64) -> bool {
+    imag.abs() <= eps * real.abs().max(1.0)
+}
+
+fn real_pivot_is_effectively_singular(pivot: f64, max_diagonal: f64, eps: f64) -> bool {
+    pivot.abs() <= eps * max_diagonal.max(1.0)
+}
+
+fn complex_pivot_is_effectively_singular(
+    real: f64,
+    imag: f64,
+    max_diagonal: f64,
+    eps: f64,
+) -> bool {
+    real.hypot(imag) <= eps * max_diagonal.max(1.0)
+}
+
 fn checked_product(
     op: &'static str,
     role: &'static str,
@@ -430,7 +447,11 @@ macro_rules! impl_real_eig_to_complex_outputs {
             let mut s = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, n) };
             let mut j = 0;
             while j < n {
-                if s_im[j] == 0.0 {
+                if eig_imag_is_effectively_zero(
+                    s_re[j] as f64,
+                    s_im[j] as f64,
+                    <$real>::EPSILON as f64,
+                ) {
                     s[j] = <$complex>::new(s_re[j], 0.0);
                     for i in 0..n {
                         u[i + j * n] = <$complex>::new(u_real[(i, j)], 0.0);
@@ -1126,8 +1147,15 @@ macro_rules! impl_faer_linalg_for_real {
             stack,
             Default::default(),
         );
+        let max_diagonal = (0..n)
+            .map(|i| lu[(i, i)].abs() as f64)
+            .fold(0.0, f64::max);
         for i in 0..n {
-            if lu[(i, i)] == 0.0 {
+            if real_pivot_is_effectively_singular(
+                lu[(i, i)] as f64,
+                max_diagonal,
+                <$scalar>::EPSILON as f64,
+            ) {
                 return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
             }
         }
@@ -1205,8 +1233,15 @@ macro_rules! impl_faer_linalg_for_real {
             stack,
             Default::default(),
         );
+        let max_diagonal = (0..n)
+            .map(|i| lu[(i, i)].abs() as f64)
+            .fold(0.0, f64::max);
         for i in 0..n {
-            if lu[(i, i)] == 0.0 {
+            if real_pivot_is_effectively_singular(
+                lu[(i, i)] as f64,
+                max_diagonal,
+                <$scalar>::EPSILON as f64,
+            ) {
                 return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
             }
         }
@@ -1882,9 +1917,20 @@ macro_rules! impl_faer_linalg_for_complex {
             stack,
             Default::default(),
         );
+        let max_diagonal = (0..n)
+            .map(|i| {
+                let value = lu[(i, i)];
+                (value.re as f64).hypot(value.im as f64)
+            })
+            .fold(0.0, f64::max);
         for i in 0..n {
             let value = lu[(i, i)];
-            if value.re == 0.0 && value.im == 0.0 {
+            if complex_pivot_is_effectively_singular(
+                value.re as f64,
+                value.im as f64,
+                max_diagonal,
+                <$real>::EPSILON as f64,
+            ) {
                 return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
             }
         }
@@ -1970,9 +2016,20 @@ macro_rules! impl_faer_linalg_for_complex {
             stack,
             Default::default(),
         );
+        let max_diagonal = (0..n)
+            .map(|i| {
+                let value = lu[(i, i)];
+                (value.re as f64).hypot(value.im as f64)
+            })
+            .fold(0.0, f64::max);
         for i in 0..n {
             let value = lu[(i, i)];
-            if value.re == 0.0 && value.im == 0.0 {
+            if complex_pivot_is_effectively_singular(
+                value.re as f64,
+                value.im as f64,
+                max_diagonal,
+                <$real>::EPSILON as f64,
+            ) {
                 return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
             }
         }
