@@ -22,8 +22,73 @@ use crate::optimize::{
 };
 use crate::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
-    Error as EinsumError, Result as EinsumResult, Subscripts,
+    Error as EinsumError, Result as EinsumResult, Subscripts, TensorDotAxes,
 };
+
+/// Traced einsum extension methods for [`GraphCompiler`].
+pub trait GraphCompilerEinsumExt {
+    fn einsum(&mut self, inputs: &[&TracedTensor], subscripts: &str) -> Result<TracedTensor>;
+    fn einsum_subscripts(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &EinsumSubscripts,
+    ) -> Result<TracedTensor>;
+    fn einsum_with(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &str,
+        optimize: EinsumOptimize,
+    ) -> Result<TracedTensor>;
+    fn einsum_subscripts_with(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &EinsumSubscripts,
+        optimize: EinsumOptimize,
+    ) -> Result<TracedTensor>;
+}
+
+impl GraphCompilerEinsumExt for GraphCompiler {
+    fn einsum(&mut self, inputs: &[&TracedTensor], subscripts: &str) -> Result<TracedTensor> {
+        einsum(self, inputs, subscripts)
+    }
+
+    fn einsum_subscripts(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &EinsumSubscripts,
+    ) -> Result<TracedTensor> {
+        einsum_subscripts(self, inputs, subscripts)
+    }
+
+    fn einsum_with(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &str,
+        optimize: EinsumOptimize,
+    ) -> Result<TracedTensor> {
+        einsum_with(self, inputs, subscripts, optimize)
+    }
+
+    fn einsum_subscripts_with(
+        &mut self,
+        inputs: &[&TracedTensor],
+        subscripts: &EinsumSubscripts,
+        optimize: EinsumOptimize,
+    ) -> Result<TracedTensor> {
+        einsum_subscripts_with(self, inputs, subscripts, optimize)
+    }
+}
+
+/// Traced tensor contraction-sugar methods.
+pub trait TracedTensorEinsumExt {
+    fn tensordot(&self, rhs: &TracedTensor, axes: TensorDotAxes<'_>) -> Result<TracedTensor>;
+}
+
+impl TracedTensorEinsumExt for TracedTensor {
+    fn tensordot(&self, rhs: &TracedTensor, axes: TensorDotAxes<'_>) -> Result<TracedTensor> {
+        tensordot(self, rhs, axes)
+    }
+}
 
 /// N-ary einsum with default time-optimized automatic planning.
 ///
@@ -165,6 +230,16 @@ pub fn einsum_subscripts_with(
         .into_iter()
         .next()
         .ok_or_else(|| Error::Internal("einsum extension produced no output".into()))
+}
+
+fn tensordot(
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+    axes: TensorDotAxes<'_>,
+) -> Result<TracedTensor> {
+    let config = crate::tensordot::dot_general_config(axes, lhs.rank, rhs.rank)?;
+    crate::tensordot::validate_traced_contract_dims(lhs, rhs, &config)?;
+    lhs.dot_general(rhs, config)
 }
 
 fn expand_traced_einsum_graph(

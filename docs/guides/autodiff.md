@@ -57,6 +57,7 @@ it to keep the first example short.
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
+use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -82,7 +83,7 @@ use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let mut compiler = GraphCompiler::new();
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let factor = tenferro_linalg::traced_tensor::cholesky(&a).unwrap();
+let factor = a.cholesky().unwrap();
 let ad = AdContext::builder()
     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
     .build()
@@ -118,7 +119,7 @@ let cotangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
+let y = a.matmul(&b).unwrap();
 let ad = AdContext::builder().build().unwrap();
 let ct_a = ad.vjp(&y, &a, &cotangent).unwrap();
 let program = compiler.compile(&ct_a).unwrap();
@@ -154,7 +155,7 @@ let tangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
+let y = a.matmul(&b).unwrap();
 let ad = AdContext::builder().build().unwrap();
 let dy = ad.jvp(&y, &a, &tangent).unwrap();
 let program = compiler.compile(&dy).unwrap();

@@ -1,7 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    tensor, traced_tensor, DType, DotGeneralConfig, Error, GraphCompiler, GraphExecutor, Tensor,
-    TensorRead, TensorValue, TracedTensor,
+    DType, DotGeneralConfig, Error, GatherConfig, GraphCompiler, GraphExecutor, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue, TracedTensor,
 };
 
 #[test]
@@ -19,51 +19,157 @@ fn runtime_crate_exposes_traced_graph_execution_api() {
 }
 
 #[test]
-fn tensor_module_free_functions_cover_eager_runtime_paths() {
+fn tensor_extension_trait_covers_eager_runtime_paths() {
     let mut backend = CpuBackend::new();
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 
-    let converted = tensor::convert(&f32_input, DType::F64, &mut backend).unwrap();
+    let converted = f32_input.convert(DType::F64, &mut backend).unwrap();
     assert_eq!(converted.dtype(), DType::F64);
     assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 
-    let casted = tensor::cast(&input, DType::F32, &mut backend).unwrap();
+    let casted = input.cast(DType::F32, &mut backend).unwrap();
     assert_eq!(casted.dtype(), DType::F32);
     assert_eq!(casted.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let reshaped = tensor::reshape(&input, &[4], &mut backend).unwrap();
+    let reshaped = input.reshape(&[4], &mut backend).unwrap();
     assert_eq!(reshaped.shape(), &[4]);
     assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let transposed = tensor::transpose(&input, &[1, 0], &mut backend).unwrap();
+    let transposed = input.transpose(&[1, 0], &mut backend).unwrap();
     assert_eq!(transposed.shape(), &[2, 2]);
     assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
 
-    let summed = tensor::reduce_sum(&input, &[0], &mut backend).unwrap();
+    let summed = input.reduce_sum(&[0], &mut backend).unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(summed.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
 }
 
 #[test]
-fn traced_tensor_module_free_functions_cover_wrappers_and_rank_errors() {
+fn traced_tensor_methods_cover_conversion_and_rank_errors() {
     let scalar = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let vector = TracedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.75]).unwrap();
 
-    let converted = traced_tensor::convert(&vector, DType::C64).unwrap();
+    let converted = vector.convert(DType::C64).unwrap();
     assert_eq!(converted.dtype, DType::C64);
 
-    let casted = traced_tensor::cast(&vector, DType::I32);
+    let casted = vector.cast(DType::I32);
     assert_eq!(casted.dtype, DType::I32);
 
-    let err = traced_tensor::matmul(&scalar, &vector).unwrap_err();
+    let err = scalar.matmul(&vector).unwrap_err();
     assert!(matches!(
         err,
         Error::InvalidGraphBuild {
-            op: "traced_tensor::matmul",
+            op: "TracedTensor::matmul",
             ..
         }
     ));
+}
+
+#[test]
+fn traced_tensor_methods_cover_structural_surface() {
+    fn run(output: &TracedTensor) -> Tensor {
+        let mut compiler = GraphCompiler::new();
+        let program = compiler.compile(output).unwrap();
+        GraphExecutor::new(CpuBackend::new()).run(&program).unwrap()
+    }
+
+    let vector = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let sliced = vector
+        .slice(SliceConfig {
+            starts: vec![1],
+            limits: vec![3],
+            strides: vec![1],
+        })
+        .unwrap();
+    assert_eq!(run(&sliced).as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+
+    let padded = sliced
+        .pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![0],
+        })
+        .unwrap();
+    let reversed = padded.reverse(&[0]).unwrap();
+    assert_eq!(
+        run(&reversed).as_slice::<f64>().unwrap(),
+        &[0.0, 3.0, 2.0, 0.0]
+    );
+
+    let starts = TracedTensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+    let dynamic = vector.dynamic_slice(&starts, &[2]).unwrap();
+    assert_eq!(run(&dynamic).as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+
+    let indices = TracedTensor::from_vec_col_major(vec![3], vec![3_i64, 1, 0]).unwrap();
+    let gathered = vector
+        .gather(
+            &indices,
+            GatherConfig {
+                offset_dims: vec![],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1],
+            },
+        )
+        .unwrap();
+    assert_eq!(run(&gathered).as_slice::<f64>().unwrap(), &[4.0, 2.0, 1.0]);
+
+    let operand = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
+    let scatter_indices = TracedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 3]).unwrap();
+    let updates = TracedTensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap();
+    let scattered = operand
+        .scatter(
+            &scatter_indices,
+            &updates,
+            ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![0],
+                scatter_dims_to_operand_dims: vec![0],
+                index_vector_dim: 1,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        run(&scattered).as_slice::<f64>().unwrap(),
+        &[0.0, 5.0, 0.0, 7.0]
+    );
+
+    let concatenated = TracedTensor::concatenate(&[&vector, &vector], 0).unwrap();
+    assert_eq!(run(&concatenated).shape(), &[8]);
+
+    let matrix =
+        TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    assert_eq!(
+        run(&matrix.tril(0)).as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 0.0, 4.0]
+    );
+    assert_eq!(
+        run(&matrix.triu(0)).as_slice::<f64>().unwrap(),
+        &[1.0, 0.0, 3.0, 4.0]
+    );
+
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    assert_eq!(run(&lhs.matmul(&rhs).unwrap()).shape(), &[2, 2]);
+}
+
+#[test]
+fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+
+    let err = x.index_select(0, &[0]).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidGraphBuild {
+            op: "index_select",
+            ..
+        }
+    ));
+
+    let err = TracedTensor::stack(&[&x], 0).unwrap_err();
+    assert!(matches!(err, Error::InvalidGraphBuild { op: "stack", .. }));
 }
 
 #[test]

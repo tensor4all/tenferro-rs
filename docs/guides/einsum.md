@@ -1,9 +1,9 @@
 # Einsum
 
 `einsum` is a standard extension, not part of `tenferro` core. Add the
-`tenferro-einsum` crate and call traced graph operations explicitly as
-`tenferro_einsum::traced_tensor::einsum`. The same extension crate also owns
-`tensordot` contraction sugar; it is not part of the linalg namespace.
+`tenferro-einsum` crate and import its extension traits. Traced graph
+construction uses `GraphCompilerEinsumExt`; eager execution uses
+`EagerEinsumExt`; `tensordot` contraction sugar uses tensor extension traits.
 Compiled execution also requires explicit runtime registration for einsum
 extension ops.
 
@@ -24,6 +24,7 @@ Use the traced route when einsum should be part of a graph compiled by
 
 ```rust
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -36,7 +37,7 @@ let b = TracedTensor::from_vec_col_major(
 )?;
 
 let mut compiler = GraphCompiler::new();
-let c = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let c = compiler.einsum(&[&a, &b], "ij,jk->ik").unwrap();
 let program = compiler.compile(&c).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -57,13 +58,14 @@ labels in that form.
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_einsum::EagerEinsumExt;
 
 let ctx = EagerRuntime::new();
 let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap()).unwrap();
 
-let outer = tenferro_einsum::eager_tensor::einsum(&[&u, &v], "i,j->ij").unwrap();
-let diag = tenferro_einsum::eager_tensor::einsum(&[&v], "i->ii").unwrap();
+let outer = [&u, &v].einsum("i,j->ij").unwrap();
+let diag = [&v].einsum("i->ii").unwrap();
 
 assert_eq!(outer.shape(), &[2, 3]);
 assert_eq!(
@@ -87,7 +89,7 @@ negative axes.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::{traced_tensor, TensorDotAxes};
+use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let lhs = TracedTensor::from_vec_col_major(
@@ -103,7 +105,7 @@ let rhs = TracedTensor::from_vec_col_major(
         10.0, 11.0, 12.0,
     ],
 );
-let out = traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(1)).unwrap();
+let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 
 assert_eq!(out.rank, 2);
 let mut compiler = GraphCompiler::new();
@@ -121,8 +123,7 @@ assert_eq!(
 ## Optimization Controls
 
 The default policy chooses an N-ary contraction order automatically. Advanced
-users can pass an explicit strategy through
-`tenferro_einsum::traced_tensor::einsum_with`.
+users can pass an explicit strategy through `GraphCompilerEinsumExt::einsum_with`.
 The public optimizer API is limited to the types needed to express that
 choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.
@@ -138,14 +139,13 @@ concrete traced op is built.
 
 ```rust
 use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_einsum::EinsumOptimize;
+use tenferro_einsum::{EinsumOptimize, GraphCompilerEinsumExt};
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
 let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
 
 let mut compiler = GraphCompiler::new();
-let c = tenferro_einsum::traced_tensor::einsum_with(
-    &mut compiler,
+let c = compiler.einsum_with(
     &[&a, &b],
     "ij,jk->ik",
     EinsumOptimize::False,

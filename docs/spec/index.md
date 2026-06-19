@@ -13,4 +13,4 @@ link here rather than re-stating.
 | [tensor-semantics.md](./tensor-semantics.md) | Tensor type semantics, stride model, contiguity rules |
 | [extension-op.md](./extension-op.md) | ExtensionOp trait contract (identity, AD, dispatch, registry) |
 | [api-conventions.md](./api-conventions.md) | Public API naming, module shape, feature naming, documentation-surface checks, and checker mapping |
-| [operation-categories.md](./operation-categories.md) | User-facing operation categories and the Eager/Traced surface-parity contract (draft) |
+| [operation-categories.md](./operation-categories.md) | User-facing operation categories and the Eager/Traced surface-parity contract |

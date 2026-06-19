@@ -1,6 +1,6 @@
 #[test]
 fn einsum_eager_prototypes_are_not_public_api() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_tensor.rs");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
     let source = std::fs::read_to_string(root).expect("read eager tensor source");
 
     for forbidden in [

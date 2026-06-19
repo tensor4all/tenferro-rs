@@ -199,8 +199,9 @@ rules from `tensor4all-agent-rules`.
   operation-family facade paths such as `tenferro::einsum`,
   `tenferro::linalg`, or `tenferro::fft`; users import operation crates
   directly.
-- Users import operation crates directly and register runtimes explicitly, for
-  example `tenferro_einsum::traced_tensor::einsum` plus
+- Users import operation crates directly, bring their extension traits into
+  scope, and register runtimes explicitly when graph execution reaches an
+  extension family; for example `tenferro_einsum::GraphCompilerEinsumExt` plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
 - Extension runtime dispatch must fail explicitly when a runtime owner is
   available but the extension family is not registered. Do not silently fall
@@ -721,9 +722,25 @@ Tests follow implementation ownership.
 
 ## Public API Convention
 
-- **Unary single-output ops**: methods on `TracedTensor` (e.g., `x.exp()`, `x.reshape(shape)`)
-- **Binary single-output ops**: operator overloads where natural (`&a + &b`, `&a * &b`), methods otherwise (`a.dot_general(&b, config)`)
-- **Multi-output ops**: free functions (e.g., `svd(&a)`, `qr(&a)`, `eigh(&a)`)
-- **Linalg ops**: free functions (e.g., `solve(&a, &b)`, `cholesky(&a)`)
-- **Einsum**: free function `einsum(engine, inputs, subscripts)`
+- **AD core ops**: `EagerTensor` and `TracedTensor` use methods as the
+  canonical surface for single-output operations (`x.exp()`, `x.reshape(shape)`,
+  `a.dot_general(&b, config)`). Use operator overloads where they read
+  naturally (`&a + &b`, `&a * &b`) and associated functions for core operations
+  with no natural receiver (`EagerTensor::where_select(...)`,
+  `TracedTensor::concatenate(...)`).
+- **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
+  crate-root extension-trait methods with an explicit backend (`TensorOpsExt`,
+  `TypedTensorOpsExt`, and `TypedTensorMaskOpsExt`). The implementation may use
+  private helper modules, but public `tensor` / `typed_tensor` module free
+  functions are not part of the release API.
+- **Extension families**: extension crates cannot add inherent methods to
+  external tensor types, so their canonical tensor-facing surface is extension
+  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`,
+  `GraphCompilerEinsumExt`, `TracedTensorFftExt`) re-exported at the crate
+  root. Do not expose public `traced_tensor` / `eager_tensor` module free
+  functions for standard operation families.
+- **No compatibility shims for operation-surface style changes**: when API
+  compatibility is not explicitly required, remove old module functions instead
+  of keeping wrappers beside the canonical method/associated-function or
+  extension-trait surface.
 - No `traced_` prefix on methods. `TracedTensor` methods are inherently traced.

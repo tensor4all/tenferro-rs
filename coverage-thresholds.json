@@ -18,7 +18,7 @@
   ],
   "files": {
     "crates/tenferro-einsum/src/cache.rs": 60,
-    "crates/tenferro-einsum/src/eager_tensor.rs": 72,
+    "crates/tenferro-einsum/src/eager_ad.rs": 72,
     "crates/tenferro-einsum/src/extension.rs": 60,
     "crates/tenferro-einsum/src/lib.rs": 65,
     "crates/tenferro-einsum/src/subscripts.rs": 65,
@@ -34,7 +34,7 @@
     "crates/tenferro-linalg/src/ad/rules/support.rs": 47,
     "crates/tenferro-linalg/src/ad/support.rs": 79,
     "crates/tenferro-linalg/src/eager_backend.rs": 55,
-    "crates/tenferro-linalg/src/eager_tensor.rs": 52,
+    "crates/tenferro-linalg/src/eager_ext.rs": 52,
     "crates/tenferro-linalg/src/extension.rs": 75,
     "crates/tenferro-runtime/src/extension_cache.rs": 65,
     "crates/tenferro-runtime/src/extension_runtime.rs": 73,

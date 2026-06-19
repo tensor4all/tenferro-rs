@@ -9,6 +9,7 @@ import sys
 
 SKIP_DIRS = {
     ".git",
+    ".worktrees",
     "target",
     "docs/plans",
     "docs/superpowers",
@@ -56,8 +57,9 @@ def main() -> int:
     linalg_lib = repo / "crates" / "tenferro-linalg" / "src" / "lib.rs"
     for needle in [
         '#[cfg(feature = "autodiff")]\nmod ad;',
-        '#[cfg(feature = "autodiff")]\npub mod eager_tensor;',
+        '#[cfg(feature = "autodiff")]\nmod eager_ext;',
         '#[cfg(feature = "autodiff")]\npub use ad::ad_rules;',
+        '#[cfg(feature = "autodiff")]\npub use eager_ext::EagerTensorLinalgExt;',
     ]:
         if needle not in linalg_lib.read_text(encoding="utf-8"):
             findings.append(f"crates/tenferro-linalg/src/lib.rs missing gated item: {needle!r}")

@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::traced_tensor::einsum;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{
     GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
 };
@@ -65,7 +65,8 @@ fn build_inner_product_graph(
         TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
-        env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
+        env = compiler
+            .einsum(&[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");
     }
     env.reshape(&[])

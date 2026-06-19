@@ -1,7 +1,9 @@
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
 use crate::eager::EagerTensor;
+use crate::eager_ops::{broadcast_binary, broadcast_ternary};
 use crate::error::Result;
+use crate::CompareDir;
 
 impl EagerTensor {
     /// Elementwise absolute value.
@@ -218,7 +220,8 @@ impl EagerTensor {
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, -2.0, 3.0]);
     /// ```
     pub fn div(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Div)
+        let (lhs, rhs) = broadcast_binary("div", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Div)
     }
 
     /// Elementwise power.
@@ -237,7 +240,8 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[8.0, 9.0]);
     /// ```
     pub fn pow(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Pow)
+        let (lhs, rhs) = broadcast_binary("pow", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Pow)
     }
 
     /// Elementwise maximum.
@@ -256,7 +260,8 @@ impl EagerTensor {
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 5.0]);
     /// ```
     pub fn maximum(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Maximum)
+        let (lhs, rhs) = broadcast_binary("maximum", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Maximum)
     }
 
     /// Elementwise minimum.
@@ -275,7 +280,14 @@ impl EagerTensor {
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 4.0]);
     /// ```
     pub fn minimum(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Minimum)
+        let (lhs, rhs) = broadcast_binary("minimum", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Minimum)
+    }
+
+    /// Elementwise comparison.
+    pub fn compare(&self, other: &Self, dir: CompareDir) -> Result<Self> {
+        let (lhs, rhs) = broadcast_binary("compare", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Compare(dir))
     }
 
     /// Select values from `on_true` or `on_false` using `condition`.
@@ -295,7 +307,14 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 20.0]);
     /// ```
     pub fn select(condition: &Self, on_true: &Self, on_false: &Self) -> Result<Self> {
-        condition.ternary_op(on_true, on_false, StdTensorOp::Select)
+        Self::where_select(condition, on_true, on_false)
+    }
+
+    /// Select values from `on_true` or `on_false` using `condition`.
+    pub fn where_select(condition: &Self, on_true: &Self, on_false: &Self) -> Result<Self> {
+        let (condition, on_true, on_false) =
+            broadcast_ternary("where_select", condition, on_true, on_false)?;
+        condition.ternary_op(&on_true, &on_false, StdTensorOp::Select)
     }
 
     /// Clamp values elementwise between lower and upper bounds.
@@ -315,6 +334,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 0.5, 4.0]);
     /// ```
     pub fn clamp(&self, lower: &Self, upper: &Self) -> Result<Self> {
-        self.ternary_op(lower, upper, StdTensorOp::Clamp)
+        let (input, lower, upper) = broadcast_ternary("clamp", self, lower, upper)?;
+        input.ternary_op(&lower, &upper, StdTensorOp::Clamp)
     }
 }

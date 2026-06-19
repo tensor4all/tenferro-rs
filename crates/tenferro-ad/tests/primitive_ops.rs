@@ -2,7 +2,6 @@ mod support;
 use support::{run_many_traced_with, RunTraced};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::traced_tensor::pow;
 use tenferro_runtime::DType;
 use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
@@ -128,7 +127,7 @@ fn test_pow_broadcast_vector_with_scalar_exponent() {
     let base =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, 3.0, 4.0])).unwrap();
     let exp = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![2.0])).unwrap();
-    let out = pow(&base, &exp).unwrap();
+    let out = base.pow(&exp).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = out.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3]);

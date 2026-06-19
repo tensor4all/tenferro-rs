@@ -1,11 +1,10 @@
 # Einsum Design
 
 Einsum is a standard extension crate, not part of a root facade.
-The public user-facing paths live under `tenferro_einsum`, for example
-`tenferro_einsum::traced_tensor::einsum` for traced graph construction and
-`tenferro_einsum::eager_tensor::einsum` for immediate eager execution.
-The same namespaces expose `tensordot` as NumPy-style contraction sugar over
-axis pairs; it is not a `tenferro-linalg` API.
+The public user-facing paths live under `tenferro_einsum` as crate-root
+extension traits: `GraphCompilerEinsumExt` for traced graph construction,
+`EagerEinsumExt` for immediate eager execution, and tensor extension traits for
+`tensordot` contraction sugar. `tensordot` is not a `tenferro-linalg` API.
 
 The workspace intentionally has no root `tenferro` crate and no einsum facade
 paths. Programs that use traced einsum must explicitly register the extension
@@ -21,7 +20,7 @@ The implementation is split between:
 - `crates/tenferro-einsum/src/planning/` for contraction tree planning and per-step
   lowering plans,
 - `crates/tenferro-einsum/src/builder.rs` for graph-fragment lowering,
-- `crates/tenferro-einsum/src/eager_tensor.rs` for eager tensor execution.
+- `crates/tenferro-einsum/src/eager_ad.rs` for eager tensor execution.
 
 Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 `tenferro-prims`, or the old nine-function einsum API are not current.
@@ -34,14 +33,14 @@ The extension crate exposes lazy traced einsum:
 
 ```rust
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_einsum::traced_tensor::einsum;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 let mut compiler = GraphCompiler::new();
-let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let c = compiler.einsum(&[&a, &b], "ij,jk->ik").unwrap();
 let program = compiler.compile(&c).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.register_extension(tenferro_einsum::register_runtime).unwrap();
@@ -67,19 +66,19 @@ contraction pairs when accepted for concrete inputs.
 
 ## Eager Tensor API
 
-`tenferro_einsum::eager_tensor` exposes immediate execution over `EagerTensor`
-values:
+`EagerEinsumExt` exposes immediate execution over `EagerTensor` input
+slices/arrays:
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_einsum::eager_tensor::einsum;
+use tenferro_einsum::EagerEinsumExt;
 
 let ctx = EagerRuntime::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let a = ctx.constant_from(a).unwrap();
 let b = ctx.constant_from(b).unwrap();
-let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+let c = [&a, &b].einsum("ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);
 ```

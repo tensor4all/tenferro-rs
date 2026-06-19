@@ -2,7 +2,8 @@
 
 use num_complex::Complex32;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_einsum::eager_tensor::einsum as eager_einsum;
+use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_gpu::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 use tenferro_gpu::{WebGpuBackend, WebGpuRuntime};
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
@@ -68,7 +69,7 @@ fn eager_tensor_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() 
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = eager_einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let out = [&lhs, &rhs].einsum("ij,jk->ik").unwrap();
     let host = download_webgpu_tensor(&runtime, out.materialized().unwrap().as_ref()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2]);
@@ -107,7 +108,7 @@ fn eager_tensor_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available(
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = eager_einsum(&[&lhs, &rhs], "ikb,kjb->ijb").unwrap();
+    let out = [&lhs, &rhs].einsum("ikb,kjb->ijb").unwrap();
     let host = download_webgpu_tensor(&runtime, out.materialized().unwrap().as_ref()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2, 2]);
@@ -145,7 +146,7 @@ fn eager_tensor_einsum_runs_rank2_c32_matmul_on_webgpu_when_adapter_available() 
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = eager_einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let out = [&lhs, &rhs].einsum("ij,jk->ik").unwrap();
     let host = download_webgpu_tensor(&runtime, out.materialized().unwrap().as_ref()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2]);
@@ -163,8 +164,7 @@ fn traced_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() {
     let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3]).unwrap();
     let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2]).unwrap();
     let mut compiler = GraphCompiler::new();
-    let out =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let out = compiler.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
     let program = compiler
         .compile_with_input_specs(
             &out,
@@ -203,8 +203,7 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
     let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3, 2]).unwrap();
     let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2, 2]).unwrap();
     let mut compiler = GraphCompiler::new();
-    let out = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &rhs], "ikb,kjb->ijb")
-        .unwrap();
+    let out = compiler.einsum(&[&lhs, &rhs], "ikb,kjb->ijb").unwrap();
     let program = compiler
         .compile_with_input_specs(
             &out,

@@ -1,3 +1,4 @@
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TracedTensor};
 use tenferro_xla::lower_to_stablehlo;
 
@@ -96,9 +97,9 @@ fn lowers_concrete_nary_einsum_via_standard_ops() {
     )
     .unwrap();
     let mut compiler = GraphCompiler::new();
-    let product =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
-            .unwrap();
+    let product = compiler
+        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
+        .unwrap();
     let program = compiler.compile(&product).unwrap();
 
     let module = lower_to_stablehlo(&program).unwrap();
@@ -116,9 +117,9 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
     let mid = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let mut compiler = GraphCompiler::new();
-    let product =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
-            .unwrap();
+    let product = compiler
+        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &product,

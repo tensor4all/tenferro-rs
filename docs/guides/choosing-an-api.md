@@ -86,10 +86,10 @@ operations.
 
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | `tenferro_runtime::tensor` functions; selected `tenferro_runtime::typed_tensor` wrappers | `tenferro_ad::eager_tensor` functions | `tenferro_runtime::traced_tensor` functions |
-| Einsum | Internal to `tenferro-einsum` runtime execution | `tenferro_einsum::eager_tensor::einsum` | `tenferro_einsum::traced_tensor::einsum` plus `register_runtime` |
-| Tensordot sugar | Use `matmul` or `dot_general` directly | `tenferro_einsum::eager_tensor::tensordot` | `tenferro_einsum::traced_tensor::tensordot` |
-| Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `tenferro_linalg::eager_tensor` helpers with `autodiff` | `tenferro_linalg::traced_tensor` helpers |
+| Everyday tensor ops | `TensorOpsExt` / `TypedTensorOpsExt` backend-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
+| Einsum | Internal to `tenferro-einsum` runtime execution | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
+| Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
+| Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` on tracked scalar losses | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 

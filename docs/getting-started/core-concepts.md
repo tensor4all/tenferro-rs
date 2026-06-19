@@ -69,13 +69,13 @@ ordinary tensor computation without autodiff when runtime dtype is useful.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-let c = tensor::matmul(&a, &b, &mut backend).unwrap();
+let c = a.matmul(&b, &mut backend).unwrap();
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
@@ -84,8 +84,8 @@ project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
 Einsum is provided by the `tenferro-einsum` standard extension. Traced code
-uses `tenferro_einsum::traced_tensor::einsum` and registers
-`tenferro_einsum::register_runtime` on the executor.
+uses `GraphCompilerEinsumExt` and registers `tenferro_einsum::register_runtime`
+on the executor.
 
 ## Eager Execution And Backward
 

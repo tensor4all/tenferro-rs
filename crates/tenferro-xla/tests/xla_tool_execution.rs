@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tenferro_einsum::GraphCompilerEinsumExt;
 
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TracedTensor};
 use tenferro_xla::lower_to_stablehlo;
@@ -107,9 +108,9 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
     let mid = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
     let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
     let mut compiler = GraphCompiler::new();
-    let product =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&lhs, &mid, &rhs], "ij,jk,kl->il")
-            .unwrap();
+    let product = compiler
+        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &product,

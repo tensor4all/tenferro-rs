@@ -15,6 +15,7 @@ OpenXLA test described below executes the same generated einsum module through
 <!-- snippet-source: docs/tutorial-code/src/bin/xla_einsum_backend.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
+use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_xla::XlaExecutor;
 
@@ -57,8 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
     let c = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let product =
-        tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il")?;
+    let product = compiler.einsum(&[&a, &b, &c], "ij,jk,kl->il")?;
 
     let a_value = lhs_value()?;
     let b_value = middle_value()?;

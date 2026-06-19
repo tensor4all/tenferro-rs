@@ -22,10 +22,10 @@ Choose the tensor API first, then choose the operation entry point.
 
 | Layer | Start here when | Operation entry point | AD |
 | --- | --- | --- | --- |
-| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; selected `tenferro_runtime::typed_tensor` wrappers for dynamic-rank `TypedTensor<T>` | No |
-| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `tenferro_runtime::tensor` functions with an explicit backend | No |
-| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `tenferro_ad::eager_tensor` functions and methods | Yes, for tracked values |
-| `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `tenferro_runtime::traced_tensor` functions and methods | Yes, through graph transforms |
+| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `TypedTensorOpsExt` backend-explicit methods for dynamic-rank `TypedTensor<T>` | No |
+| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `TensorOpsExt` backend-explicit methods | No |
+| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `EagerTensor` methods and associated functions | Yes, for tracked values |
+| `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `TracedTensor` methods and associated functions | Yes, through graph transforms |
 
 For most code without autodiff, start with `TypedTensor<T, R>` when the scalar type is
 known in Rust, and use `Tensor` when the dtype must remain dynamic. `Tensor`
@@ -103,23 +103,23 @@ and they do not configure CPU parallelism.
 
 ## TypedTensor Backend Operations
 
-For common typed math without autodiff, `tenferro_runtime::typed_tensor` provides selected
-wrappers that accept dynamic-rank `TypedTensor<T>` values and return typed
-results.
+For common typed math without autodiff, `TypedTensorOpsExt` provides selected
+backend-explicit methods that accept dynamic-rank `TypedTensor<T>` values and
+return typed results.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
+use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
 let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap();
 
-let sum = typed_tensor::add(&x, &y, &mut backend).unwrap();
-let product = typed_tensor::mul(&x, &y, &mut backend).unwrap();
-let total = typed_tensor::reduce_sum(&product, &[0], &mut backend).unwrap();
-let mask = typed_tensor::compare(&sum, &product, CompareDir::Lt, &mut backend).unwrap();
-let selected = typed_tensor::where_select(&mask, &sum, &product, &mut backend).unwrap();
+let sum = x.add(&y, &mut backend).unwrap();
+let product = x.mul(&y, &mut backend).unwrap();
+let total = product.reduce_sum(&[0], &mut backend).unwrap();
+let mask = sum.compare(&product, CompareDir::Lt, &mut backend).unwrap();
+let selected = mask.where_select(&sum, &product, &mut backend).unwrap();
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -206,14 +206,14 @@ should remain dynamic.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
-let sum = tensor::add(&a, &b, &mut backend).unwrap();
-let product = tensor::mul(&a, &b, &mut backend).unwrap();
+let sum = a.add(&b, &mut backend).unwrap();
+let product = a.mul(&b, &mut backend).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -242,12 +242,12 @@ Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{traced_tensor, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
-let sum = traced_tensor::add(&a, &b);
-let product = traced_tensor::mul(&a, &b);
+let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+let sum = (&a + &b).unwrap();
+let product = (&a * &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile_many(&[&sum, &product]).unwrap();
@@ -261,11 +261,11 @@ assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ## Elementwise Math Functions
 
 ```rust
-use tenferro_ad::{eager_tensor, EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = eager_tensor::exp(&x).unwrap();
+let y = x.exp().unwrap();
 
 let data = y.materialized().unwrap().as_slice::<f64>().unwrap();
 
@@ -278,15 +278,15 @@ assert!((data[2] - 7.38905609893065).abs() < 1e-12);
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 );
-let reshaped = tensor::reshape(&a, &[6], &mut backend).unwrap();
-let transposed = tensor::transpose(&a, &[1, 0], &mut backend).unwrap();
+let reshaped = a.reshape(&[6], &mut backend).unwrap();
+let transposed = a.transpose(&[1, 0], &mut backend).unwrap();
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -311,7 +311,7 @@ assert_eq!(repeated.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
@@ -321,8 +321,8 @@ let a = Tensor::from_vec_col_major(
 // Logical matrix:
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
-let row_sums = tensor::reduce_sum(&a, &[1], &mut backend).unwrap();
-let total = tensor::reduce_sum(&a, &[0, 1], &mut backend).unwrap();
+let row_sums = a.reduce_sum(&[1], &mut backend).unwrap();
+let total = a.reduce_sum(&[0, 1], &mut backend).unwrap();
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

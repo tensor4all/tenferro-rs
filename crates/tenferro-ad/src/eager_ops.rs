@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use tenferro_ops::broadcast::{
+    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
@@ -14,6 +17,121 @@ use crate::eager::{
 use crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads;
 use crate::error::{Error, Result};
 use crate::metadata::push_metadata_scope;
+
+pub(crate) fn broadcast_binary(
+    op: &'static str,
+    lhs: &EagerTensor,
+    rhs: &EagerTensor,
+) -> Result<(EagerTensor, EagerTensor)> {
+    ensure_same_context(lhs, rhs)?;
+    let shape =
+        broadcast_shape(lhs.shape(), rhs.shape()).map_err(|err| broadcast_error(op, err))?;
+    Ok((
+        broadcast_to(op, lhs, &shape)?,
+        broadcast_to(op, rhs, &shape)?,
+    ))
+}
+
+pub(crate) fn broadcast_ternary(
+    op: &'static str,
+    first: &EagerTensor,
+    second: &EagerTensor,
+    third: &EagerTensor,
+) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+    ensure_same_context(first, second)?;
+    ensure_same_context(first, third)?;
+    let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
+        .map_err(|err| broadcast_error(op, err))?;
+    Ok((
+        broadcast_to(op, first, &shape)?,
+        broadcast_to(op, second, &shape)?,
+        broadcast_to(op, third, &shape)?,
+    ))
+}
+
+fn broadcast_to(
+    op: &'static str,
+    input: &EagerTensor,
+    target_shape: &[usize],
+) -> Result<EagerTensor> {
+    let input_shape = input.shape();
+    if input_shape == target_shape {
+        return Ok(input.clone());
+    }
+
+    let plan =
+        broadcast_input_plan(input_shape, target_shape).map_err(|err| broadcast_error(op, err))?;
+    let source = if plan.source_shape == input_shape {
+        input.clone()
+    } else {
+        input.reshape(&plan.source_shape)?
+    };
+    source.broadcast_in_dim(target_shape, &plan.dims)
+}
+
+fn broadcast_error(op: &'static str, err: BroadcastError) -> Error {
+    match err {
+        BroadcastError::IncompatibleBinary { lhs, rhs } => {
+            tenferro_tensor::Error::ShapeMismatch { op, lhs, rhs }.into()
+        }
+        BroadcastError::IncompatibleInput { input, output }
+        | BroadcastError::RankTooLarge { input, output } => tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!("cannot broadcast shape {input:?} to {output:?}"),
+        }
+        .into(),
+    }
+}
+
+fn ensure_same_context(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<()> {
+    if !lhs.same_context(rhs) {
+        return Err(Error::ContextMismatch {
+            lhs: lhs.ctx_id(),
+            rhs: rhs.ctx_id(),
+        });
+    }
+    Ok(())
+}
+
+impl std::ops::Add for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn add(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::add(self, rhs)
+    }
+}
+
+impl std::ops::Sub for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn sub(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::sub(self, rhs)
+    }
+}
+
+impl std::ops::Mul for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn mul(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::mul(self, rhs)
+    }
+}
+
+impl std::ops::Div for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn div(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::div(self, rhs)
+    }
+}
+
+impl std::ops::Neg for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn neg(self) -> Result<EagerTensor> {
+        EagerTensor::neg(self)
+    }
+}
 
 impl EagerTensor {
     /// Elementwise addition.
@@ -32,7 +150,15 @@ impl EagerTensor {
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Add)
+        let (lhs, rhs) = broadcast_binary("add", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Add)
+    }
+
+    /// Elementwise subtraction.
+    pub fn sub(&self, other: &Self) -> Result<Self> {
+        let (lhs, rhs) = broadcast_binary("sub", self, other)?;
+        let rhs = rhs.neg()?;
+        lhs.binary_op(&rhs, StdTensorOp::Add)
     }
 
     /// Elementwise multiplication.
@@ -51,7 +177,8 @@ impl EagerTensor {
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
     /// ```
     pub fn mul(&self, other: &Self) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::Mul)
+        let (lhs, rhs) = broadcast_binary("mul", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Mul)
     }
 
     /// Negate the tensor.

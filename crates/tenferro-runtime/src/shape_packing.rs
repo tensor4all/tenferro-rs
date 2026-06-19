@@ -11,7 +11,10 @@ use crate::error::{Error, Result};
 use crate::metadata::{metadata_scopes_with_new, register_scoped_value_metadata, tensor_meta};
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
-use crate::traced::{apply_binary_preserve_input_dtypes, next_traced_id, try_concrete_shape};
+use crate::traced::{
+    apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, next_traced_id,
+    try_concrete_shape,
+};
 use crate::TracedTensor;
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
@@ -140,8 +143,9 @@ impl TracedTensor {
     /// );
     /// ```
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
-        let shape = try_concrete_shape(self).ok_or_else(|| {
-            Error::Internal("index_select currently requires a concrete shape hint".into())
+        let shape = try_concrete_shape(self).ok_or_else(|| Error::InvalidGraphBuild {
+            op: "index_select",
+            message: "index_select requires a concrete shape hint".into(),
         })?;
         let (indices_tensor, config, out_shape) = index_select_config(&shape, axis, positions)?;
         let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor)?;
@@ -182,15 +186,19 @@ impl TracedTensor {
                 message: "stack requires at least one input".into(),
             })
         })?;
-        let first_shape = try_concrete_shape(first).ok_or_else(|| {
-            Error::Internal("stack currently requires concrete shape hints".into())
+        let first_shape = try_concrete_shape(first).ok_or_else(|| Error::InvalidGraphBuild {
+            op: "stack",
+            message: "stack requires concrete shape hints".into(),
         })?;
         let mut shapes = Vec::with_capacity(tensors.len());
         shapes.push(first_shape.as_slice());
         let mut owned_shapes = Vec::with_capacity(tensors.len().saturating_sub(1));
         for tensor in tensors.iter().copied().skip(1) {
             owned_shapes.push(try_concrete_shape(tensor).ok_or_else(|| {
-                Error::Internal("stack currently requires concrete shape hints".into())
+                Error::InvalidGraphBuild {
+                    op: "stack",
+                    message: "stack requires concrete shape hints".into(),
+                }
             })?);
         }
         shapes.extend(owned_shapes.iter().map(Vec::as_slice));
@@ -206,14 +214,57 @@ impl TracedTensor {
             .map(|tensor| tensor.reshape(&expanded_shape))
             .collect::<Vec<_>>();
         let refs = expanded.iter().collect::<Vec<_>>();
-        Ok(apply_nary_concatenate(&refs, axis, out_shape))
+        Ok(apply_nary_concatenate(
+            &refs,
+            axis,
+            out_shape.into_iter().map(SymDim::from).collect(),
+        ))
+    }
+
+    /// Concatenate tensors along one existing axis.
+    pub fn concatenate(tensors: &[&Self], axis: usize) -> Result<Self> {
+        let first = tensors.first().copied().ok_or_else(|| {
+            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+                op: "concatenate",
+                message: "concatenate requires at least one input".into(),
+            })
+        })?;
+        if axis >= first.rank {
+            return Err(tenferro_tensor::Error::AxisOutOfBounds {
+                op: "concatenate",
+                axis,
+                rank: first.rank,
+            }
+            .into());
+        }
+        for tensor in tensors.iter().copied().skip(1) {
+            if tensor.rank != first.rank {
+                return Err(tenferro_tensor::Error::RankMismatch {
+                    op: "concatenate",
+                    expected: first.rank,
+                    actual: tensor.rank,
+                }
+                .into());
+            }
+        }
+
+        let op = StdTensorOp::Concatenate {
+            axis,
+            input_count: tensors.len(),
+        };
+        let (_, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::concatenate", &op, tensors)?;
+        let out_shape = out_shape_hint.ok_or_else(|| {
+            Error::Internal("concatenate shape inference returned no shape hint".into())
+        })?;
+        Ok(apply_nary_concatenate(tensors, axis, out_shape))
     }
 }
 
 fn apply_nary_concatenate(
     tensors: &[&TracedTensor],
     axis: usize,
-    out_shape: Vec<usize>,
+    out_shape: Vec<SymDim>,
 ) -> TracedTensor {
     let out_dtype = promote_dtypes(tensors.iter().map(|tensor| tensor.dtype));
     let tensors = tensors
@@ -245,18 +296,12 @@ fn apply_nary_concatenate(
     );
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
-    // Stack already validated concrete input shapes; re-inferring this
-    // concat would treat equal non-axis dims from different inputs as
-    // unrelated `InputDim`s.
+    // Callers route through shape inference before graph construction.
     let metadata_scope = register_scoped_value_metadata(
         graph.values()[outputs[0]].key.clone(),
-        tensor_meta(
-            out_dtype,
-            out_shape.iter().copied().map(SymDim::from).collect(),
-        ),
+        tensor_meta(out_dtype, out_shape.clone()),
     )
-    // Stack builds a fresh graph output after validating all concrete shapes.
-    .expect("fresh stack output metadata registration failed");
+    .expect("fresh concatenate output metadata registration failed");
 
     let mut inputs_map = HashMap::new();
     let mut extra_roots = Vec::new();
@@ -284,7 +329,7 @@ fn apply_nary_concatenate(
         graph,
         val: outputs[0],
         data: None,
-        shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
+        shape_hint: Some(out_shape),
         inputs_map: Arc::new(inputs_map),
         extra_roots,
         checkpoint_chain,

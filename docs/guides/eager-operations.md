@@ -42,12 +42,12 @@ tracked eager tensors. Untracked eager tensors are forward-only. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most broad concrete operations are available as `tenferro_runtime::tensor` free
-functions, with method wrappers kept for compatibility. `TypedTensor<T, R>` is
-the first layer to consider when you want compile-time dtype safety, optional
-rank typing, or typed data that may live on the host or in backend-owned
-storage. Einsum is
-provided by the separate `tenferro-einsum` standard extension.
+Most broad non-AD concrete operations are available as `TensorOpsExt` /
+`TypedTensorOpsExt` methods with an explicit backend. AD workflows use the
+`EagerTensor` method surface instead. `TypedTensor<T, R>` is the first layer to
+consider when you want compile-time dtype safety, optional rank typing, or typed
+data that may live on the host or in backend-owned storage. Einsum is provided
+by the separate `tenferro-einsum` standard extension.
 
 Tracked `EagerTensor` values support the differentiable method surface most
 loss functions need:
@@ -61,9 +61,9 @@ loss functions need:
 | Indexing/diagonal | `gather`, `scatter`, `dynamic_slice`, `extract_diag`, `embed_diag`, `tril`, `triu` |
 | DType | checked `convert`, explicit lossy `cast` |
 
-Operation-family crates add their own eager helpers. For example,
-`tenferro_linalg::eager_tensor` owns linalg eager helpers and
-`tenferro_einsum::eager_tensor` owns eager einsum.
+Operation-family crates add eager extension traits. For example,
+`tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
+`tenferro_einsum::EagerEinsumExt` owns eager einsum on input slices/arrays.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -106,15 +106,15 @@ not silently upload CPU tensors or download CUDA tensors.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
-let sum = tensor::add(&a, &b, &mut backend).unwrap();
-let product = tensor::mul(&a, &b, &mut backend).unwrap();
-let negated = tensor::neg(&a, &mut backend).unwrap();
+let sum = a.add(&b, &mut backend).unwrap();
+let product = a.mul(&b, &mut backend).unwrap();
+let negated = a.neg(&mut backend).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -126,7 +126,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 ```rust
 use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
@@ -166,28 +166,28 @@ assert_eq!(x.shape(), &[3]);
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{tensor, Tensor};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Transpose
-let at = tensor::transpose(&a, &[1, 0], &mut backend).unwrap();
+let at = a.transpose(&[1, 0], &mut backend).unwrap();
 assert_eq!(at.shape(), &[3, 2]);
 
 // Reshape
-let flat = tensor::reshape(&a, &[6], &mut backend).unwrap();
+let flat = a.reshape(&[6], &mut backend).unwrap();
 assert_eq!(flat.shape(), &[6]);
 
 // Reduce
-let col_sum = tensor::reduce_sum(&a, &[0], &mut backend).unwrap();
+let col_sum = a.reduce_sum(&[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
 
 ## Einsum
 
-Use `tenferro_einsum::eager_tensor::einsum` when working with `EagerTensor`.
-For traced graph execution, use `tenferro_einsum::traced_tensor::einsum` and
+Use `tenferro_einsum::EagerEinsumExt` when working with `EagerTensor`.
+For traced graph execution, use `tenferro_einsum::GraphCompilerEinsumExt` and
 register `tenferro_einsum::register_runtime` on the `GraphExecutor`.
 
 ## Extracting data

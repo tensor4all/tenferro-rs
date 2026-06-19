@@ -69,6 +69,49 @@ MATRIX_EXCLUDED_CRATES = {
     "tenferro-internal-ops",
 }
 
+ALLOWED_CANONICAL_TRY_APIS = {
+    (
+        "tenferro-tensor",
+        "crates/tenferro-tensor/src/types.rs",
+        "try_slice",
+    ): "canonical fallible tensor-view construction",
+    (
+        "tenferro-tensor",
+        "crates/tenferro-tensor/src/types.rs",
+        "try_slice_axis",
+    ): "canonical fallible tensor-view construction",
+    (
+        "tenferro-tensor",
+        "crates/tenferro-tensor/src/types.rs",
+        "try_reshape",
+    ): "canonical fallible tensor-view construction",
+    (
+        "tenferro-tensor",
+        "crates/tenferro-tensor/src/types.rs",
+        "try_multi_slice_mut",
+    ): "canonical alias-safe mutable view construction",
+    (
+        "tenferro-tensor",
+        "crates/tenferro-tensor/src/types.rs",
+        "try_into_rank",
+    ): "canonical Rust conversion naming",
+    (
+        "tenferro-cpu",
+        "crates/tenferro-cpu/src/backend.rs",
+        "try_new",
+    ): "canonical fallible constructor naming",
+    (
+        "tenferro-cpu",
+        "crates/tenferro-cpu/src/context.rs",
+        "try_from_env",
+    ): "canonical fallible constructor naming",
+    (
+        "tenferro-runtime",
+        "crates/tenferro-runtime/src/traced.rs",
+        "try_concrete_shape",
+    ): "canonical optional shape query naming",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class CrateInfo:
@@ -210,6 +253,17 @@ def check_public_items(root: pathlib.Path, items: list[PublicItem]) -> list[Find
     findings: list[Finding] = []
     for item in items:
         location = item.location(root)
+        if item.kind == "fn" and item.name.startswith("try_"):
+            key = (item.crate, item.file.relative_to(root).as_posix(), item.name)
+            if key not in ALLOWED_CANONICAL_TRY_APIS:
+                findings.append(
+                    Finding(
+                        "public_try_prefix",
+                        location,
+                        item.signature,
+                        "Do not add public `try_*` compatibility escapes. Make the canonical API return a typed `Result`, or add this API to the explicit canonical-try allowlist with a rationale.",
+                    )
+                )
         if item.kind == "fn" and item.name.startswith("traced_"):
             findings.append(
                 Finding(

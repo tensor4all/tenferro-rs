@@ -12,7 +12,10 @@ use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_s
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Tensor, TensorScalar};
+use tenferro_tensor::{
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Tensor, TensorScalar,
+};
 
 use super::error::{Error, Result};
 use super::sym_dim::SymDim;
@@ -189,6 +192,76 @@ fn inferred_output_dtype_or_fallback(
     }
 }
 
+fn traced_input_shape_exprs(input_idx: usize, tensor: &TracedTensor) -> Vec<DimExpr> {
+    match tensor.shape_hint.as_ref() {
+        Some(shape) => shape
+            .iter()
+            .enumerate()
+            .map(|(axis, dim)| {
+                dim.constant_value()
+                    .map_or(DimExpr::InputDim { input_idx, axis }, DimExpr::Const)
+            })
+            .collect(),
+        None => (0..tensor.rank)
+            .map(|axis| DimExpr::InputDim { input_idx, axis })
+            .collect(),
+    }
+}
+
+fn traced_input_sym_shape(tensor: &TracedTensor) -> Vec<SymDim> {
+    tensor.shape_hint.clone().unwrap_or_else(|| {
+        (0..tensor.rank)
+            .map(|axis| SymDim::tensor_axis(tensor.id, axis))
+            .collect()
+    })
+}
+
+pub(crate) fn infer_traced_single_output_shape(
+    op_name: &'static str,
+    op: &StdTensorOp,
+    inputs: &[&TracedTensor],
+) -> Result<(usize, Option<Vec<SymDim>>)> {
+    let input_shape_exprs: Vec<Vec<DimExpr>> = inputs
+        .iter()
+        .enumerate()
+        .map(|(input_idx, tensor)| traced_input_shape_exprs(input_idx, tensor))
+        .collect();
+    let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
+    let output_shapes =
+        crate::shape_infer::infer_output_shapes(op, &input_shape_refs).map_err(|err| {
+            Error::InvalidGraphBuild {
+                op: op_name,
+                message: err.to_string(),
+            }
+        })?;
+    let output_shape = output_shapes
+        .first()
+        .ok_or_else(|| Error::InvalidGraphBuild {
+            op: op_name,
+            message: "shape inference returned no outputs".into(),
+        })?;
+    if output_shapes.len() != 1 {
+        return Err(Error::InvalidGraphBuild {
+            op: op_name,
+            message: format!(
+                "expected single-output shape inference, got {} outputs",
+                output_shapes.len()
+            ),
+        });
+    }
+
+    let input_sym_shapes: Vec<Vec<SymDim>> = inputs
+        .iter()
+        .map(|tensor| traced_input_sym_shape(tensor))
+        .collect();
+    let input_sym_refs: Vec<&[SymDim]> = input_sym_shapes.iter().map(Vec::as_slice).collect();
+    let out_shape_hint = output_shape
+        .iter()
+        .map(|dim| SymDim::from_dim_expr(dim, &input_sym_refs))
+        .collect();
+    Ok((output_shape.len(), Some(out_shape_hint)))
+}
+
 fn register_metadata_or_internal(
     result: std::result::Result<GlobalMetadataScope, impl std::fmt::Display>,
 ) -> Result<GlobalMetadataScope> {
@@ -232,6 +305,26 @@ fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) ->
             op,
             message: format!("axis {axis} out of bounds for rank {}", tensor.rank),
         });
+    }
+    Ok(())
+}
+
+fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result<()> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("axis {axis} out of bounds for rank {rank}"),
+            });
+        }
+        if seen[axis] {
+            return Err(Error::InvalidGraphBuild {
+                op,
+                message: format!("duplicate axis {axis}"),
+            });
+        }
+        seen[axis] = true;
     }
     Ok(())
 }
@@ -336,6 +429,14 @@ impl std::ops::Add for &TracedTensor {
 
     fn add(self, rhs: &TracedTensor) -> Result<TracedTensor> {
         TracedTensor::add(self, rhs)
+    }
+}
+
+impl std::ops::Sub for &TracedTensor {
+    type Output = Result<TracedTensor>;
+
+    fn sub(self, rhs: &TracedTensor) -> Result<TracedTensor> {
+        TracedTensor::sub(self, rhs)
     }
 }
 
@@ -719,6 +820,21 @@ impl TracedTensor {
         ))
     }
 
+    /// Elementwise subtraction with NumPy-style broadcasting.
+    ///
+    /// Prefer using the `-` operator when it reads naturally.
+    pub fn sub(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        let rhs = rhs.neg();
+        Ok(apply_binary(
+            StdTensorOp::Add,
+            &lhs,
+            &rhs,
+            lhs.rank,
+            lhs.shape_hint.clone(),
+        ))
+    }
+
     /// Elementwise multiplication with NumPy-style broadcasting.
     ///
     /// Prefer using the `*` operator when it reads naturally.
@@ -777,6 +893,39 @@ impl TracedTensor {
             lhs.rank,
             lhs.shape_hint.clone(),
         ))
+    }
+
+    /// Elementwise maximum with NumPy-style broadcasting.
+    pub fn maximum(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        apply_broadcast_binary_op(StdTensorOp::Maximum, self, other)
+    }
+
+    /// Elementwise minimum with NumPy-style broadcasting.
+    pub fn minimum(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        apply_broadcast_binary_op(StdTensorOp::Minimum, self, other)
+    }
+
+    /// Select values from `on_true` or `on_false` using `condition`.
+    pub fn where_select(
+        condition: &TracedTensor,
+        on_true: &TracedTensor,
+        on_false: &TracedTensor,
+    ) -> Result<TracedTensor> {
+        apply_broadcast_ternary_op(StdTensorOp::Select, condition, on_true, on_false)
+    }
+
+    /// Alias for [`Self::where_select`].
+    pub fn select(
+        condition: &TracedTensor,
+        on_true: &TracedTensor,
+        on_false: &TracedTensor,
+    ) -> Result<TracedTensor> {
+        Self::where_select(condition, on_true, on_false)
+    }
+
+    /// Clamp values elementwise between lower and upper bounds.
+    pub fn clamp(&self, lower: &TracedTensor, upper: &TracedTensor) -> Result<TracedTensor> {
+        apply_broadcast_ternary_op(StdTensorOp::Clamp, self, lower, upper)
     }
 
     fn apply_same_shape_unary(&self, op: StdTensorOp) -> TracedTensor {
@@ -1163,6 +1312,45 @@ impl TracedTensor {
             out_rank,
             out_shape_hint,
         ))
+    }
+
+    /// Matrix multiplication for rank-2 tensors.
+    pub fn matmul(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        if self.rank != 2 {
+            return Err(Error::InvalidGraphBuild {
+                op: "TracedTensor::matmul",
+                message: format!("matmul requires rank-2 inputs, got lhs rank {}", self.rank),
+            });
+        }
+        if other.rank != 2 {
+            return Err(Error::InvalidGraphBuild {
+                op: "TracedTensor::matmul",
+                message: format!("matmul requires rank-2 inputs, got rhs rank {}", other.rank),
+            });
+        }
+        if let (Some(lhs_shape), Some(rhs_shape)) = (&self.shape_hint, &other.shape_hint) {
+            if let (Some(lhs_cols), Some(rhs_rows)) =
+                (lhs_shape[1].constant_value(), rhs_shape[0].constant_value())
+            {
+                if lhs_cols != rhs_rows {
+                    return Err(Error::InvalidGraphBuild {
+                        op: "TracedTensor::matmul",
+                        message: format!(
+                            "matmul dimension mismatch: lhs columns {lhs_cols} != rhs rows {rhs_rows}"
+                        ),
+                    });
+                }
+            }
+        }
+        self.dot_general(
+            other,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
     }
 
     /// Sum over the given axes.
@@ -1552,6 +1740,122 @@ impl TracedTensor {
             shape.len(),
             out_shape_hint,
         ))
+    }
+
+    /// Slice with explicit start, limit, and stride per axis.
+    pub fn slice(&self, config: SliceConfig) -> Result<TracedTensor> {
+        let op = StdTensorOp::Slice(config);
+        let (out_rank, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::slice", &op, &[self])?;
+        Ok(apply_unary(op, self, out_rank, out_shape_hint))
+    }
+
+    /// Pad with zeros using StableHLO-style edge and interior padding.
+    pub fn pad(&self, config: PadConfig) -> Result<TracedTensor> {
+        let op = StdTensorOp::Pad(config);
+        let (out_rank, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::pad", &op, &[self])?;
+        Ok(apply_unary(op, self, out_rank, out_shape_hint))
+    }
+
+    /// Reverse the order of elements along the requested axes.
+    pub fn reverse(&self, axes: &[usize]) -> Result<TracedTensor> {
+        validate_traced_axes(self.rank, axes, "TracedTensor::reverse")?;
+        Ok(apply_unary(
+            StdTensorOp::Reverse {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank,
+            self.shape_hint.clone(),
+        ))
+    }
+
+    /// Gather slices from `self` using integer start indices.
+    pub fn gather(&self, indices: &TracedTensor, config: GatherConfig) -> Result<TracedTensor> {
+        let op = StdTensorOp::Gather(config);
+        let (out_rank, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::gather", &op, &[self, indices])?;
+        Ok(apply_binary_preserve_input_dtypes(
+            op,
+            self,
+            indices,
+            out_rank,
+            out_shape_hint,
+            self.dtype,
+        ))
+    }
+
+    /// Scatter updates into `self` using StableHLO scatter semantics.
+    pub fn scatter(
+        &self,
+        indices: &TracedTensor,
+        updates: &TracedTensor,
+        config: ScatterConfig,
+    ) -> Result<TracedTensor> {
+        let op = StdTensorOp::Scatter(config);
+        let (out_rank, out_shape_hint) = infer_traced_single_output_shape(
+            "TracedTensor::scatter",
+            &op,
+            &[self, indices, updates],
+        )?;
+        let out_dtype = crate::shape_infer::promote_dtype(self.dtype, updates.dtype);
+        let operand = if self.dtype != out_dtype {
+            self.cast(out_dtype)
+        } else {
+            self.clone()
+        };
+        let updates = if updates.dtype != out_dtype {
+            updates.cast(out_dtype)
+        } else {
+            updates.clone()
+        };
+        Ok(apply_ternary_with_output_dtype(
+            op,
+            &operand,
+            indices,
+            &updates,
+            out_rank,
+            out_shape_hint,
+            out_dtype,
+        ))
+    }
+
+    /// Slice using runtime start indices.
+    pub fn dynamic_slice(&self, starts: &TracedTensor, sizes: &[usize]) -> Result<TracedTensor> {
+        let op = StdTensorOp::DynamicSlice {
+            slice_sizes: sizes.to_vec(),
+        };
+        let (out_rank, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::dynamic_slice", &op, &[self, starts])?;
+        Ok(apply_binary_preserve_input_dtypes(
+            op,
+            self,
+            starts,
+            out_rank,
+            out_shape_hint,
+            self.dtype,
+        ))
+    }
+
+    /// Keep the lower triangle and zero the rest.
+    pub fn tril(&self, k: i64) -> TracedTensor {
+        apply_unary(
+            StdTensorOp::Tril { k },
+            self,
+            self.rank,
+            self.shape_hint.clone(),
+        )
+    }
+
+    /// Keep the upper triangle and zero the rest.
+    pub fn triu(&self, k: i64) -> TracedTensor {
+        apply_unary(
+            StdTensorOp::Triu { k },
+            self,
+            self.rank,
+            self.shape_hint.clone(),
+        )
     }
 
     /// Permute tensor axes.

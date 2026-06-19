@@ -45,9 +45,14 @@ The default stratum is internal.
 5. Scalar constructors use generic `TensorScalar`-bounded entry points instead
    of dtype-specific public functions such as `constant_f64`.
 6. Traced tensor method and free-function names do not use a `traced_` prefix.
-7. Public module namespaces may use `traced_tensor` when they identify the
-   traced tensor surface as a peer of `eager_tensor`. The namespace is a
-   surface stratum, not an operation-name prefix.
+7. Tensor operation surfaces are methods, associated functions, or extension
+   trait methods, not public module free functions. Core AD operations in
+   `tenferro-runtime` and `tenferro-ad` use inherent `TracedTensor` /
+   `EagerTensor` methods or associated functions. Concrete non-AD operations
+   use crate-root `TensorOpsExt` / `TypedTensorOpsExt` extension traits because
+   `Tensor` and `TypedTensor` are owned by `tenferro-tensor`. Extension-family
+   crates use crate-root extension traits because they cannot add inherent
+   methods to external tensor types.
 8. User-facing backend features use concrete backend family names such as
    `cuda` and `rocm`. Public crates must not expose a vague `gpu` feature.
 9. Optional operation-specific AD support belongs behind an `autodiff` feature
@@ -58,8 +63,10 @@ The default stratum is internal.
 1. Unary single-output traced ops are methods on `TracedTensor`.
 2. Binary single-output ops use operator overloads when the operator is natural;
    otherwise they use methods.
-3. Multi-output linalg and decomposition ops are free functions.
-4. Einsum is a free function owned by `tenferro-einsum`.
+3. Multi-output linalg and decomposition ops are tensor extension-trait methods.
+4. Einsum is exposed through extension traits owned by `tenferro-einsum`:
+   `GraphCompilerEinsumExt` for traced graph construction and
+   `EagerEinsumExt` for eager input slices/arrays.
 5. Standard operation families are first-class crates, not modules under a
    broad facade.
 
@@ -104,8 +111,10 @@ The default stratum is internal.
 | `read_suffix_without_read_input` | Naming rule 3. |
 | `per_dtype_constructor` | Naming rule 5. |
 | `public_gpu_feature` | Naming rule 8, limited to published crates. |
+| `public_try_prefix` | Naming rule 10; only explicitly allowlisted canonical Rust `try_*` APIs may use this prefix. |
 | `facade_path_in_user_docs` | Naming rule 1 and documentation check 2. |
 | `internal_jargon_in_user_docs` | Documentation check 1. |
+| `operation_surface` | Delegated to `scripts/check-operation-categories.py`; enforces the AD method/associated-function surface and Eager/Traced parity from `operation-categories.md`. |
 
 The concept-family matrices emitted by the checker are review aids. A matrix
 difference becomes a finding only when the relevant spec, design doc, or

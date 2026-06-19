@@ -36,7 +36,6 @@ mod eager_builder;
 pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
-pub mod eager_tensor;
 pub mod extension;
 mod shape_packing;
 pub mod traced;

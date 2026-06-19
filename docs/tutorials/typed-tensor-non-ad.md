@@ -9,17 +9,17 @@ The example below shows four details that matter in real code:
 
 - `from_vec_col_major` accepts data already arranged in tenferro's native
   column-major layout.
-- `typed_tensor::*` operations keep the scalar type fixed and return
+- `TypedTensorOpsExt` methods keep the scalar type fixed and return
   `TypedTensor<T>`.
-- Reductions such as `typed_tensor::reduce_sum` are backend-aware tensor
-  operations, unlike small host-only checks over `iter()`.
-- Structural helpers such as `typed_tensor::transpose` preserve the typed
-  workflow without switching to runtime-dtype `Tensor`.
+- Reductions such as `x.reduce_sum(...)` are backend-aware tensor operations,
+  unlike small host-only checks over `iter()`.
+- Structural helpers such as `x.transpose(...)` preserve the typed workflow
+  without switching to runtime-dtype `Tensor`.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/typed_tensor_non_ad.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{typed_tensor, TypedTensor};
+use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -42,21 +42,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let column_offsets =
         TypedTensor::<f64>::from_vec_col_major(vec![1, 3], vec![10.0, 20.0, 30.0])?;
-    let shifted = typed_tensor::add(&x, &column_offsets, &mut backend)?;
+    let shifted = x.add(&column_offsets, &mut backend)?;
     assert_close(shifted.host_data()?, &[11.0, 14.0, 22.0, 25.0, 33.0, 36.0]);
 
-    let squared = typed_tensor::mul(&shifted, &shifted, &mut backend)?;
-    let squared_total = typed_tensor::reduce_sum(&squared, &[0, 1], &mut backend)?;
+    let squared = shifted.mul(&shifted, &mut backend)?;
+    let squared_total = squared.reduce_sum(&[0, 1], &mut backend)?;
     assert_eq!(squared_total.shape(), &[]);
     assert_close(squared_total.host_data()?, &[3811.0]);
 
-    let transposed = typed_tensor::transpose(&x, &[1, 0], &mut backend)?;
+    let transposed = x.transpose(&[1, 0], &mut backend)?;
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_close(transposed.host_data()?, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let weights =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5])?;
-    let projected = typed_tensor::matmul(&x, &weights, &mut backend)?;
+    let projected = x.matmul(&weights, &mut backend)?;
     assert_eq!(projected.shape(), &[2, 2]);
     assert_close(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 
