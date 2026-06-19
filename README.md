@@ -211,12 +211,21 @@ for the per-operation AD coverage status and the
 [`tensor4all/tensor-ad-oracles`](https://github.com/tensor4all/tensor-ad-oracles)
 dataset repository.
 
-## Community
+## Get In Touch
 
-The broader tensor4all community uses the
+Questions, design discussions, and contributor coordination for tenferro happen
+in the tenferro Matrix room:
+
+- [#tenferro-tensor4all:matrix.org](https://matrix.to/#/#tenferro-tensor4all:matrix.org)
+
+Matrix is an open, federated chat protocol. You can join from a Matrix client
+such as Element, or through the browser flow opened by the link above.
+
+Use GitHub issues for bug reports, feature requests, and decisions that need
+tracking; use Matrix for lightweight discussion before filing or implementing
+changes. The broader tensor4all community also uses the
 [tensor4all mailing list](https://groups.google.com/g/tensor4all) for
-announcements and [Matrix](https://tensor4all.org/matrix.html) for real-time
-chat. The community entry point is <https://tensor4all.org/>.
+announcements, and the community entry point is <https://tensor4all.org/>.
 
 ## Acknowledgments
 

@@ -65,3 +65,17 @@ known at compile time, or `Tensor` when dtype must be selected at runtime.
 `EagerTensor` adds immediate execution through an `EagerRuntime` and optional
 `backward()` on scalar losses. `TracedTensor` adds graph compilation, `grad`,
 `vjp`, and `jvp` on traced graphs, symbolic inputs, and reuse.
+
+## Get In Touch
+
+Questions, design discussions, and contributor coordination for tenferro happen
+in the tenferro Matrix room:
+
+- [#tenferro-tensor4all:matrix.org](https://matrix.to/#/#tenferro-tensor4all:matrix.org)
+
+Matrix is an open, federated chat protocol. You can join from a Matrix client
+such as Element, or through the browser flow opened by the link above.
+
+Use GitHub issues for bug reports, feature requests, and decisions that need
+tracking; use Matrix for lightweight discussion before filing or implementing
+changes.
