@@ -79,6 +79,14 @@ pub use tenferro_tensor::{
 /// `Tensor` is owned by `tenferro-tensor`, so `tenferro-runtime` exposes these
 /// operations as a crate-root extension trait rather than as inherent methods.
 ///
+/// # Public API rationale
+///
+/// This trait is intentionally public: it is the supported non-AD concrete
+/// tensor operation surface for downstream users who want to run operations on
+/// an explicit backend. The old public module/free-function surface was
+/// removed; the private `tensor` module now contains implementation helpers
+/// only and must not be treated as a compatibility API.
+///
 /// # Examples
 ///
 /// ```rust
@@ -222,6 +230,14 @@ pub trait TensorOpsExt {
 /// these operations as a crate-root extension trait rather than as inherent
 /// methods.
 ///
+/// # Public API rationale
+///
+/// This trait is intentionally public for the same reason as [`TensorOpsExt`]:
+/// downstream users need a supported backend-explicit typed tensor surface, and
+/// `tenferro-runtime` cannot add inherent methods to a type owned by
+/// `tenferro-tensor`. The private `typed_tensor` module is implementation
+/// detail, not a retained module/free-function API.
+///
 /// # Examples
 ///
 /// ```rust
@@ -351,6 +367,13 @@ pub trait TypedTensorOpsExt<T: TensorScalar> {
 }
 
 /// Backend-explicit bool-mask operations for typed tensors.
+///
+/// # Public API rationale
+///
+/// This trait keeps `where_select` available as a method on bool
+/// `TypedTensor`s while preserving the crate-root extension-trait surface. It
+/// is public because downstream users call it directly; the implementation
+/// helper in the private `typed_tensor` module is not a compatibility API.
 pub trait TypedTensorMaskOpsExt {
     /// Select typed values using this bool tensor as condition.
     fn where_select<T: TensorScalar, B: TensorBackend>(
