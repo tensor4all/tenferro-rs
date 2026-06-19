@@ -227,14 +227,26 @@ def rust_files(path: pathlib.Path) -> list[pathlib.Path]:
 def rendered_files(path: pathlib.Path) -> list[pathlib.Path]:
     absolute = ROOT / path
     if absolute.is_file():
-        return [path] if path.suffix in RENDERED_SUFFIXES else []
+        return (
+            [path]
+            if path.suffix in RENDERED_SUFFIXES and not is_rendered_search_index(path)
+            else []
+        )
     if not absolute.exists():
         return []
     return sorted(
         file.relative_to(ROOT)
         for file in absolute.rglob("*")
-        if file.is_file() and file.suffix in RENDERED_SUFFIXES
+        if file.is_file()
+        and file.suffix in RENDERED_SUFFIXES
+        and not is_rendered_search_index(file.relative_to(ROOT))
     )
+
+
+def is_rendered_search_index(path: pathlib.Path) -> bool:
+    # rustdoc search metadata keeps original private module paths even when the
+    # public API is a root re-export; rendered HTML remains the user-facing check.
+    return "search.index" in path.parts
 
 
 def forbidden_tensor_module_export_offsets(text: str, module_name: str) -> list[int]:

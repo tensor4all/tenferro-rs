@@ -166,6 +166,20 @@ def test_operation_surface_checker_rejects_tensor_module_exports() -> None:
     )
 
 
+def test_operation_surface_checker_skips_rendered_search_index_metadata() -> None:
+    checker = load_operation_categories_checker()
+
+    assert checker.is_rendered_search_index(
+        pathlib.Path("target/doc/search.index/path/abc123.js")
+    )
+    assert checker.is_rendered_search_index(
+        pathlib.Path("target/docs-site/api/search.index/path/abc123.js")
+    )
+    assert not checker.is_rendered_search_index(
+        pathlib.Path("target/docs-site/guides/tensor-operations.html")
+    )
+
+
 def test_api_consistency_checker_rejects_public_try_compatibility_escape() -> None:
     checker = load_api_consistency_checker()
     allowed = checker.PublicItem(
@@ -281,6 +295,7 @@ def main() -> int:
         test_pre_pr_checklist_requires_local_llm_review,
         test_operation_surface_checker_requires_inherent_tensor_methods,
         test_operation_surface_checker_rejects_tensor_module_exports,
+        test_operation_surface_checker_skips_rendered_search_index_metadata,
         test_api_consistency_checker_rejects_public_try_compatibility_escape,
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
