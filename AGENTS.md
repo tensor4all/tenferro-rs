@@ -188,9 +188,16 @@ cargo llvm-cov --workspace --release --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
+python3 scripts/repository-rules-review.py \
+  --base origin/main \
+  --head HEAD \
+  --output-json /tmp/repository-rules-review.json
 ```
 
 If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
+Run the local LLM review on the committed PR head; `--worktree` is acceptable
+only as an earlier preview, and must be rerun without `--worktree` before PR
+creation.
 
 Additionally, verify the following before pushing:
 

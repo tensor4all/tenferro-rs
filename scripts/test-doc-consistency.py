@@ -108,6 +108,17 @@ def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
     assert "needs: [pre-gpu-gate, cuda-archive]" in text
 
 
+def test_pre_pr_checklist_requires_local_llm_review() -> None:
+    text = read("AGENTS.md")
+    template = read(".github/pull_request_template.md")
+
+    assert "python3 scripts/repository-rules-review.py" in text
+    assert "--base origin/main" in text
+    assert "--head HEAD" in text
+    assert "--worktree" in text
+    assert "local repository-rules LLM review" in template
+
+
 def test_operation_surface_checker_requires_inherent_tensor_methods() -> None:
     checker = load_operation_categories_checker()
     source = textwrap.dedent(
@@ -256,6 +267,7 @@ def main() -> int:
         test_review_bot_workflow_exists,
         test_repo_settings_requires_repository_rules_review,
         test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,
+        test_pre_pr_checklist_requires_local_llm_review,
         test_operation_surface_checker_requires_inherent_tensor_methods,
         test_operation_surface_checker_rejects_tensor_module_exports,
         test_api_consistency_checker_rejects_public_try_compatibility_escape,
