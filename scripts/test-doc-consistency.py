@@ -62,10 +62,11 @@ def test_repo_settings_requires_repository_rules_review() -> None:
     assert '"repository rules review"' in text
 
 
-def test_gpu_ci_waits_for_review_bot_llm_before_cuda_work() -> None:
+def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
     text = read(".github/workflows/CI_gpu.yml")
 
-    assert "repository rules review (LLM)" in text
+    assert '"repository rules review"' in text
+    assert "repository rules review (LLM)" not in text
     assert text.index("pre-gpu-gate:") < text.index("cuda-archive:")
     assert text.index("pre-gpu-gate:") < text.index("runs-on: ubuntu-gpu")
     assert "needs: [pre-gpu-gate]" in text
@@ -88,7 +89,7 @@ def main() -> int:
         test_docs_ci_runs_docs_script_tests,
         test_review_bot_workflow_exists,
         test_repo_settings_requires_repository_rules_review,
-        test_gpu_ci_waits_for_review_bot_llm_before_cuda_work,
+        test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,
         test_documentation_policy_matches_rendered_internals,
     ]:
         test()

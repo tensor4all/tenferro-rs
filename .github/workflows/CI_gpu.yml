@@ -36,7 +36,7 @@ jobs:
         with:
           script: |
             const required = [
-              "repository rules review (LLM)",
+              "repository rules review",
               "rustfmt",
               "clippy",
               "cargo test (blas inject)",
