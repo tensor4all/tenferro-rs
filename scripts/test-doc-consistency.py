@@ -12,7 +12,7 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_architecture_svg_lists_cpu_crate_and_background() -> None:
+def test_architecture_svg_lists_cpu_crate_xla_boundary_and_background() -> None:
     svg_path = ROOT / "docs/assets/tenferro-architecture.svg"
     text = svg_path.read_text(encoding="utf-8")
 
@@ -20,14 +20,16 @@ def test_architecture_svg_lists_cpu_crate_and_background() -> None:
     assert '<rect width="100%" height="100%" fill="#ffffff"/>' in text
     assert "tenferro-cpu" in text
     assert "tenferro-xla" in text
-    assert "StableHLO/PJRT peer executor" in text
+    assert "GraphProgram → StableHLO" in text
+    assert "PJRT plugin" in text
+    assert "tenferro-xla bridge" in text
     assert "CPU backend" in text
     assert text.index("tenferro-cpu") < text.index("faer | BLAS/LAPACK")
 
     tensor_section = text[text.index("tenferro-tensor") : text.index("tenferro-cpu")]
     assert "faer | BLAS/LAPACK" not in tensor_section
 
-    assert '<line x1="460" y1="378" x2="460" y2="400" class="dep"/>' in text
+    assert '<line x1="460" y1="390" x2="460" y2="412" class="dep"/>' in text
 
 
 def test_agents_layer_diagram_lists_cpu_crate() -> None:
@@ -84,7 +86,7 @@ def test_documentation_policy_matches_rendered_internals() -> None:
 
 def main() -> int:
     for test in [
-        test_architecture_svg_lists_cpu_crate_and_background,
+        test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
         test_agents_layer_diagram_lists_cpu_crate,
         test_docs_ci_runs_docs_script_tests,
         test_review_bot_workflow_exists,
