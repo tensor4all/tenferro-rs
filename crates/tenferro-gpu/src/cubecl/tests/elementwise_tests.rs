@@ -23,7 +23,7 @@ fn test_log1p_small_x_f32_precision() {
     let gpu_out = backend.log1p(&gpu_input).unwrap();
     let result = super::download(&backend, &gpu_out);
     let result_slice = match result {
-        Tensor::F32(t) => t.as_slice().to_vec(),
+        Tensor::F32(t) => t.as_slice().unwrap().to_vec(),
         _ => panic!("expected F32"),
     };
 
@@ -52,7 +52,7 @@ fn test_expm1_small_x_f32_precision() {
     let gpu_out = backend.expm1(&gpu_input).unwrap();
     let result = super::download(&backend, &gpu_out);
     let result_slice = match result {
-        Tensor::F32(t) => t.as_slice().to_vec(),
+        Tensor::F32(t) => t.as_slice().unwrap().to_vec(),
         _ => panic!("expected F32"),
     };
 

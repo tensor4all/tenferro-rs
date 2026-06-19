@@ -33,8 +33,8 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let c = upload_traced(&gpu_backend, &c_host);
     let mut engine = GraphExecutor::new(gpu_backend);
 
-    let sum = a.add(&b);
-    let result_traced = sum.mul(&c);
+    let sum = a.add(&b).unwrap();
+    let result_traced = sum.mul(&c).unwrap();
 
     let result = result_traced.run_with(&mut engine).unwrap();
     let result = download_tensor(engine.backend().runtime(), &result).unwrap();

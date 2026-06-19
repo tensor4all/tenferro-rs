@@ -75,6 +75,7 @@ fn matmul(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
             rhs_batch_dims: vec![],
         },
     )
+    .unwrap()
 }
 
 #[test]

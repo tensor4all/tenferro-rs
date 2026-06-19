@@ -54,11 +54,12 @@ instead of preserving them behind `try_*` or alias wrappers.
   use the canonical builder contract.
 - Updated the README architecture SVG so `tenferro-xla` appears as the L3
   StableHLO/PJRT peer executor, matching the crate table and architecture docs.
-- Reworked `CI_gpu.yml` so same-repository PRs wait for
-  `repository rules review (LLM)` and all cheap non-GPU checks before building
+- Reworked `CI_gpu.yml` so same-repository PRs wait for the aggregate
+  `repository rules review` gate and all cheap non-GPU checks before building
   the CUDA test archive or starting the `ubuntu-gpu` runner. This avoids
   spending GPU runner time on PR revisions already rejected by repository
-  policy, lint, docs, coverage, or CPU tests.
+  policy, lint, docs, coverage, or CPU tests, while still allowing the
+  maintainer-controlled no-LLM review path to satisfy the policy gate.
 - Hardened the repository-rules review bot so malformed or schema-drifting LLM
   responses produce a structured review finding instead of a Python traceback.
   The prompt now caps findings per chunk and explicitly suppresses known
@@ -78,6 +79,9 @@ instead of preserving them behind `try_*` or alias wrappers.
 - Closed the prototype `einsum_whole_program_untracked` public eager API; it is
   now test-only, while user-facing eager einsum remains through `einsum`,
   `einsum_subscripts`, and `tensordot`.
+- Updated CUDA-feature-only tests for the fallible traced/tensor APIs so the
+  GPU test archive compile catches API drift instead of relying only on
+  non-CUDA workspace builds.
 
 ## Rule Updates
 
@@ -159,8 +163,18 @@ Additional local verification after the public API cleanup:
 - `python3 scripts/check-docs-site.py`
 - `git diff --check`
 
-No successful cloud GPU runtime check had completed at the time of this local
-verification; GPU coverage here is local source-contract tests plus CUDA feature
-compilation. The pre-gate `CI_gpu` run on PR #1125 was cancelled after the
-repository-rules LLM review failed, and subsequent pushes gate CUDA archive
-building and GPU runner use behind that LLM review plus cheap non-GPU checks.
+Additional local verification while babysitting PR #1125 CI:
+
+- `python3 scripts/test-doc-consistency.py`
+- `cargo test -p tenferro-ad --features cuda --test gpu_f32_fusion --no-run`
+- `CUDARC_CUDA_VERSION=12080 cargo test --no-run --package tenferro-gpu --package tenferro-ad --package tenferro-linalg --features cuda --release`
+- `cargo fmt --all --check`
+- `git diff --check`
+
+No successful cloud GPU runtime check had completed at the time of the first
+local verification; GPU coverage there was local source-contract tests plus
+CUDA feature compilation. During PR CI babysitting, the no-LLM repository review
+path was used because the base `pull_request_target` review bot could not use
+this PR's malformed-LLM-JSON parser fix. The PR now gates CUDA archive building
+and GPU runner use behind the aggregate repository review gate plus cheap
+non-GPU checks.
