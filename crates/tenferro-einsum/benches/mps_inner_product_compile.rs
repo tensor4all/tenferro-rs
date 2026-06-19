@@ -1,6 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_einsum::EagerEinsumExt;
 use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{DType, GraphCompiler, GraphProgram, TracedTensor};
 
