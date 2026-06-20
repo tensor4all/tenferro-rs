@@ -11,7 +11,22 @@ explicitly. For eager forward execution and scalar loss accumulation semantics, 
 
 ## Setup
 
+For a published build, depend on the AD, runtime, and backend crates:
+
 ```toml
+[dependencies]
+tenferro-ad = "..."
+tenferro-runtime = "..."
+tenferro-cpu = "..."
+```
+
+When working from a local checkout, use paths that match your project layout.
+For a scratch crate created directly inside the `tenferro-rs` checkout, include
+an empty `[workspace]` table:
+
+```toml
+[workspace]
+
 [dependencies]
 tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
@@ -23,6 +38,10 @@ Extension AD examples also need that extension crate's AD feature. For linalg:
 ```toml
 tenferro-linalg = { path = "../crates/tenferro-linalg", features = ["autodiff"] }
 ```
+
+In code that uses extension operations during traced execution, also register
+the extension runtime on the `GraphExecutor` and add the extension rule set to
+`AdContext` when differentiating through that operation family.
 
 - `grad` for reverse mode on scalar losses
 - `vjp` for vector-Jacobian products

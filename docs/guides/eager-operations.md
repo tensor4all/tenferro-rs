@@ -9,6 +9,8 @@ gradient accumulation and `backward()`.
 
 ## Setup
 
+For a published build, depend on the crates you use:
+
 ```toml
 [dependencies]
 tenferro-runtime = "..."
@@ -20,7 +22,24 @@ tenferro-einsum = { version = "...", features = ["autodiff"] }
 ```
 
 When working from a local checkout, replace the versions with `path = "..."`
-entries that match your project layout.
+entries that match your project layout. For a scratch crate created directly
+inside the `tenferro-rs` checkout, include an empty `[workspace]` table so Cargo
+does not try to enroll the scratch crate in the parent workspace:
+
+```toml
+[workspace]
+
+[dependencies]
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-linalg = { path = "../crates/tenferro-linalg" }
+tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
+```
+
+The first local build can spend several minutes compiling the default
+`cpu-faer` stack. That is expected on a fresh machine.
 
 Most direct tensor examples start by importing the CPU backend and concrete
 tensor types:
@@ -183,6 +202,9 @@ assert_eq!(flat.shape(), &[6]);
 let col_sum = a.reduce_sum(&[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
+
+The `reduce_sum(&[0])` call removes axis `0`. For this `[2, 3]` tensor, that
+means summing down each column and keeping one value per column.
 
 ## Einsum
 

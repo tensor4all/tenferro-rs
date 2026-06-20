@@ -153,6 +153,10 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 Create a binary crate that depends on `tenferro-runtime` and `tenferro-cpu`.
 The same runnable example lives at
 `crates/tenferro-runtime/examples/cpu_quickstart.rs`.
+For a local checkout, the full setup notes are in
+[`docs/getting-started/index.md`](docs/getting-started/index.md), including the
+empty `[workspace]` table needed by scratch crates created inside this
+repository.
 
 <!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust

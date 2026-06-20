@@ -358,6 +358,16 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
     };
     assert!(err.to_string().contains("positive"), "{err}");
 
+    let zero_axis = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
+    ))
+    .unwrap();
+    let err = match zero_axis.rfft(None, -1, FftNorm::Backward) {
+        Ok(_) => panic!("expected rfft to reject zero-length input axis"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("positive"), "{err}");
+
     let err = match x.rfft(None, 3, FftNorm::Backward) {
         Ok(_) => panic!("expected rfft to reject out-of-bounds axis"),
         Err(err) => err,

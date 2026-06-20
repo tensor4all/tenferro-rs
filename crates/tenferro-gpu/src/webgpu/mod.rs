@@ -268,12 +268,12 @@ fn typed_from_webgpu<T: Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: WebGpuBuffer<T>,
     device_ordinal: usize,
-) -> TypedTensor<T> {
-    TypedTensor::from_buffer_col_major(
+) -> crate::Result<TypedTensor<T>> {
+    Ok(TypedTensor::from_buffer_col_major(
         shape,
         Buffer::Backend(Arc::new(buffer)),
         webgpu_placement(device_ordinal),
-    )
+    )?)
 }
 
 fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
@@ -289,11 +289,11 @@ fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
         )
     })?;
     let handle = rt.client().empty(bytes);
-    Ok(typed_from_webgpu(
+    typed_from_webgpu(
         shape.to_vec(),
         WebGpuBuffer::new(handle, len),
         rt.device_ordinal(),
-    ))
+    )
 }
 
 fn webgpu_placement(device_ordinal: usize) -> Placement {

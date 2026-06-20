@@ -73,7 +73,7 @@ fn free_axes(rank: usize, contracting: &[usize], batch: &[usize]) -> AxisVec {
 }
 
 fn dense_strides(shape: &[usize]) -> crate::Result<Vec<usize>> {
-    col_major_strides(shape)
+    col_major_strides(shape)?
         .into_iter()
         .map(|stride| {
             usize::try_from(stride).map_err(|_| {
