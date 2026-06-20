@@ -669,6 +669,7 @@ fn apply_unary_fft(
 ) -> Result<TracedTensor> {
     validate_n(op_name, n)?;
     let axis = normalize_axis(op_name, axis, input.rank)?;
+    validate_resolved_transform_len(op_name, input, n, axis)?;
     let op = Arc::new(FftOp::new(kind, axis, n, norm));
     let mut outputs = apply(op, &[input])?;
     outputs
@@ -693,6 +694,28 @@ fn normalize_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
 
 fn validate_n(op: &'static str, n: Option<usize>) -> Result<()> {
     if n == Some(0) {
+        return Err(fft_config_error(
+            op,
+            "tenferro-fft transform length n must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resolved_transform_len(
+    op: &'static str,
+    input: &TracedTensor,
+    n: Option<usize>,
+    axis: usize,
+) -> Result<()> {
+    if n.is_some() {
+        return Ok(());
+    }
+    if input
+        .try_concrete_shape()
+        .and_then(|shape| shape.get(axis).copied())
+        == Some(0)
+    {
         return Err(fft_config_error(
             op,
             "tenferro-fft transform length n must be positive",

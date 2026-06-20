@@ -172,6 +172,19 @@ fn matrix_eager_input_uses_column_major_values() {
 }
 
 #[test]
+fn eager_concatenate_empty_reports_typed_validation_error() {
+    let err = EagerTensor::concatenate(&[], 0).unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+            op: "concatenate",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
     let ctx = test_ctx();
     let plain = EagerTensor::from_tensor_in(

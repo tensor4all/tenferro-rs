@@ -24,6 +24,17 @@ pub(crate) fn char_to_label(c: char) -> Result<u32> {
 ///
 /// Returns `(lhs, rhs)` where `lhs` is the input side and `rhs` is the output side.
 pub(crate) fn split_and_validate_notation(notation: &str) -> Result<(&str, &str)> {
+    if notation.contains("...") {
+        return Err(Error::InvalidArgument(
+            "einsum ellipsis '...' is not supported yet".into(),
+        ));
+    }
+    if notation.contains('.') {
+        return Err(Error::InvalidArgument(
+            "einsum label '.' is reserved for ellipsis, which is not supported yet".into(),
+        ));
+    }
+
     let parts: Vec<&str> = notation.split("->").collect();
     if parts.len() != 2 {
         return Err(Error::InvalidArgument(format!(

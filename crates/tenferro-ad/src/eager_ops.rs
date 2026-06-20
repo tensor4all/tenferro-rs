@@ -851,9 +851,7 @@ impl EagerTensor {
         value: TensorValue,
     ) -> Result<Self> {
         let Some(first) = tensors.first() else {
-            return Err(Error::Internal(
-                "nary eager value op requires at least one input tensor".to_string(),
-            ));
+            return Err(empty_nary_input_error(&op));
         };
 
         let ctx = Arc::clone(&first.ctx);
@@ -896,9 +894,7 @@ impl EagerTensor {
     pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
         let total_started = std::time::Instant::now();
         let Some(first) = tensors.first() else {
-            return Err(Error::Internal(
-                "nary eager op requires at least one input tensor".to_string(),
-            ));
+            return Err(empty_nary_input_error(&op));
         };
 
         let ctx = Arc::clone(&first.ctx);
@@ -976,5 +972,19 @@ impl EagerTensor {
         record_eager_op_profile("nary_op.total", total_started.elapsed());
         maybe_print_eager_op_profile();
         result
+    }
+}
+
+fn empty_nary_input_error(op: &StdTensorOp) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        op: eager_validation_op_name(op),
+        message: "operation requires at least one input tensor".to_string(),
+    })
+}
+
+fn eager_validation_op_name(op: &StdTensorOp) -> &'static str {
+    match op {
+        StdTensorOp::Concatenate { .. } => "concatenate",
+        _ => "eager_nary_op",
     }
 }
