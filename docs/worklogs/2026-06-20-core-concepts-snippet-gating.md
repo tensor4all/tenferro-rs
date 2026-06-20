@@ -51,12 +51,18 @@ again, consistent with the already-marker-backed Memory Model snippet
   considered; the mechanical snippet-source gate is stronger for these snippets.
   A general rule could still be proposed separately if unmarked blocks recur.
 
+## Signposts added in this PR (from the doer's refuted false positives)
+
+The source-blind doer guessed `as_slice` returned `Option` (it returns `Result`)
+and flagged `tenferro_ad::Tensor` vs `tenferro_runtime::Tensor` as a clash (they
+are the same re-exported type). Both false positives mark spots the docs invite
+misreading, so `core-concepts.md` now states each explicitly — a false positive
+turned into a signpost rather than discarded.
+
 ## Deferred (other audit findings, doc-clarity only — not compile bugs)
 
-- `as_slice::<T>()` returns `Result<&[T]>` (not `Option`); undocumented.
 - No copy-pasteable dependency (path placeholder / crates.io `"..."`; no git URL).
 - Error type not named; no `Debug`/print example; MSRV/edition unstated.
-- Eager example imports `Tensor` from `tenferro_ad` with no deps block shown.
 - `pytorch-jax-mapping.md` column-major fragment is illustrative (not a program).
 
 ## Verification

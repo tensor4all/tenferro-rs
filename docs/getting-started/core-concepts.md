@@ -62,6 +62,10 @@ Use `from_vec_col_major` for tensor construction. Data copied from PyTorch,
 NumPy, JAX, or C-style examples must be explicitly reordered at the boundary
 before entering tenferro.
 
+Read values back with `as_slice::<T>()` on `Tensor`, or `as_slice()` on
+`TypedTensor<T>`. Both return `Result<&[T]>` and yield `Err` on a dtype
+mismatch, not `Option`.
+
 ## Direct Tensor Execution
 
 `Tensor` operations run immediately through an explicit backend. Use this for
@@ -122,6 +126,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 <!-- end-snippet-source -->
+
+Here `Tensor` is `tenferro_ad`'s re-export of `tenferro_runtime::Tensor` — the
+same type as the concrete tensor used in the sections above, so values move
+between the eager and direct APIs without conversion.
 
 ## Traced Graph Execution
 
