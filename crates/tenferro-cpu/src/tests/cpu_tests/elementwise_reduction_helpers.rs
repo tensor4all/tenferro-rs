@@ -566,6 +566,87 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
 }
 
 #[test]
+fn equal_bool_add_and_mul_report_unsupported_dtype_not_mismatch() {
+    let lhs = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap());
+    let rhs = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap());
+
+    assert!(matches!(
+        add(&lhs, &rhs),
+        Err(crate::Error::BackendFailure {
+            op: "add",
+            message,
+        }) if message == "unsupported dtype Bool"
+    ));
+    assert!(matches!(
+        mul(&lhs, &rhs),
+        Err(crate::Error::BackendFailure {
+            op: "mul",
+            message,
+        }) if message == "unsupported dtype Bool"
+    ));
+}
+
+#[test]
+fn maximum_and_minimum_propagate_nan_independent_of_argument_order() {
+    let nan_lhs =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![f64::NAN, 1.0]).unwrap());
+    let nan_rhs =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, f64::NAN]).unwrap());
+
+    let max_lr = maximum(&nan_lhs, &nan_rhs).unwrap();
+    let max_rl = maximum(&nan_rhs, &nan_lhs).unwrap();
+    let min_lr = minimum(&nan_lhs, &nan_rhs).unwrap();
+    let min_rl = minimum(&nan_rhs, &nan_lhs).unwrap();
+
+    for tensor in [&max_lr, &max_rl, &min_lr, &min_rl] {
+        let data = tensor.as_slice::<f64>().unwrap();
+        assert!(data[0].is_nan(), "expected NaN at index 0, got {:?}", data);
+        assert!(data[1].is_nan(), "expected NaN at index 1, got {:?}", data);
+    }
+}
+
+#[test]
+fn reduce_max_and_min_propagate_nan_instead_of_leaking_sentinel() {
+    let mixed =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![f64::NAN, 1.0, 2.0]).unwrap());
+    let all_nan =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN]).unwrap());
+
+    assert!(reduce_max(&mixed, &[0]).unwrap().as_slice::<f64>().unwrap()[0].is_nan());
+    assert!(reduce_min(&mixed, &[0]).unwrap().as_slice::<f64>().unwrap()[0].is_nan());
+    assert!(reduce_max(&all_nan, &[0])
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
+    assert!(reduce_min(&all_nan, &[0])
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
+}
+
+#[test]
+fn reduce_max_and_min_reject_zero_length_reduced_axis() {
+    let empty = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap());
+
+    assert!(matches!(
+        reduce_max(&empty, &[0]),
+        Err(crate::Error::InvalidConfig {
+            op: "reduce_max",
+            ..
+        })
+    ));
+    assert!(matches!(
+        reduce_min(&empty, &[0]),
+        Err(crate::Error::InvalidConfig {
+            op: "reduce_min",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     let lhs_f64 =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.5f64, -3.0]).unwrap());

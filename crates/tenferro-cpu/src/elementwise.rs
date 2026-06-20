@@ -11,8 +11,8 @@ use strided_kernel::{
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::ConjElem;
 use tenferro_tensor::{
-    col_major_strides, CompareDir, Tensor, TensorOwnedView, TensorRank, TensorRead, TensorValue,
-    TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, CompareDir, DType, Tensor, TensorOwnedView, TensorRank, TensorRead,
+    TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{
@@ -30,6 +30,22 @@ macro_rules! dispatch_ternary_result_with_pool {
             _ => Err(crate::Error::backend_failure($op, "dtype mismatch")),
         }
     };
+}
+
+fn dtype_pair_error(op: &'static str, lhs: DType, rhs: DType) -> crate::Error {
+    if lhs == rhs {
+        crate::Error::backend_failure(op, format!("unsupported dtype {lhs:?}"))
+    } else {
+        crate::Error::DTypeMismatch { op, lhs, rhs }
+    }
+}
+
+fn tensor_pair_error(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> crate::Error {
+    dtype_pair_error(op, lhs.dtype(), rhs.dtype())
+}
+
+fn read_pair_error(op: &'static str, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Error {
+    dtype_pair_error(op, lhs.dtype(), rhs.dtype())
 }
 
 pub(crate) trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
@@ -59,7 +75,9 @@ macro_rules! impl_tier2_elem_real {
             }
 
             fn max_elem(self, other: Self) -> Self {
-                if self >= other {
+                if self.is_nan() || other.is_nan() {
+                    <$ty>::NAN
+                } else if self >= other {
                     self
                 } else {
                     other
@@ -67,7 +85,9 @@ macro_rules! impl_tier2_elem_real {
             }
 
             fn min_elem(self, other: Self) -> Self {
-                if self <= other {
+                if self.is_nan() || other.is_nan() {
+                    <$ty>::NAN
+                } else if self <= other {
                     self
                 } else {
                     other
@@ -105,7 +125,11 @@ macro_rules! impl_tier2_elem_complex {
             }
 
             fn max_elem(self, other: Self) -> Self {
-                if self.norm_sqr() >= other.norm_sqr() {
+                let lhs_norm = self.norm_sqr();
+                let rhs_norm = other.norm_sqr();
+                if lhs_norm.is_nan() || rhs_norm.is_nan() {
+                    Self::new(<$real>::NAN, <$real>::NAN)
+                } else if lhs_norm >= rhs_norm {
                     self
                 } else {
                     other
@@ -113,7 +137,11 @@ macro_rules! impl_tier2_elem_complex {
             }
 
             fn min_elem(self, other: Self) -> Self {
-                if self.norm_sqr() <= other.norm_sqr() {
+                let lhs_norm = self.norm_sqr();
+                let rhs_norm = other.norm_sqr();
+                if lhs_norm.is_nan() || rhs_norm.is_nan() {
+                    Self::new(<$real>::NAN, <$real>::NAN)
+                } else if lhs_norm <= rhs_norm {
                     self
                 } else {
                     other
@@ -237,11 +265,7 @@ pub(crate) fn add_with_pool(
             let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0])?;
             Ok(Tensor::C64(typed_add_with_pool(buffers, a, &scalar)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "add",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(tensor_pair_error("add", lhs, rhs)),
     }
 }
 
@@ -362,11 +386,7 @@ pub(crate) fn add_read_with_pool(
     dispatch!(C32);
     dispatch!(C64);
 
-    Err(crate::Error::DTypeMismatch {
-        op: "add",
-        lhs: lhs.dtype(),
-        rhs: rhs.dtype(),
-    })
+    Err(read_pair_error("add", lhs, rhs))
 }
 
 /// Multiply two CPU tensors elementwise.
@@ -398,11 +418,7 @@ fn binary_read_with_pool(
         return f(buffers, lhs, rhs);
     }
 
-    Err(crate::Error::DTypeMismatch {
-        op,
-        lhs: lhs.dtype(),
-        rhs: rhs.dtype(),
-    })
+    Err(read_pair_error(op, lhs, rhs))
 }
 
 pub(crate) fn mul_with_pool(
@@ -433,11 +449,7 @@ pub(crate) fn mul_with_pool(
             let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0])?;
             Ok(Tensor::C64(typed_mul_with_pool(buffers, a, &scalar)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "mul",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(tensor_pair_error("mul", lhs, rhs)),
     }
 }
 
@@ -1920,11 +1932,7 @@ pub(crate) fn maximum_with_pool(
         (Tensor::C64(a), Tensor::C64(b)) => {
             Ok(Tensor::C64(typed_maximum_with_pool(buffers, a, b)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "maximum",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(tensor_pair_error("maximum", lhs, rhs)),
     }
 }
 
@@ -1956,11 +1964,7 @@ pub(crate) fn maximum_read_with_pool(
                 x.max_elem(y)
             })?,
         )),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "maximum",
-            lhs: lhs_dtype,
-            rhs: rhs_dtype,
-        }),
+        _ => Err(dtype_pair_error("maximum", lhs_dtype, rhs_dtype)),
     }
 }
 
@@ -2000,11 +2004,7 @@ pub(crate) fn minimum_with_pool(
         (Tensor::C64(a), Tensor::C64(b)) => {
             Ok(Tensor::C64(typed_minimum_with_pool(buffers, a, b)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "minimum",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(tensor_pair_error("minimum", lhs, rhs)),
     }
 }
 
@@ -2036,11 +2036,7 @@ pub(crate) fn minimum_read_with_pool(
                 x.min_elem(y)
             })?,
         )),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "minimum",
-            lhs: lhs_dtype,
-            rhs: rhs_dtype,
-        }),
+        _ => Err(dtype_pair_error("minimum", lhs_dtype, rhs_dtype)),
     }
 }
 

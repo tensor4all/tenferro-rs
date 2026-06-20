@@ -43,6 +43,39 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
     }
 }
 
+fn validate_reduced_axes_nonempty(
+    op: &'static str,
+    shape: &[usize],
+    axes: &[usize],
+) -> crate::Result<()> {
+    validate_axes(op, axes, shape.len())?;
+    for &axis in axes {
+        if shape[axis] == 0 {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!("cannot reduce over zero-length axis {axis}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn nan_propagating_max<T: Float>(a: T, b: T) -> T {
+    if a.is_nan() || b.is_nan() {
+        T::nan()
+    } else {
+        a.max(b)
+    }
+}
+
+fn nan_propagating_min<T: Float>(a: T, b: T) -> T {
+    if a.is_nan() || b.is_nan() {
+        T::nan()
+    } else {
+        a.min(b)
+    }
+}
+
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes)?)),
@@ -230,22 +263,28 @@ pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
             ensure_host_tensor("reduce_max", input)?;
             reduce_max(input, axes)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
-            &t,
-            axes,
-            |x| x,
-            |a, b| a.max(b),
-            f32::neg_infinity(),
-            "reduce_max",
-        )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view(
-            &t,
-            axes,
-            |x| x,
-            |a, b| a.max(b),
-            f64::neg_infinity(),
-            "reduce_max",
-        )?)),
+        TensorRead::View(TensorView::F32(t)) => {
+            validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
+            Ok(Tensor::F32(typed_reduce_view(
+                &t,
+                axes,
+                |x| x,
+                nan_propagating_max,
+                f32::neg_infinity(),
+                "reduce_max",
+            )?))
+        }
+        TensorRead::View(TensorView::F64(t)) => {
+            validate_reduced_axes_nonempty("reduce_max", t.shape(), axes)?;
+            Ok(Tensor::F64(typed_reduce_view(
+                &t,
+                axes,
+                |x| x,
+                nan_propagating_max,
+                f64::neg_infinity(),
+                "reduce_max",
+            )?))
+        }
         view => Err(crate::Error::backend_failure(
             "reduce_max",
             format!("unsupported dtype {:?}", view.dtype()),
@@ -288,22 +327,28 @@ pub(crate) fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
             ensure_host_tensor("reduce_min", input)?;
             reduce_min(input, axes)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
-            &t,
-            axes,
-            |x| x,
-            |a, b| a.min(b),
-            f32::infinity(),
-            "reduce_min",
-        )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view(
-            &t,
-            axes,
-            |x| x,
-            |a, b| a.min(b),
-            f64::infinity(),
-            "reduce_min",
-        )?)),
+        TensorRead::View(TensorView::F32(t)) => {
+            validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
+            Ok(Tensor::F32(typed_reduce_view(
+                &t,
+                axes,
+                |x| x,
+                nan_propagating_min,
+                f32::infinity(),
+                "reduce_min",
+            )?))
+        }
+        TensorRead::View(TensorView::F64(t)) => {
+            validate_reduced_axes_nonempty("reduce_min", t.shape(), axes)?;
+            Ok(Tensor::F64(typed_reduce_view(
+                &t,
+                axes,
+                |x| x,
+                nan_propagating_min,
+                f64::infinity(),
+                "reduce_min",
+            )?))
+        }
         view => Err(crate::Error::backend_failure(
             "reduce_min",
             format!("unsupported dtype {:?}", view.dtype()),
@@ -440,11 +485,12 @@ pub fn typed_reduce_max<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Res
 where
     T: Float + Send + Sync,
 {
+    validate_reduced_axes_nonempty("reduce_max", input.shape(), axes)?;
     typed_reduce(
         input,
         axes,
         |x| x,
-        |a, b| a.max(b),
+        nan_propagating_max,
         T::neg_infinity(),
         "reduce_max",
     )
@@ -454,11 +500,12 @@ pub fn typed_reduce_min<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Res
 where
     T: Float + Send + Sync,
 {
+    validate_reduced_axes_nonempty("reduce_min", input.shape(), axes)?;
     typed_reduce(
         input,
         axes,
         |x| x,
-        |a, b| a.min(b),
+        nan_propagating_min,
         T::infinity(),
         "reduce_min",
     )
