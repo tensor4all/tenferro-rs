@@ -8,6 +8,16 @@ compile/run workflow.
 
 ## Setup
 
+When working from a local checkout, use paths that match your project layout.
+For a scratch crate created directly inside the `tenferro-rs` checkout, include
+an empty `[workspace]` table:
+
+```toml
+[workspace]
+```
+
+Then add the dependencies:
+
 ```toml
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
@@ -16,8 +26,20 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-linalg = { path = "../crates/tenferro-linalg", features = ["autodiff"] }
 ```
 
+For published crates, use the same crate set with version requirements:
+
+```toml
+[dependencies]
+tenferro-runtime = "..."
+tenferro-cpu = "..."
+tenferro-ad = "..."
+tenferro-linalg = { version = "...", features = ["autodiff"] }
+```
+
 Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
 when they do not need eager linalg helpers or linalg AD rules.
+The examples below are Rust fragments; copy them into `fn main() -> Result<(),
+Box<dyn std::error::Error>>` for a standalone binary.
 
 ## Layer Coverage
 

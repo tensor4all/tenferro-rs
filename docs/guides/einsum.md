@@ -7,6 +7,17 @@ construction uses `GraphCompilerEinsumExt`; eager execution uses
 Compiled execution also requires explicit runtime registration for einsum
 extension ops.
 
+When working from a local checkout, use paths that match your project layout.
+For a scratch crate created directly inside the `tenferro-rs` checkout, include
+an empty `[workspace]` table so Cargo does not try to enroll it in the parent
+workspace:
+
+```toml
+[workspace]
+```
+
+Then add the dependencies:
+
 ```toml
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
@@ -15,7 +26,19 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
 ```
 
-Graph-only users can omit `tenferro-ad` and the `autodiff` feature.
+For published crates, use the same crate set with version requirements:
+
+```toml
+[dependencies]
+tenferro-runtime = "..."
+tenferro-cpu = "..."
+tenferro-ad = "..."
+tenferro-einsum = { version = "...", features = ["autodiff"] }
+```
+
+Graph-only users can omit `tenferro-ad` and the `autodiff` feature. The traced
+examples below are fragments; copy them into `fn main() -> Result<(), Box<dyn
+std::error::Error>>` when turning them into a standalone `src/main.rs`.
 
 ## Traced Matrix Multiply
 

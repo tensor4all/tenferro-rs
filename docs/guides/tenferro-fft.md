@@ -11,6 +11,16 @@ extension machinery directly.
 
 ## Setup
 
+When working from a local checkout, use paths that match your project layout.
+For a scratch crate created directly inside the `tenferro-rs` checkout, include
+an empty `[workspace]` table:
+
+```toml
+[workspace]
+```
+
+Then add the dependencies:
+
 ```toml
 [dependencies]
 num-complex = "0.4"
@@ -20,7 +30,22 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
-Graph-only users can omit `tenferro-ad` and the `autodiff` feature.
+For published crates, use the same crate set with version requirements:
+
+```toml
+[dependencies]
+num-complex = "0.4"
+tenferro-runtime = "..."
+tenferro-cpu = "..."
+tenferro-ad = "..."
+tenferro-fft = { version = "...", features = ["autodiff"] }
+```
+
+Graph-only users can omit `tenferro-ad` and the `autodiff` feature. The
+`traced_tensor` module path in rustdoc contains the traced-graph FFT helpers
+implemented by `TracedTensorFftExt`. `rustfft` is pulled in automatically by
+`tenferro-fft`, and the first local build can take a few minutes on a fresh
+machine.
 
 ## Current API
 

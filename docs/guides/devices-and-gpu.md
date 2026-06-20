@@ -134,6 +134,62 @@ For XLA/PJRT GPU verification, add the PJRT plugin path separately:
 export TENFERRO_PJRT_GPU_PLUGIN=/path/to/pjrt_c_api_gpu_plugin.so
 ```
 
+## WebGPU Quickstart
+
+WebGPU is experimental and currently useful for explicit transfer plus
+`F32`/`C32` `dot_general` and einsum paths. For a WebGPU-only binary, disable
+default features on `tenferro-gpu` unless the same crate also needs the default
+CPU provider stack:
+
+```toml
+[dependencies]
+tenferro-gpu = { version = "...", default-features = false, features = ["webgpu"] }
+tenferro-tensor = "..."
+```
+
+For a local scratch crate inside the checkout, use matching path dependencies
+and add an empty `[workspace]` table as described in
+[Getting Started](../getting-started/index.md).
+
+```rust
+use tenferro_gpu::{
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, WebGpuBackend,
+};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if !webgpu_available() {
+        return Ok(());
+    }
+
+    let mut backend = WebGpuBackend::new_default()?;
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let gpu_lhs = upload_webgpu_tensor(backend.runtime(), &lhs)?;
+    let gpu_rhs = upload_webgpu_tensor(backend.runtime(), &rhs)?;
+    let gpu_out = backend.dot_general(&gpu_lhs, &gpu_rhs, &config)?;
+    let out = download_webgpu_tensor(backend.runtime(), &gpu_out)?;
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f32>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+    backend.runtime().synchronize()?;
+    Ok(())
+}
+```
+
+`DotGeneralConfig` uses StableHLO-style dimension-number fields:
+`lhs_contracting_dims`, `rhs_contracting_dims`, `lhs_batch_dims`, and
+`rhs_batch_dims`. Direct backend code can use the lower-level
+`backend.runtime().synchronize()` barrier; eager code can use
+`EagerRuntime::synchronize()`.
+
 ## CUDA Across Tensor Layers
 
 | Tensor model | How CUDA fits |

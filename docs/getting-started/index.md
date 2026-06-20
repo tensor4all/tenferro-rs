@@ -32,9 +32,27 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
 tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu" }
 ```
 
+If you create a scratch binary crate inside the `tenferro-rs` checkout, add an
+empty `[workspace]` table to that scratch crate's `Cargo.toml`. Otherwise Cargo
+will treat it as an unlisted member of the parent workspace and report a
+workspace-membership error.
+
+For a scratch crate directly under the checkout root, relative paths are less
+error-prone:
+
+```toml
+[workspace]
+
+[dependencies]
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+```
+
 The first build still needs network access unless dependencies are already
 vendored or cached. The workspace pins git dependencies and uses crates.io
 packages even when the tenferro crates themselves are local path dependencies.
+The default `cpu-faer` provider may take several minutes to compile the first
+time on a fresh machine; later incremental builds are much faster.
 
 With default features, this compiles the `cpu-faer` provider, so
 `CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
@@ -121,7 +139,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <!-- end-snippet-source -->
 
 Expected output: the program exits silently because the shape and value
-assertions pass.
+assertions pass. The `from_vec_col_major` buffer is column-major: the leftmost
+axis varies fastest in memory.
 
 ## Next Steps
 
