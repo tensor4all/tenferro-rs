@@ -83,7 +83,7 @@ pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
         typed.shape().to_vec(),
         Buffer::Backend(Arc::new(WebGpuBuffer::new(handle, host_data.len()))),
         webgpu_placement(device_ordinal),
-    ))
+    )?)
 }
 
 pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
@@ -106,7 +106,7 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
         return Ok(TypedTensor::from_vec_col_major(
             typed.shape().to_vec(),
             Vec::new(),
-        ));
+        )?);
     }
 
     let bytes = client
@@ -116,7 +116,7 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
     Ok(TypedTensor::from_vec_col_major(
         typed.shape().to_vec(),
         data,
-    ))
+    )?)
 }
 
 fn upload_bool(
@@ -143,7 +143,7 @@ fn upload_bool(
         typed.shape().to_vec(),
         Buffer::Backend(Arc::new(WebGpuBuffer::new(handle, host_data.len()))),
         webgpu_placement(device_ordinal),
-    ))
+    )?)
 }
 
 fn download_bool(
@@ -166,7 +166,7 @@ fn download_bool(
         return Ok(TypedTensor::from_vec_col_major(
             typed.shape().to_vec(),
             Vec::new(),
-        ));
+        )?);
     }
 
     let bytes = client
@@ -176,5 +176,5 @@ fn download_bool(
     Ok(TypedTensor::from_vec_col_major(
         typed.shape().to_vec(),
         data,
-    ))
+    )?)
 }
