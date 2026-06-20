@@ -24,8 +24,8 @@ downstream crate, which surfaced the `E0599`.
 ## Root cause
 
 `scripts/check-doc-snippets.py` only verifies code blocks wrapped in
-`<!-- snippet-source: PATH -->` / `<!-- end-snippet-source -->` markers (it syncs
-them from real example files, which CI compiles). The `index.md` First CPU
+`snippet-source` / `end-snippet-source` HTML-comment markers (it syncs them from
+real example files, which CI compiles). The `index.md` First CPU
 Program is marker-backed (`crates/tenferro-runtime/examples/cpu_quickstart.rs`)
 and stayed correct; the core-concepts concept snippets were hand-written and
 **unmarked**, so they were never compile-checked and the Direct snippet rotted.
