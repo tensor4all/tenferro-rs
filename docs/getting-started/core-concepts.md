@@ -62,22 +62,33 @@ Use `from_vec_col_major` for tensor construction. Data copied from PyTorch,
 NumPy, JAX, or C-style examples must be explicitly reordered at the boundary
 before entering tenferro.
 
+Read values back with `as_slice::<T>()` on `Tensor`, or `as_slice()` on
+`TypedTensor<T>`. Both return `Result<&[T]>` and yield `Err` on a dtype
+mismatch, not `Option`.
+
 ## Direct Tensor Execution
 
 `Tensor` operations run immediately through an explicit backend. Use this for
 ordinary tensor computation without autodiff when runtime dtype is useful.
 
+<!-- snippet-source: crates/tenferro-runtime/examples/direct_tensor_execution.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
-let mut backend = CpuBackend::new();
-let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut backend = CpuBackend::new();
 
-let c = a.matmul(&b, &mut backend).unwrap();
-assert_eq!(c.shape(), &[2, 2]);
+    let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+
+    let c = a.matmul(&b, &mut backend)?;
+    assert_eq!(c.shape(), &[2, 2]);
+
+    Ok(())
+}
 ```
+<!-- end-snippet-source -->
 
 `TypedTensor<T>` is the compile-time scalar type layer. It is useful when the
 project already knows it is working with `f64`, `f32`, complex values, or
@@ -99,16 +110,26 @@ gradients.
 This is not the forward-mode AD/JVP API. Use `TracedTensor` for `grad`, `vjp`,
 `jvp`, and HVP via composition on traced graphs.
 
+<!-- snippet-source: crates/tenferro-ad/examples/eager_backward.rs -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
-let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
-let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
-loss.backward().unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = EagerRuntime::new();
+    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    let loss = x.mul(&x)?.reduce_sum(&[0])?;
+    loss.backward()?;
 
-assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+
+    Ok(())
+}
 ```
+<!-- end-snippet-source -->
+
+Here `Tensor` is `tenferro_ad`'s re-export of `tenferro_runtime::Tensor` — the
+same type as the concrete tensor used in the sections above, so values move
+between the eager and direct APIs without conversion.
 
 ## Traced Graph Execution
 
@@ -116,21 +137,27 @@ assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 lowers that graph into a reusable program, and a `GraphExecutor<B>` runs the
 program on a backend.
 
+<!-- snippet-source: crates/tenferro-runtime/examples/traced_graph_execution.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-let sum = (&a + &b).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    let sum = (&a + &b)?;
 
-let mut compiler = GraphCompiler::new();
-let program = compiler.compile(&sum).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run(&program).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&sum)?;
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let result = executor.run(&program)?;
 
-assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+
+    Ok(())
+}
 ```
+<!-- end-snippet-source -->
 
 Traced mode is the right API for `grad`, `vjp`, `jvp`, and HVP via composition
 on traced graphs, symbolic inputs, graph optimization, and repeated execution.
