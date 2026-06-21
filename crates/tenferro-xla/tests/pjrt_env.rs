@@ -52,7 +52,7 @@ fn plugin_path_from_env_accepts_gpu_specific_env_var() {
             assert!(matches!(
                 err,
                 Error::PluginLoad { path, .. }
-                    if path == std::path::PathBuf::from("/definitely/missing/pjrt_gpu.so")
+                    if path == std::path::Path::new("/definitely/missing/pjrt_gpu.so")
             ));
         },
     );

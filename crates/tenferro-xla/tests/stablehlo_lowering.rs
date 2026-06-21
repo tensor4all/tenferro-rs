@@ -22,6 +22,45 @@ fn lowers_elementwise_reduce_and_static_shapes() {
 }
 
 #[test]
+fn lowers_phase_one_real_elementwise_ops() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let unary = x
+        .abs()
+        .exp()
+        .log()
+        .sin()
+        .cos()
+        .tanh()
+        .sqrt()
+        .rsqrt()
+        .expm1()
+        .log1p();
+    let divided = unary.div(&x).unwrap();
+    let powered = divided.pow(&x).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&powered, &[(&x, DType::F64, &[4])])
+        .unwrap();
+
+    let module = lower_to_stablehlo(&program).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains("stablehlo.abs %arg0 : tensor<4xf64>"));
+    assert!(text.contains("stablehlo.exponential %"));
+    assert!(text.contains("stablehlo.log %"));
+    assert!(text.contains("stablehlo.sine %"));
+    assert!(text.contains("stablehlo.cosine %"));
+    assert!(text.contains("stablehlo.tanh %"));
+    assert!(text.contains("stablehlo.sqrt %"));
+    assert!(text.contains("stablehlo.rsqrt %"));
+    assert!(text.contains("stablehlo.exponential_minus_one %"));
+    assert!(text.contains("stablehlo.log_plus_one %"));
+    assert!(text.contains("stablehlo.divide %"));
+    assert!(text.contains("stablehlo.power %"));
+    assert!(text.contains("-> tensor<4xf64>"));
+}
+
+#[test]
 fn lowers_structural_ops_and_convert() {
     let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
     let y = x

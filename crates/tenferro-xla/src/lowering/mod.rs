@@ -2,7 +2,7 @@
 
 mod emit;
 mod program;
-mod shape;
+pub(crate) mod shape;
 mod types;
 
 use tenferro_runtime::GraphProgram;

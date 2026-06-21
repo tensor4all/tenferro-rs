@@ -165,6 +165,18 @@ impl<'a> GraphInstructionView<'a> {
             ExecOp::Add => GraphOpView::Add,
             ExecOp::Multiply => GraphOpView::Multiply,
             ExecOp::Negate => GraphOpView::Negate,
+            ExecOp::Divide => GraphOpView::Divide,
+            ExecOp::Abs => GraphOpView::Abs,
+            ExecOp::Exp => GraphOpView::Exp,
+            ExecOp::Log => GraphOpView::Log,
+            ExecOp::Sin => GraphOpView::Sin,
+            ExecOp::Cos => GraphOpView::Cos,
+            ExecOp::Tanh => GraphOpView::Tanh,
+            ExecOp::Sqrt => GraphOpView::Sqrt,
+            ExecOp::Rsqrt => GraphOpView::Rsqrt,
+            ExecOp::Pow => GraphOpView::Pow,
+            ExecOp::Expm1 => GraphOpView::Expm1,
+            ExecOp::Log1p => GraphOpView::Log1p,
             ExecOp::Convert { to } => GraphOpView::Convert { to: *to },
             ExecOp::Reshape { .. } => GraphOpView::Reshape,
             ExecOp::BroadcastInDim { dims, .. } => GraphOpView::BroadcastInDim { dims },
@@ -333,6 +345,30 @@ pub enum GraphOpView<'a> {
     Multiply,
     /// Elementwise negation.
     Negate,
+    /// Elementwise division.
+    Divide,
+    /// Elementwise absolute value.
+    Abs,
+    /// Elementwise exponential.
+    Exp,
+    /// Elementwise natural logarithm.
+    Log,
+    /// Elementwise sine.
+    Sin,
+    /// Elementwise cosine.
+    Cos,
+    /// Elementwise hyperbolic tangent.
+    Tanh,
+    /// Elementwise square root.
+    Sqrt,
+    /// Elementwise reciprocal square root.
+    Rsqrt,
+    /// Elementwise power.
+    Pow,
+    /// Elementwise exponential minus one.
+    Expm1,
+    /// Elementwise natural logarithm of one plus input.
+    Log1p,
     /// Dtype conversion.
     Convert { to: DType },
     /// Shape-only reshape.
@@ -362,6 +398,18 @@ impl fmt::Debug for GraphOpView<'_> {
             Self::Add => f.write_str("Add"),
             Self::Multiply => f.write_str("Multiply"),
             Self::Negate => f.write_str("Negate"),
+            Self::Divide => f.write_str("Divide"),
+            Self::Abs => f.write_str("Abs"),
+            Self::Exp => f.write_str("Exp"),
+            Self::Log => f.write_str("Log"),
+            Self::Sin => f.write_str("Sin"),
+            Self::Cos => f.write_str("Cos"),
+            Self::Tanh => f.write_str("Tanh"),
+            Self::Sqrt => f.write_str("Sqrt"),
+            Self::Rsqrt => f.write_str("Rsqrt"),
+            Self::Pow => f.write_str("Pow"),
+            Self::Expm1 => f.write_str("Expm1"),
+            Self::Log1p => f.write_str("Log1p"),
             Self::Convert { to } => f.debug_struct("Convert").field("to", to).finish(),
             Self::Reshape => f.write_str("Reshape"),
             Self::BroadcastInDim { dims } => f
@@ -405,6 +453,18 @@ impl GraphOpView<'_> {
             Self::Add => "Add",
             Self::Multiply => "Multiply",
             Self::Negate => "Negate",
+            Self::Divide => "Divide",
+            Self::Abs => "Abs",
+            Self::Exp => "Exp",
+            Self::Log => "Log",
+            Self::Sin => "Sin",
+            Self::Cos => "Cos",
+            Self::Tanh => "Tanh",
+            Self::Sqrt => "Sqrt",
+            Self::Rsqrt => "Rsqrt",
+            Self::Pow => "Pow",
+            Self::Expm1 => "Expm1",
+            Self::Log1p => "Log1p",
             Self::Convert { .. } => "Convert",
             Self::Reshape => "Reshape",
             Self::BroadcastInDim { .. } => "BroadcastInDim",

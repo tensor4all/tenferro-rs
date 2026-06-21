@@ -248,6 +248,18 @@ fn graph_op_view_names_and_debug_cover_lowering_variants() {
         (GraphOpView::Add, "Add", "Add"),
         (GraphOpView::Multiply, "Multiply", "Multiply"),
         (GraphOpView::Negate, "Negate", "Negate"),
+        (GraphOpView::Divide, "Divide", "Divide"),
+        (GraphOpView::Abs, "Abs", "Abs"),
+        (GraphOpView::Exp, "Exp", "Exp"),
+        (GraphOpView::Log, "Log", "Log"),
+        (GraphOpView::Sin, "Sin", "Sin"),
+        (GraphOpView::Cos, "Cos", "Cos"),
+        (GraphOpView::Tanh, "Tanh", "Tanh"),
+        (GraphOpView::Sqrt, "Sqrt", "Sqrt"),
+        (GraphOpView::Rsqrt, "Rsqrt", "Rsqrt"),
+        (GraphOpView::Pow, "Pow", "Pow"),
+        (GraphOpView::Expm1, "Expm1", "Expm1"),
+        (GraphOpView::Log1p, "Log1p", "Log1p"),
         (GraphOpView::Convert { to: DType::F32 }, "Convert", "to"),
         (GraphOpView::Reshape, "Reshape", "Reshape"),
         (
@@ -279,6 +291,34 @@ fn graph_op_view_names_and_debug_cover_lowering_variants() {
         assert!(
             format!("{op:?}").contains(debug_fragment),
             "{op:?} did not contain {debug_fragment}"
+        );
+    }
+}
+
+#[test]
+fn phase_one_elementwise_exec_ops_have_lowering_variants() {
+    let cases = [
+        (ExecOp::Divide, "Divide"),
+        (ExecOp::Abs, "Abs"),
+        (ExecOp::Exp, "Exp"),
+        (ExecOp::Log, "Log"),
+        (ExecOp::Sin, "Sin"),
+        (ExecOp::Cos, "Cos"),
+        (ExecOp::Tanh, "Tanh"),
+        (ExecOp::Sqrt, "Sqrt"),
+        (ExecOp::Rsqrt, "Rsqrt"),
+        (ExecOp::Pow, "Pow"),
+        (ExecOp::Expm1, "Expm1"),
+        (ExecOp::Log1p, "Log1p"),
+    ];
+
+    for (op, name) in cases {
+        let inst = instruction(op, vec![0, 0], vec![1]);
+        let op_view = GraphInstructionView::new(&inst).op();
+        assert_eq!(op_view.name(), name);
+        assert!(
+            !matches!(op_view, GraphOpView::Unsupported { .. }),
+            "ExecOp::{name} should be exposed as a lowerable GraphOpView variant"
         );
     }
 }
