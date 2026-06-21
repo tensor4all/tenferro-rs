@@ -457,6 +457,7 @@ jobs:
             echo "CUDA NVCC directory not found under ${unpack_dir}"
             exit 1
           fi
+          chmod +x "${cuda_nvcc_dir}/bin/"*
           test -x "${cuda_nvcc_dir}/bin/ptxas"
           test -f "${cuda_nvcc_dir}/nvvm/libdevice/libdevice.10.bc"
           nm -D "${plugin_path}" | grep -q GetPjrtApi
