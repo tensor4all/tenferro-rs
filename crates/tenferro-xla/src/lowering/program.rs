@@ -155,6 +155,31 @@ fn lower_instruction(
             lower_same_type_binary("stablehlo.multiply", &input_values, &output_ty, emitter)?
         }
         GraphOpView::Negate => lower_unary("stablehlo.negate", &input_values, &output_ty, emitter)?,
+        GraphOpView::Divide => {
+            lower_same_type_binary("stablehlo.divide", &input_values, &output_ty, emitter)?
+        }
+        GraphOpView::Abs => lower_unary("stablehlo.abs", &input_values, &output_ty, emitter)?,
+        GraphOpView::Exp => {
+            lower_unary("stablehlo.exponential", &input_values, &output_ty, emitter)?
+        }
+        GraphOpView::Log => lower_unary("stablehlo.log", &input_values, &output_ty, emitter)?,
+        GraphOpView::Sin => lower_unary("stablehlo.sine", &input_values, &output_ty, emitter)?,
+        GraphOpView::Cos => lower_unary("stablehlo.cosine", &input_values, &output_ty, emitter)?,
+        GraphOpView::Tanh => lower_unary("stablehlo.tanh", &input_values, &output_ty, emitter)?,
+        GraphOpView::Sqrt => lower_unary("stablehlo.sqrt", &input_values, &output_ty, emitter)?,
+        GraphOpView::Rsqrt => lower_unary("stablehlo.rsqrt", &input_values, &output_ty, emitter)?,
+        GraphOpView::Pow => {
+            lower_same_type_binary("stablehlo.power", &input_values, &output_ty, emitter)?
+        }
+        GraphOpView::Expm1 => lower_unary(
+            "stablehlo.exponential_minus_one",
+            &input_values,
+            &output_ty,
+            emitter,
+        )?,
+        GraphOpView::Log1p => {
+            lower_unary("stablehlo.log_plus_one", &input_values, &output_ty, emitter)?
+        }
         GraphOpView::Convert { to } => lower_convert(to, &input_values, &output_ty, emitter)?,
         GraphOpView::Reshape => lower_reshape(&input_values, &output_ty, emitter)?,
         GraphOpView::BroadcastInDim { dims } => {

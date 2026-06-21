@@ -15,12 +15,24 @@ The initial StableHLO lowering accepts exact static shapes and these dtypes:
 - `F32`
 - `F64`
 
-The initial operation subset is:
+The Phase 1 operation subset is:
 
 - `Constant`
 - `Add`
 - `Multiply`
 - `Negate`
+- `Divide`
+- `Abs`
+- `Exp`
+- `Log`
+- `Sin`
+- `Cos`
+- `Tanh`
+- `Sqrt`
+- `Rsqrt`
+- `Pow`
+- `Expm1`
+- `Log1p`
 - `Convert`
 - `Reshape`
 - `BroadcastInDim`
@@ -33,6 +45,10 @@ without a fixed-shape standard-op lowering, and operation variants outside this
 subset are rejected before PJRT is called. If an operation-family API expands
 to supported standard ops, as fixed-shape N-ary einsum can, the resulting graph
 can still lower through this path.
+
+`Compare`, `Select`, `Maximum`, `Minimum`, `Clamp`, `Sign`, `Conj`, integer
+dtypes, `Bool`, and complex dtypes remain outside Phase 1. They need additional
+dtype plumbing or explicit NaN/edge-case parity tests before being enabled.
 
 ## Lowering Example
 
@@ -66,6 +82,113 @@ unset, empty, points to a missing file, or the library does not export
 TENFERRO_PJRT_PLUGIN=/path/to/pjrt_c_api_cpu_plugin.so \
   cargo test -p tenferro-xla --features pjrt --test pjrt_env
 ```
+
+OpenXLA/JAX CUDA PJRT wheels provide a prebuilt C API plugin. For example, on a
+CUDA 12 Linux machine:
+
+```bash
+python3 -m pip download --only-binary=:all: --no-deps \
+  --dest /tmp/tenferro-openxla-prebuilt \
+  jax-cuda12-pjrt==0.10.2 \
+  nvidia-cudnn-cu12==9.23.2.1 \
+  nvidia-cuda-nvcc-cu12==12.9.86
+
+mkdir -p /tmp/tenferro-openxla-prebuilt/unpacked
+python3 - <<'PY'
+import pathlib, zipfile
+root = pathlib.Path("/tmp/tenferro-openxla-prebuilt")
+for wheel in root.glob("*.whl"):
+    out = root / "unpacked" / wheel.stem
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(out)
+PY
+
+export TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/unpacked/jax_cuda12_pjrt-0.10.2-py3-none-manylinux_2_27_x86_64/jax_plugins/xla_cuda12/xla_cuda_plugin.so
+export LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cudnn_cu12-9.23.2.1-py3-none-manylinux_2_27_x86_64/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64/nvidia/cuda_nvcc
+
+cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
+```
+
+`XlaExecutor::run_with_inputs` and `XlaExecutor::run_many_with_inputs` use a
+loaded PJRT plugin to compile the generated StableHLO, upload compact
+column-major tenferro host tensors with explicit PJRT `byte_strides`, execute
+on one addressable device, and download outputs back into tenferro tensors.
+Calling these methods without the `pjrt` feature returns `PjrtFeatureDisabled`;
+calling them on `XlaExecutor::default()` with the feature enabled returns
+`PjrtPluginNotLoaded`.
+
+This example compiles a fixed-shape N-ary einsum followed by elementwise ops.
+It always checks StableHLO lowering. When `TENFERRO_PJRT_PLUGIN` is set, the
+same binary also executes the graph through PJRT:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/xla_pjrt_execution.rs -->
+```rust
+use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor};
+use tenferro_xla::{XlaExecutor, TENFERRO_PJRT_PLUGIN_ENV};
+
+fn assert_close(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        let residual = (actual - expected).abs();
+        assert!(
+            residual <= 1.0e-3,
+            "value {index} differs: actual={actual}, expected={expected}, residual={residual}"
+        );
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2)?;
+    let mid = TracedTensor::input_symbolic_shape(DType::F32, 2)?;
+    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2)?;
+
+    let mut compiler = GraphCompiler::new();
+    let product = compiler.einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")?;
+    let y = product.abs().sqrt().log1p().exp();
+    let program = compiler.compile_with_input_specs(
+        &y,
+        &[
+            (&lhs, DType::F32, &[2, 3]),
+            (&mid, DType::F32, &[3, 4]),
+            (&rhs, DType::F32, &[4, 2]),
+        ],
+    )?;
+
+    let module = XlaExecutor::default().lower_to_stablehlo(&program)?;
+    let stablehlo = module.as_str();
+    assert!(stablehlo.contains("stablehlo.dot_general"));
+    assert!(stablehlo.contains("stablehlo.abs"));
+    assert!(stablehlo.contains("stablehlo.sqrt"));
+    assert!(stablehlo.contains("stablehlo.log_plus_one"));
+    assert!(stablehlo.contains("stablehlo.exponential"));
+
+    if std::env::var_os(TENFERRO_PJRT_PLUGIN_ENV).is_none() {
+        return Ok(());
+    }
+
+    let lhs_values = vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let mid_values = vec![
+        1.0_f32, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
+    ];
+    let rhs_values = vec![1.0_f32, 3.0, 5.0, 7.0, 2.0, 4.0, 6.0, 8.0];
+    let lhs_input = Tensor::from_vec_col_major(vec![2, 3], lhs_values.clone())?;
+    let mid_input = Tensor::from_vec_col_major(vec![3, 4], mid_values.clone())?;
+    let rhs_input = Tensor::from_vec_col_major(vec![4, 2], rhs_values.clone())?;
+
+    let output = XlaExecutor::from_env()?
+        .run_with_inputs(&program, &[&lhs_input, &mid_input, &rhs_input])?;
+    assert_eq!(output.shape(), &[2, 2]);
+    assert_close(
+        output.as_slice::<f32>().unwrap(),
+        &[29.495_613, 43.871_902, 32.622_776, 48.539_455],
+    );
+
+    Ok(())
+}
+```
+<!-- end-snippet-source -->
 
 ## CUDA and cuTENSOR Setup
 
@@ -108,9 +231,10 @@ StableHLO tensor types record logical dimension order. They do not say whether
 host memory is row-major or column-major.
 
 tenferro host tensors are compact column-major. PJRT host transfer paths often
-use C-contiguous host buffers. The XLA crate keeps explicit conversion helpers
-at that boundary so the physical host-order conversion is not hidden inside the
-native runtime.
+use C-contiguous host buffers. The XLA crate keeps that boundary explicit:
+input upload passes column-major byte strides to PJRT, while output download
+requests a column-major host layout from PJRT and constructs the returned
+tenferro tensor directly from that buffer.
 
 `dot_general` has a separate logical-order issue. StableHLO reports batched
 `dot_general` results as batch dimensions first, followed by free lhs and rhs
@@ -130,9 +254,9 @@ TENFERRO_XLA_RUN_HLO_PLATFORM=Host \
   cargo test -p tenferro-xla --test xla_tool_execution -- --nocapture
 ```
 
-The test covers both a direct static tensor graph and the fixed-shape N-ary
-einsum tutorial graph after the einsum extension expands to standard
-`dot_general` operations.
+The test covers a direct static tensor graph, the Phase 1 real-floating
+elementwise subset, and the fixed-shape N-ary einsum tutorial graph after the
+einsum extension expands to standard `dot_general` operations.
 
 On a configured NVIDIA machine, use `CUDA` for the platform:
 

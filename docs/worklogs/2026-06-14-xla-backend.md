@@ -91,3 +91,85 @@ CUDA 12.6 and cuTENSOR library paths.
 - The initial StableHLO subset is intentionally small and does not cover
   integer, boolean, complex, linalg, indexing, or extension operations without
   a fixed-shape standard-op lowering hook.
+
+## 2026-06-20 Phase 1 Elementwise Update
+
+### Summary
+
+Expanded the Phase 1 XLA path from the initial `Add`/`Multiply`/`Negate`
+elementwise subset to real-floating analytic elementwise lowering and added a
+Rust-side PJRT execution API boundary.
+
+### Context Read
+
+- `crates/tenferro-runtime/src/graph/lowering_view.rs`
+- `crates/tenferro-runtime/src/graph/lowering_view/tests.rs`
+- `crates/tenferro-xla/src/lowering/program.rs`
+- `crates/tenferro-xla/src/pjrt/sys.rs`
+- `crates/tenferro-xla/src/pjrt/plugin.rs`
+- `crates/tenferro-xla/src/executor.rs`
+- `docs/design/xla-backend.md`
+- `docs/guides/xla.md`
+- OpenXLA `xla/pjrt/c/pjrt_c_api.h` from the sibling `../xla` checkout
+
+### Decisions
+
+- Added `GraphOpView` variants for Phase 1 real-floating elementwise ops:
+  `Divide`, `Abs`, `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`,
+  `Pow`, `Expm1`, and `Log1p`.
+- Mapped those variants directly to StableHLO ops for exact static `F32`/`F64`
+  programs.
+- Kept `Compare`, `Select`, `Maximum`, `Minimum`, `Clamp`, `Sign`, `Conj`,
+  integer, `Bool`, and complex support outside Phase 1.
+- Added `XlaExecutor::run_with_inputs` and `run_many_with_inputs` as the public
+  Rust-side execution boundary. The methods require a loaded PJRT plugin and
+  return explicit typed errors when the `pjrt` feature or plugin is absent.
+- Kept host memory order handling explicit in `tenferro-xla`: inputs pass
+  column-major `byte_strides` to PJRT so upload can read compact tenferro host
+  buffers directly, and outputs still convert the downloaded default host
+  layout back to tenferro column-major tensors.
+- Bound only the PJRT C API prefix needed for single-device Phase 1 execution:
+  client creation, addressable-device lookup, MLIR compile, host-buffer upload,
+  executable output count, execute, host download, and object/event cleanup.
+- After testing against the prebuilt OpenXLA/JAX CUDA PJRT plugin, changed PJRT
+  compile to pass a minimal serialized `CompileOptionsProto` with
+  `num_replicas = 1` and `num_partitions = 1`. The CUDA plugin aborts in device
+  assignment if those values are left at their protobuf default of zero.
+
+### Verification
+
+- `cargo test -p tenferro-runtime graph::lowering_view --lib`
+- `cargo test -p tenferro-xla --test stablehlo_lowering`
+- `cargo test -p tenferro-xla --test unsupported`
+- `cargo test -p tenferro-xla --test public_api`
+- `cargo test -p tenferro-xla --features pjrt --test public_api`
+- `cargo fmt --all --check`
+- `cargo test -p tenferro-xla --tests`
+- `cargo test -p tenferro-xla --features pjrt --tests`
+- `cargo test -p tenferro-xla --doc`
+- `cargo test -p tenferro-xla --features pjrt --doc`
+- `cargo clippy -p tenferro-xla --all-targets -- -D warnings`
+- `cargo clippy -p tenferro-xla --features pjrt --all-targets -- -D warnings`
+- 2026-06-21 external OpenXLA Host verification:
+  - `git -C ../xla fetch origin && git -C ../xla pull --ff-only origin main && git -C ../xla rev-parse --short HEAD` -> `3b0ff804f2`
+  - `/home/shinaoka/.local/bin/bazelisk build //xla/tools:run_hlo_module`
+  - `TENFERRO_XLA_RUN_HLO_MODULE=/home/shinaoka/tensor4all/xla/bazel-bin/xla/tools/run_hlo_module TENFERRO_XLA_RUN_HLO_PLATFORM=Host cargo test -p tenferro-xla --test xla_tool_execution -- --nocapture`
+  - Result: 3/3 execution tests passed, covering the direct static graph,
+    fixed-shape N-ary einsum, and Phase 1 elementwise StableHLO graph.
+- 2026-06-21 Rust-to-PJRT CUDA verification with prebuilt wheels:
+  - `python3 -m pip download --only-binary=:all: --no-deps --dest /tmp/tenferro-openxla-prebuilt jaxlib jax-cuda12-plugin==0.10.2 jax-cuda12-pjrt==0.10.2 nvidia-cudnn-cu12==9.23.2.1 nvidia-cuda-nvcc-cu12==12.9.86`
+  - `nm -D /tmp/tenferro-openxla-prebuilt/jax-cuda12-pjrt-unpacked/jax_plugins/xla_cuda12/xla_cuda_plugin.so | rg GetPjrtApi`
+  - `XLA_FLAGS=--xla_gpu_cuda_data_dir=/tmp/tenferro-openxla-prebuilt/nvidia-cuda-nvcc-cu12-unpacked/nvidia/cuda_nvcc TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/jax-cuda12-pjrt-unpacked/jax_plugins/xla_cuda12/xla_cuda_plugin.so LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/nvidia-cudnn-cu12-unpacked/nvidia/cudnn/lib:/usr/local/cuda-12.5/targets/x86_64-linux/lib:/usr/local/cuda-12.6/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture`
+  - Result: 3/3 Rust E2E tests passed, covering fixed-shape N-ary einsum,
+    Phase 1 elementwise ops, and a fixed-shape N-ary einsum followed by
+    elementwise ops through compile, upload, execute, download, and value
+    compare.
+
+### Residual Risks
+
+- The new Rust-side PJRT execution path was verified against the prebuilt CUDA
+  PJRT plugin on one A100 machine, but not yet against a standalone CPU PJRT
+  plugin.
+- The PJRT binding mirrors the current OpenXLA C API prefix from the local
+  sibling checkout. Future PJRT API drift should be caught with real-plugin
+  smoke tests before expanding the execution subset.

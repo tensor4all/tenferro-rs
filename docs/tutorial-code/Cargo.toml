@@ -6,9 +6,10 @@ license.workspace = true
 publish = false
 
 [features]
-default = ["cpu-faer"]
+default = ["cpu-faer", "xla-pjrt"]
 cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer", "tenferro-linalg/cpu-faer"]
 cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas", "tenferro-linalg/cpu-blas"]
+xla-pjrt = ["tenferro-xla/pjrt"]
 
 [dependencies]
 num-complex.workspace = true
@@ -38,6 +39,10 @@ path = "src/bin/einsum_subscripts_to_gradients.rs"
 [[bin]]
 name = "xla_einsum_backend"
 path = "src/bin/xla_einsum_backend.rs"
+
+[[bin]]
+name = "xla_pjrt_execution"
+path = "src/bin/xla_pjrt_execution.rs"
 
 [[bin]]
 name = "dynamic_shape_truncated_svd"

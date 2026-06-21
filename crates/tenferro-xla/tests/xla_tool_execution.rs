@@ -32,6 +32,33 @@ fn nary_einsum_extension_stablehlo_executes_with_xla_run_hlo_module_when_configu
     run_hlo_module(&config, "tenferro-xla-nary-einsum", &module);
 }
 
+#[test]
+fn phase_one_elementwise_stablehlo_executes_with_xla_run_hlo_module_when_configured() {
+    let Some(config) = XlaToolConfig::from_env() else {
+        return;
+    };
+    let module = stablehlo_phase_one_elementwise_module();
+    let text = module.as_str();
+    for op in [
+        "stablehlo.abs",
+        "stablehlo.exponential",
+        "stablehlo.log",
+        "stablehlo.sine",
+        "stablehlo.cosine",
+        "stablehlo.tanh",
+        "stablehlo.sqrt",
+        "stablehlo.rsqrt",
+        "stablehlo.exponential_minus_one",
+        "stablehlo.log_plus_one",
+        "stablehlo.divide",
+        "stablehlo.power",
+    ] {
+        assert!(text.contains(op), "StableHLO did not contain {op}:\n{text}");
+    }
+
+    run_hlo_module(&config, "tenferro-xla-phase-one-elementwise", &module);
+}
+
 struct XlaToolConfig {
     run_hlo_module: PathBuf,
     platform: String,
@@ -120,6 +147,21 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
                 (&rhs, DType::F32, &[4, 2]),
             ],
         )
+        .unwrap();
+    lower_to_stablehlo(&program).unwrap()
+}
+
+fn stablehlo_phase_one_elementwise_module() -> tenferro_xla::StableHloModule {
+    let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
+    let positive = x.abs().exp();
+    let analytic = positive.log().sqrt().rsqrt().expm1().log1p();
+    let trig = positive.sin().cos().tanh();
+    let combined = (&analytic + &trig).unwrap();
+    let divided = combined.div(&positive).unwrap();
+    let powered = divided.abs().pow(&positive).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&powered, &[(&x, DType::F32, &[4])])
         .unwrap();
     lower_to_stablehlo(&program).unwrap()
 }

@@ -93,7 +93,7 @@ fn rejects_dynamic_upper_bound_extents() {
 #[test]
 fn rejects_unsupported_static_op() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = x.exp();
+    let y = x.maximum(&x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
@@ -101,7 +101,7 @@ fn rejects_unsupported_static_op() {
 
     let err = lower_to_stablehlo(&program).unwrap_err();
 
-    assert!(matches!(err, Error::UnsupportedOp { op: "Exp", .. }));
+    assert!(matches!(err, Error::UnsupportedOp { op: "Maximum", .. }));
 }
 
 #[test]

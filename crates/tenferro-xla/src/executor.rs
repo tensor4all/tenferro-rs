@@ -1,8 +1,8 @@
 use std::fmt;
 
 use tenferro_runtime::GraphProgram;
+use tenferro_tensor::Tensor;
 
-#[cfg(not(feature = "pjrt"))]
 use crate::Error;
 use crate::{lower_to_stablehlo, Result, StableHloModule};
 
@@ -176,6 +176,76 @@ impl XlaExecutor {
     /// ```
     pub fn lower_to_stablehlo(&self, program: &GraphProgram) -> Result<StableHloModule> {
         lower_to_stablehlo(program)
+    }
+
+    /// Execute a graph program through a loaded PJRT plugin and return all outputs.
+    ///
+    /// Inputs must match [`GraphProgram::input_specs`] exactly. This
+    /// experimental execution path supports the same exact-static-shape,
+    /// `F32`/`F64` subset as StableHLO lowering.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_xla::{Error, XlaExecutor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let err = XlaExecutor::default()
+    ///     .run_many_with_inputs(&program, &[&input])
+    ///     .unwrap_err();
+    /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
+    /// ```
+    pub fn run_many_with_inputs(
+        &self,
+        program: &GraphProgram,
+        inputs: &[&Tensor],
+    ) -> Result<Vec<Tensor>> {
+        #[cfg(feature = "pjrt")]
+        {
+            let Some(plugin) = self.plugin.as_ref() else {
+                return Err(Error::PjrtPluginNotLoaded);
+            };
+            crate::pjrt::run_many_with_inputs(plugin, program, inputs)
+        }
+        #[cfg(not(feature = "pjrt"))]
+        {
+            let _ = (program, inputs);
+            Err(Error::PjrtFeatureDisabled)
+        }
+    }
+
+    /// Execute a single-output graph program through a loaded PJRT plugin.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_xla::{Error, XlaExecutor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let err = XlaExecutor::default().run_with_inputs(&program, &[&input]).unwrap_err();
+    /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
+    /// ```
+    pub fn run_with_inputs(&self, program: &GraphProgram, inputs: &[&Tensor]) -> Result<Tensor> {
+        let mut outputs = self.run_many_with_inputs(program, inputs)?;
+        if outputs.len() != 1 {
+            return Err(crate::Error::InvalidProgram {
+                message: format!(
+                    "PJRT single-output execution expected 1 output, got {}",
+                    outputs.len()
+                ),
+            });
+        }
+        Ok(outputs.remove(0))
     }
 }
 

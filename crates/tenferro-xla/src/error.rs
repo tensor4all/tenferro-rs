@@ -40,6 +40,10 @@ pub enum Error {
     InvalidProgram { message: String },
     #[error("PJRT support requires enabling the tenferro-xla `pjrt` feature")]
     PjrtFeatureDisabled,
+    #[error("PJRT execution requires an executor created from a loaded plugin")]
+    PjrtPluginNotLoaded,
+    #[error("PJRT call {call} failed: {message}")]
+    PjrtCall { call: &'static str, message: String },
     #[error("environment variable {var} is not set; set it to a PJRT plugin .so path")]
     MissingEnv { var: &'static str },
     #[error("failed to load PJRT plugin from {path}: {message}")]

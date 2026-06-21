@@ -105,4 +105,8 @@ impl PjrtPlugin {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub(crate) fn api(&self) -> *const PJRT_Api {
+        self._api
+    }
 }
