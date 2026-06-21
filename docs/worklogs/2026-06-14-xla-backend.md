@@ -157,9 +157,9 @@ Rust-side PJRT execution API boundary.
   - Result: 3/3 execution tests passed, covering the direct static graph,
     fixed-shape N-ary einsum, and Phase 1 elementwise StableHLO graph.
 - 2026-06-21 Rust-to-PJRT CUDA verification with prebuilt wheels:
-  - `python3 -m pip download --only-binary=:all: --no-deps --dest /tmp/tenferro-openxla-prebuilt jaxlib jax-cuda12-plugin==0.10.2 jax-cuda12-pjrt==0.10.2 'nvidia-cudnn-cu12>=9.8,<10.0'`
+  - `python3 -m pip download --only-binary=:all: --no-deps --dest /tmp/tenferro-openxla-prebuilt jaxlib jax-cuda12-plugin==0.10.2 jax-cuda12-pjrt==0.10.2 nvidia-cudnn-cu12==9.23.2.1 nvidia-cuda-nvcc-cu12==12.9.86`
   - `nm -D /tmp/tenferro-openxla-prebuilt/jax-cuda12-pjrt-unpacked/jax_plugins/xla_cuda12/xla_cuda_plugin.so | rg GetPjrtApi`
-  - `TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/jax-cuda12-pjrt-unpacked/jax_plugins/xla_cuda12/xla_cuda_plugin.so LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/nvidia-cudnn-cu12-unpacked/nvidia/cudnn/lib:/usr/local/cuda-12.5/targets/x86_64-linux/lib:/usr/local/cuda-12.6/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture`
+  - `XLA_FLAGS=--xla_gpu_cuda_data_dir=/tmp/tenferro-openxla-prebuilt/nvidia-cuda-nvcc-cu12-unpacked/nvidia/cuda_nvcc TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/jax-cuda12-pjrt-unpacked/jax_plugins/xla_cuda12/xla_cuda_plugin.so LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/nvidia-cudnn-cu12-unpacked/nvidia/cudnn/lib:/usr/local/cuda-12.5/targets/x86_64-linux/lib:/usr/local/cuda-12.6/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture`
   - Result: 3/3 Rust E2E tests passed, covering fixed-shape N-ary einsum,
     Phase 1 elementwise ops, and a fixed-shape N-ary einsum followed by
     elementwise ops through compile, upload, execute, download, and value

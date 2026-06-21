@@ -89,7 +89,9 @@ CUDA 12 Linux machine:
 ```bash
 python3 -m pip download --only-binary=:all: --no-deps \
   --dest /tmp/tenferro-openxla-prebuilt \
-  jax-cuda12-pjrt==0.10.2 'nvidia-cudnn-cu12>=9.8,<10.0'
+  jax-cuda12-pjrt==0.10.2 \
+  nvidia-cudnn-cu12==9.23.2.1 \
+  nvidia-cuda-nvcc-cu12==12.9.86
 
 mkdir -p /tmp/tenferro-openxla-prebuilt/unpacked
 python3 - <<'PY'
@@ -103,6 +105,7 @@ PY
 
 export TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/unpacked/jax_cuda12_pjrt-0.10.2-py3-none-manylinux_2_27_x86_64/jax_plugins/xla_cuda12/xla_cuda_plugin.so
 export LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cudnn_cu12-9.23.2.1-py3-none-manylinux_2_27_x86_64/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64/nvidia/cuda_nvcc
 
 cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
 ```

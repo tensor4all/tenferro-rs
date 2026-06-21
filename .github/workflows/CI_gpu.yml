@@ -25,6 +25,7 @@ env:
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
+  NVIDIA_CUDA_NVCC_CU12_VERSION: "12.9.86"
 
 jobs:
   pre-gpu-gate:
@@ -428,7 +429,8 @@ jobs:
           python3 -m pip download --only-binary=:all: --no-deps \
             --dest "${wheel_dir}" \
             "jax-cuda12-pjrt==${JAX_CUDA12_PJRT_VERSION}" \
-            "nvidia-cudnn-cu12==${NVIDIA_CUDNN_CU12_VERSION}"
+            "nvidia-cudnn-cu12==${NVIDIA_CUDNN_CU12_VERSION}" \
+            "nvidia-cuda-nvcc-cu12==${NVIDIA_CUDA_NVCC_CU12_VERSION}"
           python3 - <<'PY'
           import pathlib
           import zipfile
@@ -442,6 +444,7 @@ jobs:
           PY
           plugin_path="$(find "${unpack_dir}" -path '*/jax_plugins/xla_cuda12/xla_cuda_plugin.so' -print -quit)"
           cudnn_lib="$(find "${unpack_dir}" -path '*/nvidia/cudnn/lib' -type d -print -quit)"
+          cuda_nvcc_dir="$(find "${unpack_dir}" -path '*/nvidia/cuda_nvcc' -type d -print -quit)"
           if [ -z "${plugin_path}" ]; then
             echo "xla_cuda_plugin.so not found under ${unpack_dir}"
             exit 1
@@ -450,7 +453,14 @@ jobs:
             echo "cuDNN lib directory not found under ${unpack_dir}"
             exit 1
           fi
+          if [ -z "${cuda_nvcc_dir}" ]; then
+            echo "CUDA NVCC directory not found under ${unpack_dir}"
+            exit 1
+          fi
+          test -x "${cuda_nvcc_dir}/bin/ptxas"
+          test -f "${cuda_nvcc_dir}/nvvm/libdevice/libdevice.10.bc"
           nm -D "${plugin_path}" | grep -q GetPjrtApi
+          XLA_FLAGS="--xla_gpu_cuda_data_dir=${cuda_nvcc_dir} ${XLA_FLAGS:-}" \
           TENFERRO_PJRT_PLUGIN="${plugin_path}" \
           LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}" \
             cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
