@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check tenferro publish layout and crates.io-facing metadata.
 
-This check intentionally does not reject git dependencies. Converting those
-dependencies to registry versions is a separate release-prep step.
+This check allows pre-publish git dependencies only when they also declare the
+registry version Cargo needs for packaging.
 """
 
 from __future__ import annotations
@@ -42,12 +42,10 @@ PUBLISHED_CRATES = set(
     + [
         "tenferro-tensor-core",
         "tenferro-core-ops",
+        "tenferro-internal-ops",
         "tenferro-internal-extension-macros",
     ]
 )
-UNPUBLISHED_WORKSPACE_CRATES = {
-    "tenferro-internal-ops",
-}
 
 
 def rel(path: Path) -> str:
@@ -132,6 +130,18 @@ def check_workspace_metadata(root_text: str, errors: list[str]) -> None:
             errors.append(f"workspace.package missing {line!r}")
 
 
+def check_workspace_dependencies(root_text: str, errors: list[str]) -> None:
+    for line_no, line in enumerate(root_text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "git =" in stripped and "version =" not in stripped:
+            errors.append(
+                f"Cargo.toml:{line_no}: git dependency must include a version "
+                "requirement for crates.io packaging"
+            )
+
+
 def check_package_metadata(errors: list[str]) -> None:
     for crate in TENFERRO_CRATES:
         manifest_path = ROOT / "crates" / crate / "Cargo.toml"
@@ -145,13 +155,6 @@ def check_package_metadata(errors: list[str]) -> None:
             if "publish.workspace = true" not in package_section:
                 errors.append(
                     f"{rel(manifest_path)} package.publish must inherit workspace metadata"
-                )
-        elif crate in UNPUBLISHED_WORKSPACE_CRATES:
-            if "publish = false" not in package_section:
-                errors.append(f"{rel(manifest_path)} package.publish must be false")
-            if "publish.workspace = true" in package_section:
-                errors.append(
-                    f"{rel(manifest_path)} package.publish must not inherit workspace metadata"
                 )
         else:
             errors.append(f"no publish-layout classification for crate {crate!r}")
@@ -221,6 +224,7 @@ def main() -> int:
     metadata = cargo_metadata()
     check_workspace_members(metadata, root_text, errors)
     check_workspace_metadata(root_text, errors)
+    check_workspace_dependencies(root_text, errors)
     check_package_metadata(errors)
     check_readme(errors)
 

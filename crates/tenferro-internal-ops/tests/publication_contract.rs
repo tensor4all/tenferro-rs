@@ -7,14 +7,14 @@ fn manifest() -> String {
 }
 
 #[test]
-fn internal_ops_crate_is_not_publishable() {
+fn internal_ops_crate_is_publishable_implementation_crate() {
     let manifest = manifest();
     assert!(
-        manifest.contains("publish = false"),
-        "tenferro-internal-ops must remain unpublished because its library name is internal workspace API"
+        manifest.contains("publish.workspace = true"),
+        "tenferro-internal-ops must be publishable because published tenferro crates depend on it"
     );
     assert!(
-        !manifest.contains("publish.workspace = true"),
-        "tenferro-internal-ops must not inherit the workspace publish setting"
+        !manifest.contains("publish = false"),
+        "tenferro-internal-ops must not opt out of crates.io packaging"
     );
 }

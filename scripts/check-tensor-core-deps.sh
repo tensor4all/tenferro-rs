@@ -10,7 +10,8 @@ for forbidden in \
   tenferro-linalg \
   cblas-sys \
   lapack \
-  cubecl
+  cubecl \
+  t4a-cubecl
 do
   if grep -Eq "(^|[[:space:]])${forbidden//-/-}[[:space:]v]" <<<"${crate_tree}"; then
     echo "tenferro-tensor-core must not depend on ${forbidden}" >&2

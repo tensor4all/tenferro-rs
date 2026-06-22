@@ -47,12 +47,12 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "77527ecb647fecd4918ea2d06d0065ddce4e5b1c" }
-strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", features = ["parallel"] }
-strided-einsum2 = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", default-features = false }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "77527ecb647fecd4918ea2d06d0065ddce4e5b1c", version = "0.1.0" }
+strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0", features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0", features = ["parallel"] }
+strided-einsum2 = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0", default-features = false }
 libloading = "0.8"
 faer = "0.24"
 cblas-sys = "0.1"
@@ -65,17 +65,15 @@ lapack-inject = "0.1.2"
 # Match CubeCL's CUDA API floor. CUDA 12.8 is the oldest cudarc binding set
 # that exposes the driver symbols used by the current cubecl-cuda revision.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", default-features = false }
-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubek-matmul = { git = "https://github.com/tensor4all/cubek.git", rev = "7a42081f3f18578014a8b2656ea6a6c79c7fa9be", default-features = false }
-cubek-std = { git = "https://github.com/tensor4all/cubek.git", rev = "7a42081f3f18578014a8b2656ea6a6c79c7fa9be", default-features = false }
+# Pre-publish staging: Cargo uses these fork commits locally, while packaged
+# manifests retain only the crates.io version requirements.
+cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "6424d9da407d4bc10034aee3bae52705eb5d2da0", version = "=0.10.0", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "6424d9da407d4bc10034aee3bae52705eb5d2da0", version = "=0.10.0" }
+cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "6424d9da407d4bc10034aee3bae52705eb5d2da0", version = "=0.10.0" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "6424d9da407d4bc10034aee3bae52705eb5d2da0", version = "=0.10.0" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "6424d9da407d4bc10034aee3bae52705eb5d2da0", version = "=0.10.0" }
+cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "7d9e38294d0d71406d6e19c421ab463af9efc66e", version = "=0.2.0", default-features = false }
+cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "7d9e38294d0d71406d6e19c421ab463af9efc66e", version = "=0.2.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }
-
-[patch.crates-io]
-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }

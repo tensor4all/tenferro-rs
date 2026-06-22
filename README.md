@@ -145,7 +145,7 @@ tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` fac
 | --- | --- |
 | `tenferro-tensor-core` | Host tensor storage, dtype tags, and metadata-only layouts |
 | `tenferro-core-ops` | Core primitive operation metadata shared by runtimes and backends |
-| `tenferro-internal-ops` | Unpublished internal graph op vocabulary and AD rule implementations used by tenferro crates |
+| `tenferro-internal-ops` | Published implementation crate for internal graph op vocabulary and AD rule implementations used by tenferro crates |
 | `tenferro-internal-extension-macros` | Procedural macros for registering internal extension operation descriptors |
 
 ## Minimal CPU Example
@@ -240,9 +240,10 @@ it iterates quickly.
 - **GPU.** The GPU backend is built on
   [CubeCL](https://github.com/tracel-ai/cubecl) by the
   [tracel-ai](https://github.com/tracel-ai) team (also the foundation of the
-  [Burn](https://github.com/tracel-ai/burn) deep learning framework); we use it
-  for portable GPU kernels and aim to contribute improvements upstream rather
-  than fork the ecosystem.
+  [Burn](https://github.com/tracel-ai/burn) deep learning framework). The
+  temporary `t4a-*` CubeCL/CubeK crates stage tensor4all fork patches until
+  those changes are upstream, with the intent to converge back rather than fork
+  the ecosystem.
 - **CPU / numerics.** Dense CPU linear algebra builds on
   [`faer`](https://github.com/sarah-quinones/faer-rs), with numeric foundations
   from [`num-traits`](https://github.com/rust-num/num-traits) and
