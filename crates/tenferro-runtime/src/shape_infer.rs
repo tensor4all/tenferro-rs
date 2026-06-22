@@ -209,7 +209,7 @@ pub fn infer_output_shapes(
         | StdTensorOp::ReduceProd { axes, .. }
         | StdTensorOp::ReduceMax { axes, .. }
         | StdTensorOp::ReduceMin { axes, .. } => {
-            vec![reduced_shape(require_input(op, input_shapes, 0)?, axes)]
+            vec![reduced_shape(require_input(op, input_shapes, 0)?, axes)?]
         }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             vec![extract_diag_shape(
@@ -349,7 +349,7 @@ pub fn infer_extension_output_meta(
         .collect();
     let symdim_refs: Vec<&[SymDim]> = symdim_storage.iter().map(Vec::as_slice).collect();
 
-    let metas = op.infer_output_meta(input_dtypes, &symdim_refs);
+    let metas = op.infer_output_meta(input_dtypes, &symdim_refs)?;
 
     let tensor_map: Vec<(u64, usize)> = (0..input_shapes.len())
         .map(|input_idx| (input_idx as u64, input_idx))
@@ -397,7 +397,7 @@ fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) ->
     // be handled through [`infer_extension_output_meta`], which
     // `compile_std_to_exec` prefers for the `Extension` arm.
     let empty_rows: Vec<&[SymDim]> = (0..op.input_count()).map(|_| [].as_slice()).collect();
-    let metas = op.infer_output_meta(input_dtypes, &empty_rows);
+    let metas = op.infer_output_meta(input_dtypes, &empty_rows)?;
     if metas.is_empty() {
         return Err(shape_infer_error(format!(
             "ExtensionOp::infer_output_meta for family {:?} returned an \
@@ -477,12 +477,32 @@ fn permute_shape(input_shape: &[DimExpr], perm: &[usize]) -> Vec<DimExpr> {
     perm.iter().map(|&axis| input_shape[axis].clone()).collect()
 }
 
-fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Vec<DimExpr> {
-    input_shape
+fn validate_reduction_axes(input_shape: &[DimExpr], axes: &[usize]) -> Result<()> {
+    let mut seen = vec![false; input_shape.len()];
+    for &axis in axes {
+        if axis >= input_shape.len() {
+            return Err(shape_infer_error(format!(
+                "reduction axis {axis} out of bounds for rank {}",
+                input_shape.len()
+            )));
+        }
+        if seen[axis] {
+            return Err(shape_infer_error(format!(
+                "duplicate reduction axis {axis}"
+            )));
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Result<Vec<DimExpr>> {
+    validate_reduction_axes(input_shape, axes)?;
+    Ok(input_shape
         .iter()
         .enumerate()
         .filter_map(|(axis, dim)| (!axes.contains(&axis)).then_some(dim.clone()))
-        .collect()
+        .collect())
 }
 
 fn same_or_scalar_broadcast_shape(

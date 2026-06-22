@@ -93,7 +93,7 @@ pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
-pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
+pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result<()> {
     let old_graph = tensor.graph.clone();
     let old_output_key = old_graph.values()[tensor.val].key.clone();
     let old_inputs = (*tensor.inputs_map).clone();
@@ -106,13 +106,9 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
     let new_metadata_scope = register_scoped_value_metadata(
         new_graph.values()[leaf_val].key.clone(),
         concrete_meta.clone(),
-    )
-    // The replacement checkpoint input key is freshly allocated here.
-    .expect("fresh checkpoint input metadata registration failed");
+    )?;
     let old_output_metadata_scope =
-        register_scoped_value_metadata(old_output_key.clone(), concrete_meta)
-            // Checkpoint aliases re-register metadata for the captured output key.
-            .expect("checkpoint output metadata registration failed");
+        register_scoped_value_metadata(old_output_key.clone(), concrete_meta)?;
     let node = CheckpointNode {
         graph: old_graph,
         alias_key: new_key.clone(),
@@ -138,6 +134,7 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) {
     }
     merged.insert(new_key, data);
     tensor.inputs_map = Arc::new(merged);
+    Ok(())
 }
 
 pub fn allocate_input_key() -> TensorInputKey {

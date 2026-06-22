@@ -40,6 +40,13 @@ const TROPICAL_EINSUM_JVP_FAMILY_ID: &str = "tenferro-ext-tropical.einsum_jvp.v1
 #[cfg(feature = "autodiff")]
 const TROPICAL_EINSUM_VJP_FAMILY_ID: &str = "tenferro-ext-tropical.einsum_vjp.v1";
 
+fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::InvalidConfig {
+        op,
+        message: message.into(),
+    }
+}
+
 #[derive(Debug)]
 struct TropicalRuntime {
     family_id: &'static str,
@@ -167,10 +174,12 @@ impl ExtensionOp for TropicalEinsumOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes)
-            .into_iter()
-            .collect()
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let meta =
+            infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes).ok_or_else(
+                || invalid_config("tropical_einsum", "invalid tropical einsum metadata"),
+            )?;
+        Ok(vec![meta])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -237,14 +246,25 @@ impl ExtensionOp for TropicalEinsumJvpOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
-            return Vec::new();
+            return Err(invalid_config(
+                "tropical_einsum_jvp",
+                format!(
+                    "expected {} input metadata entries, got dtypes={} shapes={}",
+                    self.input_count(),
+                    input_dtypes.len(),
+                    input_shapes.len()
+                ),
+            ));
         }
         let Some(primal) =
             infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
         else {
-            return Vec::new();
+            return Err(invalid_config(
+                "tropical_einsum_jvp",
+                "invalid tropical einsum primal metadata",
+            ));
         };
         for &active in &self.active_inputs {
             let Some(position) = self
@@ -252,14 +272,20 @@ impl ExtensionOp for TropicalEinsumJvpOp {
                 .iter()
                 .position(|candidate| *candidate == active)
             else {
-                return Vec::new();
+                return Err(invalid_config(
+                    "tropical_einsum_jvp",
+                    "active input is missing from the active input set",
+                ));
             };
             let tangent_idx = 2 + position;
             if active >= 2 || input_dtypes[tangent_idx] != input_dtypes[active] {
-                return Vec::new();
+                return Err(invalid_config(
+                    "tropical_einsum_jvp",
+                    "active input tangent metadata does not match primal metadata",
+                ));
             }
         }
-        vec![primal]
+        Ok(vec![primal])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -351,22 +377,36 @@ impl ExtensionOp for TropicalEinsumVjpOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         if input_dtypes.len() != 3 || input_shapes.len() != 3 || self.active_input >= 2 {
-            return Vec::new();
+            return Err(invalid_config(
+                "tropical_einsum_vjp",
+                format!(
+                    "expected 3 input metadata entries and active input < 2, got dtypes={} shapes={} active_input={}",
+                    input_dtypes.len(),
+                    input_shapes.len(),
+                    self.active_input
+                ),
+            ));
         }
         if infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
             .is_none()
         {
-            return Vec::new();
+            return Err(invalid_config(
+                "tropical_einsum_vjp",
+                "invalid tropical einsum primal metadata",
+            ));
         }
         if input_dtypes[2] != input_dtypes[self.active_input] {
-            return Vec::new();
+            return Err(invalid_config(
+                "tropical_einsum_vjp",
+                "cotangent dtype does not match active primal dtype",
+            ));
         }
-        vec![(
+        Ok(vec![(
             input_dtypes[self.active_input],
             input_shapes[self.active_input].to_vec(),
-        )]
+        )])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {

@@ -89,6 +89,21 @@ fn invalid_shape_configs_return_errors_instead_of_panicking() {
 }
 
 #[test]
+fn reduction_shape_inference_rejects_invalid_axes() {
+    let shape = DimExpr::from_concrete(&[2, 3]);
+    let invalid_ops = [
+        StdTensorOp::ReduceSum { axes: vec![2] },
+        StdTensorOp::ReduceProd { axes: vec![0, 0] },
+        StdTensorOp::ReduceMax { axes: vec![3] },
+        StdTensorOp::ReduceMin { axes: vec![1, 1] },
+    ];
+
+    for op in invalid_ops {
+        assert!(infer_output_shapes(&op, &[&shape]).is_err(), "{op:?}");
+    }
+}
+
+#[test]
 fn concatenate_rejects_non_axis_dimension_mismatch() {
     let lhs = DimExpr::from_concrete(&[2, 3]);
     let rhs = DimExpr::from_concrete(&[4, 3]);

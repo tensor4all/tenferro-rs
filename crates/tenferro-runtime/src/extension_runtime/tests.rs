@@ -75,8 +75,8 @@ impl ExtensionOp for TestExtension {
         &self,
         _input_dtypes: &[DType],
         _input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(DType::F64, vec![])]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(DType::F64, vec![])])
     }
 
     fn eager_execute(&self, _inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {

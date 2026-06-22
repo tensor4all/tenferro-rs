@@ -294,6 +294,44 @@ fn traced_inv_rejects_rank_less_than_two_without_panicking() {
     ));
 }
 
+fn assert_linalg_rank_mismatch<T>(name: &str, result: tenferro_runtime::Result<T>, actual: usize) {
+    let err = match result {
+        Ok(_) => panic!("{name} should reject rank < 2 inputs"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            Error::TensorRuntime(TensorError::RankMismatch {
+                expected: 2,
+                actual: got,
+                ..
+            }) if got == actual
+        ),
+        "expected rank mismatch for {name}, got {err:?}"
+    );
+}
+
+#[test]
+fn traced_linalg_metadata_helpers_reject_rank_less_than_two_without_panicking() {
+    let scalar = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let vector = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+
+    assert_linalg_rank_mismatch("svd scalar", scalar.svd(), 0);
+    assert_linalg_rank_mismatch("svd vector", vector.svd(), 1);
+    assert_linalg_rank_mismatch("qr vector", vector.qr(), 1);
+    assert_linalg_rank_mismatch("lu vector", vector.lu(), 1);
+    assert_linalg_rank_mismatch("full_piv_lu vector", vector.full_piv_lu(), 1);
+    assert_linalg_rank_mismatch("eigh vector", vector.eigh(), 1);
+    assert_linalg_rank_mismatch("eig vector", vector.eig(), 1);
+    assert_linalg_rank_mismatch("eigvalsh vector", vector.eigvalsh(), 1);
+    assert_linalg_rank_mismatch("eigvals vector", vector.eigvals(), 1);
+    assert_linalg_rank_mismatch("solve vector", vector.solve(&vector), 1);
+    assert_linalg_rank_mismatch("slogdet vector", vector.slogdet(), 1);
+    assert_linalg_rank_mismatch("det vector", vector.det(), 1);
+    assert_linalg_rank_mismatch("pinv vector", vector.pinv(), 1);
+}
+
 #[test]
 fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
     let matrix = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();

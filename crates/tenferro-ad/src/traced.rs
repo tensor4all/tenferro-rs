@@ -347,7 +347,7 @@ impl TracedTensorAdExt for TracedTensor {
             let program = compiler.compile(self)?;
             Arc::new(executor.run(&program)?)
         };
-        checkpoint_tensor(self, data);
+        checkpoint_tensor(self, data)?;
         Ok(())
     }
 

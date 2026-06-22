@@ -107,8 +107,8 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// #         &self,
 /// #         dtypes: &[DType],
 /// #         shapes: &[&[SymDim]],
-/// #     ) -> Vec<(DType, Vec<SymDim>)> {
-/// #         vec![(dtypes[0], shapes[0].to_vec())]
+/// #     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+/// #         Ok(vec![(dtypes[0], shapes[0].to_vec())])
 /// #     }
 /// #     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
 /// #         Ok(vec![inputs[0].clone()])
@@ -159,7 +159,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
         .collect();
     let input_shape_refs: Vec<&[SymDim]> = input_shape_storage.iter().map(Vec::as_slice).collect();
 
-    let output_metas = op.infer_output_meta(&input_dtypes, &input_shape_refs);
+    let output_metas = op.infer_output_meta(&input_dtypes, &input_shape_refs)?;
     if output_metas.len() != op.output_count() {
         return Err(Error::InvalidGraphBuild {
             op: "extension::apply",

@@ -82,8 +82,8 @@ impl ExtensionOp for NoInlineRuleOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -127,8 +127,8 @@ impl ExtensionOp for FamilyOnlyOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -177,8 +177,8 @@ impl ExtensionOp for PayloadOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {

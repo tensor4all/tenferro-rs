@@ -455,6 +455,10 @@ pub trait TensorStructural {
 
 /// Reduction operations.
 ///
+/// Reducing over an axis whose extent is zero returns an error for every
+/// reduction operation. Passing an empty `axes` slice is a no-op and returns the
+/// input values unchanged.
+///
 /// # Examples
 ///
 /// ```rust

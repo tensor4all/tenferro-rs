@@ -6,7 +6,7 @@ use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{Error as TensorError, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -134,6 +134,28 @@ fn assert_invalid_ad_graph_build(
     }
 }
 
+fn assert_traced_op_rank_mismatch<T>(
+    result: std::thread::Result<tenferro_runtime::Result<T>>,
+    linalg_op: &'static str,
+    actual: usize,
+) {
+    let err = match result.unwrap_or_else(|_| panic!("{linalg_op} should return Err, not panic")) {
+        Ok(_) => panic!("{linalg_op} should reject rank < 2 inputs"),
+        Err(err) => err,
+    };
+    match err {
+        Error::TensorRuntime(TensorError::RankMismatch {
+            op,
+            expected: 2,
+            actual: got,
+        }) => {
+            assert_eq!(op, linalg_op);
+            assert_eq!(got, actual);
+        }
+        other => panic!("expected RankMismatch for {linalg_op}, got {other:?}"),
+    }
+}
+
 #[test]
 fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
     let ad = ad_context();
@@ -176,38 +198,24 @@ fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
 
 #[test]
 fn full_piv_lu_solve_grad_rejects_rank1_operands_without_panic() {
-    let ad = ad_context();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 9.0])).unwrap();
-    let x = a.full_piv_lu_solve(&b).unwrap();
-    let loss = reduce_all(&x);
 
-    let result = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
+    let result = catch_unwind(AssertUnwindSafe(|| a.full_piv_lu_solve(&b)));
 
-    assert_invalid_ad_graph_build(
-        result,
-        "vjp",
-        "tenferro-linalg.full_piv_lu_solve",
-        "rank >= 2",
-    );
+    assert_traced_op_rank_mismatch(result, "tenferro-linalg.full_piv_lu_solve", 1);
 }
 
 #[test]
 fn triangular_solve_grad_rejects_rank1_operands_without_panic() {
-    let ad = ad_context();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 3.0])).unwrap();
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![4.0, 9.0])).unwrap();
-    let x = a.triangular_solve(&b, true, true, false, false).unwrap();
-    let loss = reduce_all(&x);
 
-    let result = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        a.triangular_solve(&b, true, true, false, false)
+    }));
 
-    assert_invalid_ad_graph_build(
-        result,
-        "vjp",
-        "tenferro-linalg.triangular_solve",
-        "rank >= 2",
-    );
+    assert_traced_op_rank_mismatch(result, "tenferro-linalg.triangular_solve", 1);
 }
 
 #[test]

@@ -80,16 +80,16 @@ enum GemmAnalysisCacheKind {
 }
 
 impl GemmAnalysisPlan {
-    fn matches<L, R, T>(&self, lhs: &L, rhs: &R, config: &DotGeneralConfig) -> bool
+    fn matches<L, R, T>(&self, lhs: &L, rhs: &R, config: &DotGeneralConfig) -> crate::Result<bool>
     where
         L: TypedTensorRead<T>,
         R: TypedTensorRead<T>,
     {
-        self.lhs_shape.as_slice() == lhs.shape()
+        Ok(self.lhs_shape.as_slice() == lhs.shape()
             && self.rhs_shape.as_slice() == rhs.shape()
-            && self.lhs_strides.as_slice() == lhs.strides().as_slice()
-            && self.rhs_strides.as_slice() == rhs.strides().as_slice()
-            && self.config.matches(config)
+            && self.lhs_strides.as_slice() == lhs.strides()?.as_slice()
+            && self.rhs_strides.as_slice() == rhs.strides()?.as_slice()
+            && self.config.matches(config))
     }
 }
 
@@ -113,9 +113,9 @@ impl GemmConfigKey {
 
 trait TypedTensorRead<T> {
     fn shape(&self) -> &[usize];
-    fn strides(&self) -> SmallVec<[isize; 8]>;
+    fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>>;
     fn offset(&self) -> isize;
-    fn host_data_opt(&self) -> Option<&[T]>;
+    fn host_data_opt(&self) -> crate::Result<Option<&[T]>>;
 }
 
 impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
@@ -123,23 +123,19 @@ impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
         self.layout().shape()
     }
 
-    fn strides(&self) -> SmallVec<[isize; 8]> {
-        // Invariant: owned tensors validate compact shape products at construction.
-        col_major_strides(self.shape())
-            .expect("owned tensor shape has valid column-major strides")
-            .into_iter()
-            .collect()
+    fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {
+        Ok(col_major_strides(self.shape())?.into_iter().collect())
     }
 
     fn offset(&self) -> isize {
         0
     }
 
-    fn host_data_opt(&self) -> Option<&[T]> {
-        match self.buffer() {
+    fn host_data_opt(&self) -> crate::Result<Option<&[T]>> {
+        Ok(match self.buffer() {
             Buffer::Host(v) => Some(v.as_slice()),
             Buffer::Backend(_) => None,
-        }
+        })
     }
 }
 
@@ -148,23 +144,19 @@ impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
         self.shape()
     }
 
-    fn strides(&self) -> SmallVec<[isize; 8]> {
-        self.strides().iter().copied().collect()
+    fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {
+        Ok(self.strides().iter().copied().collect())
     }
 
     fn offset(&self) -> isize {
         self.offset()
     }
 
-    fn host_data_opt(&self) -> Option<&[T]> {
+    fn host_data_opt(&self) -> crate::Result<Option<&[T]>> {
         if self.backend_buffer().is_some() {
-            None
+            Ok(None)
         } else {
-            // Invariant: host tensor views validate their physical slice range at construction.
-            Some(
-                self.host_storage()
-                    .expect("host tensor view has a valid physical slice"),
-            )
+            Ok(Some(self.host_storage()?))
         }
     }
 }
@@ -174,7 +166,7 @@ impl<T: Clone> TypedTensorRead<T> for std::borrow::Cow<'_, TypedTensor<T>> {
         self.as_ref().shape()
     }
 
-    fn strides(&self) -> SmallVec<[isize; 8]> {
+    fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {
         self.as_ref().strides()
     }
 
@@ -182,7 +174,7 @@ impl<T: Clone> TypedTensorRead<T> for std::borrow::Cow<'_, TypedTensor<T>> {
         self.as_ref().offset()
     }
 
-    fn host_data_opt(&self) -> Option<&[T]> {
+    fn host_data_opt(&self) -> crate::Result<Option<&[T]>> {
         self.as_ref().host_data_opt()
     }
 }
@@ -244,16 +236,19 @@ impl GemmAnalysisCache {
         lhs: &L,
         rhs: &R,
         config: &DotGeneralConfig,
-    ) -> Option<Option<GemmDims>>
+    ) -> crate::Result<Option<Option<GemmDims>>>
     where
         L: TypedTensorRead<T>,
         R: TypedTensorRead<T>,
     {
-        self.slots
-            .get(slot)
-            .and_then(|entry| entry.get(kind))
-            .filter(|plan| plan.matches(lhs, rhs, config))
-            .map(|plan| plan.dims.clone())
+        let Some(entry) = self.slots.get(slot).and_then(|entry| entry.get(kind)) else {
+            return Ok(None);
+        };
+        if entry.matches(lhs, rhs, config)? {
+            Ok(Some(entry.dims.clone()))
+        } else {
+            Ok(None)
+        }
     }
 
     // Cache entries mirror the full analyzed GEMM key to avoid rebuilding a temporary key object.
@@ -567,7 +562,11 @@ fn is_identity_perm(perm: &[usize]) -> bool {
     perm.iter().enumerate().all(|(i, &p)| i == p)
 }
 
-fn analyse_gemm<L, R, T>(lhs: &L, rhs: &R, config: &DotGeneralConfig) -> Option<GemmDims>
+fn analyse_gemm<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<GemmDims>>
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
@@ -584,15 +583,17 @@ where
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides = lhs.strides();
-    let rhs_strides = rhs.strides();
+    let lhs_strides = lhs.strides()?;
+    let rhs_strides = rhs.strides()?;
 
     let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims
         .iter()
         .map(|&d| lhs_shape[d])
         .collect();
-    let batch_total = checked_product(&batch_shapes)?;
+    let Some(batch_total) = checked_product(&batch_shapes) else {
+        return Ok(None);
+    };
 
     let lhs_free_shapes: SmallVec<[usize; 8]> = lhs_free.iter().map(|&d| lhs_shape[d]).collect();
     let rhs_free_shapes: SmallVec<[usize; 8]> = rhs_free.iter().map(|&d| rhs_shape[d]).collect();
@@ -602,9 +603,15 @@ where
         .map(|&d| lhs_shape[d])
         .collect();
 
-    let m = checked_product(&lhs_free_shapes)?;
-    let n = checked_product(&rhs_free_shapes)?;
-    let k = checked_product(&contract_shapes)?;
+    let Some(m) = checked_product(&lhs_free_shapes) else {
+        return Ok(None);
+    };
+    let Some(n) = checked_product(&rhs_free_shapes) else {
+        return Ok(None);
+    };
+    let Some(k) = checked_product(&contract_shapes) else {
+        return Ok(None);
+    };
 
     let lhs_free_strides: SmallVec<[isize; 8]> = lhs_free.iter().map(|&d| lhs_strides[d]).collect();
     let rhs_free_strides: SmallVec<[isize; 8]> = rhs_free.iter().map(|&d| rhs_strides[d]).collect();
@@ -635,23 +642,34 @@ where
         || !is_identity_order(&stride_sort_order(&rhs_batch_strides))
         || stride_sort_order(&lhs_contract_strides) != stride_sort_order(&rhs_contract_strides)
     {
-        return None;
+        return Ok(None);
     }
 
-    let (_, a_rs) = try_fuse_dims(&lhs_free_shapes, &lhs_free_strides)?;
-    let (_, a_cs) = try_fuse_dims(&contract_shapes, &lhs_contract_strides)?;
-    let (_, b_rs) = try_fuse_dims(&contract_shapes, &rhs_contract_strides)?;
-    let (_, b_cs) = try_fuse_dims(&rhs_free_shapes, &rhs_free_strides)?;
-    let (_, a_bs) = try_fuse_dims(&batch_shapes, &lhs_batch_strides)?;
-    let (_, b_bs) = try_fuse_dims(&batch_shapes, &rhs_batch_strides)?;
+    let Some((_, a_rs)) = try_fuse_dims(&lhs_free_shapes, &lhs_free_strides) else {
+        return Ok(None);
+    };
+    let Some((_, a_cs)) = try_fuse_dims(&contract_shapes, &lhs_contract_strides) else {
+        return Ok(None);
+    };
+    let Some((_, b_rs)) = try_fuse_dims(&contract_shapes, &rhs_contract_strides) else {
+        return Ok(None);
+    };
+    let Some((_, b_cs)) = try_fuse_dims(&rhs_free_shapes, &rhs_free_strides) else {
+        return Ok(None);
+    };
+    let Some((_, a_bs)) = try_fuse_dims(&batch_shapes, &lhs_batch_strides) else {
+        return Ok(None);
+    };
+    let Some((_, b_bs)) = try_fuse_dims(&batch_shapes, &rhs_batch_strides) else {
+        return Ok(None);
+    };
 
     let mut out_shape = SmallVec::<[usize; 8]>::new();
     out_shape.extend_from_slice(&lhs_free_shapes);
     out_shape.extend_from_slice(&rhs_free_shapes);
     out_shape.extend_from_slice(&batch_shapes);
 
-    let out_strides: SmallVec<[isize; 8]> =
-        col_major_strides(&out_shape).ok()?.into_iter().collect();
+    let out_strides: SmallVec<[isize; 8]> = col_major_strides(&out_shape)?.into_iter().collect();
     let nm = lhs_free_shapes.len();
     let nn = rhs_free_shapes.len();
     let out_m_shapes = &out_shape[..nm];
@@ -661,11 +679,17 @@ where
     let out_b_shapes = &out_shape[nm + nn..];
     let out_b_strides = &out_strides[nm + nn..];
 
-    let (_, c_rs) = try_fuse_dims(out_m_shapes, out_m_strides)?;
-    let (_, c_cs) = try_fuse_dims(out_n_shapes, out_n_strides)?;
-    let (_, c_bs) = try_fuse_dims(out_b_shapes, out_b_strides)?;
+    let Some((_, c_rs)) = try_fuse_dims(out_m_shapes, out_m_strides) else {
+        return Ok(None);
+    };
+    let Some((_, c_cs)) = try_fuse_dims(out_n_shapes, out_n_strides) else {
+        return Ok(None);
+    };
+    let Some((_, c_bs)) = try_fuse_dims(out_b_shapes, out_b_strides) else {
+        return Ok(None);
+    };
 
-    Some(GemmDims {
+    Ok(Some(GemmDims {
         m,
         n,
         k,
@@ -680,7 +704,7 @@ where
         c_cs,
         c_bs,
         out_shape,
-    })
+    }))
 }
 
 fn analyse_gemm_cached<L, R, T>(
@@ -697,21 +721,21 @@ where
 {
     let cache_slot = cache_slot.filter(|&slot| slot < cache.max_slots);
     if let Some(slot) = cache_slot {
-        if let Some(cached) = cache.cached_dims(slot, cache_kind, lhs, rhs, config) {
+        if let Some(cached) = cache.cached_dims(slot, cache_kind, lhs, rhs, config)? {
             return Ok(cached);
         }
     }
 
     validate_dot_general(lhs, rhs, config)?;
-    let dims = analyse_gemm(lhs, rhs, config);
+    let dims = analyse_gemm(lhs, rhs, config)?;
     if let Some(slot) = cache_slot {
         cache.store(
             slot,
             cache_kind,
             lhs.shape().iter().copied().collect(),
             rhs.shape().iter().copied().collect(),
-            lhs.strides(),
-            rhs.strides(),
+            lhs.strides()?,
+            rhs.strides()?,
             GemmConfigKey::from_config(config),
             dims.clone(),
         );
@@ -944,10 +968,10 @@ where
         )?));
     }
 
-    let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
-    let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
     let a_base = lhs.offset();
@@ -1286,10 +1310,10 @@ where
         return Ok(None);
     }
 
-    let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
-    let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
     let a_base = lhs.offset();
@@ -1382,10 +1406,10 @@ where
         return Ok(None);
     }
 
-    let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
-    let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Ok(None);
     };
     let a_base = lhs.offset();

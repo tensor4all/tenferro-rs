@@ -627,9 +627,23 @@ fn reduce_max_and_min_propagate_nan_instead_of_leaking_sentinel() {
 }
 
 #[test]
-fn reduce_max_and_min_reject_zero_length_reduced_axis() {
+fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
     let empty = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap());
 
+    assert!(matches!(
+        reduce_sum(&empty, &[0]),
+        Err(crate::Error::InvalidConfig {
+            op: "reduce_sum",
+            ..
+        })
+    ));
+    assert!(matches!(
+        reduce_prod(&empty, &[0]),
+        Err(crate::Error::InvalidConfig {
+            op: "reduce_prod",
+            ..
+        })
+    ));
     assert!(matches!(
         reduce_max(&empty, &[0]),
         Err(crate::Error::InvalidConfig {
@@ -644,6 +658,30 @@ fn reduce_max_and_min_reject_zero_length_reduced_axis() {
             ..
         })
     ));
+}
+
+#[test]
+fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
+    let bool_tensor = TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
+    let bools = Tensor::Bool(bool_tensor.clone());
+    let mut backend = CpuBackend::new();
+
+    let sum_owned = reduce_sum(&bools, &[]).unwrap();
+    let prod_owned = reduce_prod(&bools, &[]).unwrap();
+    let sum_read = backend
+        .reduce_sum_read(TensorRead::from_tensor(&bools), &[])
+        .unwrap();
+    let prod_read = backend
+        .reduce_prod_read(
+            TensorRead::from_view(TensorView::Bool(bool_tensor.as_view())),
+            &[],
+        )
+        .unwrap();
+
+    for tensor in [sum_owned, prod_owned, sum_read, prod_read] {
+        assert_eq!(tensor.shape(), &[2]);
+        assert_eq!(tensor.as_slice::<bool>().unwrap(), &[true, false]);
+    }
 }
 
 #[test]

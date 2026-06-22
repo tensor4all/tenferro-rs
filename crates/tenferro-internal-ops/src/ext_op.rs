@@ -131,8 +131,8 @@ pub type ExtensionLoweringResult =
 ///         &self,
 ///         dtypes: &[DType],
 ///         shapes: &[&[SymDim]],
-///     ) -> Vec<(DType, Vec<SymDim>)> {
-///         vec![(dtypes[0], shapes[0].to_vec())]
+///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+///         Ok(vec![(dtypes[0], shapes[0].to_vec())])
 ///     }
 ///     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
 ///         Ok(vec![inputs[0].clone()])
@@ -188,24 +188,26 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// `Arc<dyn ExtensionOp>` value.
     fn input_count(&self) -> usize;
 
-    /// Number of outputs. MUST match the length of the vector returned by
-    /// [`Self::infer_output_meta`].
+    /// Number of outputs. MUST match the length of the vector returned by a
+    /// successful [`Self::infer_output_meta`] call.
     fn output_count(&self) -> usize;
 
     // ----- Shape and dtype inference (spec Section 7) -----
 
     /// Infer output dtypes and shapes for each output slot.
     ///
-    /// `input_dtypes.len()` and `input_shapes.len()` both equal
-    /// `self.input_count()`. The returned vector MUST have length
-    /// `self.output_count()`, one `(dtype, shape)` entry per output slot.
-    /// Shapes use [`SymDim`] so extension ops compose with graph-global
-    /// symbolic metadata.
+    /// Implementations MUST validate arity, rank, dtype, axis, and other
+    /// input-derived metadata before indexing shape arrays. Invalid public
+    /// input must return a typed error rather than an empty sentinel or panic.
+    ///
+    /// On success, the returned vector MUST have length `self.output_count()`,
+    /// one `(dtype, shape)` entry per output slot. Shapes use [`SymDim`] so
+    /// extension ops compose with graph-global symbolic metadata.
     fn infer_output_meta(
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)>;
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
     // ----- Forward execution dispatch (spec Section 8) -----
 

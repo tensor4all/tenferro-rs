@@ -60,6 +60,34 @@ fn validate_reduced_axes_nonempty(
     Ok(())
 }
 
+fn reduction_empty_axes_noop(
+    op: &'static str,
+    input: &Tensor,
+    axes: &[usize],
+) -> crate::Result<Option<Tensor>> {
+    validate_axes(op, axes, input.shape().len())?;
+    Ok(axes.is_empty().then(|| input.clone()))
+}
+
+fn reduction_read_empty_axes_noop(
+    op: &'static str,
+    input: &TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Option<Tensor>> {
+    validate_axes(op, axes, input.shape().len())?;
+    if !axes.is_empty() {
+        return Ok(None);
+    }
+
+    match input.clone() {
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor(op, input)?;
+            Ok(Some(input.clone()))
+        }
+        TensorRead::View(input) => Ok(Some(view_to_contiguous_tensor(input)?)),
+    }
+}
+
 fn nan_propagating_max<T: Float>(a: T, b: T) -> T {
     if a.is_nan() || b.is_nan() {
         T::nan()
@@ -77,6 +105,10 @@ fn nan_propagating_min<T: Float>(a: T, b: T) -> T {
 }
 
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_empty_axes_noop("reduce_sum", input, axes)? {
+        return Ok(output);
+    }
+
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes)?)),
@@ -92,6 +124,10 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop("reduce_sum", &input, axes)? {
+        return Ok(output);
+    }
+
     match input {
         TensorRead::Tensor(input) => {
             ensure_host_tensor("reduce_sum", input)?;
@@ -153,6 +189,10 @@ pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
 }
 
 pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_empty_axes_noop("reduce_prod", input, axes)? {
+        return Ok(output);
+    }
+
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_prod(t, axes)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes)?)),
@@ -168,6 +208,10 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop("reduce_prod", &input, axes)? {
+        return Ok(output);
+    }
+
     match input {
         TensorRead::Tensor(input) => {
             ensure_host_tensor("reduce_prod", input)?;
@@ -229,9 +273,8 @@ pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::
 }
 
 pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-    validate_axes("reduce_max", axes, input.shape().len())?;
-    if axes.is_empty() {
-        return Ok(input.clone());
+    if let Some(output) = reduction_empty_axes_noop("reduce_max", input, axes)? {
+        return Ok(output);
     }
 
     match input {
@@ -247,15 +290,8 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    validate_axes("reduce_max", axes, input.shape().len())?;
-    if axes.is_empty() {
-        return match input {
-            TensorRead::Tensor(input) => {
-                ensure_host_tensor("reduce_max", input)?;
-                Ok(input.clone())
-            }
-            TensorRead::View(input) => view_to_contiguous_tensor(input),
-        };
+    if let Some(output) = reduction_read_empty_axes_noop("reduce_max", &input, axes)? {
+        return Ok(output);
     }
 
     match input {
@@ -293,9 +329,8 @@ pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
 }
 
 pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-    validate_axes("reduce_min", axes, input.shape().len())?;
-    if axes.is_empty() {
-        return Ok(input.clone());
+    if let Some(output) = reduction_empty_axes_noop("reduce_min", input, axes)? {
+        return Ok(output);
     }
 
     match input {
@@ -311,15 +346,8 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 }
 
 pub(crate) fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    validate_axes("reduce_min", axes, input.shape().len())?;
-    if axes.is_empty() {
-        return match input {
-            TensorRead::Tensor(input) => {
-                ensure_host_tensor("reduce_min", input)?;
-                Ok(input.clone())
-            }
-            TensorRead::View(input) => view_to_contiguous_tensor(input),
-        };
+    if let Some(output) = reduction_read_empty_axes_noop("reduce_min", &input, axes)? {
+        return Ok(output);
     }
 
     match input {
@@ -369,7 +397,7 @@ where
     M: Fn(T) -> T + Copy + Sync,
     R: Fn(T, T) -> T + Copy + Sync,
 {
-    validate_axes(label, axes, input.shape().len())?;
+    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
     if axes.is_empty() {
         return Ok(input.clone());
     }
@@ -414,7 +442,7 @@ where
     R: Fn(T, T) -> T + Copy + Sync,
     TR: TensorRank,
 {
-    validate_axes(label, axes, input.shape().len())?;
+    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
     if axes.is_empty() {
         return view_to_dyn_contiguous(input);
     }

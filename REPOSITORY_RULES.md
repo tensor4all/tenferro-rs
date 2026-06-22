@@ -103,6 +103,12 @@ rules from `tensor4all-agent-rules`.
   computing output ranks or indexing shape arrays. Symbolic-shape traced values
   must not be forced through concrete-shape helpers unless the API explicitly
   returns a symbolic-shape error.
+- Repeated public-boundary input validation must live in shared helpers or
+  fallible metadata/validation functions when sibling operation surfaces need
+  the same rank, axis, dtype, shape, padding, or linalg checks. Do not duplicate
+  hand-written checks across owned/read, eager/traced, CPU/GPU, or extension
+  paths when a helper can enforce validation before fast paths and reduce public
+  panic risk.
 - Parallel operation surfaces must keep validation and promotion semantics in
   parity across owned/read, eager/traced, CPU/GPU, and extension wrapper paths.
   A bug in one surface should trigger an audit of the corresponding surfaces

@@ -39,10 +39,16 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
 }
 
 #[test]
-fn infer_output_meta_returns_empty_on_input_count_mismatch() {
+fn infer_output_meta_returns_error_on_input_count_mismatch() {
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
-    let metas = op.infer_output_meta(&[], &[]);
+    let err = op.infer_output_meta(&[], &[]).unwrap_err();
 
-    assert!(metas.is_empty());
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "tenferro-linalg",
+            ..
+        }
+    ));
 }

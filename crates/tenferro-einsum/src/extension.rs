@@ -31,7 +31,9 @@ use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::extension::{
     ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
 };
-use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{
+    DType, Error as TensorError, RuntimeCacheControl, Tensor, TensorBackend, TensorRead,
+};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -209,17 +211,32 @@ impl ExtensionOp for EinsumExtensionOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         if input_shapes.len() != self.subscripts.inputs.len()
             || input_dtypes.len() != input_shapes.len()
         {
-            return Vec::new();
+            return Err(TensorError::InvalidConfig {
+                op: "einsum",
+                message: format!(
+                    "expected {} input metadata entries, got dtypes={} shapes={}",
+                    self.subscripts.inputs.len(),
+                    input_dtypes.len(),
+                    input_shapes.len()
+                ),
+            });
         }
 
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
         for (labels, shape) in self.subscripts.inputs.iter().zip(input_shapes.iter()) {
             if labels.len() != shape.len() {
-                return Vec::new();
+                return Err(TensorError::InvalidConfig {
+                    op: "einsum",
+                    message: format!(
+                        "subscript rank {} does not match input rank {}",
+                        labels.len(),
+                        shape.len()
+                    ),
+                });
             }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
                 if let Some(existing) = label_dims.get(&label) {
@@ -227,7 +244,11 @@ impl ExtensionOp for EinsumExtensionOp {
                         (existing.constant_value(), dim.constant_value())
                     {
                         if lhs != rhs {
-                            return Vec::new();
+                            return Err(TensorError::ShapeMismatch {
+                                op: "einsum",
+                                lhs: vec![lhs],
+                                rhs: vec![rhs],
+                            });
                         }
                     }
                 } else {
@@ -244,12 +265,25 @@ impl ExtensionOp for EinsumExtensionOp {
                 .iter()
                 .map(|label| label_dims.get(label).cloned())
                 .collect::<Option<Vec<_>>>()
-                .unwrap_or_default(),
+                .ok_or_else(|| TensorError::InvalidConfig {
+                    op: "einsum",
+                    message: "output labels must be present in input metadata".into(),
+                })?,
         };
         if output_shape.len() != self.subscripts.output.len() {
-            return Vec::new();
+            return Err(TensorError::InvalidConfig {
+                op: "einsum",
+                message: format!(
+                    "output rank {} does not match subscript rank {}",
+                    output_shape.len(),
+                    self.subscripts.output.len()
+                ),
+            });
         }
-        vec![(promote_dtypes(input_dtypes.iter().copied()), output_shape)]
+        Ok(vec![(
+            promote_dtypes(input_dtypes.iter().copied()),
+            output_shape,
+        )])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
