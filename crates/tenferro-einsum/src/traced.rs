@@ -264,7 +264,7 @@ fn expand_traced_einsum_graph(
         })
         .collect::<Result<_>>()?;
     let input_sym_shape_refs: Vec<_> = input_sym_shapes.iter().map(Vec::as_slice).collect();
-    let output_metas = op.infer_output_meta(&input_dtypes, &input_sym_shape_refs);
+    let output_metas = op.infer_output_meta(&input_dtypes, &input_sym_shape_refs)?;
     let input_dim_shapes = traced_dim_expr_shapes(inputs);
 
     let outputs = extension::apply_expanded_graph(inputs, output_metas, |builder, input_refs| {

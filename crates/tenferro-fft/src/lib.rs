@@ -229,25 +229,35 @@ impl ExtensionOp for FftOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        // Public FFT constructors validate dtype/axis/n before building this
-        // op. The extension trait is non-fallible, so direct invalid trait
-        // calls return an output-count mismatch sentinel instead of panicking.
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         let [input_dtype] = input_dtypes else {
-            return Vec::new();
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op: "tenferro-fft",
+                message: format!("expected 1 input dtype, got {}", input_dtypes.len()),
+            });
         };
         let [input_shape] = input_shapes else {
-            return Vec::new();
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op: "tenferro-fft",
+                message: format!("expected 1 input shape, got {}", input_shapes.len()),
+            });
         };
         if self.axis >= input_shape.len() {
-            return Vec::new();
+            return Err(tenferro_tensor::Error::AxisOutOfBounds {
+                op: "tenferro-fft",
+                axis: self.axis,
+                rank: input_shape.len(),
+            });
         }
 
         let mut out_shape = input_shape.to_vec();
         let output_dtype = match self.kind {
             FftKind::C2C { .. } => {
                 if !matches!(input_dtype, DType::C32 | DType::C64) {
-                    return Vec::new();
+                    return Err(tenferro_tensor::Error::backend_failure(
+                        "tenferro-fft",
+                        format!("unsupported dtype {input_dtype:?} for complex FFT"),
+                    ));
                 }
                 *input_dtype
             }
@@ -257,7 +267,12 @@ impl ExtensionOp for FftOp {
                 match input_dtype {
                     DType::F32 => DType::C32,
                     DType::F64 => DType::C64,
-                    _ => return Vec::new(),
+                    _ => {
+                        return Err(tenferro_tensor::Error::backend_failure(
+                            "tenferro-fft",
+                            format!("unsupported dtype {input_dtype:?} for real FFT"),
+                        ));
+                    }
                 }
             }
             FftKind::C2R => {
@@ -268,7 +283,12 @@ impl ExtensionOp for FftOp {
                 match input_dtype {
                     DType::C32 => DType::F32,
                     DType::C64 => DType::F64,
-                    _ => return Vec::new(),
+                    _ => {
+                        return Err(tenferro_tensor::Error::backend_failure(
+                            "tenferro-fft",
+                            format!("unsupported dtype {input_dtype:?} for inverse real FFT"),
+                        ));
+                    }
                 }
             }
         };
@@ -277,7 +297,7 @@ impl ExtensionOp for FftOp {
             out_shape[self.axis] = transform_len_dim(self.n, &input_shape[self.axis]);
         }
 
-        vec![(output_dtype, out_shape)]
+        Ok(vec![(output_dtype, out_shape)])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1124,14 +1144,14 @@ mod tests {
         let op = FftOp::new(FftKind::R2C { onesided: true }, 0, None, FftNorm::Backward);
         let shape = [SymDim::from(4usize)];
 
-        assert!(op.infer_output_meta(&[], &[&shape]).is_empty());
-        assert!(op.infer_output_meta(&[DType::F64], &[]).is_empty());
-        assert!(op.infer_output_meta(&[DType::I64], &[&shape]).is_empty());
+        assert!(op.infer_output_meta(&[], &[&shape]).is_err());
+        assert!(op.infer_output_meta(&[DType::F64], &[]).is_err());
+        assert!(op.infer_output_meta(&[DType::I64], &[&shape]).is_err());
 
         let bad_axis = FftOp::new(FftKind::C2C { forward: true }, 2, None, FftNorm::Backward);
         assert!(bad_axis
             .infer_output_meta(&[DType::C64], &[&shape])
-            .is_empty());
+            .is_err());
     }
 
     #[test]

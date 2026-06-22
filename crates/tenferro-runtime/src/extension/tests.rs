@@ -42,10 +42,10 @@ impl ExtensionOp for TestExtension {
         &self,
         dtypes: &[DType],
         shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        (0..self.inferred_outputs)
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok((0..self.inferred_outputs)
             .map(|_| (dtypes[0], shapes[0].to_vec()))
-            .collect()
+            .collect())
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {

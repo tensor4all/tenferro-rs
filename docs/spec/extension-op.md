@@ -160,22 +160,25 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     fn input_count(&self) -> usize;
 
     /// Number of outputs. MUST match the length of the returned
-    /// `Vec` from `infer_output_meta`.
+    /// `Vec` from a successful `infer_output_meta` call.
     fn output_count(&self) -> usize;
 
     // ----- Shape and dtype inference (Section 7) -----
 
     /// Infer output dtype and shape for each output slot.
     ///
-    /// Returned vector length MUST equal `self.output_count()`. Shapes use
-    /// graph-global `SymDim` (symbolic dimensions). Input metadata is given as
-    /// explicit `SymDim` / `DType` slices; callers that start from `TensorMeta`
-    /// must choose `exact_shape` or `bound_shape` deliberately.
+    /// Implementations MUST validate arity, rank, dtype, axis, and other
+    /// input-derived metadata before indexing shape arrays. Invalid public
+    /// input must return a typed error rather than an empty sentinel or panic.
+    /// Returned vector length MUST equal `self.output_count()` on success.
+    /// Shapes use graph-global `SymDim` (symbolic dimensions). Input metadata
+    /// is given as explicit `SymDim` / `DType` slices; callers that start from
+    /// `TensorMeta` must choose `exact_shape` or `bound_shape` deliberately.
     fn infer_output_meta(
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)>;
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
     /// Optionally expand this extension into standard tensor graph operations.
     ///
@@ -549,7 +552,7 @@ fn infer_output_meta(
     &self,
     input_dtypes: &[DType],
     input_shapes: &[&[SymDim]],
-) -> Vec<(DType, Vec<SymDim>)>;
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 ```
 
 This method's responsibility mirrors
@@ -560,9 +563,9 @@ extension.
 ### Contract
 
 - `input_dtypes.len()` and `input_shapes.len()` MUST both equal
-  `self.input_count()`. Callers (`compile_std_to_exec`, eager execution)
-  guarantee this.
-- The returned vector MUST have length `self.output_count()`.
+  `self.input_count()`. Implementations MUST validate this before indexing,
+  even when current callers are expected to pass checked metadata.
+- The returned vector MUST have length `self.output_count()` on success.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>`. `TensorMeta` does not expose a
@@ -574,6 +577,8 @@ extension.
 - If the implementer needs dimension arithmetic (e.g. output dim =
   `lhs_m * rhs_n`), it MUST use the `SymDim` arithmetic API. Collapsing
   an unknown symbolic input to `0` or panicking is a contract violation.
+- Invalid arity, rank, dtype, axis, or shape metadata MUST return a typed
+  `tenferro_tensor::Error` rather than an empty vector sentinel.
 
 ### Symbolic-shape interaction
 
@@ -581,21 +586,19 @@ Per [`../design/dynamic-symbolic-shapes.md`](../design/dynamic-symbolic-shapes.m
 every extension's `infer_output_meta` MUST be **total** over both concrete and
 symbolic inputs. Total means:
 
-- The method returns without panicking for any `input_shapes` that would
-  also be accepted by the ambient core ops this extension composes with.
+- The method returns `Ok` or a typed `Err` without panicking for public input
+  metadata, including invalid metadata supplied through the trait boundary.
 - Where the output dimension is symbolic, the returned `SymDim` explicitly
   represents the symbolic expression rather than silently collapsing to
   a constant.
 
 ### Failure signature
 
-- An implementer that returns the wrong number of outputs causes
-  `compile_std_to_exec` to panic when assigning output slot metadata
-  (the panic already exists for core ops; see
-  `crates/tenferro-runtime/src/compiler/mod.rs`). The same panic applies to
-  extensions.
-- An implementer that panics on valid symbolic inputs surfaces as a
-  hard crash in symbolic-shape composition tests. This is a contract violation.
+- An implementer that returns `Ok` with the wrong number of outputs MUST be
+  rejected by the graph/runtime metadata layer with a typed graph-build or
+  invalid-config error that includes the extension `family_id`.
+- An implementer that panics on public metadata input surfaces as a hard crash
+  in symbolic-shape and boundary-safety tests. This is a contract violation.
 
 ---
 

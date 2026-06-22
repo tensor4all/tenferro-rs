@@ -9,6 +9,20 @@ fn repo_file(path: &str) -> String {
     std::fs::read_to_string(root).expect("source file must be readable")
 }
 
+fn assert_no_panic_helpers(path: &str, source: &str) {
+    for (line_idx, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("///") || trimmed.starts_with("//!") || trimmed.starts_with("//") {
+            continue;
+        }
+        assert!(
+            !line.contains(".expect(") && !line.contains(".unwrap("),
+            "{path}:{} must not use expect/unwrap in publicly reachable implementation paths: {line}",
+            line_idx + 1
+        );
+    }
+}
+
 #[test]
 fn graph_program_exposes_read_only_lowering_view_for_owner_crates() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -47,4 +61,17 @@ fn traced_tensor_graph_and_attached_data_are_accessor_based() {
         source.contains("pub fn attached_data(&self)"),
         "TracedTensor should expose optional attached data through an accessor"
     );
+}
+
+#[test]
+fn tensor_checkpoint_and_cpu_gemm_public_paths_avoid_panic_helpers() {
+    for path in [
+        "crates/tenferro-tensor/src/types.rs",
+        "crates/tenferro-runtime/src/ad_support.rs",
+        "crates/tenferro-cpu/src/gemm/mod.rs",
+        "crates/tenferro-cpu/src/gemm/strided_dot.rs",
+    ] {
+        let source = repo_file(path);
+        assert_no_panic_helpers(path, &source);
+    }
 }

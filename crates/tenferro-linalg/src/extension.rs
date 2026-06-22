@@ -267,42 +267,57 @@ impl ExtensionOp for LinalgExtensionOp {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
-            return Vec::new();
+            return Err(Error::InvalidConfig {
+                op: "tenferro-linalg",
+                message: format!(
+                    "expected {} input metadata entries, got dtypes={} shapes={}",
+                    self.input_count(),
+                    input_dtypes.len(),
+                    input_shapes.len()
+                ),
+            });
         }
-        match self.op {
-            LinalgOp::Cholesky
-            | LinalgOp::FullPivLuSolve { .. }
-            | LinalgOp::TriangularSolve { .. } => {
-                let output_shape = if self.input_count() == 1 {
-                    input_shapes[0].to_vec()
-                } else {
-                    input_shapes[1].to_vec()
-                };
-                vec![(promote_dtypes(input_dtypes), output_shape)]
+        let metas = match self.op {
+            LinalgOp::Cholesky => {
+                require_matrix_meta("tenferro-linalg.cholesky", input_shapes[0])?;
+                vec![(promote_dtypes(input_dtypes), input_shapes[0].to_vec())]
+            }
+            LinalgOp::FullPivLuSolve { .. } => {
+                require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[0])?;
+                require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[1])?;
+                vec![(promote_dtypes(input_dtypes), input_shapes[1].to_vec())]
+            }
+            LinalgOp::TriangularSolve { .. } => {
+                require_matrix_meta("tenferro-linalg.triangular_solve", input_shapes[0])?;
+                require_matrix_meta("tenferro-linalg.triangular_solve", input_shapes[1])?;
+                vec![(promote_dtypes(input_dtypes), input_shapes[1].to_vec())]
             }
             LinalgOp::LuSolvePrepared { .. } => {
+                require_matrix_meta("tenferro-linalg.lu_solve_prepared_lu", input_shapes[0])?;
+                require_matrix_meta("tenferro-linalg.lu_solve_prepared_rhs", input_shapes[3])?;
                 vec![(
                     promote_dtypes(&[input_dtypes[0], input_dtypes[3]]),
                     input_shapes[3].to_vec(),
                 )]
             }
-            LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0]),
-            LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0]),
-            LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0]),
-            LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0]),
+            LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::SvdVals { .. } => {
-                vec![svd_values_meta(input_dtypes[0], input_shapes[0])]
+                vec![svd_values_meta(input_dtypes[0], input_shapes[0])?]
             }
-            LinalgOp::Qr => qr_meta(input_dtypes[0], input_shapes[0]),
-            LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0]),
-            LinalgOp::EighVals { .. } => vec![eigh_values_meta(input_dtypes[0], input_shapes[0])],
-            LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0]),
+            LinalgOp::Qr => qr_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::EighVals { .. } => vec![eigh_values_meta(input_dtypes[0], input_shapes[0])?],
+            LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0])?,
             LinalgOp::EigVals { input_dtype } => {
-                vec![eig_values_meta(input_dtype, input_shapes[0])]
+                vec![eig_values_meta(input_dtype, input_shapes[0])?]
             }
-        }
+        };
+        Ok(metas)
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -412,104 +427,126 @@ fn execute_linalg<B: LinalgBackend>(
     }
 }
 
-fn lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let m = shape[0].clone();
-    let n = shape[1].clone();
+fn require_matrix_meta(op: &'static str, shape: &[SymDim]) -> tenferro_tensor::Result<()> {
+    if shape.len() < 2 {
+        return Err(Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: shape.len(),
+        });
+    }
+    Ok(())
+}
+
+fn matrix_meta_parts<'a>(
+    op: &'static str,
+    shape: &'a [SymDim],
+) -> tenferro_tensor::Result<(SymDim, SymDim, &'a [SymDim])> {
+    require_matrix_meta(op, shape)?;
+    Ok((shape[0].clone(), shape[1].clone(), &shape[2..]))
+}
+
+fn lu_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.lu", shape)?;
     let k = m.clone().min(n.clone());
-    let batch = &shape[2..];
-    vec![
+    Ok(vec![
         (dtype, matrix_shape(m.clone(), m, batch)),
         (dtype, matrix_shape(shape[0].clone(), k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
         (dtype, batch.to_vec()),
-    ]
+    ])
 }
 
-fn lu_factor_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let m = shape[0].clone();
-    let n = shape[1].clone();
+fn lu_factor_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.lu_factor", shape)?;
     let k = m.min(n);
-    let batch = &shape[2..];
-    vec![
+    Ok(vec![
         (dtype, shape.to_vec()),
         (DType::I32, vector_shape(k, batch)),
         (dtype, batch.to_vec()),
-    ]
+    ])
 }
 
-fn full_piv_lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let n = shape[0].clone();
-    let batch = &shape[2..];
-    vec![
+fn full_piv_lu_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.full_piv_lu", shape)?;
+    Ok(vec![
         (dtype, matrix_shape(n.clone(), n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
         (singular_values_dtype(dtype), batch.to_vec()),
-    ]
+    ])
 }
 
-fn svd_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let m = shape[0].clone();
-    let n = shape[1].clone();
+fn svd_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.svd", shape)?;
     let k = m.clone().min(n.clone());
-    let batch = &shape[2..];
-    vec![
+    Ok(vec![
         (dtype, matrix_shape(m, k.clone(), batch)),
         (singular_values_dtype(dtype), vector_shape(k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
-    ]
+    ])
 }
 
-fn svd_values_meta(dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
-    let m = shape[0].clone();
-    let n = shape[1].clone();
+fn svd_values_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.svd_values", shape)?;
     let k = m.min(n);
-    let batch = &shape[2..];
-    (singular_values_dtype(dtype), vector_shape(k, batch))
+    Ok((singular_values_dtype(dtype), vector_shape(k, batch)))
 }
 
-fn qr_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let m = shape[0].clone();
-    let n = shape[1].clone();
+fn qr_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.qr", shape)?;
     let k = m.clone().min(n.clone());
-    let batch = &shape[2..];
-    vec![
+    Ok(vec![
         (dtype, matrix_shape(m, k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
-    ]
+    ])
 }
 
-fn eigh_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
-    let n = shape[0].clone();
-    let batch = &shape[2..];
-    vec![
+fn eigh_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.eigh", shape)?;
+    Ok(vec![
         (singular_values_dtype(dtype), vector_shape(n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
-    ]
+    ])
 }
 
-fn eigh_values_meta(dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
-    let n = shape[0].clone();
-    let batch = &shape[2..];
-    (singular_values_dtype(dtype), vector_shape(n, batch))
+fn eigh_values_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.eigh_values", shape)?;
+    Ok((singular_values_dtype(dtype), vector_shape(n, batch)))
 }
 
-fn eig_meta(input_dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
+fn eig_meta(
+    input_dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
     let dtype = eig_output_dtype(input_dtype);
-    let n = shape[0].clone();
-    let batch = &shape[2..];
-    vec![
+    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.eig", shape)?;
+    Ok(vec![
         (dtype, vector_shape(n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
-    ]
+    ])
 }
 
-fn eig_values_meta(input_dtype: DType, shape: &[SymDim]) -> (DType, Vec<SymDim>) {
+fn eig_values_meta(
+    input_dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
     let dtype = eig_output_dtype(input_dtype);
-    let n = shape[0].clone();
-    let batch = &shape[2..];
-    (dtype, vector_shape(n, batch))
+    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.eig_values", shape)?;
+    Ok((dtype, vector_shape(n, batch)))
 }
 
 fn matrix_shape(rows: SymDim, cols: SymDim, batch: &[SymDim]) -> Vec<SymDim> {

@@ -635,8 +635,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     pub fn n_elements(&self) -> usize {
         // Invariant: public view constructors validate logical element count.
-        checked_view_element_count(self.shape(), "TypedTensorView::n_elements")
-            .expect("TypedTensorView layout shape was validated at construction")
+        match checked_view_element_count(self.shape(), "TypedTensorView::n_elements") {
+            Ok(n) => n,
+            Err(err) => {
+                unreachable!("TypedTensorView layout shape is validated at construction: {err}")
+            }
+        }
     }
 
     /// Return layout metadata for this view.
@@ -1121,8 +1125,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn n_elements(&self) -> usize {
         // Invariant: public mutable view constructors validate logical element count.
-        checked_view_element_count(self.shape(), "TypedTensorViewMut::n_elements")
-            .expect("TypedTensorViewMut layout shape was validated at construction")
+        match checked_view_element_count(self.shape(), "TypedTensorViewMut::n_elements") {
+            Ok(n) => n,
+            Err(err) => {
+                unreachable!("TypedTensorViewMut layout shape is validated at construction: {err}")
+            }
+        }
     }
 
     /// Return layout metadata for this view.
@@ -3433,8 +3441,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn n_elements(&self) -> usize {
         // Invariant: owned tensor constructors validate compact shape length against buffer length.
-        try_shape_product(self.shape(), "TypedTensor::n_elements")
-            .expect("TypedTensor compact shape was validated at construction")
+        match try_shape_product(self.shape(), "TypedTensor::n_elements") {
+            Ok(n) => n,
+            Err(err) => {
+                unreachable!("TypedTensor compact shape is validated at construction: {err}")
+            }
+        }
     }
 
     /// Tensor shape.

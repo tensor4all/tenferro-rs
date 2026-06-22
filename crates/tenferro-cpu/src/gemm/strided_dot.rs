@@ -41,13 +41,14 @@ where
     R: TypedTensorRead<T>,
     T: 'static,
 {
-    let Some(data) = read.host_data_opt() else {
+    let Some(data) = read.host_data_opt()? else {
         return Err(Error::backend_failure(
             "dot_general",
             "CPU dot_general requires host-backed inputs",
         ));
     };
-    strided_einsum2::StridedView::new(data, read.shape(), read.strides().as_slice(), read.offset())
+    let strides = read.strides()?;
+    strided_einsum2::StridedView::new(data, read.shape(), strides.as_slice(), read.offset())
         .map_err(map_strided_error)
 }
 

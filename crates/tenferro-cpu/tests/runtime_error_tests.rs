@@ -181,41 +181,89 @@ fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
 }
 
 #[test]
-fn cpu_reduce_max_min_validate_axes_before_empty_fast_path() {
+fn cpu_reductions_use_common_empty_axes_validation_helpers() {
     let reduction = include_str!("../src/reduction.rs");
-    for (start, end, op) in [
+
+    for (start, end, empty_check) in [
+        (
+            "fn reduction_empty_axes_noop",
+            "fn reduction_read_empty_axes_noop",
+            "axes.is_empty()",
+        ),
+        (
+            "fn reduction_read_empty_axes_noop",
+            "fn nan_propagating_max",
+            "if !axes.is_empty()",
+        ),
+    ] {
+        let section = source_section(reduction, start, end);
+        let validate_pos = section
+            .find("validate_axes(op, axes, input.shape().len())?;")
+            .unwrap_or_else(|| panic!("{start} should validate axes through the common helper"));
+        let empty_pos = section
+            .find(empty_check)
+            .unwrap_or_else(|| panic!("{start} should have an empty-axis fast path"));
+        assert!(
+            validate_pos < empty_pos,
+            "{start} must validate axes before empty-axis fast path"
+        );
+    }
+
+    for (start, end, helper, op) in [
+        (
+            "pub fn reduce_sum",
+            "pub(crate) fn reduce_sum_read",
+            "reduction_empty_axes_noop",
+            "reduce_sum",
+        ),
+        (
+            "pub(crate) fn reduce_sum_read",
+            "pub fn reduce_prod",
+            "reduction_read_empty_axes_noop",
+            "reduce_sum",
+        ),
+        (
+            "pub fn reduce_prod",
+            "pub(crate) fn reduce_prod_read",
+            "reduction_empty_axes_noop",
+            "reduce_prod",
+        ),
+        (
+            "pub(crate) fn reduce_prod_read",
+            "pub fn reduce_max",
+            "reduction_read_empty_axes_noop",
+            "reduce_prod",
+        ),
         (
             "pub fn reduce_max",
             "pub(crate) fn reduce_max_read",
+            "reduction_empty_axes_noop",
             "reduce_max",
         ),
         (
             "pub(crate) fn reduce_max_read",
             "pub fn reduce_min",
+            "reduction_read_empty_axes_noop",
             "reduce_max",
         ),
         (
             "pub fn reduce_min",
             "pub(crate) fn reduce_min_read",
+            "reduction_empty_axes_noop",
             "reduce_min",
         ),
         (
             "pub(crate) fn reduce_min_read",
             "fn typed_reduce<",
+            "reduction_read_empty_axes_noop",
             "reduce_min",
         ),
     ] {
         let section = source_section(reduction, start, end);
-        let validate = format!("validate_axes(\"{op}\", axes, input.shape().len())?;");
-        let validate_pos = section
-            .find(&validate)
-            .unwrap_or_else(|| panic!("{start} should validate axes"));
-        let empty_pos = section
-            .find("if axes.is_empty()")
-            .unwrap_or_else(|| panic!("{start} should have an empty-axis fast path"));
+        let call = format!("{helper}(\"{op}\",");
         assert!(
-            validate_pos < empty_pos,
-            "{start} must validate axes before empty-axis fast path"
+            section.contains(&call),
+            "{start} should route empty-axis handling through {helper}"
         );
     }
 }

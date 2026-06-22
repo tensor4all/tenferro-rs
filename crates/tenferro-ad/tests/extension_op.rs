@@ -79,8 +79,8 @@ impl ExtensionOp for TestScaleBy2 {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -213,17 +213,17 @@ impl ExtensionOp for TestSwap {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         // (a, b) -> (b, a). We report the swapped meta so downstream
         // consumers see the correct shape for each output slot.
         assert_eq!(
             input_dtypes[0], input_dtypes[1],
             "TestSwap expects matching dtypes"
         );
-        vec![
+        Ok(vec![
             (input_dtypes[1], input_shapes[1].to_vec()),
             (input_dtypes[0], input_shapes[0].to_vec()),
-        ]
+        ])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -315,8 +315,8 @@ impl ExtensionOp for TestNoAd {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -367,8 +367,8 @@ impl ExtensionOp for TestProbeIdentity {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -414,8 +414,8 @@ impl ExtensionOp for TestProbeLinear {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -564,8 +564,8 @@ impl ExtensionOp for TestBadOutputCount {
         &self,
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {

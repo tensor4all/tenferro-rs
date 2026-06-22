@@ -14,17 +14,19 @@ fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
     let rhs_shape = [SymDim::from(3usize), SymDim::from(4usize)];
 
-    let meta = op.infer_output_meta(
-        &[DType::F32, DType::F64],
-        &[lhs_shape.as_slice(), rhs_shape.as_slice()],
-    );
+    let meta = op
+        .infer_output_meta(
+            &[DType::F32, DType::F64],
+            &[lhs_shape.as_slice(), rhs_shape.as_slice()],
+        )
+        .unwrap();
 
     assert_eq!(meta[0].0, DType::F64);
     assert_eq!(meta[0].1, vec![SymDim::from(2usize), SymDim::from(4usize)]);
 }
 
 #[test]
-fn infer_output_meta_returns_empty_for_invalid_extension_metadata() {
+fn infer_output_meta_returns_error_for_invalid_extension_metadata() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
     let bad_rhs_rank = [SymDim::from(3usize)];
@@ -35,19 +37,19 @@ fn infer_output_meta_returns_empty_for_invalid_extension_metadata() {
             &[DType::F64],
             &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
         )
-        .is_empty());
+        .is_err());
     assert!(op
         .infer_output_meta(
             &[DType::F64, DType::F64],
             &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
         )
-        .is_empty());
+        .is_err());
     assert!(op
         .infer_output_meta(
             &[DType::F64, DType::F64],
             &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()]
         )
-        .is_empty());
+        .is_err());
 }
 
 #[test]
