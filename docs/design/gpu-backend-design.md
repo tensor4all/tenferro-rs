@@ -94,27 +94,37 @@ concerns rather than reusable static kernels.
 
 ## Dependency Source
 
-The workspace intentionally depends on the `tensor4all/cubecl` fork. CUDA and
+The workspace intentionally depends on temporary `tensor4all` fork packages for
+CubeCL and CubeK while the required patches are pending upstream. CUDA and
 WebGPU runtime dependencies are feature-owned by `tenferro-gpu`; the workspace
 dependency declaration must not force CUDA for WebGPU-only builds:
 
 ```toml
-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", default-features = false }
-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl = { package = "t4a-cubecl", version = "=0.10.0", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.0" }
+cubecl-common = { package = "t4a-cubecl-common", version = "=0.10.0" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", version = "=0.10.0" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", version = "=0.10.0" }
+cubek-matmul = { package = "t4a-cubek-matmul", version = "=0.2.0", default-features = false }
+cubek-std = { package = "t4a-cubek-std", version = "=0.2.0", default-features = false }
 ```
 
-Keep this fork dependency until upstream CubeCL has the required support and the
-workspace is deliberately migrated. Do not replace it with crates.io CubeCL as
-part of unrelated GPU or documentation work.
+Keep these fork package dependencies until upstream CubeCL/CubeK have the
+required support and the workspace is deliberately migrated. Do not replace them
+with upstream crates.io CubeCL/CubeK as part of unrelated GPU or documentation
+work.
 
 CubeK matmul integration should branch from the CubeK release paired to CubeCL
 0.10.0: start from CubeK `v0.2.0` / `cubek-matmul 0.2.0`. If complex GEMM or
 WebGPU fixes require a tensor4all fork, publish tensor4all-owned CubeK crates
 from that branch rather than vendoring CubeK into this repository. Local
-development may use a sibling checkout, but committed tenferro manifests should
-use workspace dependencies or a deliberate crates.io/git dependency.
+development may use sibling checkouts with Cargo `path` dependencies, but
+committed tenferro manifests should use the published `t4a-*` package aliases
+unless the PR deliberately targets a pre-publish staging branch. In that staging
+case, use Cargo's multiple-location form with `git`, `rev`, and `version` so CI
+uses the fork commit while the packaged manifest retains the registry version.
+After the `t4a-*` packages are on crates.io, remove the `git` and `rev` keys and
+keep the exact version requirements.
 
 ## Runtime And Library Loading
 
