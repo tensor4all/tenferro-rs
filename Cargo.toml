@@ -47,7 +47,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = "0.1.0"
+tidu = "0.2.0"
 strided-view = "0.1.0"
 strided-traits = "0.1.0"
 strided-perm = { version = "0.1.0", features = ["parallel"] }
