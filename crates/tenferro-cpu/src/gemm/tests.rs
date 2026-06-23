@@ -10,7 +10,7 @@ use super::dot_general_blas_cached;
 #[cfg(feature = "cpu-faer")]
 use super::faer_gemm::FaerGemm;
 #[cfg(feature = "cpu-faer")]
-use super::{dot_general_faer_read_cached, strided_dot};
+use super::{dot_general_faer_cached, dot_general_faer_read_cached, faer_prepared};
 #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
 use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-faer")]
@@ -159,7 +159,7 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
 
 #[cfg(feature = "cpu-faer")]
 #[test]
-fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
+fn faer_read_transposed_view_uses_prepared_gemm_without_operand_copies() {
     let lhs_source =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
@@ -180,7 +180,7 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
     let mut cache = GemmAnalysisCache::default();
     let ctx = CpuContext::with_threads(1).unwrap();
 
-    let dispatch_count_before = strided_dot::test_dispatch_count();
+    faer_prepared::test_reset_stats();
     let out = dot_general_faer_read_cached(
         &mut buffers,
         &mut cache,
@@ -193,9 +193,45 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
     .unwrap()
     .expect("same-dtype f64 inputs should be handled directly");
 
-    assert!(strided_dot::test_dispatch_count() > dispatch_count_before);
+    let stats = faer_prepared::test_stats();
+    assert_eq!(stats.dispatches, 1);
+    assert_eq!(stats.lhs_copies, 0);
+    assert_eq!(stats.rhs_copies, 0);
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_noncanonical_contract_copies_only_nonfusable_rhs_operand() {
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(
+        vec![3, 2],
+        vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
+    )
+    .unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0, 1],
+        rhs_contracting_dims: vec![1, 0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut buffers = BufferPool::new();
+    let mut cache = GemmAnalysisCache::default();
+    let ctx = CpuContext::with_threads(1).unwrap();
+
+    faer_prepared::test_reset_stats();
+    let out = dot_general_faer_cached(&mut buffers, &mut cache, Some(1), &ctx, &lhs, &rhs, &config)
+        .unwrap();
+
+    let stats = faer_prepared::test_stats();
+    assert_eq!(stats.dispatches, 1);
+    assert_eq!(stats.lhs_copies, 0);
+    assert_eq!(stats.rhs_copies, 1);
+    assert_eq!(out.shape(), &[] as &[usize]);
+    assert_eq!(out.as_slice().unwrap(), &[212.0]);
 }
 
 #[cfg(feature = "cpu-blas")]

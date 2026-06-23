@@ -21,9 +21,10 @@ fn cpu_tensor_kernel_parallel_features_are_wired() {
         .lines()
         .find(|line| line.trim_start().starts_with("cpu-faer ="))
         .expect("tenferro-cpu manifest should declare cpu-faer");
-    assert!(
-        cpu_faer_line.contains("strided-einsum2/parallel"),
-        "cpu-faer must propagate strided-einsum2/parallel: {cpu_faer_line}"
+    assert_eq!(
+        cpu_faer_line.trim(),
+        r#"cpu-faer = ["dep:faer"]"#,
+        "cpu-faer should only select the faer dependency: {cpu_faer_line}"
     );
 }
 

@@ -1,3 +1,5 @@
+#![cfg_attr(all(feature = "cpu-faer", not(feature = "cpu-blas")), allow(dead_code))]
+
 use num_traits::{One, Zero};
 use smallvec::{Array, SmallVec};
 use std::fmt;
@@ -7,6 +9,7 @@ use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::default_placement;
 #[cfg(feature = "cpu-blas")]
 use crate::elementwise::typed_conj_with_pool;
+#[cfg(feature = "cpu-blas")]
 use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
@@ -22,7 +25,7 @@ mod blas_gemm;
 #[cfg(feature = "cpu-faer")]
 mod faer_gemm;
 #[cfg(feature = "cpu-faer")]
-mod strided_dot;
+mod faer_prepared;
 
 #[cfg(feature = "cpu-blas")]
 use blas_gemm::BlasGemm;
@@ -754,16 +757,7 @@ pub(crate) fn dot_general_faer_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm
-        + PoolScalar
-        + Copy
-        + Clone
-        + Zero
-        + One
-        + PartialEq
-        + strided_einsum2::ScalarBase
-        + 'static,
-    strided_einsum2::backend::FaerBackend: strided_einsum2::Backend<T>,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + Send + Sync + 'static,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
@@ -785,70 +779,10 @@ pub(crate) fn dot_general_faer_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm
-        + PoolScalar
-        + Copy
-        + Clone
-        + Zero
-        + One
-        + PartialEq
-        + strided_einsum2::ScalarBase
-        + 'static,
-    strided_einsum2::backend::FaerBackend: strided_einsum2::Backend<T>,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + Send + Sync + 'static,
 {
-    if !lhs_conj && !rhs_conj {
-        return strided_dot::dot_general_strided_with_backend::<
-            _,
-            _,
-            _,
-            strided_einsum2::backend::FaerBackend,
-        >(buffers, lhs, rhs, config);
-    }
-
-    if let Some(result) = typed_faer_gemm(
-        buffers,
-        cache,
-        cache_slot,
-        GemmAnalysisCacheKind::Direct,
-        ctx,
-        lhs,
-        rhs,
-        config,
-        lhs_conj,
-        rhs_conj,
-    )? {
-        return Ok(result);
-    }
-    let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
-    let lhs_canon = if is_identity_perm(&lhs_perm) {
-        std::borrow::Cow::Borrowed(lhs)
-    } else {
-        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, lhs, &lhs_perm)?)
-    };
-    let rhs_canon = if is_identity_perm(&rhs_perm) {
-        std::borrow::Cow::Borrowed(rhs)
-    } else {
-        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, rhs, &rhs_perm)?)
-    };
-    typed_faer_gemm(
-        buffers,
-        cache,
-        cache_slot,
-        GemmAnalysisCacheKind::Canonical,
-        ctx,
-        &lhs_canon,
-        &rhs_canon,
-        &new_config,
-        lhs_conj,
-        rhs_conj,
-    )?
-    .ok_or_else(|| {
-        Error::backend_failure(
-            "dot_general",
-            "CPU GEMM requires host-backed canonical inputs",
-        )
-    })
+    let _ = (cache, cache_slot);
+    faer_prepared::dot_general_prepared_faer(buffers, ctx, lhs, rhs, config, lhs_conj, rhs_conj)
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -861,7 +795,7 @@ pub(crate) fn dot_general_faer_read_cached(
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
 ) -> crate::Result<Option<crate::Tensor>> {
-    let _ = (cache, cache_slot, ctx);
+    let _ = (cache, cache_slot);
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
             match (&lhs, &rhs) {
@@ -869,48 +803,36 @@ pub(crate) fn dot_general_faer_read_cached(
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
                 ) => {
-                    return strided_dot::dot_general_strided_with_backend::<
-                        _,
-                        _,
-                        _,
-                        strided_einsum2::backend::FaerBackend,
-                    >(buffers, a, b, config)
+                    return faer_prepared::dot_general_prepared_faer(
+                        buffers, ctx, a, b, config, false, false,
+                    )
                     .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::View(TensorView::$view(b)),
                 ) => {
-                    return strided_dot::dot_general_strided_with_backend::<
-                        _,
-                        _,
-                        _,
-                        strided_einsum2::backend::FaerBackend,
-                    >(buffers, a, b, config)
+                    return faer_prepared::dot_general_prepared_faer(
+                        buffers, ctx, a, b, config, false, false,
+                    )
                     .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::View(TensorView::$view(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
                 ) => {
-                    return strided_dot::dot_general_strided_with_backend::<
-                        _,
-                        _,
-                        _,
-                        strided_einsum2::backend::FaerBackend,
-                    >(buffers, a, b, config)
+                    return faer_prepared::dot_general_prepared_faer(
+                        buffers, ctx, a, b, config, false, false,
+                    )
                     .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 (
                     TensorRead::View(TensorView::$view(a)),
                     TensorRead::View(TensorView::$view(b)),
                 ) => {
-                    return strided_dot::dot_general_strided_with_backend::<
-                        _,
-                        _,
-                        _,
-                        strided_einsum2::backend::FaerBackend,
-                    >(buffers, a, b, config)
+                    return faer_prepared::dot_general_prepared_faer(
+                        buffers, ctx, a, b, config, false, false,
+                    )
                     .map(|result| Some(crate::Tensor::$wrap(result)));
                 }
                 _ => {}
