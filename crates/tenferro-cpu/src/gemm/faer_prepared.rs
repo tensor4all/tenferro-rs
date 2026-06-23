@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 #[cfg(test)]
 use std::cell::Cell;
 use strided_kernel::{copy_into_col_major, StridedView, StridedViewMut};
-use tenferro_tensor::{col_major_strides, Buffer, DotGeneralConfig, TypedTensor};
+use tenferro_tensor::{Buffer, DotGeneralConfig, TypedTensor};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{default_placement, Error};
@@ -106,12 +106,33 @@ fn checked_product_or_error(dims: &[usize], message: &'static str) -> crate::Res
     checked_product(dims).ok_or_else(|| Error::backend_failure("dot_general", message))
 }
 
-fn collect_shape(shape: &[usize], axes: impl Iterator<Item = usize>) -> SmallVec<[usize; 8]> {
-    axes.map(|axis| shape[axis]).collect()
+fn col_major_strides_small(shape: &[usize]) -> crate::Result<SmallVec<[isize; 8]>> {
+    let mut strides = SmallVec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &extent in shape {
+        strides.push(stride);
+        let extent = isize::try_from(extent).map_err(|_| {
+            Error::backend_failure("dot_general", "shape extent does not fit in isize")
+        })?;
+        stride = stride
+            .checked_mul(extent)
+            .ok_or_else(|| Error::backend_failure("dot_general", "column-major stride overflow"))?;
+    }
+    Ok(strides)
 }
 
-fn collect_strides(strides: &[isize], axes: impl Iterator<Item = usize>) -> SmallVec<[isize; 8]> {
-    axes.map(|axis| strides[axis]).collect()
+fn collect_shape_and_strides(
+    shape: &[usize],
+    strides: &[isize],
+    axes: impl Iterator<Item = usize>,
+) -> (SmallVec<[usize; 8]>, SmallVec<[isize; 8]>) {
+    let mut dims = SmallVec::new();
+    let mut permuted_strides = SmallVec::new();
+    for axis in axes {
+        dims.push(shape[axis]);
+        permuted_strides.push(strides[axis]);
+    }
+    (dims, permuted_strides)
 }
 
 fn try_fuse_col_major_group(dims: &[usize], strides: &[isize]) -> Option<(usize, isize)> {
@@ -306,13 +327,8 @@ impl DotGeneralPreparedPlan {
             .copied()
             .chain(config.lhs_contracting_dims.iter().copied())
             .chain(config.lhs_batch_dims.iter().copied());
-        let lhs_dims = collect_shape(lhs_shape, lhs_axes);
-        let lhs_axes = lhs_free
-            .iter()
-            .copied()
-            .chain(config.lhs_contracting_dims.iter().copied())
-            .chain(config.lhs_batch_dims.iter().copied());
-        let lhs_strides = collect_strides(&lhs_source_strides, lhs_axes);
+        let (lhs_dims, lhs_strides) =
+            collect_shape_and_strides(lhs_shape, &lhs_source_strides, lhs_axes);
 
         let rhs_axes = config
             .rhs_contracting_dims
@@ -320,52 +336,48 @@ impl DotGeneralPreparedPlan {
             .copied()
             .chain(rhs_free.iter().copied())
             .chain(config.rhs_batch_dims.iter().copied());
-        let rhs_dims = collect_shape(rhs_shape, rhs_axes);
-        let rhs_axes = config
-            .rhs_contracting_dims
-            .iter()
-            .copied()
-            .chain(rhs_free.iter().copied())
-            .chain(config.rhs_batch_dims.iter().copied());
-        let rhs_strides = collect_strides(&rhs_source_strides, rhs_axes);
+        let (rhs_dims, rhs_strides) =
+            collect_shape_and_strides(rhs_shape, &rhs_source_strides, rhs_axes);
 
-        let lhs_free_shapes: SmallVec<[usize; 8]> =
-            lhs_free.iter().map(|&axis| lhs_shape[axis]).collect();
-        let rhs_free_shapes: SmallVec<[usize; 8]> =
-            rhs_free.iter().map(|&axis| rhs_shape[axis]).collect();
-        let contract_shapes: SmallVec<[usize; 8]> = config
-            .lhs_contracting_dims
-            .iter()
-            .map(|&axis| lhs_shape[axis])
-            .collect();
-        let batch_dims: SmallVec<[usize; 8]> = config
-            .lhs_batch_dims
-            .iter()
-            .map(|&axis| lhs_shape[axis])
-            .collect();
+        let lhs_free_len = lhs_free.len();
+        let lhs_contract_len = config.lhs_contracting_dims.len();
+        let lhs_contract_end = lhs_free_len + lhs_contract_len;
+        let rhs_contract_len = config.rhs_contracting_dims.len();
+        let rhs_free_len = rhs_free.len();
+        let rhs_free_end = rhs_contract_len + rhs_free_len;
 
-        let m = checked_product_or_error(&lhs_free_shapes, "lhs free element count overflow")?;
-        let n = checked_product_or_error(&rhs_free_shapes, "rhs free element count overflow")?;
-        let k = checked_product_or_error(&contract_shapes, "contract element count overflow")?;
+        let batch_dims: SmallVec<[usize; 8]> =
+            lhs_dims[lhs_contract_end..].iter().copied().collect();
+
+        let m =
+            checked_product_or_error(&lhs_dims[..lhs_free_len], "lhs free element count overflow")?;
+        let n = checked_product_or_error(
+            &rhs_dims[rhs_contract_len..rhs_free_end],
+            "rhs free element count overflow",
+        )?;
+        let k = checked_product_or_error(
+            &lhs_dims[lhs_free_len..lhs_contract_end],
+            "contract element count overflow",
+        )?;
         let batch_total = checked_product_or_error(&batch_dims, "batch element count overflow")?;
 
         let mut out_shape = SmallVec::<[usize; 8]>::new();
-        out_shape.extend_from_slice(&lhs_free_shapes);
-        out_shape.extend_from_slice(&rhs_free_shapes);
+        out_shape.extend_from_slice(&lhs_dims[..lhs_free_len]);
+        out_shape.extend_from_slice(&rhs_dims[rhs_contract_len..rhs_free_end]);
         out_shape.extend_from_slice(&batch_dims);
         let out_len = checked_product_or_error(&out_shape, "output element count overflow")?;
-        let out_strides = col_major_strides(&out_shape)?;
+        let out_strides = col_major_strides_small(&out_shape)?;
         let output_row_stride =
-            try_fuse_col_major_group(&out_shape[..lhs_free.len()], &out_strides[..lhs_free.len()])
+            try_fuse_col_major_group(&out_shape[..lhs_free_len], &out_strides[..lhs_free_len])
                 .ok_or_else(|| Error::backend_failure("dot_general", "output row fuse failed"))?
                 .1;
         let output_col_stride = try_fuse_col_major_group(
-            &out_shape[lhs_free.len()..lhs_free.len() + rhs_free.len()],
-            &out_strides[lhs_free.len()..lhs_free.len() + rhs_free.len()],
+            &out_shape[lhs_free_len..lhs_free_len + rhs_free_len],
+            &out_strides[lhs_free_len..lhs_free_len + rhs_free_len],
         )
         .ok_or_else(|| Error::backend_failure("dot_general", "output column fuse failed"))?
         .1;
-        let output_batch_strides = out_strides[lhs_free.len() + rhs_free.len()..]
+        let output_batch_strides = out_strides[lhs_free_len + rhs_free_len..]
             .iter()
             .copied()
             .collect();
@@ -381,10 +393,10 @@ impl DotGeneralPreparedPlan {
             output_row_stride,
             output_col_stride,
             output_batch_strides,
-            lhs_n_group1: lhs_free.len(),
-            lhs_n_group2: config.lhs_contracting_dims.len(),
-            rhs_n_group1: config.rhs_contracting_dims.len(),
-            rhs_n_group2: rhs_free.len(),
+            lhs_n_group1: lhs_free_len,
+            lhs_n_group2: lhs_contract_len,
+            rhs_n_group1: rhs_contract_len,
+            rhs_n_group2: rhs_free_len,
             m,
             n,
             k,
@@ -434,7 +446,7 @@ where
     let len = checked_product_or_error(&dims, "operand element count overflow")?;
     // SAFETY: copy_into_col_major overwrites every element before the buffer is read.
     let mut buffer = unsafe { T::pool_acquire(buffers, len) };
-    let out_strides = col_major_strides(&dims)?;
+    let out_strides = col_major_strides_small(&dims)?;
     let mut out = StridedViewMut::new(&mut buffer, &dims, &out_strides, 0)
         .map_err(|err| Error::backend_failure("dot_general", err))?;
     copy_into_col_major(&mut out, &view)
@@ -549,4 +561,23 @@ where
         Buffer::Host(out_data),
         default_placement(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn col_major_strides_small_matches_tensor_strides_without_spilling() {
+        let shape = [2, 3, 4, 5];
+
+        let strides = super::col_major_strides_small(&shape).unwrap();
+
+        assert_eq!(strides.as_slice(), &[1, 2, 6, 24]);
+        assert_eq!(
+            strides.as_slice(),
+            tenferro_tensor::col_major_strides(&shape)
+                .unwrap()
+                .as_slice()
+        );
+        assert!(!strides.spilled());
+    }
 }
