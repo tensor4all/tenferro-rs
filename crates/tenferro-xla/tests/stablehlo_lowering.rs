@@ -218,9 +218,9 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
 #[test]
 fn lowers_multi_output_program_and_special_scalar_constants() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let scaled_nan = x.scale_real(f64::NAN);
-    let scaled_neg_inf = x.scale_real(f64::NEG_INFINITY);
-    let scaled_pos_inf = x.scale_real(f64::INFINITY);
+    let scaled_nan = x.scale_real(f64::NAN).unwrap();
+    let scaled_neg_inf = x.scale_real(f64::NEG_INFINITY).unwrap();
+    let scaled_pos_inf = x.scale_real(f64::INFINITY).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_many(&[&scaled_nan, &scaled_neg_inf, &scaled_pos_inf])
@@ -243,7 +243,7 @@ fn lowers_multi_output_program_and_special_scalar_constants() {
 #[test]
 fn lowers_f32_scalar_constant() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let scaled = x.scale_real(2.5);
+    let scaled = x.scale_real(2.5).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&scaled).unwrap();
 

@@ -203,7 +203,7 @@ pub fn reverse_kernel<E: CubePrimitive>(
         for axis in 0..rank {
             let dim = out.shape(axis);
             input_idx[axis] = if axis_in_sequence(axes.clone(), axis) {
-                dim - 1 - out_idx[axis]
+                dim.saturating_sub(1).saturating_sub(out_idx[axis])
             } else {
                 out_idx[axis]
             };

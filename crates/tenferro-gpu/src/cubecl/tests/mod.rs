@@ -75,11 +75,11 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
         (Tensor::F64(_), Tensor::F64(_)) => {
             let actual = actual.as_slice::<f64>().unwrap();
             let expected = expected.as_slice::<f64>().unwrap();
-            for (lhs, rhs) in actual.iter().zip(expected.iter()) {
+            for (idx, (lhs, rhs)) in actual.iter().zip(expected.iter()).enumerate() {
                 let diff = (*lhs - *rhs).abs();
                 assert!(
                     diff <= tol,
-                    "f64 tensors differ: lhs={lhs:?} rhs={rhs:?} diff={diff}"
+                    "f64 tensors differ at {idx}: lhs={lhs:?} rhs={rhs:?} diff={diff}; actual={actual:?} expected={expected:?}"
                 );
             }
         }

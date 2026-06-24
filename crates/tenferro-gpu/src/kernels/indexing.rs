@@ -11,7 +11,7 @@ pub(crate) fn clamp_window_start<I: Numeric + CubePrimitive>(
     dim_size: usize,
     window_size: usize,
 ) -> usize {
-    let max_start = dim_size - window_size;
+    let max_start = dim_size.saturating_sub(window_size);
     let mut clamped = max_start;
     if start <= I::from_int(0) {
         clamped = 0usize;
@@ -285,7 +285,7 @@ pub fn scatter_copy_kernel<E: CubePrimitive>(out: &mut Tensor<E>, operand: &Tens
 pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
     // Atomic<E> is a CubeCL storage view over the same dense output allocation;
     // the host launch path gates it with `ensure_atomic_add_supported`.
-    out: &mut Tensor<Atomic<E>>,
+    out_parts: &mut Array<Atomic<E>>,
     operand: &Tensor<E>,
     scatter_indices: &Tensor<I>,
     updates: &Tensor<E>,
@@ -339,11 +339,11 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
                 component,
                 scatter_indices_rank,
             );
-            if start < I::from_int(0) {
-                window_fits = false;
-            } else {
-                operand_base[operand_dim] = usize::cast_from(start);
-            }
+            operand_base[operand_dim] = clamp_window_start::<I>(
+                start,
+                operand.shape(operand_dim),
+                window_shape[operand_dim],
+            );
         }
         if window_fits {
             #[unroll]
@@ -377,9 +377,9 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
                 operand_idx[operand_axis] += window_idx[pos];
             }
 
-            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
+            let dst = multi_to_tensor_index(&operand_idx, operand, operand_rank);
             let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
-            out[dst].fetch_add(updates[src]);
+            out_parts[dst].fetch_add(updates[src]);
         }
     }
 }
@@ -441,11 +441,11 @@ pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimiti
                 component,
                 scatter_indices_rank,
             );
-            if start < I::from_int(0) {
-                window_fits = false;
-            } else {
-                operand_base[operand_dim] = usize::cast_from(start);
-            }
+            operand_base[operand_dim] = clamp_window_start::<I>(
+                start,
+                operand.shape(operand_dim),
+                window_shape[operand_dim],
+            );
         }
         if window_fits {
             #[unroll]
