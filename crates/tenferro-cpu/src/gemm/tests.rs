@@ -1,6 +1,6 @@
 use super::{
-    analyse_gemm_cached, canonical_gemm_layout, checked_product, try_fuse_dims, GemmAnalysisCache,
-    GemmAnalysisCacheKind,
+    analyse_gemm_cached, canonical_gemm_layout, checked_batch_offset, checked_product,
+    try_fuse_dims, GemmAnalysisCache, GemmAnalysisCacheKind,
 };
 
 #[cfg(feature = "cpu-blas")]
@@ -24,41 +24,56 @@ use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 #[test]
 fn try_fuse_dims_reversed_strides() {
-    assert_eq!(try_fuse_dims(&[3, 4], &[4, 1]), Some((12, 1)));
+    assert_eq!(try_fuse_dims(&[3, 4], &[4, 1]).unwrap(), Some((12, 1)));
 }
 
 #[test]
 fn try_fuse_dims_sorted_strides_unchanged() {
-    assert_eq!(try_fuse_dims(&[3, 4], &[1, 3]), Some((12, 1)));
+    assert_eq!(try_fuse_dims(&[3, 4], &[1, 3]).unwrap(), Some((12, 1)));
 }
 
 #[test]
 fn try_fuse_dims_non_adjacent_fails() {
-    assert_eq!(try_fuse_dims(&[3, 2], &[1, 6]), None);
+    assert_eq!(try_fuse_dims(&[3, 2], &[1, 6]).unwrap(), None);
 }
 
 #[test]
 fn try_fuse_dims_single_dim() {
-    assert_eq!(try_fuse_dims(&[5], &[3]), Some((5, 3)));
+    assert_eq!(try_fuse_dims(&[5], &[3]).unwrap(), Some((5, 3)));
 }
 
 #[test]
 fn try_fuse_dims_empty() {
-    assert_eq!(try_fuse_dims(&[], &[]), Some((1, 0)));
+    assert_eq!(try_fuse_dims(&[], &[]).unwrap(), Some((1, 0)));
 }
 
 #[test]
 fn try_fuse_dims_rejects_extent_that_does_not_fit_isize() {
     let too_large = (isize::MAX as usize).saturating_add(1);
 
-    assert_eq!(try_fuse_dims(&[too_large], &[1]), None);
+    let err = try_fuse_dims(&[too_large], &[1]).unwrap_err();
+    assert!(
+        err.to_string().contains("isize"),
+        "expected isize range error, got {err:?}"
+    );
 }
 
 #[test]
 fn try_fuse_dims_rejects_fused_stride_overflow() {
-    assert_eq!(
-        try_fuse_dims(&[isize::MAX as usize, 2], &[1, isize::MAX]),
-        None
+    let err = try_fuse_dims(&[isize::MAX as usize, 2], &[1, isize::MAX]).unwrap_err();
+    assert!(
+        err.to_string().contains("overflows"),
+        "expected stride overflow error, got {err:?}"
+    );
+}
+
+#[test]
+fn checked_batch_offset_reports_batch_conversion_overflow() {
+    let too_large = (isize::MAX as usize).saturating_add(1);
+    let err = checked_batch_offset(too_large, 1).unwrap_err();
+    assert!(
+        err.to_string().contains("batch index"),
+        "expected batch index range error, got {err:?}"
     );
 }
 
@@ -155,6 +170,47 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
     let stats = cache.stats();
     assert_eq!(stats.entries, 1);
     assert!(stats.retained_bytes > 0);
+}
+
+#[test]
+fn gemm_analysis_cache_shrink_invalidates_entries_instead_of_truncating_by_slot() {
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = GemmAnalysisCache::with_capacity(8);
+
+    let _ = analyse_gemm_cached(
+        &mut cache,
+        Some(1),
+        GemmAnalysisCacheKind::Direct,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .expect("low-slot analysis should validate");
+    let _ = analyse_gemm_cached(
+        &mut cache,
+        Some(7),
+        GemmAnalysisCacheKind::Direct,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .expect("high-slot analysis should validate");
+    assert_eq!(cache.stats().entries, 2);
+
+    cache.set_capacity(2);
+    assert_eq!(cache.capacity(), 2);
+    assert_eq!(
+        cache.stats().entries,
+        0,
+        "shrinking a direct-indexed cache should not retain arbitrary low-slot entries as a fake LRU"
+    );
 }
 
 #[cfg(feature = "cpu-faer")]

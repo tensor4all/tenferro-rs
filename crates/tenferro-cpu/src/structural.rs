@@ -11,8 +11,8 @@ use tenferro_tensor::{DType, Tensor, TensorRank, TypedTensor, TypedTensorView};
 #[cfg(test)]
 use super::typed_array_uninit;
 use super::{
-    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit_from_pool, typed_view,
-    typed_view_from_view,
+    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit_from_pool, typed_host_data,
+    typed_view, typed_view_from_view,
 };
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -261,8 +261,14 @@ pub(crate) fn cast_with_pool(
     match (input, to) {
         (Tensor::F32(t), DType::F32) => Ok(Tensor::F32(t.clone())),
         (Tensor::F32(t), DType::F64) => converted!(F64, t, |x| x as f64),
-        (Tensor::F32(t), DType::I32) => converted!(I32, t, |x| x as i32),
-        (Tensor::F32(t), DType::I64) => converted!(I64, t, |x| x as i64),
+        (Tensor::F32(t), DType::I32) => {
+            validate_real_values_cast_to_i32(t, |x| x as f64)?;
+            converted!(I32, t, |x| x as i32)
+        }
+        (Tensor::F32(t), DType::I64) => {
+            validate_real_values_cast_to_i64(t, |x| x as f64)?;
+            converted!(I64, t, |x| x as i64)
+        }
         (Tensor::F32(t), DType::Bool) => converted!(Bool, t, |x| x != 0.0),
         (Tensor::F32(t), DType::C32) => converted!(C32, t, |x| Complex32::new(x, 0.0)),
         (Tensor::F32(t), DType::C64) => {
@@ -270,8 +276,14 @@ pub(crate) fn cast_with_pool(
         }
         (Tensor::F64(t), DType::F32) => converted!(F32, t, |x| x as f32),
         (Tensor::F64(t), DType::F64) => Ok(Tensor::F64(t.clone())),
-        (Tensor::F64(t), DType::I32) => converted!(I32, t, |x| x as i32),
-        (Tensor::F64(t), DType::I64) => converted!(I64, t, |x| x as i64),
+        (Tensor::F64(t), DType::I32) => {
+            validate_real_values_cast_to_i32(t, |x| x)?;
+            converted!(I32, t, |x| x as i32)
+        }
+        (Tensor::F64(t), DType::I64) => {
+            validate_real_values_cast_to_i64(t, |x| x)?;
+            converted!(I64, t, |x| x as i64)
+        }
         (Tensor::F64(t), DType::Bool) => converted!(Bool, t, |x| x != 0.0),
         (Tensor::F64(t), DType::C32) => {
             converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
@@ -312,8 +324,14 @@ pub(crate) fn cast_with_pool(
         }
         (Tensor::C32(t), DType::F32) => converted!(F32, t, |z| z.re),
         (Tensor::C32(t), DType::F64) => converted!(F64, t, |z| z.re as f64),
-        (Tensor::C32(t), DType::I32) => converted!(I32, t, |z| z.re as i32),
-        (Tensor::C32(t), DType::I64) => converted!(I64, t, |z| z.re as i64),
+        (Tensor::C32(t), DType::I32) => {
+            validate_real_values_cast_to_i32(t, |z| z.re as f64)?;
+            converted!(I32, t, |z| z.re as i32)
+        }
+        (Tensor::C32(t), DType::I64) => {
+            validate_real_values_cast_to_i64(t, |z| z.re as f64)?;
+            converted!(I64, t, |z| z.re as i64)
+        }
         (Tensor::C32(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
         (Tensor::C32(t), DType::C32) => Ok(Tensor::C32(t.clone())),
         (Tensor::C32(t), DType::C64) => {
@@ -321,13 +339,77 @@ pub(crate) fn cast_with_pool(
         }
         (Tensor::C64(t), DType::F32) => converted!(F32, t, |z| z.re as f32),
         (Tensor::C64(t), DType::F64) => converted!(F64, t, |z| z.re),
-        (Tensor::C64(t), DType::I32) => converted!(I32, t, |z| z.re as i32),
-        (Tensor::C64(t), DType::I64) => converted!(I64, t, |z| z.re as i64),
+        (Tensor::C64(t), DType::I32) => {
+            validate_real_values_cast_to_i32(t, |z| z.re)?;
+            converted!(I32, t, |z| z.re as i32)
+        }
+        (Tensor::C64(t), DType::I64) => {
+            validate_real_values_cast_to_i64(t, |z| z.re)?;
+            converted!(I64, t, |z| z.re as i64)
+        }
         (Tensor::C64(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
         (Tensor::C64(t), DType::C32) => {
             converted!(C32, t, |z| Complex32::new(z.re as f32, z.im as f32))
         }
         (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.clone())),
+    }
+}
+
+fn validate_real_values_cast_to_i32<S: Copy>(
+    tensor: &TypedTensor<S>,
+    real: impl Fn(S) -> f64,
+) -> crate::Result<()> {
+    for &value in typed_host_data("cast", tensor)? {
+        validate_real_cast_to_i32(real(value))?;
+    }
+    Ok(())
+}
+
+fn validate_real_values_cast_to_i64<S: Copy>(
+    tensor: &TypedTensor<S>,
+    real: impl Fn(S) -> f64,
+) -> crate::Result<()> {
+    for &value in typed_host_data("cast", tensor)? {
+        validate_real_cast_to_i64(real(value))?;
+    }
+    Ok(())
+}
+
+fn validate_real_cast_to_i32(value: f64) -> crate::Result<()> {
+    if !value.is_finite() {
+        return Err(invalid_cast_value(format!(
+            "real value must be finite when casting to i32, got {value}"
+        )));
+    }
+    if value < i32::MIN as f64 || value > i32::MAX as f64 {
+        return Err(invalid_cast_value(format!(
+            "real value {value} is out of i32 range"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_real_cast_to_i64(value: f64) -> crate::Result<()> {
+    const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+    const I64_MAX_EXCLUSIVE_F64: f64 = 9_223_372_036_854_775_808.0;
+
+    if !value.is_finite() {
+        return Err(invalid_cast_value(format!(
+            "real value must be finite when casting to i64, got {value}"
+        )));
+    }
+    if !(I64_MIN_F64..I64_MAX_EXCLUSIVE_F64).contains(&value) {
+        return Err(invalid_cast_value(format!(
+            "real value {value} is out of i64 range"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_cast_value(message: String) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op: "cast",
+        message,
     }
 }
 
@@ -416,7 +498,7 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync>(
 fn typed_transpose_view_impl<T, R>(
     view: &TypedTensorView<'_, T, R>,
     perm: &[usize],
-    make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
+    make_out: impl FnOnce(&[usize]) -> crate::Result<strided_kernel::StridedArray<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + 'static,
@@ -429,7 +511,7 @@ where
         .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     checked_shape_product("transpose", "output shape", permuted.dims())?;
     // SAFETY: copy_into overwrites every output element.
-    let out = make_out(permuted.dims());
+    let out = make_out(permuted.dims())?;
     copy_view_to_array("transpose", out, &permuted)
 }
 
@@ -487,7 +569,7 @@ pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync>(
 ) -> crate::Result<TypedTensor<T>> {
     typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
         // SAFETY: broadcast materialization writes every output element before returning.
-        typed_array_uninit(shape)
+        Ok(typed_array_uninit(shape))
     })
 }
 
@@ -510,7 +592,7 @@ fn typed_broadcast_in_dim_impl<T>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
-    make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
+    make_out: impl FnOnce(&[usize]) -> crate::Result<strided_kernel::StridedArray<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync,
@@ -554,7 +636,7 @@ where
         .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
     // SAFETY: copy_into overwrites every output element.
-    let mut out = make_out(shape);
+    let mut out = make_out(shape)?;
     copy_into(&mut out.view_mut(), &broadcast)
         .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     Ok(tensor_from_array(out))
@@ -570,7 +652,7 @@ where
     T: Copy + Clone + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, tensor.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, tensor.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("convert", tensor)?, f)
         .map_err(|err| crate::Error::backend_failure("convert", err))?;
     Ok(tensor_from_array(out))
@@ -613,7 +695,7 @@ where
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) }?;
     copy_into(&mut out.view_mut(), &diag)
         .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))

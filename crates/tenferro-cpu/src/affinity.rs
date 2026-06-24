@@ -67,6 +67,8 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
     let mut mask_bytes = INITIAL_MASK_BYTES;
     loop {
         let mut mask = vec![0u8; mask_bytes];
+        // SAFETY: `mask` is a live allocation of `mask_bytes` bytes, and pid 0
+        // asks the OS to query the current process affinity.
         let rc = unsafe {
             sched_getaffinity(0, mask_bytes, mask.as_mut_ptr().cast::<core::ffi::c_void>())
         };
@@ -103,12 +105,17 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
         ) -> i32;
     }
 
+    // SAFETY: `GetCurrentProcess` takes no arguments and returns a pseudo-handle
+    // owned by the process; it must not be closed by the caller.
     let process = unsafe { GetCurrentProcess() };
+    // SAFETY: This Windows query takes no pointers and has no preconditions.
     let system_group_count = unsafe { GetActiveProcessorGroupCount() };
 
     if system_group_count <= 1 {
         let mut process_mask = 0usize;
         let mut system_mask = 0usize;
+        // SAFETY: `process` is the current-process pseudo-handle and both
+        // output pointers refer to live local variables for the duration of the call.
         let ok = unsafe {
             GetProcessAffinityMask(
                 process,
@@ -120,11 +127,14 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
             let count = process_mask.count_ones() as usize;
             return (count > 0).then_some(count);
         }
+        // SAFETY: Group 0 exists when Windows reports at most one active group.
         let count = unsafe { GetActiveProcessorCount(0) } as usize;
         return (count > 0).then_some(count);
     }
 
     let mut group_count: Word = 0;
+    // SAFETY: Windows accepts a null group array to query the required group
+    // count; `group_count` is a live output variable.
     let ok = unsafe {
         GetProcessGroupAffinity(
             process,
@@ -133,11 +143,14 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
         )
     };
     if ok != 0 || group_count == 0 {
+        // SAFETY: `u16::MAX` requests the total count across all processor groups.
         let count = unsafe { GetActiveProcessorCount(u16::MAX) } as usize;
         return (count > 0).then_some(count);
     }
 
     let mut groups = vec![0u16; group_count as usize];
+    // SAFETY: `groups` has `group_count` entries and both output pointers stay
+    // valid for the duration of the call.
     let ok = unsafe {
         GetProcessGroupAffinity(
             process,
@@ -146,6 +159,7 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
         )
     };
     if ok == 0 || group_count == 0 {
+        // SAFETY: `u16::MAX` requests the total count across all processor groups.
         let count = unsafe { GetActiveProcessorCount(u16::MAX) } as usize;
         return (count > 0).then_some(count);
     }
@@ -153,6 +167,8 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
     if group_count == 1 {
         let mut process_mask = 0usize;
         let mut system_mask = 0usize;
+        // SAFETY: `process` is the current-process pseudo-handle and both
+        // output pointers refer to live local variables for the duration of the call.
         let ok = unsafe {
             GetProcessAffinityMask(
                 process,
@@ -168,7 +184,10 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
 
     let count = groups
         .into_iter()
-        .map(|group| unsafe { GetActiveProcessorCount(group) } as usize)
+        .map(|group| {
+            // SAFETY: Group identifiers are returned by `GetProcessGroupAffinity`.
+            (unsafe { GetActiveProcessorCount(group) }) as usize
+        })
         .sum();
     (count > 0).then_some(count)
 }

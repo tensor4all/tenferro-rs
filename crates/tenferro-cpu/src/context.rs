@@ -25,8 +25,8 @@ pub struct CpuContext {
 }
 
 impl CpuContext {
-    /// Create a CPU context from `RAYON_NUM_THREADS`, or fall back to the
-    /// process-visible CPU count.
+    /// Create a CPU context from `RAYON_NUM_THREADS`, or fall back to a
+    /// single-threaded context with a stderr warning when validation fails.
     ///
     /// # Examples
     ///
@@ -37,7 +37,12 @@ impl CpuContext {
     /// assert!(ctx.num_threads() >= 1);
     /// ```
     pub fn from_env() -> Self {
-        Self::try_from_env().unwrap_or_else(|_| Self::single_threaded())
+        Self::try_from_env().unwrap_or_else(|err| {
+            eprintln!(
+                "tenferro_cpu: falling back to single-threaded CPU context after configuration error: {err}"
+            );
+            Self::single_threaded()
+        })
     }
 
     /// Try to create a CPU context from `RAYON_NUM_THREADS`.

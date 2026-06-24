@@ -173,6 +173,29 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 }
 
 #[test]
+fn linalg_pool_acquire_then_panic_keeps_retained_stats_consistent() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    <f64 as PoolScalar>::pool_release(&mut backend.buffers, Vec::with_capacity(1024));
+    assert_eq!(backend.buffer_pool_len(), 1);
+    assert_eq!(
+        backend.buffers.retained_capacity_bytes(),
+        1024 * std::mem::size_of::<f64>()
+    );
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_linalg_pool::<()>(|pool| {
+            let _in_flight = unsafe { <f64 as PoolScalar>::pool_acquire(pool, 1024) };
+            assert_eq!(pool.retained_capacity_bytes(), 0);
+            panic!("forced panic after pool acquisition");
+        });
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(backend.buffer_pool_len(), 0);
+    assert_eq!(backend.buffers.retained_capacity_bytes(), 0);
+}
+
+#[test]
 #[cfg(feature = "cpu-faer")]
 fn cached_faer_gemm_pool_helper_enters_owned_rayon_pool() {
     let ambient_threads = rayon::current_num_threads();

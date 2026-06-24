@@ -406,7 +406,7 @@ where
         .shape()
         .iter()
         .enumerate()
-        .filter(|(axis, _)| !axes.contains(axis))
+        .filter(|&(axis, _)| !axes.contains(&axis))
         .map(|(_, &dim)| dim)
         .collect();
 
@@ -451,7 +451,7 @@ where
         .shape()
         .iter()
         .enumerate()
-        .filter(|(axis, _)| !axes.contains(axis))
+        .filter(|&(axis, _)| !axes.contains(&axis))
         .map(|(_, &dim)| dim)
         .collect();
 
