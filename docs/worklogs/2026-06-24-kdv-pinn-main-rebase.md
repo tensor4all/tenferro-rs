@@ -22,6 +22,8 @@ tutorial page that links the sample into the Quarto docs sidebar.
 - Added `docs/tutorials/kdv-pinn.md` as an advanced tutorial that explains the
   sample structure, run commands, output options, and traced-AD residual
   pattern.
+- Limited `plotters` features to bitmap PNG/GIF and line-series rendering so
+  the sample does not require system `fontconfig` packages in workspace-wide CI.
 - Applied the PDE loss weight after `mean(residual^2)` so the scalar weight is
   not squared implicitly.
 - Updated KdV PINN graph construction and tests for APIs that now return
@@ -36,6 +38,8 @@ tutorial page that links the sample into the Quarto docs sidebar.
 - `quarto render docs`
 - `/opt/homebrew/bin/python3.12 scripts/check-docs-site.py --root-dir . --quiet`
 - `cargo test -p tenferro-fft --test fft_ops`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --release --no-run`
 
 ## Remaining Risks
 

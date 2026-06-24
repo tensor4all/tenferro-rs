@@ -10,5 +10,10 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
 tenferro-tensor = { path = "../crates/tenferro-tensor" }
-plotters = "0.3"
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "bitmap_gif",
+    "line_series",
+] }
 rand.workspace = true
