@@ -22,6 +22,9 @@ tutorial page that links the sample into the Quarto docs sidebar.
 - Added `docs/tutorials/kdv-pinn.md` as an advanced tutorial that explains the
   sample structure, run commands, output options, and traced-AD residual
   pattern.
+- Expanded the KdV tutorial after readability feedback so it defines the KdV
+  equation, the neural model, sampled point sets, and the PINN objective with
+  rendered math before the run instructions.
 - Limited `plotters` features to bitmap PNG/GIF and line-series rendering so
   the sample does not require system `fontconfig` packages in workspace-wide CI.
 - Added coverage thresholds for the KdV sample binary, because coverage CI
