@@ -4,9 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, check_lapack_info, dim_i32, has_zero_dim, matrix_with_batch_shape,
-    square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
-    vector_with_batch_shape, work_len,
+    batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
+    dim_i32, has_zero_dim, matrix_with_batch_shape, square_core_and_batch_result,
+    square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
@@ -294,15 +294,18 @@ pub(crate) fn eigh_values<T: LapackEigh>(
     }
 
     let n = core_shape[0];
-    let slice_size = n * n;
-    let batch_total: usize = batch_shape.iter().product();
-    let mut data = Vec::with_capacity(n * batch_total);
+    let slice_size = checked_product("eigh_values", "matrix shape", &[n, n])?;
+    let batch_total = batch_element_count("eigh_values", batch_shape)?;
+    let mut data = Vec::with_capacity(checked_product(
+        "eigh_values",
+        "values output",
+        &[n, batch_total],
+    )?);
     for batch in 0..batch_total {
-        let start = batch * slice_size;
-        let end = start + slice_size;
+        let range = checked_slice_range("eigh_values", batch, slice_size)?;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()?[start..end].to_vec(),
+            input.host_data()?[range].to_vec(),
             input,
         )?;
         let values = eigh_values_2d(buffers, &batch_input)?;

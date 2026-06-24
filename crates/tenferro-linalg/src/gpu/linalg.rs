@@ -19,8 +19,9 @@ use tenferro_gpu::cuda_interop::{
     typed_device_ptr as interop_typed_device_ptr, typed_tensor_array_arg, typed_tensor_binding,
     upload_device_bytes, with_cubecl_client, CudaExtensionCacheGuard, DeviceByteBuffer,
 };
-// validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
-// then downloads a single scalar — no bulk host roundtrip.
+// validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
+// reduce_min/reduce_max) then downloads scalar summaries — no bulk host
+// roundtrip.
 use tenferro_gpu::{download_tensor, CudaBackend, CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
@@ -525,7 +526,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(&input.shape()[2..]);
+    let batch_total = batch_count(OP, &input.shape()[2..])?;
     let first_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(n, OP, "lda")?;
     let n_i32 = as_i32(n, OP, "n")?;
@@ -649,7 +650,7 @@ where
     let n_rhs = as_i32(cols, op, "n")?;
     let alpha = T::one();
 
-    let batch_total = batch_count(&b.shape()[2..]);
+    let batch_total = batch_count(op, &b.shape()[2..])?;
     if batch_total > 1 {
         let mut a_pointers = Vec::with_capacity(batch_total);
         let mut b_pointers = Vec::with_capacity(batch_total);
@@ -757,7 +758,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(&input.shape()[2..]);
+    let batch_total = batch_count(OP, &input.shape()[2..])?;
     let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(m, OP, "lda")?;
     let m_i32 = as_i32(m, OP, "m")?;
@@ -1002,7 +1003,7 @@ where
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
     let ldu = as_i32(m, OP, "ldu")?;
-    let batch_total = batch_count(batch_shape);
+    let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd input stride", m, n)?;
     let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
     let s_stride = k;
@@ -1185,7 +1186,7 @@ where
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(m, OP, "lda")?;
-    let batch_total = batch_count(batch_shape);
+    let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
     let s_stride = k;
 
@@ -1394,7 +1395,7 @@ where
         OP,
     )?;
     let orgqr_workspace = alloc_workspace_elems::<T>(backend.runtime(), orgqr_lwork, OP)?;
-    let batch_total = batch_count(batch_shape);
+    let batch_total = batch_count(OP, batch_shape)?;
     let geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let geqrf_info_ptr = typed_device_ptr(backend.runtime(), &geqrf_info, OP)?;
@@ -1498,7 +1499,7 @@ where
         OP,
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let batch_total = batch_count(batch_shape);
+    let batch_total = batch_count(OP, batch_shape)?;
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
@@ -1572,7 +1573,7 @@ where
         OP,
     )?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let batch_total = batch_count(batch_shape);
+    let batch_total = batch_count(OP, batch_shape)?;
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
     let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
@@ -1998,8 +1999,18 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
-fn batch_count(batch_shape: &[usize]) -> usize {
-    batch_shape.iter().product::<usize>().max(1)
+fn checked_shape_product(op: &'static str, label: &'static str, shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| Error::InvalidConfig {
+            op,
+            message: format!("{label} element count overflows usize"),
+        })
+    })
+}
+
+fn batch_count(op: &'static str, batch_shape: &[usize]) -> Result<usize> {
+    let count = checked_shape_product(op, "batch shape", batch_shape)?;
+    Ok(count.max(1))
 }
 
 fn checked_mul_usize(
@@ -2087,53 +2098,116 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 
 /// Validate that U's diagonal has no singular/zero entries — GPU-accelerated.
 ///
-/// Strategy: extract_diagonal → abs → reshape to 1D → reduce_min(axis=0) →
-/// download 1 scalar → check > 0.
+/// Strategy: extract_diagonal → magnitude → reshape to 1D →
+/// reduce_min/reduce_max(axis=0) → download scalar summaries → tolerance check.
 ///
-/// Only the final scalar (8 bytes) is transferred to host.
+/// Only the final scalar summaries are transferred to host.
 fn validate_nonsingular_gpu(backend: &mut CudaBackend, u: &Tensor) -> Result<()> {
     let diag = backend.extract_diagonal(u, 0, 1)?;
-
-    // abs — convert complex to real first (complex abs not supported)
-    let abs_diag = match &diag {
-        Tensor::C32(_) | Tensor::C64(_) => {
-            let real_diag = backend.cast(&diag, DType::F64)?;
-            backend.abs(&real_diag)?
-        }
-        _ => backend.abs(&diag)?,
-    };
+    let abs_diag = diagonal_magnitude(backend, &diag)?;
 
     // Flatten to 1D then reduce_min on axis 0 to get a single scalar.
-    let total: usize = abs_diag.shape().iter().product();
+    let total = checked_shape_product("validate_nonsingular_gpu", "diagonal", abs_diag.shape())?;
     let flat = backend.reshape(&abs_diag, &[total])?;
     let min_val = backend.reduce_min(&flat, &[0])?;
+    let max_val = backend.reduce_max(&flat, &[0])?;
 
     // Host reads must observe the queued GPU reduction result.
     backend.runtime().synchronize()?;
     let host_min = download_tensor(backend.runtime(), &min_val)?;
-    let is_singular = match &host_min {
-        Tensor::F64(t) => {
-            let value = t.host_data()?[0];
-            value == 0.0 || !value.is_finite()
-        }
-        Tensor::F32(t) => {
-            let value = t.host_data()?[0];
-            value == 0.0 || !value.is_finite()
-        }
-        _ => {
-            return Err(Error::backend_failure(
-                "solve",
-                "unexpected dtype after abs reduction",
-            ));
-        }
-    };
+    let host_max = download_tensor(backend.runtime(), &max_val)?;
+    let (value, max_magnitude) = host_min_max_magnitudes(&host_min, &host_max)?;
+    let tolerance = singularity_tolerance(abs_diag.dtype(), max_magnitude);
+    let is_singular = !value.is_finite() || !max_magnitude.is_finite() || value <= tolerance;
 
     if is_singular {
         Err(Error::backend_failure(
             "solve",
-            "singular matrix: zero or non-finite diagonal entry in U",
+            "singular matrix: near-zero or non-finite diagonal entry in U",
         ))
     } else {
         Ok(())
     }
+}
+
+fn diagonal_magnitude(backend: &mut CudaBackend, diag: &Tensor) -> Result<Tensor> {
+    match diag {
+        Tensor::F32(_) | Tensor::F64(_) => backend.abs(diag),
+        Tensor::C32(t) => complex32_magnitude(backend.runtime(), t).map(Tensor::F32),
+        Tensor::C64(t) => complex64_magnitude(backend.runtime(), t).map(Tensor::F64),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag))
+        }
+    }
+}
+
+fn complex32_magnitude(
+    rt: &CudaRuntime,
+    input: &TypedTensor<Complex32>,
+) -> Result<TypedTensor<f32>> {
+    let output = alloc_output::<f32>(rt, input.shape())?;
+    let input_arg = typed_tensor_array_arg(input, "validate_nonsingular_gpu")?;
+    let output_arg = typed_tensor_array_arg(&output, "validate_nonsingular_gpu")?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    let launch_count = cube_count_for_len(output.n_elements())?;
+    with_cubecl_client(rt, |client| unsafe {
+        cubecl_linalg::complex32_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+            client,
+            launch_count,
+            cube_dim_1d(),
+            output_arg,
+            input_arg,
+        );
+    });
+    flush_cubecl_client(rt, "validate_nonsingular_gpu")?;
+    Ok(output)
+}
+
+fn complex64_magnitude(
+    rt: &CudaRuntime,
+    input: &TypedTensor<Complex64>,
+) -> Result<TypedTensor<f64>> {
+    let output = alloc_output::<f64>(rt, input.shape())?;
+    let input_arg = typed_tensor_array_arg(input, "validate_nonsingular_gpu")?;
+    let output_arg = typed_tensor_array_arg(&output, "validate_nonsingular_gpu")?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    let launch_count = cube_count_for_len(output.n_elements())?;
+    with_cubecl_client(rt, |client| unsafe {
+        cubecl_linalg::complex64_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+            client,
+            launch_count,
+            cube_dim_1d(),
+            output_arg,
+            input_arg,
+        );
+    });
+    flush_cubecl_client(rt, "validate_nonsingular_gpu")?;
+    Ok(output)
+}
+
+fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64, f64)> {
+    match (host_min, host_max) {
+        (Tensor::F64(min), Tensor::F64(max)) => Ok((min.host_data()?[0], max.host_data()?[0])),
+        (Tensor::F32(min), Tensor::F32(max)) => Ok((
+            f64::from(min.host_data()?[0]),
+            f64::from(max.host_data()?[0]),
+        )),
+        _ => Err(Error::backend_failure(
+            "solve",
+            "unexpected dtype after magnitude reduction",
+        )),
+    }
+}
+
+fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> f64 {
+    let eps = match dtype {
+        DType::F32 | DType::C32 => f32::EPSILON as f64,
+        DType::F64 | DType::C64 => f64::EPSILON,
+        DType::I32 | DType::I64 | DType::Bool => f64::EPSILON,
+    };
+    eps * max_magnitude.max(1.0)
 }

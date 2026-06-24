@@ -4,9 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batch_element_count, batched_multi, check_lapack_info, dim_i32, has_zero_dim,
-    leading_upper_triangle_from_lapack, matrix_core_and_batch_result, matrix_dims,
-    matrix_with_batch_shape, tensor_from_vec_with_template, vector_with_batch_shape,
+    batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
+    dim_i32, has_zero_dim, leading_upper_triangle_from_lapack, matrix_core_and_batch_result,
+    matrix_dims, matrix_with_batch_shape, tensor_from_vec_with_template, vector_with_batch_shape,
 };
 
 pub(crate) trait LapackLu: Clone + Copy + Default + PoolScalar {
@@ -233,21 +233,25 @@ pub(crate) fn lu_factor<T: LapackLu>(
     }
 
     let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
-    let matrix_len = m * n;
+    let matrix_len = checked_product("lu_factor", "matrix shape", &[m, n])?;
     let k = m.min(n);
     let batch_total = batch_element_count("lu_factor", batch_shape)?;
-    let mut lu_data = Vec::with_capacity(matrix_len * batch_total);
-    let mut pivot_data = Vec::with_capacity(k * batch_total);
+    let mut lu_data = Vec::with_capacity(checked_product(
+        "lu_factor",
+        "packed LU output",
+        &[matrix_len, batch_total],
+    )?);
+    let mut pivot_data = Vec::with_capacity(checked_product(
+        "lu_factor",
+        "pivot output",
+        &[k, batch_total],
+    )?);
     let mut parity_data = Vec::with_capacity(batch_total);
 
     for batch in 0..batch_total {
-        let start = batch * matrix_len;
-        let end = start + matrix_len;
-        let batch_input = tensor_from_vec_with_template(
-            vec![m, n],
-            input.host_data()?[start..end].to_vec(),
-            input,
-        )?;
+        let range = checked_slice_range("lu_factor", batch, matrix_len)?;
+        let batch_input =
+            tensor_from_vec_with_template(vec![m, n], input.host_data()?[range].to_vec(), input)?;
         let (packed, pivots, parity) = lu_factor_2d(&batch_input)?;
         lu_data.extend_from_slice(packed.host_data()?);
         pivot_data.extend_from_slice(pivots.host_data()?);

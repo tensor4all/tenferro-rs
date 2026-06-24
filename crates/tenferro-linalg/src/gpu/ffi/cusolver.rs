@@ -1151,6 +1151,26 @@ fn cublas_status_name(status: CublasStatus) -> &'static str {
     }
 }
 
+#[cold]
+fn report_cusolver_destroy_status(status: CusolverStatus, call: &'static str) {
+    if status != CUSOLVER_STATUS_SUCCESS {
+        eprintln!(
+            "tenferro-linalg: {call} failed during Drop with cuSOLVER {} ({status})",
+            cusolver_status_name(status)
+        );
+    }
+}
+
+#[cold]
+fn report_cublas_destroy_status(status: CublasStatus, call: &'static str) {
+    if status != CUBLAS_STATUS_SUCCESS {
+        eprintln!(
+            "tenferro-linalg: {call} failed during Drop with cuBLAS {} ({status})",
+            cublas_status_name(status)
+        );
+    }
+}
+
 pub struct CusolverDnHandle {
     lib: Arc<CusolverLibrary>,
     raw: CusolverDnHandleRaw,
@@ -1190,9 +1210,8 @@ impl<'a> GesvdjInfo<'a> {
 
 impl Drop for GesvdjInfo<'_> {
     fn drop(&mut self) {
-        unsafe {
-            (self.handle.lib.vtable.destroy_gesvdj_info)(self.raw);
-        }
+        let status = unsafe { (self.handle.lib.vtable.destroy_gesvdj_info)(self.raw) };
+        report_cusolver_destroy_status(status, "cusolverDnDestroyGesvdjInfo");
     }
 }
 
@@ -2080,7 +2099,8 @@ impl CusolverDnHandle {
 
 impl Drop for CusolverDnHandle {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        report_cusolver_destroy_status(status, "cusolverDnDestroy");
     }
 }
 
@@ -2277,7 +2297,8 @@ impl CublasHandle {
 
 impl Drop for CublasHandle {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        report_cublas_destroy_status(status, "cublasDestroy_v2");
     }
 }
 

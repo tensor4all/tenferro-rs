@@ -476,17 +476,39 @@ pub(crate) fn transpose_lu_solve_prepared(
     mode: &OperationRole,
     transpose_a: bool,
     conjugate_a: bool,
-    _ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None, None, None, None];
+        return Ok(vec![None, None, None, None]);
     };
     let OperationRole::Linearized { active_mask } = mode else {
-        return vec![None, None, None, None];
+        return Ok(vec![None, None, None, None]);
     };
+    if active_mask.len() != 4 {
+        return Err(invalid_input(
+            "lu_solve_prepared",
+            ADRuleKind::Transpose,
+            format!(
+                "expected 4 active-mask entries for prepared LU solve, got {}",
+                active_mask.len()
+            ),
+        ));
+    }
+    if active_mask[1] || active_mask[2] {
+        return Err(invalid_input(
+            "lu_solve_prepared",
+            ADRuleKind::Transpose,
+            "packed LU and pivot cotangents are unsupported; differentiate with respect to the original matrix or RHS",
+        ));
+    }
 
     let mut result = vec![None, None, None, None];
-    if active_mask[3] {
+    if active_mask[0] || active_mask[3] {
+        let rank = ctx.rank_of(&inputs[0])?;
+        let rhs_rank = ctx.rank_of(&inputs[3])?;
+        validate_matrix_operands("lu_solve_prepared", ADRuleKind::Transpose, rank, rhs_rank)?;
+        validate_square_matrix_input("lu_solve_prepared", ADRuleKind::Transpose, &inputs[0], ctx)?;
+        let dtype = ctx.dtype_of(&inputs[0])?;
         let (adjoint_transpose_a, adjoint_conjugate_a) =
             adjoint_lu_solve_flags(transpose_a, conjugate_a);
         let out = builder.add_operation(
@@ -504,9 +526,55 @@ pub(crate) fn transpose_lu_solve_prepared(
                 active_mask: vec![false, false, false, true],
             },
         );
-        result[3] = Some(out[0]);
+        let rhs_cotangent = out[0];
+        if active_mask[0] {
+            let solution = builder.add_operation(
+                linalg_std_op(LinalgOp::LuSolvePrepared {
+                    transpose_a,
+                    conjugate_a,
+                }),
+                inputs.to_vec(),
+                OperationRole::Primary,
+            )[0];
+            let op_matrix_cotangent = solve_matrix_cotangent(
+                builder,
+                rhs_cotangent,
+                ValueRef::Local(solution),
+                true,
+                false,
+                rank,
+                dtype,
+            );
+            result[0] = Some(adjoint_lu_operand_cotangent(
+                builder,
+                op_matrix_cotangent,
+                transpose_a,
+                conjugate_a,
+                rank,
+                dtype,
+            ));
+        }
+        if active_mask[3] {
+            result[3] = Some(rhs_cotangent);
+        }
     }
-    result
+    Ok(result)
+}
+
+fn adjoint_lu_operand_cotangent(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    op_matrix_cotangent: LocalValueId,
+    transpose_a: bool,
+    conjugate_a: bool,
+    rank: usize,
+    dtype: tenferro_tensor::DType,
+) -> LocalValueId {
+    match (transpose_a, conjugate_a) {
+        (false, false) => op_matrix_cotangent,
+        (true, false) => transpose_matrix_linear(builder, op_matrix_cotangent, rank),
+        (false, true) => conjugate_linear_if_dtype_complex(builder, op_matrix_cotangent, dtype),
+        (true, true) => adjoint_matrix_linear(builder, op_matrix_cotangent, rank, dtype),
+    }
 }
 
 pub(crate) fn transpose_full_piv_lu_solve(

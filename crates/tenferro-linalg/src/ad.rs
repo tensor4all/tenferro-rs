@@ -123,21 +123,12 @@ impl ExtensionAdRule for LinalgAdRule {
             LinalgOp::EighVals { eps } => {
                 rules::linearize_eigh_values(builder, primal_in, tangent_in, eps, ctx)
             }
-            LinalgOp::Eig { input_dtype } => Ok(rules::linearize_eig(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                input_dtype,
-                ctx,
-            )),
-            LinalgOp::EigVals { input_dtype } => Ok(rules::linearize_eig_values(
-                builder,
-                primal_in,
-                tangent_in,
-                input_dtype,
-                ctx,
-            )),
+            LinalgOp::Eig { input_dtype } => {
+                rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
+            }
+            LinalgOp::EigVals { input_dtype } => {
+                rules::linearize_eig_values(builder, primal_in, tangent_in, input_dtype, ctx)
+            }
         }
     }
 
@@ -169,7 +160,7 @@ impl ExtensionAdRule for LinalgAdRule {
             LinalgOp::LuSolvePrepared {
                 transpose_a,
                 conjugate_a,
-            } => Ok(rules::transpose_lu_solve_prepared(
+            } => rules::transpose_lu_solve_prepared(
                 &mut builder,
                 cotangent_out,
                 inputs,
@@ -177,7 +168,7 @@ impl ExtensionAdRule for LinalgAdRule {
                 transpose_a,
                 conjugate_a,
                 ctx,
-            )),
+            ),
             LinalgOp::FullPivLuSolve { transpose_a } => rules::transpose_full_piv_lu_solve(
                 &mut builder,
                 cotangent_out,
@@ -448,6 +439,30 @@ mod tests {
 
         assert!(result[0].is_some());
         assert!(!builder.build().operations().is_empty());
+    }
+
+    #[test]
+    fn cholesky_jvp_propagates_missing_input_metadata() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let mut ctx = ShapeGuardContext::default();
+        let primal = input_key(55);
+        let tangent = builder.add_input(TensorInputKey::User { id: 56 });
+        let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
+
+        let err = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[primal],
+                &[input_key(57)],
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.rule(), ADRuleKind::Jvp);
+        assert!(err.to_string().contains("missing TensorMeta"));
+        assert!(builder.build().operations().is_empty());
     }
 
     #[test]

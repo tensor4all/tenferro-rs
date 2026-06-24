@@ -173,6 +173,13 @@ fn vec_from_diag<T: Copy + PoolScalar>(buffers: &mut BufferPool, diag: DiagRef<'
 
 macro_rules! impl_complex_faer_casts {
     ($to_faer_slice:ident, $to_faer_slice_mut:ident, $complex:ty, $faer_complex:ty) => {
+        const _: () = {
+            assert!(std::mem::size_of::<$complex>() == std::mem::size_of::<$faer_complex>());
+            assert!(std::mem::align_of::<$complex>() == std::mem::align_of::<$faer_complex>());
+            assert!(std::mem::offset_of!($complex, re) == std::mem::offset_of!($faer_complex, re));
+            assert!(std::mem::offset_of!($complex, im) == std::mem::offset_of!($faer_complex, im));
+        };
+
         fn $to_faer_slice(data: &[$complex]) -> &[$faer_complex] {
             assert_eq!(
                 std::mem::size_of::<$complex>(),
@@ -262,8 +269,8 @@ fn checked_product(
         .ok_or_else(|| invalid_config(op, format!("{role} element count overflows usize")))
 }
 
-fn batch_count(batch_shape: &[usize]) -> usize {
-    batch_shape.iter().product::<usize>().max(1)
+fn batch_count(op: &'static str, batch_shape: &[usize]) -> tenferro_tensor::Result<usize> {
+    Ok(checked_product(op, "batch shape", batch_shape)?.max(1))
 }
 
 fn checked_repeated_len(
@@ -447,11 +454,13 @@ macro_rules! impl_real_eig_to_complex_outputs {
             let mut s = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, n) };
             let mut j = 0;
             while j < n {
-                if eig_imag_is_effectively_zero(
-                    s_re[j] as f64,
-                    s_im[j] as f64,
-                    <$real>::EPSILON as f64,
-                ) {
+                if j + 1 >= n
+                    || eig_imag_is_effectively_zero(
+                        s_re[j] as f64,
+                        s_im[j] as f64,
+                        <$real>::EPSILON as f64,
+                    )
+                {
                     s[j] = <$complex>::new(s_re[j], 0.0);
                     for i in 0..n {
                         u[i + j * n] = <$complex>::new(u_real[(i, j)], 0.0);
@@ -2551,7 +2560,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "lu_factor")?;
         let k = m.min(n);
-        let parity_len = batch_count(batch_shape);
+        let parity_len = batch_count("lu_factor", batch_shape)?;
         return Ok((
             tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input),
             tensor_from_vec_with_template(
@@ -2573,13 +2582,15 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     }
 
     let k = m.min(n);
-    let matrix_len = m * n;
-    let batch_total = batch_count(batch_shape);
-    let mut lu_data = buffers.acquire_with_capacity::<T>(matrix_len * batch_total);
-    let mut pivot_data = Vec::with_capacity(k * batch_total);
+    let matrix_len = checked_product("lu_factor", "matrix shape", &[m, n])?;
+    let batch_total = batch_count("lu_factor", batch_shape)?;
+    let lu_len = checked_repeated_len("lu_factor", "packed LU", matrix_len, batch_total)?;
+    let pivot_len = checked_repeated_len("lu_factor", "pivots", k, batch_total)?;
+    let mut lu_data = buffers.acquire_with_capacity::<T>(lu_len);
+    let mut pivot_data = Vec::with_capacity(pivot_len);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
 
-    let first_range = 0..matrix_len;
+    let first_range = checked_slice_range("lu_factor", 0, matrix_len)?;
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         vec![m, n],
@@ -2589,9 +2600,8 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
 
     for batch in 0..batch_total {
         if batch > 0 {
-            let start = batch * matrix_len;
-            let end = start + matrix_len;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end]);
+            let range = checked_slice_range("lu_factor", batch, matrix_len)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range]);
         }
         let (packed, pivots, parity) = T::lu_factor_2d(ctx, buffers, &batch_input)?;
         lu_data.extend_from_slice(packed.host_data()?);

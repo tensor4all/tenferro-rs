@@ -137,6 +137,91 @@ fn cpu_eig_real_complex_classification_uses_tolerance() {
 }
 
 #[test]
+fn real_eig_complex_pair_conversion_guards_unpaired_last_column() {
+    for (name, source, loop_var) in [
+        ("LAPACK eig", cpu_lapack_eig_source(), "col"),
+        ("faer eig", cpu_faer_linalg_source(), "j"),
+    ] {
+        let converter = source_section(
+            &source,
+            "macro_rules! impl_real_eig_to_complex_outputs",
+            "macro_rules! impl_real_eig_to_complex_values",
+        );
+        assert!(
+            converter.contains(&format!("if {loop_var} + 1 >= n")),
+            "{name} real eig conversion should guard an apparent complex pair at the final column"
+        );
+    }
+}
+
+#[test]
+fn faer_complex_slice_casts_assert_field_offsets() {
+    let source = cpu_faer_linalg_source();
+    let casts = source_section(
+        &source,
+        "macro_rules! impl_complex_faer_casts",
+        "impl_complex_faer_casts!(",
+    );
+
+    for needle in [
+        "std::mem::offset_of!($complex, re)",
+        "std::mem::offset_of!($faer_complex, re)",
+        "std::mem::offset_of!($complex, im)",
+        "std::mem::offset_of!($faer_complex, im)",
+    ] {
+        assert!(
+            casts.contains(needle),
+            "faer complex slice casts must assert field-order compatibility: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
+    let lapack_helpers = cpu_lapack_helpers_source();
+    let batched_helpers = source_section(
+        &lapack_helpers,
+        "pub(crate) fn batched_single",
+        "pub(crate) fn zero_dim_eig_outputs",
+    );
+    assert!(
+        !batched_helpers.contains(".iter().product"),
+        "LAPACK batched helpers must use checked shape products"
+    );
+    for needle in [
+        "batch_idx * slice_size",
+        "batch_idx * a_slice_size",
+        "batch_idx * b_slice_size",
+    ] {
+        assert!(
+            !batched_helpers.contains(needle),
+            "LAPACK batched helpers must use checked slice ranges instead of {needle}"
+        );
+    }
+    assert!(
+        batched_helpers.contains("checked_product(")
+            && batched_helpers.contains("checked_slice_range("),
+        "LAPACK batched helpers should route products and batch ranges through checked helpers"
+    );
+
+    let faer_source = cpu_faer_linalg_source();
+    let batch_count = source_section(&faer_source, "fn batch_count", "fn checked_repeated_len");
+    assert!(
+        !batch_count.contains(".iter().product"),
+        "faer batch_count must use checked products"
+    );
+    let lu_factor = source_section(
+        &faer_source,
+        "pub(crate) fn lu_factor<T: FaerLinalg>",
+        "pub(crate) fn full_piv_lu<T: FaerLinalg>",
+    );
+    assert!(
+        !lu_factor.contains("batch * matrix_len") && !lu_factor.contains("start + matrix_len"),
+        "faer LU factor batching must use checked_slice_range for batch windows"
+    );
+}
+
+#[test]
 fn faer_lu_singularity_detection_uses_tolerance() {
     let source = cpu_faer_linalg_source();
 

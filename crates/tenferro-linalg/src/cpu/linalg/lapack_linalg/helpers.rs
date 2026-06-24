@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -111,6 +113,56 @@ pub(crate) fn batch_element_count(
                 message: "batch element count overflow".into(),
             })
     })
+}
+
+pub(crate) fn checked_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> tenferro_tensor::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: format!("{role} element count overflow"),
+            })
+    })
+}
+
+fn checked_repeated_len(
+    op: &'static str,
+    role: &'static str,
+    per_batch: usize,
+    batch_count: usize,
+) -> tenferro_tensor::Result<usize> {
+    per_batch
+        .checked_mul(batch_count)
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!("{role} repeated batch length overflow"),
+        })
+}
+
+pub(crate) fn checked_slice_range(
+    op: &'static str,
+    batch_idx: usize,
+    slice_size: usize,
+) -> tenferro_tensor::Result<Range<usize>> {
+    let start =
+        batch_idx
+            .checked_mul(slice_size)
+            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: "batch slice start overflow".into(),
+            })?;
+    let end =
+        start
+            .checked_add(slice_size)
+            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: "batch slice end overflow".into(),
+            })?;
+    Ok(start..end)
 }
 
 pub(crate) fn has_zero_dim(shape: &[usize]) -> bool {
@@ -228,8 +280,8 @@ where
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: op_name,
@@ -240,7 +292,7 @@ where
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
-    let first_range = 0..slice_size;
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
@@ -250,9 +302,8 @@ where
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
-            let start = batch_idx * slice_size;
-            let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
         }
         let batch_output = op(buffers, &batch_input)?;
 
@@ -265,7 +316,12 @@ where
                 });
             }
         } else {
-            out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
+            out_data = Some(Vec::with_capacity(checked_repeated_len(
+                op_name,
+                "output",
+                batch_output.n_elements(),
+                batch_count,
+            )?));
             out_core_shape = Some(batch_output.shape().to_vec());
         }
 
@@ -307,8 +363,8 @@ where
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: op_name,
@@ -319,7 +375,7 @@ where
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<T>> = Vec::new();
 
-    let first_range = 0..slice_size;
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
@@ -329,9 +385,8 @@ where
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
-            let start = batch_idx * slice_size;
-            let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -348,8 +403,11 @@ where
                 .collect();
             out_data = batch_outputs
                 .iter()
-                .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
-                .collect();
+                .map(|tensor| {
+                    checked_repeated_len(op_name, "output", tensor.n_elements(), batch_count)
+                        .map(Vec::with_capacity)
+                })
+                .collect::<tenferro_tensor::Result<_>>()?;
         } else {
             if batch_outputs.len() != out_shapes.len() {
                 return Err(tenferro_tensor::Error::InvalidConfig {
@@ -399,8 +457,8 @@ where
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: op_name,
@@ -411,7 +469,7 @@ where
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<OutT>> = Vec::new();
 
-    let first_range = 0..slice_size;
+    let first_range = checked_slice_range(op_name, 0, slice_size)?;
     let mut batch_input = tensor_from_pooled_slice_with_template(
         buffers,
         core_shape.to_vec(),
@@ -421,9 +479,8 @@ where
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
-            let start = batch_idx * slice_size;
-            let end = start + slice_size;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[start..end])?;
+            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
         }
         let batch_outputs = op(buffers, &batch_input)?;
 
@@ -440,8 +497,11 @@ where
                 .collect();
             out_data = batch_outputs
                 .iter()
-                .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
-                .collect();
+                .map(|tensor| {
+                    checked_repeated_len(op_name, "output", tensor.n_elements(), batch_count)
+                        .map(Vec::with_capacity)
+                })
+                .collect::<tenferro_tensor::Result<_>>()?;
         } else {
             if batch_outputs.len() != out_shapes.len() {
                 return Err(tenferro_tensor::Error::InvalidConfig {
@@ -506,9 +566,9 @@ where
         return op(buffers, a, b);
     }
 
-    let a_slice_size: usize = a_core_shape.iter().product();
-    let b_slice_size: usize = b_core_shape.iter().product();
-    let batch_count: usize = a_batch_shape.iter().product();
+    let a_slice_size = checked_product(op_name, "lhs core shape", a_core_shape)?;
+    let b_slice_size = checked_product(op_name, "rhs core shape", b_core_shape)?;
+    let batch_count = batch_element_count(op_name, a_batch_shape)?;
     if batch_count == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: op_name,
@@ -519,8 +579,8 @@ where
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
-    let a_first_range = 0..a_slice_size;
-    let b_first_range = 0..b_slice_size;
+    let a_first_range = checked_slice_range(op_name, 0, a_slice_size)?;
+    let b_first_range = checked_slice_range(op_name, 0, b_slice_size)?;
     let mut batch_a = tensor_from_pooled_slice_with_template(
         buffers,
         a_core_shape.to_vec(),
@@ -536,12 +596,10 @@ where
 
     for batch_idx in 0..batch_count {
         if batch_idx > 0 {
-            let a_start = batch_idx * a_slice_size;
-            let a_end = a_start + a_slice_size;
-            let b_start = batch_idx * b_slice_size;
-            let b_end = b_start + b_slice_size;
-            refill_tensor_from_slice(&mut batch_a, &a.host_data()?[a_start..a_end])?;
-            refill_tensor_from_slice(&mut batch_b, &b.host_data()?[b_start..b_end])?;
+            let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
+            let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
+            refill_tensor_from_slice(&mut batch_a, &a.host_data()?[a_range])?;
+            refill_tensor_from_slice(&mut batch_b, &b.host_data()?[b_range])?;
         }
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
@@ -554,7 +612,12 @@ where
                 });
             }
         } else {
-            out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
+            out_data = Some(Vec::with_capacity(checked_repeated_len(
+                op_name,
+                "output",
+                batch_output.n_elements(),
+                batch_count,
+            )?));
             out_core_shape = Some(batch_output.shape().to_vec());
         }
 
