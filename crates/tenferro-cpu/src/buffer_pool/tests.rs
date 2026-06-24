@@ -111,6 +111,38 @@ fn acquire_updates_retained_capacity_stats() {
 }
 
 #[test]
+fn replenish_in_flight_retained_restores_lost_capacity() {
+    let mut pool = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
+
+    let _in_flight = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 8) };
+    assert_eq!(pool.retained_capacity_bytes(), 0);
+    assert!(pool.is_empty());
+
+    pool.replenish_in_flight_retained();
+
+    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
+    assert!(!pool.is_empty());
+}
+
+#[test]
+fn replenish_in_flight_retained_skips_successfully_released_buffers() {
+    let mut pool = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
+
+    let buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 8) };
+    <f64 as PoolScalar>::pool_release(&mut pool, buf);
+
+    let stats_before = pool.stats();
+    pool.replenish_in_flight_retained();
+
+    assert_eq!(pool.stats(), stats_before);
+    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
+}
+
+#[test]
 fn stats_counts_typed_capacity_bytes() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(3));
