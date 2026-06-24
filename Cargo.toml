@@ -15,6 +15,7 @@ members = [
     "crates/tenferro-linalg",
     "crates/tenferro-fft",
     "docs/tutorial-code",
+    "kdv_pinn",
 ]
 default-members = [
     "crates/tenferro-tensor",
@@ -36,6 +37,7 @@ repository = "https://github.com/tensor4all/tenferro-rs"
 homepage = "https://tensor4all.org/tenferro-rs/"
 
 [workspace.dependencies]
+rand = "0.8"
 num-complex = "0.4"
 num-traits = "0.2"
 thiserror = "2"
