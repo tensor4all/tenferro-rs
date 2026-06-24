@@ -25,7 +25,7 @@ use crate::metadata::{
     register_scoped_graph_metadata, register_scoped_value_metadata, symbolic_input_meta,
     tensor_meta,
 };
-use crate::scalar_semantics::round_real_to_i64;
+use crate::scalar_semantics::{bool_from_real_for_op, round_real_to_i32_for_op, round_real_to_i64};
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
@@ -174,20 +174,11 @@ fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
     )
 }
 
-fn inferred_output_dtype_or_fallback(
-    op: &StdTensorOp,
-    inputs: &[DType],
-    fallback: DType,
-    context: &'static str,
-) -> DType {
+fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static str) -> DType {
     match crate::shape_infer::infer_output_dtype(op, inputs) {
         Ok(dtype) => dtype,
         Err(err) => {
-            debug_assert!(
-                false,
-                "{context}: built-in traced dtype inference failed for {op:?}: {err}"
-            );
-            fallback
+            panic!("{context}: built-in traced dtype inference failed for {op:?}: {err}");
         }
     }
 }
@@ -449,17 +440,17 @@ impl std::ops::Mul for &TracedTensor {
 }
 
 impl std::ops::Mul<f64> for &TracedTensor {
-    type Output = TracedTensor;
+    type Output = Result<TracedTensor>;
 
-    fn mul(self, rhs: f64) -> TracedTensor {
+    fn mul(self, rhs: f64) -> Result<TracedTensor> {
         self.scale_real(rhs)
     }
 }
 
 impl std::ops::Mul<&TracedTensor> for f64 {
-    type Output = TracedTensor;
+    type Output = Result<TracedTensor>;
 
-    fn mul(self, rhs: &TracedTensor) -> TracedTensor {
+    fn mul(self, rhs: &TracedTensor) -> Result<TracedTensor> {
         rhs.scale_real(self)
     }
 }
@@ -1001,19 +992,20 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.scale_real(2.0);
+    /// let y = x.scale_real(2.0)?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn scale_real(&self, factor: f64) -> TracedTensor {
+    pub fn scale_real(&self, factor: f64) -> Result<TracedTensor> {
         let op = match self.dtype {
             DType::F64 => StdTensorOp::constant(factor),
             DType::F32 => StdTensorOp::constant(factor as f32),
-            DType::I32 => StdTensorOp::constant(round_real_to_i64(factor) as i32),
-            DType::I64 => StdTensorOp::constant(round_real_to_i64(factor)),
-            DType::Bool => StdTensorOp::constant(factor != 0.0),
+            DType::I32 => StdTensorOp::constant(round_real_to_i32_for_op("scale_real", factor)?),
+            DType::I64 => StdTensorOp::constant(round_real_to_i64(factor)?),
+            DType::Bool => StdTensorOp::constant(bool_from_real_for_op("scale_real", factor)?),
             DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
             DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
         };
-        scale_with_constant(self, op)
+        Ok(scale_with_constant(self, op))
     }
 
     /// Scale by a complex scalar: `y = factor * x`.
@@ -1273,9 +1265,9 @@ impl TracedTensor {
     ) -> Result<TracedTensor> {
         config
             .validate_dims_with_ranks(self.rank, other.rank)
-            .map_err(|message| Error::InvalidGraphBuild {
+            .map_err(|err| Error::InvalidGraphBuild {
                 op: "dot_general",
-                message,
+                message: err.to_string(),
             })?;
         let lhs_free: Vec<usize> = (0..self.rank)
             .filter(|d| {
@@ -2076,8 +2068,7 @@ pub(crate) fn apply_unary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype =
-        inferred_output_dtype_or_fallback(&op, &[input.dtype], input.dtype, "apply_unary");
+    let out_dtype = inferred_output_dtype(&op, &[input.dtype], "apply_unary");
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
@@ -2224,12 +2215,7 @@ pub(crate) fn apply_binary(
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
     let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
-    let out_dtype = inferred_output_dtype_or_fallback(
-        &op,
-        &[lhs.dtype, rhs.dtype],
-        input_dtype,
-        "apply_binary",
-    );
+    let out_dtype = inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], "apply_binary");
 
     // Insert Convert ops when an input dtype differs from the primitive input dtype.
     let lhs = if lhs.dtype != input_dtype {
@@ -2297,12 +2283,9 @@ pub(crate) fn apply_ternary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let fallback_dtype =
-        crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
-    let out_dtype = inferred_output_dtype_or_fallback(
+    let out_dtype = inferred_output_dtype(
         &op,
         &[first.dtype, second.dtype, third.dtype],
-        fallback_dtype,
         "apply_ternary",
     );
     let (first, second, third) = match op {

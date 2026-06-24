@@ -89,8 +89,9 @@ fn layout_from_vecs<R: TensorRank>(
 }
 
 fn positive_ceil_div(numerator: isize, denominator: isize) -> Result<usize> {
-    debug_assert!(numerator >= 0);
-    debug_assert!(denominator > 0);
+    if numerator < 0 || denominator <= 0 {
+        return Err(Error::IntegerOverflow);
+    }
     let extent = if numerator == 0 {
         0
     } else {
@@ -211,7 +212,7 @@ impl<R: TensorRank> TensorLayout<R> {
     ///     0,
     ///     6,
     /// )?;
-    /// assert!(layout.is_compact_col_major());
+    /// assert!(layout.is_compact_col_major()?);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn from_parts(
@@ -281,13 +282,11 @@ impl<R: TensorRank> TensorLayout<R> {
     /// use tenferro_tensor_core::{Rank, TensorLayout};
     ///
     /// let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
-    /// assert!(layout.is_compact_col_major());
+    /// assert!(layout.is_compact_col_major()?);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn is_compact_col_major(&self) -> bool {
-        col_major_strides(self.shape())
-            .map(|strides| strides.as_slice() == self.strides())
-            .unwrap_or(false)
+    pub fn is_compact_col_major(&self) -> Result<bool> {
+        col_major_strides(self.shape()).map(|strides| strides.as_slice() == self.strides())
     }
 
     /// Validate that the layout can be used for mutable access without aliasing.
@@ -478,7 +477,7 @@ impl<R: TensorRank> TensorLayout<R> {
         shape: R2::Shape,
         buffer_len: usize,
     ) -> Result<TensorLayout<R2>> {
-        if !self.is_compact_col_major() {
+        if !self.is_compact_col_major()? {
             return Err(Error::NonContiguousViewAsSlice);
         }
         let from = checked_product(self.shape())?;
@@ -552,5 +551,27 @@ impl<R: TensorRank> TensorLayout<R> {
             self.offset,
             buffer_len,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::positive_ceil_div;
+    use crate::Error;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn positive_ceil_div_rejects_invalid_preconditions_without_panicking() {
+        for (numerator, denominator) in [(-1, 1), (1, 0), (1, -1)] {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                positive_ceil_div(numerator, denominator)
+            }));
+
+            assert!(
+                result.is_ok(),
+                "invalid positive_ceil_div inputs should return Err"
+            );
+            assert!(matches!(result.unwrap(), Err(Error::IntegerOverflow)));
+        }
     }
 }

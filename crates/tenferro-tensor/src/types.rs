@@ -652,7 +652,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     ///
     /// let data = [1_i32, 2];
     /// let view = TypedTensorView::from_slice(vec![2], vec![1], 0, &data)?;
-    /// assert!(view.layout().is_compact_col_major());
+    /// assert!(view.layout().is_compact_col_major().unwrap());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn layout(&self) -> &TensorLayout<R> {
@@ -904,6 +904,29 @@ pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
     placement: Placement,
 }
 
+/// Pair of mutable tensor views returned by disjoint multi-slice operations.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{StridedSliceSpec, TypedTensorViewMut, TypedTensorViewMutPair};
+///
+/// let mut data = [1_i32, 2, 3, 4];
+/// let mut view = TypedTensorViewMut::from_slice(vec![4], vec![1], 0, &mut data)?;
+/// let pair: TypedTensorViewMutPair<'_, i32> = view
+///     .try_multi_slice_mut(
+///         &[StridedSliceSpec::new(0, Some(2), 1)],
+///         &[StridedSliceSpec::new(2, Some(4), 1)],
+///     )
+///     ?
+///     .unwrap();
+/// assert_eq!(pair.0.shape(), &[2]);
+/// assert_eq!(pair.1.shape(), &[2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub type TypedTensorViewMutPair<'a, T, R = DynRank> =
+    (TypedTensorViewMut<'a, T, R>, TypedTensorViewMut<'a, T, R>);
+
 impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// Create a mutable dynamic-rank view over compact column-major host data.
     ///
@@ -1142,7 +1165,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// let mut data = [1_i32, 2];
     /// let view = TypedTensorViewMut::from_slice(vec![2], vec![1], 0, &mut data)?;
-    /// assert!(view.layout().is_compact_col_major());
+    /// assert!(view.layout().is_compact_col_major().unwrap());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn layout(&self) -> &TensorLayout<R> {
@@ -1480,6 +1503,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///         &[StridedSliceSpec::new(0, Some(2), 1)],
     ///         &[StridedSliceSpec::new(2, Some(4), 1)],
     ///     )
+    ///     ?
     ///     .unwrap();
     /// assert_eq!(left.shape(), &[2]);
     /// assert_eq!(right.shape(), &[2]);
@@ -1489,69 +1513,69 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         &mut self,
         first: &[StridedSliceSpec],
         second: &[StridedSliceSpec],
-    ) -> Option<(TypedTensorViewMut<'_, T, R>, TypedTensorViewMut<'_, T, R>)> {
-        let first_specs = core_slice_specs(
-            first,
-            self.shape(),
-            "TypedTensorViewMut::try_multi_slice_mut",
-        )
-        .ok()?;
-        let second_specs = core_slice_specs(
-            second,
-            self.shape(),
-            "TypedTensorViewMut::try_multi_slice_mut",
-        )
-        .ok()?;
+    ) -> crate::Result<Option<TypedTensorViewMutPair<'_, T, R>>> {
+        let op = "TypedTensorViewMut::try_multi_slice_mut";
+        let first_specs = core_slice_specs(first, self.shape(), op)?;
+        let second_specs = core_slice_specs(second, self.shape(), op)?;
         let buffer_len = self.buffer.len();
-        let first_layout = self.layout.slice_view(first_specs, buffer_len).ok()?;
-        let second_layout = self.layout.slice_view(second_specs, buffer_len).ok()?;
-        first_layout.validate_mutable_no_overlap().ok()?;
-        second_layout.validate_mutable_no_overlap().ok()?;
+        let first_layout = self
+            .layout
+            .slice_view(first_specs, buffer_len)
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let second_layout = self
+            .layout
+            .slice_view(second_specs, buffer_len)
+            .map_err(|err| tensor_layout_error(op, err))?;
+        first_layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        second_layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
 
         match (
             reachable_layout_span(
                 first_layout.shape(),
                 first_layout.strides(),
                 first_layout.offset(),
-            )
-            .ok()?,
+            )?,
             reachable_layout_span(
                 second_layout.shape(),
                 second_layout.strides(),
                 second_layout.offset(),
-            )
-            .ok()?,
+            )?,
         ) {
             (Some(first_span), Some(second_span)) => {
                 let first_offset = adjusted_view_offset(first_layout.offset(), first_span.0)?;
                 let second_offset = adjusted_view_offset(second_layout.offset(), second_span.0)?;
                 let (first_data, second_data) = match &mut self.buffer {
                     TensorBufferRefMut::Host(data) => {
-                        split_two_mut_ranges(data, first_span, second_span)?
+                        match split_two_mut_ranges(data, first_span, second_span) {
+                            Some(ranges) => ranges,
+                            None => return Ok(None),
+                        }
                     }
-                    TensorBufferRefMut::Backend(_) => return None,
+                    TensorBufferRefMut::Backend(_) => return Ok(None),
                 };
                 let first_view = view_mut_from_layout_and_slice(
                     &first_layout,
                     first_offset,
                     first_data,
                     self.placement.clone(),
-                )
-                .ok()?;
+                )?;
                 let second_view = view_mut_from_layout_and_slice(
                     &second_layout,
                     second_offset,
                     second_data,
                     self.placement.clone(),
-                )
-                .ok()?;
-                Some((first_view, second_view))
+                )?;
+                Ok(Some((first_view, second_view)))
             }
             (None, Some(second_span)) => {
                 let second_offset = adjusted_view_offset(second_layout.offset(), second_span.0)?;
                 let (_, after_start) = match &mut self.buffer {
                     TensorBufferRefMut::Host(data) => data.split_at_mut(second_span.0),
-                    TensorBufferRefMut::Backend(_) => return None,
+                    TensorBufferRefMut::Backend(_) => return Ok(None),
                 };
                 let (second_data, _) = after_start.split_at_mut(second_span.1 - second_span.0 + 1);
                 let first_view = view_mut_from_layout_and_slice(
@@ -1559,22 +1583,20 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                     0,
                     &mut [],
                     self.placement.clone(),
-                )
-                .ok()?;
+                )?;
                 let second_view = view_mut_from_layout_and_slice(
                     &second_layout,
                     second_offset,
                     second_data,
                     self.placement.clone(),
-                )
-                .ok()?;
-                Some((first_view, second_view))
+                )?;
+                Ok(Some((first_view, second_view)))
             }
             (Some(first_span), None) => {
                 let first_offset = adjusted_view_offset(first_layout.offset(), first_span.0)?;
                 let (_, after_start) = match &mut self.buffer {
                     TensorBufferRefMut::Host(data) => data.split_at_mut(first_span.0),
-                    TensorBufferRefMut::Backend(_) => return None,
+                    TensorBufferRefMut::Backend(_) => return Ok(None),
                 };
                 let (first_data, _) = after_start.split_at_mut(first_span.1 - first_span.0 + 1);
                 let first_view = view_mut_from_layout_and_slice(
@@ -1582,16 +1604,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                     first_offset,
                     first_data,
                     self.placement.clone(),
-                )
-                .ok()?;
+                )?;
                 let second_view = view_mut_from_layout_and_slice(
                     &second_layout,
                     0,
                     &mut [],
                     self.placement.clone(),
-                )
-                .ok()?;
-                Some((first_view, second_view))
+                )?;
+                Ok(Some((first_view, second_view)))
             }
             (None, None) => {
                 let first_view = view_mut_from_layout_and_slice(
@@ -1599,16 +1619,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                     0,
                     &mut [],
                     self.placement.clone(),
-                )
-                .ok()?;
+                )?;
                 let second_view = view_mut_from_layout_and_slice(
                     &second_layout,
                     0,
                     &mut [],
                     self.placement.clone(),
-                )
-                .ok()?;
-                Some((first_view, second_view))
+                )?;
+                Ok(Some((first_view, second_view)))
             }
         }
     }
@@ -2971,9 +2989,17 @@ fn split_two_mut_ranges<T>(
     }
 }
 
-fn adjusted_view_offset(offset: isize, span_start: usize) -> Option<isize> {
-    let span_start = isize::try_from(span_start).ok()?;
-    offset.checked_sub(span_start)
+fn adjusted_view_offset(offset: isize, span_start: usize) -> crate::Result<isize> {
+    let span_start = isize::try_from(span_start).map_err(|_| crate::Error::InvalidConfig {
+        op: "TypedTensorViewMut::try_multi_slice_mut",
+        message: "view span start does not fit in isize".to_string(),
+    })?;
+    offset
+        .checked_sub(span_start)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op: "TypedTensorViewMut::try_multi_slice_mut",
+            message: "adjusted view offset overflows".to_string(),
+        })
 }
 
 fn view_mut_from_layout_and_slice<'a, T: 'static, R: TensorRank>(
@@ -3001,7 +3027,10 @@ fn contiguous_layout_slice<'a, T, R: TensorRank>(
     data: &'a [T],
     op: &'static str,
 ) -> crate::Result<&'a [T]> {
-    if !layout.is_compact_col_major() {
+    if !layout
+        .is_compact_col_major()
+        .map_err(|err| tensor_layout_error(op, err))?
+    {
         return Err(crate::Error::InvalidConfig {
             op,
             message: "view is not contiguous column-major".to_string(),
@@ -3605,7 +3634,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// assert!(t.into_layout().is_compact_col_major());
+    /// assert!(t.into_layout().is_compact_col_major().unwrap());
     /// ```
     pub fn into_layout(self) -> TensorLayout<R> {
         self.layout
@@ -3937,7 +3966,11 @@ impl Tensor {
 #[allow(dead_code)]
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
     for i in 0..shape.len() {
-        out[i] = flat % shape[i];
-        flat /= shape[i];
+        if shape[i] == 0 {
+            out[i] = 0;
+        } else {
+            out[i] = flat % shape[i];
+            flat /= shape[i];
+        }
     }
 }

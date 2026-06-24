@@ -12,7 +12,7 @@
 
 use num_complex::{Complex32, Complex64};
 
-use crate::{DType, Error, Result, Tensor, TypedTensor};
+use crate::{DType, DotGeneralConfig, Error, Result, Tensor, TypedTensor};
 
 /// Promote two dtypes according to tenferro's public dtype-promotion lattice.
 ///
@@ -81,6 +81,143 @@ pub fn validate_convert_dtype(op: &'static str, from: DType, to: DType) -> Resul
         from,
         to,
         message: "checked convert only accepts conversions allowed by dtype promotion; use explicit cast for lossy dtype projection".to_string(),
+    })
+}
+
+/// Compute a shape product with overflow reported as a typed tensor error.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::checked_shape_product;
+///
+/// assert_eq!(checked_shape_product("zeros", "shape", &[2, 3])?, 6);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn checked_shape_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> Result<usize> {
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| Error::InvalidConfig {
+            op,
+            message: format!("{role} product overflows for shape {shape:?}"),
+        })
+}
+
+/// Validate a full permutation for a tensor rank.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::validate_permutation_axes;
+///
+/// validate_permutation_axes("transpose", 2, &[1, 0])?;
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn validate_permutation_axes(op: &'static str, rank: usize, perm: &[usize]) -> Result<()> {
+    if perm.len() != rank {
+        return Err(Error::RankMismatch {
+            op,
+            expected: rank,
+            actual: perm.len(),
+        });
+    }
+
+    let mut seen = vec![false; rank];
+    for &axis in perm {
+        if axis >= rank {
+            return Err(Error::AxisOutOfBounds { op, axis, rank });
+        }
+        if seen[axis] {
+            return Err(Error::DuplicateAxis {
+                op,
+                axis,
+                role: "permutation",
+            });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+/// Validate a subset of axes for a tensor rank.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::validate_unique_axes;
+///
+/// validate_unique_axes("reduce_sum", "axis", 3, &[0, 2])?;
+/// assert!(validate_unique_axes("reduce_sum", "axis", 2, &[2]).is_err());
+/// assert!(validate_unique_axes("reduce_sum", "axis", 2, &[0, 0]).is_err());
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn validate_unique_axes(
+    op: &'static str,
+    role: &'static str,
+    rank: usize,
+    axes: &[usize],
+) -> Result<()> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(Error::AxisOutOfBounds { op, axis, rank });
+        }
+        if seen[axis] {
+            return Err(Error::DuplicateAxis { op, axis, role });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+/// Validate rank-2 matrix multiplication shapes and return its dot-general config.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::matmul_config_for_shapes;
+///
+/// let config = matmul_config_for_shapes("matmul", &[2, 3], &[3, 4])?;
+/// assert_eq!(config.lhs_contracting_dims, vec![1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn matmul_config_for_shapes(
+    op: &'static str,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+) -> Result<DotGeneralConfig> {
+    if lhs_shape.len() != 2 {
+        return Err(Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: lhs_shape.len(),
+        });
+    }
+    if rhs_shape.len() != 2 {
+        return Err(Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: rhs_shape.len(),
+        });
+    }
+    if lhs_shape[1] != rhs_shape[0] {
+        return Err(Error::ShapeMismatch {
+            op,
+            lhs: lhs_shape.to_vec(),
+            rhs: rhs_shape.to_vec(),
+        });
+    }
+
+    Ok(DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
     })
 }
 

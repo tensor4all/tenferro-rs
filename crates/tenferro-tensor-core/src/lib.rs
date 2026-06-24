@@ -448,24 +448,20 @@ fn validate_view_bounds<T>(
     layout::validate_reachable_bounds(shape, strides, offset, data.len())
 }
 
-fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> bool {
+fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> Result<bool> {
     let mut expected = 1isize;
     for (&extent, &stride) in shape.iter().zip(strides) {
         if extent <= 1 {
             continue;
         }
         if stride != expected {
-            return false;
+            return Ok(false);
         }
-        let Ok(extent) = isize::try_from(extent) else {
-            return false;
-        };
-        let Some(next) = expected.checked_mul(extent) else {
-            return false;
-        };
+        let extent = isize::try_from(extent).map_err(|_| Error::IntegerOverflow)?;
+        let next = expected.checked_mul(extent).ok_or(Error::IntegerOverflow)?;
         expected = next;
     }
-    true
+    Ok(true)
 }
 
 impl<T> HostTensor<T> {
@@ -570,7 +566,7 @@ impl<T> HostTensor<T> {
     /// use tenferro_tensor_core::HostTensor;
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// assert!(tensor.as_view().is_zero_offset_col_major());
+    /// assert!(tensor.as_view().is_zero_offset_col_major()?);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn as_view(&self) -> HostTensorView<'_, T> {
@@ -737,10 +733,10 @@ impl<'a, T> HostTensorView<'a, T> {
     /// use tenferro_tensor_core::HostTensor;
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![0_i32; 4])?;
-    /// assert!(tensor.as_view().is_compact_col_major());
+    /// assert!(tensor.as_view().is_compact_col_major()?);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn is_compact_col_major(&self) -> bool {
+    pub fn is_compact_col_major(&self) -> Result<bool> {
         is_slice_contiguous(&self.shape, &self.strides)
     }
 
@@ -752,11 +748,11 @@ impl<'a, T> HostTensorView<'a, T> {
     /// use tenferro_tensor_core::HostTensor;
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
-    /// assert!(tensor.as_view().is_zero_offset_col_major());
+    /// assert!(tensor.as_view().is_zero_offset_col_major()?);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn is_zero_offset_col_major(&self) -> bool {
-        self.offset == 0 && self.is_compact_col_major()
+    pub fn is_zero_offset_col_major(&self) -> Result<bool> {
+        Ok(self.offset == 0 && self.is_compact_col_major()?)
     }
 
     /// Borrow the slice-contiguous backing region for this view.
@@ -772,7 +768,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn as_slice(&self) -> Result<&'a [T]> {
-        if !is_slice_contiguous(&self.shape, &self.strides) {
+        if !is_slice_contiguous(&self.shape, &self.strides)? {
             return Err(Error::NonContiguousViewAsSlice);
         }
         let len = checked_product(&self.shape)?;
@@ -793,7 +789,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn reshape_view(&self, shape: impl Into<ShapeVec>) -> Result<Self> {
-        if !self.is_compact_col_major() {
+        if !self.is_compact_col_major()? {
             return Err(Error::NonContiguousViewAsSlice);
         }
         let shape = shape.into();

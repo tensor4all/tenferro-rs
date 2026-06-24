@@ -104,6 +104,46 @@ fn reduction_shape_inference_rejects_invalid_axes() {
 }
 
 #[test]
+fn transpose_shape_inference_rejects_invalid_permutations() {
+    let shape = DimExpr::from_concrete(&[2, 3]);
+    let invalid_ops = [
+        StdTensorOp::Transpose { perm: vec![0] },
+        StdTensorOp::Transpose { perm: vec![0, 0] },
+        StdTensorOp::Transpose { perm: vec![0, 2] },
+    ];
+
+    for op in invalid_ops {
+        assert!(infer_output_shapes(&op, &[&shape]).is_err(), "{op:?}");
+    }
+}
+
+#[test]
+fn dot_general_shape_inference_rejects_invalid_dimension_numbers() {
+    let lhs = DimExpr::from_concrete(&[2, 3]);
+    let rhs = DimExpr::from_concrete(&[3, 2]);
+
+    let contracting_oob = StdTensorOp::DotGeneral {
+        config: DotGeneralConfig {
+            lhs_contracting_dims: vec![2],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+    };
+    let batch_oob = StdTensorOp::DotGeneral {
+        config: DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![2],
+            rhs_batch_dims: vec![1],
+        },
+    };
+
+    assert!(infer_output_shapes(&contracting_oob, &[&lhs, &rhs]).is_err());
+    assert!(infer_output_shapes(&batch_oob, &[&lhs, &rhs]).is_err());
+}
+
+#[test]
 fn concatenate_rejects_non_axis_dimension_mismatch() {
     let lhs = DimExpr::from_concrete(&[2, 3]);
     let rhs = DimExpr::from_concrete(&[4, 3]);
@@ -140,6 +180,24 @@ fn gather_rejects_duplicate_offset_and_collapsed_slice_dims() {
 
     assert!(infer_output_shapes(&duplicate_offset_dims, &[&operand, &indices]).is_err());
     assert!(infer_output_shapes(&duplicate_collapsed_slice_dims, &[&operand, &indices]).is_err());
+}
+
+#[test]
+fn gather_rejects_concrete_slice_sizes_larger_than_operand_dims() {
+    let operand = DimExpr::from_concrete(&[4, 5]);
+    let indices = DimExpr::from_concrete(&[2, 1]);
+    let op = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![1, 2],
+        collapsed_slice_dims: vec![],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![5, 5],
+    });
+
+    let err = infer_output_shapes(&op, &[&operand, &indices]).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("gather"), "{message}");
+    assert!(message.contains("slice_sizes[0]"), "{message}");
 }
 
 #[test]

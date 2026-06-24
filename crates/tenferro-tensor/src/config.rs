@@ -1,3 +1,14 @@
+use crate::{Error, Result};
+
+const DOT_GENERAL_OP: &str = "dot_general";
+
+fn invalid_dot_general_config(message: impl Into<String>) -> Error {
+    Error::InvalidConfig {
+        op: DOT_GENERAL_OP,
+        message: message.into(),
+    }
+}
+
 /// DotGeneral dimension configuration.
 ///
 /// Records only the dim-numbering roles (contracting / batch; free is derived).
@@ -31,11 +42,14 @@ pub struct DotGeneralConfig {
 }
 
 impl DotGeneralConfig {
-    fn check_no_duplicates(dims: &[usize], label: &str) -> Result<(), String> {
+    fn check_no_duplicates(dims: &[usize], label: &str) -> Result<()> {
         let mut seen = std::collections::HashSet::new();
         for &d in dims {
             if !seen.insert(d) {
-                return Err(format!("{} contains duplicate dim {}", label, d));
+                return Err(invalid_dot_general_config(format!(
+                    "{} contains duplicate dim {}",
+                    label, d
+                )));
             }
         }
         Ok(())
@@ -60,37 +74,37 @@ impl DotGeneralConfig {
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```
-    pub fn validate_dims_with_ranks(&self, lhs_rank: usize, rhs_rank: usize) -> Result<(), String> {
+    pub fn validate_dims_with_ranks(&self, lhs_rank: usize, rhs_rank: usize) -> Result<()> {
         for &d in &self.lhs_contracting_dims {
             if d >= lhs_rank {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "lhs_contracting_dim {} out of bounds for lhs_rank {}",
                     d, lhs_rank
-                ));
+                )));
             }
         }
         for &d in &self.rhs_contracting_dims {
             if d >= rhs_rank {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "rhs_contracting_dim {} out of bounds for rhs_rank {}",
                     d, rhs_rank
-                ));
+                )));
             }
         }
         for &d in &self.lhs_batch_dims {
             if d >= lhs_rank {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "lhs_batch_dim {} out of bounds for lhs_rank {}",
                     d, lhs_rank
-                ));
+                )));
             }
         }
         for &d in &self.rhs_batch_dims {
             if d >= rhs_rank {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "rhs_batch_dim {} out of bounds for rhs_rank {}",
                     d, rhs_rank
-                ));
+                )));
             }
         }
         Self::check_no_duplicates(&self.lhs_contracting_dims, "lhs_contracting_dims")?;
@@ -99,33 +113,33 @@ impl DotGeneralConfig {
         Self::check_no_duplicates(&self.rhs_batch_dims, "rhs_batch_dims")?;
         for &d in &self.lhs_contracting_dims {
             if self.lhs_batch_dims.contains(&d) {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "lhs dim {} appears in both contracting and batch dims",
                     d
-                ));
+                )));
             }
         }
         for &d in &self.rhs_contracting_dims {
             if self.rhs_batch_dims.contains(&d) {
-                return Err(format!(
+                return Err(invalid_dot_general_config(format!(
                     "rhs dim {} appears in both contracting and batch dims",
                     d
-                ));
+                )));
             }
         }
         if self.lhs_contracting_dims.len() != self.rhs_contracting_dims.len() {
-            return Err(format!(
+            return Err(invalid_dot_general_config(format!(
                 "lhs/rhs contracting dim counts differ ({} vs {})",
                 self.lhs_contracting_dims.len(),
                 self.rhs_contracting_dims.len()
-            ));
+            )));
         }
         if self.lhs_batch_dims.len() != self.rhs_batch_dims.len() {
-            return Err(format!(
+            return Err(invalid_dot_general_config(format!(
                 "lhs/rhs batch dim counts differ ({} vs {})",
                 self.lhs_batch_dims.len(),
                 self.rhs_batch_dims.len()
-            ));
+            )));
         }
         Ok(())
     }

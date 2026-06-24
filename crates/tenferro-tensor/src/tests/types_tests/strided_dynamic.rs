@@ -121,6 +121,7 @@ fn typed_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
                         &[StridedSliceSpec::new(0, Some(2), 1)],
                         &[StridedSliceSpec::new(2, Some(4), 1)],
                     )
+                    .unwrap()
                     .unwrap();
                 *lhs.get_mut(&[1]).unwrap() = $left;
                 *rhs.get_mut(&[0]).unwrap() = $right;

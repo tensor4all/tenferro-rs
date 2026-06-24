@@ -230,6 +230,10 @@ fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
     let mut idx = [0usize; 3];
     flat_to_multi(13, &[2, 3, 4], &mut idx);
     assert_eq!(idx, [1, 0, 2]);
+
+    let mut zero_extent_idx = [usize::MAX; 2];
+    flat_to_multi(0, &[0, 5], &mut zero_extent_idx);
+    assert_eq!(zero_extent_idx, [0, 0]);
 }
 
 #[test]
@@ -317,7 +321,7 @@ fn typed_tensor_static_rank_constructs_compact_layout() {
         TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.layout().strides(), &[1, 2]);
-    assert!(tensor.layout().is_compact_col_major());
+    assert!(tensor.layout().is_compact_col_major().unwrap());
 }
 
 #[test]
@@ -1028,6 +1032,116 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
 }
 
 #[test]
+fn backend_mutable_views_keep_metadata_paths_without_host_access() {
+    let placement = Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal: 1,
+        }),
+    };
+    let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
+        vec![2, 2],
+        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(91, 4))),
+        placement.clone(),
+    )
+    .unwrap();
+
+    assert!(tensor.buffer().is_backend());
+    assert!(!tensor.buffer().is_empty());
+
+    {
+        let mut view = tensor.as_view_mut();
+        assert_eq!(view.shape(), &[2, 2]);
+        assert_eq!(view.strides(), &[1, 2]);
+        assert_eq!(view.n_elements(), 4);
+        assert_eq!(view.placement(), &placement);
+        assert!(view.backend_buffer().is_some());
+        assert_eq!(view.get(&[0, 0]), None);
+        assert_eq!(view.get_mut(&[0, 0]), None);
+        assert!(view.host_storage().is_err());
+        assert!(view.host_storage_mut().is_err());
+
+        let read = view.as_read_only();
+        assert!(read.backend_buffer().is_some());
+        assert_eq!(read.get(&[0, 0]), None);
+        assert!(read.host_storage().is_err());
+    }
+
+    {
+        let mut view = tensor.as_view_mut();
+        let sliced = view
+            .try_slice(&[
+                StridedSliceSpec::all(),
+                StridedSliceSpec::new(0, Some(1), 1),
+            ])
+            .unwrap();
+        assert_eq!(sliced.shape(), &[2, 1]);
+        assert!(sliced.backend_buffer().is_some());
+    }
+
+    {
+        let mut view = tensor.as_view_mut();
+        let reshaped = view.try_reshape(&[4]).unwrap();
+        assert_eq!(reshaped.shape(), &[4]);
+        assert!(reshaped.backend_buffer().is_some());
+    }
+
+    {
+        let view = tensor.as_view_mut();
+        let transposed = view.transpose_view([1, 0]).unwrap();
+        assert_eq!(transposed.strides(), &[2, 1]);
+        assert!(transposed.backend_buffer().is_some());
+    }
+
+    {
+        let view = tensor.as_view_mut();
+        let read = view.into_read_only();
+        assert_eq!(read.shape(), &[2, 2]);
+        assert!(read.backend_buffer().is_some());
+    }
+}
+
+#[test]
+fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
+    let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
+        vec![4],
+        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(92, 4))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 1,
+            }),
+        },
+    )
+    .unwrap();
+    let mut view = tensor.as_view_mut();
+
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(2), 1)],
+            &[StridedSliceSpec::new(2, Some(4), 1)]
+        )
+        .unwrap()
+        .is_none());
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(0), 1)],
+            &[StridedSliceSpec::new(2, Some(4), 1)]
+        )
+        .unwrap()
+        .is_none());
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(2), 1)],
+            &[StridedSliceSpec::new(4, Some(4), 1)]
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
@@ -1046,7 +1160,7 @@ fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
     assert_eq!(tensor.rank(), 2);
     assert_eq!(tensor.n_elements(), 6);
     assert_eq!(tensor.layout().strides(), &[1, 2]);
-    assert!(tensor.into_layout().is_compact_col_major());
+    assert!(tensor.into_layout().is_compact_col_major().unwrap());
 }
 
 #[test]
@@ -1269,6 +1383,7 @@ fn strided_tensor_view_mut_multi_slice_returns_option() {
                 &[StridedSliceSpec::new(0, Some(3), 1)],
                 &[StridedSliceSpec::new(3, Some(6), 1)],
             )
+            .unwrap()
             .unwrap();
         *left.get_mut(&[2]).unwrap() = 30;
         *right.get_mut(&[0]).unwrap() = 40;
@@ -1280,6 +1395,7 @@ fn strided_tensor_view_mut_multi_slice_returns_option() {
             &[StridedSliceSpec::new(0, Some(4), 1)],
             &[StridedSliceSpec::new(3, Some(6), 1)],
         )
+        .unwrap()
         .is_none());
 
     assert!(view
@@ -1287,7 +1403,7 @@ fn strided_tensor_view_mut_multi_slice_returns_option() {
             &[StridedSliceSpec::new(0, Some(2), 0)],
             &[StridedSliceSpec::new(3, Some(6), 1)],
         )
-        .is_none());
+        .is_err());
 }
 
 #[test]
@@ -1325,6 +1441,7 @@ fn typed_tensor_view_mut_multi_slice_returns_option_for_strided_layouts() {
                 &[StridedSliceSpec::new(0, Some(2), 1)],
                 &[StridedSliceSpec::new(2, Some(4), 1)],
             )
+            .unwrap()
             .unwrap();
         assert_eq!(left.shape(), &[2]);
         assert_eq!(right.shape(), &[2]);
@@ -1335,6 +1452,7 @@ fn typed_tensor_view_mut_multi_slice_returns_option_for_strided_layouts() {
             &[StridedSliceSpec::new(0, Some(3), 1)],
             &[StridedSliceSpec::new(2, Some(4), 1)],
         )
+        .unwrap()
         .is_none());
 }
 
@@ -1471,6 +1589,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
                 &[StridedSliceSpec::new(4, Some(6), 1)],
                 &[StridedSliceSpec::new(1, Some(3), 1)],
             )
+            .unwrap()
             .unwrap();
         *high.get_mut(&[0]).unwrap() = 40;
         *low.get_mut(&[1]).unwrap() = 20;
@@ -1485,6 +1604,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
                 &[StridedSliceSpec::new(0, Some(0), 1)],
                 &[StridedSliceSpec::new(2, Some(4), 1)],
             )
+            .unwrap()
             .unwrap();
         assert_eq!(empty.n_elements(), 0);
         *right.get_mut(&[0]).unwrap() = 20;
@@ -1499,6 +1619,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
                 &[StridedSliceSpec::new(0, Some(2), 1)],
                 &[StridedSliceSpec::new(4, Some(4), 1)],
             )
+            .unwrap()
             .unwrap();
         assert_eq!(empty.n_elements(), 0);
         *left.get_mut(&[1]).unwrap() = 10;
@@ -1512,6 +1633,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
             &[StridedSliceSpec::new(0, Some(0), 1)],
             &[StridedSliceSpec::new(4, Some(4), 1)],
         )
+        .unwrap()
         .unwrap();
     assert_eq!(empty_left.n_elements(), 0);
     assert_eq!(empty_right.n_elements(), 0);
@@ -1524,6 +1646,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
                 &[StridedSliceSpec::new(3, Some(6), -1)],
                 &[StridedSliceSpec::new(0, Some(3), 1)],
             )
+            .unwrap()
             .unwrap();
         assert_eq!(reversed_high.get(&[0]), Some(&5));
         *reversed_high.get_mut(&[2]).unwrap() = 30;
@@ -1538,6 +1661,7 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
             &[StridedSliceSpec::new(0, Some(6), 2)],
             &[StridedSliceSpec::new(1, Some(6), 2)],
         )
+        .unwrap()
         .is_none());
 }
 

@@ -1,5 +1,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
+use tenferro_tensor::Error as TensorError;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -47,4 +48,22 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
         broadcast.host_data().unwrap(),
         &[10.0, 10.0, 20.0, 20.0, 30.0, 30.0],
     );
+}
+
+#[test]
+fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
+    let mut backend = CpuBackend::new();
+    let scalar = TypedTensor::<f64>::from_vec_col_major(vec![], vec![1.0]).unwrap();
+    let vector = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
+
+    let err = scalar.matmul(&vector, &mut backend).unwrap_err();
+
+    assert!(matches!(
+        err,
+        TensorError::RankMismatch {
+            op: "matmul",
+            expected: 2,
+            actual: 0,
+        }
+    ));
 }

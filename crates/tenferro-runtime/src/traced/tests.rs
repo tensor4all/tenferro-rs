@@ -23,6 +23,19 @@ fn dot_general_returns_error_for_invalid_config() {
 }
 
 #[test]
+fn integer_scale_real_rejects_non_finite_factors() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+
+    for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let err = x.scale_real(factor).unwrap_err();
+        assert!(
+            err.to_string().contains("finite"),
+            "expected finite-value error, got {err:?}"
+        );
+    }
+}
+
+#[test]
 fn dot_general_keeps_existing_success_metadata() {
     let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let rhs = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
