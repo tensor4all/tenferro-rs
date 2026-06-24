@@ -398,8 +398,7 @@ pub fn transpose_dynamic_update_slice(
     if active_mask.get(1).copied().unwrap_or(false) {
         // DynamicSlice carries concrete slice sizes. If the update shape is not
         // exact, this transpose path cannot safely encode the update cotangent.
-        let Some(update_shape) = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose")
-        else {
+        let Some(update_shape) = exact_usize_shape(ctx, &inputs[1])? else {
             return Ok(result);
         };
         let update_ct = builder.add_operation(
@@ -657,11 +656,9 @@ fn compute_inverse_gather(
 fn exact_usize_shape(
     ctx: &mut ShapeGuardContext,
     value: &ValueRef<StdTensorOp>,
-    _op_name: &'static str,
-) -> Option<Vec<usize>> {
-    ctx.exact_shape_of(value)
-        .ok()??
-        .into_iter()
-        .map(|dim| dim.constant_value())
-        .collect()
+) -> ADRuleResult<Option<Vec<usize>>> {
+    let Some(shape) = ctx.exact_shape_of(value)? else {
+        return Ok(None);
+    };
+    Ok(shape.into_iter().map(|dim| dim.constant_value()).collect())
 }

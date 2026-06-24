@@ -1,4 +1,5 @@
 use cubecl::prelude::*;
+use num_complex::{Complex32, Complex64};
 
 #[cube]
 fn zero_value<E: CubePrimitive>() -> E {
@@ -93,6 +94,20 @@ pub fn svd_v_to_vt_complex<C: ComplexCore>(
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
         out[pos] = v[svd_v_to_vt_offset(out, v, pos, rank)].conj();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn complex32_magnitude(out: &mut Array<f32>, input: &Array<Complex32>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn complex64_magnitude(out: &mut Array<f64>, input: &Array<Complex64>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
     }
 }
 

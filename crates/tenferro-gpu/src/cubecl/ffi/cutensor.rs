@@ -185,18 +185,33 @@ unsafe fn load_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
 }
 
 unsafe fn load_data_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
+    let symbol_name = String::from_utf8_lossy(name)
+        .trim_end_matches('\0')
+        .to_owned();
     // SAFETY: cuTENSOR compute descriptors are exported as static data symbols
     // whose value is a process-lifetime pointer-like descriptor.
     let symbol = lib.get::<*const T>(name).map_err(|err| {
         crate::Error::backend_failure(
             OP,
-            format!(
-                "failed to load cuTENSOR data symbol {}: {err}",
-                String::from_utf8_lossy(name).trim_end_matches('\0')
-            ),
+            format!("failed to load cuTENSOR data symbol {symbol_name}: {err}"),
         )
     })?;
-    Ok(**symbol)
+    let ptr = *symbol;
+    if ptr.is_null() {
+        return Err(crate::Error::backend_failure(
+            OP,
+            format!("cuTENSOR data symbol {symbol_name} resolved to a null pointer"),
+        ));
+    }
+    if !ptr.is_aligned() {
+        return Err(crate::Error::backend_failure(
+            OP,
+            format!("cuTENSOR data symbol {symbol_name} resolved to a misaligned pointer"),
+        ));
+    }
+    // SAFETY: null and alignment were checked above; cuTENSOR exports this as
+    // static process-lifetime data and `T: Copy`, so reading copies the descriptor value.
+    Ok(unsafe { std::ptr::read(ptr) })
 }
 
 struct CutensorLibrary {
@@ -268,6 +283,20 @@ impl CutensorLibrary {
                 self.status_message(status)
             ),
         ))
+    }
+}
+
+#[cold]
+fn report_cutensor_destroy_status(
+    lib: &CutensorLibrary,
+    status: CutensorStatus,
+    call: &'static str,
+) {
+    if status != CUTENSOR_STATUS_SUCCESS {
+        eprintln!(
+            "tenferro-gpu: {call} failed during Drop with cuTENSOR {} ({status})",
+            lib.status_message(status)
+        );
     }
 }
 
@@ -356,7 +385,8 @@ impl CutensorHandle {
 
 impl Drop for CutensorHandle {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy)(self.raw) };
+        report_cutensor_destroy_status(&self.lib, status, "cutensorDestroy");
     }
 }
 
@@ -405,7 +435,8 @@ impl TensorDescriptor {
 
 impl Drop for TensorDescriptor {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy_tensor_descriptor)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy_tensor_descriptor)(self.raw) };
+        report_cutensor_destroy_status(&self.lib, status, "cutensorDestroyTensorDescriptor");
     }
 }
 
@@ -465,7 +496,8 @@ impl OperationDescriptor {
 
 impl Drop for OperationDescriptor {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy_operation_descriptor)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy_operation_descriptor)(self.raw) };
+        report_cutensor_destroy_status(&self.lib, status, "cutensorDestroyOperationDescriptor");
     }
 }
 
@@ -501,7 +533,8 @@ impl PlanPreference {
 
 impl Drop for PlanPreference {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy_plan_preference)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy_plan_preference)(self.raw) };
+        report_cutensor_destroy_status(&self.lib, status, "cutensorDestroyPlanPreference");
     }
 }
 
@@ -542,6 +575,7 @@ impl Plan {
 
 impl Drop for Plan {
     fn drop(&mut self) {
-        let _ = unsafe { (self.lib.vtable.destroy_plan)(self.raw) };
+        let status = unsafe { (self.lib.vtable.destroy_plan)(self.raw) };
+        report_cutensor_destroy_status(&self.lib, status, "cutensorDestroyPlan");
     }
 }

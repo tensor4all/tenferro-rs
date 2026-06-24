@@ -246,17 +246,22 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
 pub(crate) unsafe fn typed_array_uninit_from_pool<T>(
     buffers: &mut BufferPool,
     shape: &[usize],
-) -> StridedArray<T>
+) -> crate::Result<StridedArray<T>>
 where
     T: PoolScalar,
 {
-    let total: usize = shape.iter().product();
+    let total = tenferro_tensor::validate::checked_shape_product(
+        "typed_array_uninit_from_pool",
+        "shape",
+        shape,
+    )?;
     let strides = kernel_col_major_strides(shape);
     // SAFETY: callers use this only for operation outputs that fully overwrite every element.
     let data = unsafe { T::pool_acquire(buffers, total) };
     // Invariant: callers pass validated tensor-derived or prechecked output
     // shapes, and `strides` is their compact column-major layout.
-    StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
+    StridedArray::from_parts(data, shape, &strides, 0)
+        .map_err(|err| crate::Error::backend_failure("typed_array_uninit_from_pool", err))
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {

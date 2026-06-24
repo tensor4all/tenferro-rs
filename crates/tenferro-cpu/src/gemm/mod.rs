@@ -10,7 +10,7 @@ use crate::elementwise::typed_conj_with_pool;
 use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
-use crate::Error;
+use crate::{Error, Result};
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
     col_major_strides, Buffer, TensorRead, TensorView, TypedTensor, TypedTensorView,
@@ -28,6 +28,8 @@ mod strided_dot;
 use blas_gemm::BlasGemm;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
+
+const OP: &str = "dot_general";
 
 #[derive(Clone)]
 struct GemmDims {
@@ -225,8 +227,11 @@ impl GemmAnalysisCache {
 
     #[doc(hidden)]
     pub fn set_capacity(&mut self, max_slots: usize) {
+        if max_slots < self.max_slots {
+            self.slots.clear();
+            self.slots.shrink_to(max_slots);
+        }
         self.max_slots = max_slots;
-        self.slots.truncate(max_slots);
     }
 
     fn cached_dims<L, R, T>(
@@ -388,7 +393,6 @@ where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
 {
-    const OP: &str = "dot_general";
     let lhs_shape = lhs.shape();
     let rhs_shape = rhs.shape();
 
@@ -471,13 +475,13 @@ fn checked_product(dims: &[usize]) -> Option<usize> {
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
 }
 
-fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> {
+fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Result<Option<(usize, isize)>> {
     if shapes.is_empty() {
-        return Some((1, 0));
+        return Ok(Some((1, 0)));
     }
     if shapes.len() == 1 {
-        isize::try_from(shapes[0]).ok()?;
-        return Some((shapes[0], strides[0]));
+        dim_to_isize(shapes[0], "try_fuse_dims")?;
+        return Ok(Some((shapes[0], strides[0])));
     }
     let mut dims: SmallVec<[(usize, isize); 8]> = shapes
         .iter()
@@ -489,21 +493,51 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
     let mut expected = base_stride;
     for (shape, stride) in dims {
         if stride != expected {
-            return None;
+            return Ok(None);
         }
-        let shape = isize::try_from(shape).ok()?;
-        expected = stride.checked_mul(shape)?;
+        let shape = dim_to_isize(shape, "try_fuse_dims")?;
+        expected = stride
+            .checked_mul(shape)
+            .ok_or_else(|| Error::InvalidConfig {
+                op: OP,
+                message: format!("fused stride overflows isize: stride={stride} shape={shape}"),
+            })?;
     }
-    Some((checked_product(shapes)?, base_stride))
+    let fused = checked_product(shapes).ok_or_else(|| Error::InvalidConfig {
+        op: OP,
+        message: format!("fused dimension product overflows usize for shape {shapes:?}"),
+    })?;
+    Ok(Some((fused, base_stride)))
 }
 
-fn checked_batch_offset(batch: usize, stride: isize) -> Option<isize> {
-    let batch = isize::try_from(batch).ok()?;
-    batch.checked_mul(stride)
+fn checked_batch_offset(batch: usize, stride: isize) -> Result<isize> {
+    let batch_isize = isize::try_from(batch).map_err(|_| Error::InvalidConfig {
+        op: OP,
+        message: format!("batch index {batch} does not fit in isize"),
+    })?;
+    batch_isize
+        .checked_mul(stride)
+        .ok_or_else(|| Error::InvalidConfig {
+            op: OP,
+            message: format!("batch offset overflows isize: batch={batch} stride={stride}"),
+        })
 }
 
-fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Option<isize> {
+fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Result<isize> {
     base.checked_add(checked_batch_offset(batch, stride)?)
+        .ok_or_else(|| Error::InvalidConfig {
+            op: OP,
+            message: format!(
+                "view batch offset overflows isize: base={base} batch={batch} stride={stride}"
+            ),
+        })
+}
+
+fn dim_to_isize(dim: usize, context: &'static str) -> Result<isize> {
+    isize::try_from(dim).map_err(|_| Error::InvalidConfig {
+        op: OP,
+        message: format!("{context}: dimension {dim} does not fit in isize"),
+    })
 }
 
 fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
@@ -527,10 +561,14 @@ fn canonical_gemm_layout(
     rhs_rank: usize,
 ) -> (SmallVec<[usize; 8]>, SmallVec<[usize; 8]>, DotGeneralConfig) {
     let lhs_free: SmallVec<[usize; 8]> = (0..lhs_rank)
-        .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
+        .filter(|&d| {
+            !config.lhs_contracting_dims.contains(&d) && !config.lhs_batch_dims.contains(&d)
+        })
         .collect();
     let rhs_free: SmallVec<[usize; 8]> = (0..rhs_rank)
-        .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
+        .filter(|&d| {
+            !config.rhs_contracting_dims.contains(&d) && !config.rhs_batch_dims.contains(&d)
+        })
         .collect();
 
     let mut lhs_perm = SmallVec::<[usize; 8]>::with_capacity(lhs_rank);
@@ -577,10 +615,14 @@ where
     let rhs_rank = rhs_shape.len();
 
     let lhs_free: SmallVec<[usize; 8]> = (0..lhs_rank)
-        .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
+        .filter(|&d| {
+            !config.lhs_contracting_dims.contains(&d) && !config.lhs_batch_dims.contains(&d)
+        })
         .collect();
     let rhs_free: SmallVec<[usize; 8]> = (0..rhs_rank)
-        .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
+        .filter(|&d| {
+            !config.rhs_contracting_dims.contains(&d) && !config.rhs_batch_dims.contains(&d)
+        })
         .collect();
 
     let lhs_strides = lhs.strides()?;
@@ -645,22 +687,22 @@ where
         return Ok(None);
     }
 
-    let Some((_, a_rs)) = try_fuse_dims(&lhs_free_shapes, &lhs_free_strides) else {
+    let Some((_, a_rs)) = try_fuse_dims(&lhs_free_shapes, &lhs_free_strides)? else {
         return Ok(None);
     };
-    let Some((_, a_cs)) = try_fuse_dims(&contract_shapes, &lhs_contract_strides) else {
+    let Some((_, a_cs)) = try_fuse_dims(&contract_shapes, &lhs_contract_strides)? else {
         return Ok(None);
     };
-    let Some((_, b_rs)) = try_fuse_dims(&contract_shapes, &rhs_contract_strides) else {
+    let Some((_, b_rs)) = try_fuse_dims(&contract_shapes, &rhs_contract_strides)? else {
         return Ok(None);
     };
-    let Some((_, b_cs)) = try_fuse_dims(&rhs_free_shapes, &rhs_free_strides) else {
+    let Some((_, b_cs)) = try_fuse_dims(&rhs_free_shapes, &rhs_free_strides)? else {
         return Ok(None);
     };
-    let Some((_, a_bs)) = try_fuse_dims(&batch_shapes, &lhs_batch_strides) else {
+    let Some((_, a_bs)) = try_fuse_dims(&batch_shapes, &lhs_batch_strides)? else {
         return Ok(None);
     };
-    let Some((_, b_bs)) = try_fuse_dims(&batch_shapes, &rhs_batch_strides) else {
+    let Some((_, b_bs)) = try_fuse_dims(&batch_shapes, &rhs_batch_strides)? else {
         return Ok(None);
     };
 
@@ -679,13 +721,13 @@ where
     let out_b_shapes = &out_shape[nm + nn..];
     let out_b_strides = &out_strides[nm + nn..];
 
-    let Some((_, c_rs)) = try_fuse_dims(out_m_shapes, out_m_strides) else {
+    let Some((_, c_rs)) = try_fuse_dims(out_m_shapes, out_m_strides)? else {
         return Ok(None);
     };
-    let Some((_, c_cs)) = try_fuse_dims(out_n_shapes, out_n_strides) else {
+    let Some((_, c_cs)) = try_fuse_dims(out_n_shapes, out_n_strides)? else {
         return Ok(None);
     };
-    let Some((_, c_bs)) = try_fuse_dims(out_b_shapes, out_b_strides) else {
+    let Some((_, c_bs)) = try_fuse_dims(out_b_shapes, out_b_strides)? else {
         return Ok(None);
     };
 
@@ -982,12 +1024,9 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
-        let c_off = checked_batch_offset(batch, dims.c_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)?;
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             if lhs_conj || rhs_conj {
                 T::strided_gemm_with_conj(
@@ -1324,12 +1363,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
-        let c_off = checked_batch_offset(batch, dims.c_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)?;
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         let executed = unsafe {
             T::strided_gemm_with_conj(
                 T::one(),
@@ -1420,12 +1456,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
-        let c_off = checked_batch_offset(batch, dims.c_bs)
-            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)?;
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             T::strided_gemm(
                 T::one(),

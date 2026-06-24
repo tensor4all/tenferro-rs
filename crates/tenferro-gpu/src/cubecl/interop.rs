@@ -51,6 +51,13 @@ impl DeviceByteBuffer {
     }
 }
 
+pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::Result<*mut c_void> {
+    let addr = usize::try_from(addr).map_err(|_| {
+        crate::Error::backend_failure(op, format!("CUDA device address {addr} exceeds usize"))
+    })?;
+    Ok(std::ptr::with_exposed_provenance_mut::<c_void>(addr))
+}
+
 /// Run a closure with the CubeCL compute client.
 ///
 /// This is for operation-family kernel launches that cannot be implemented
@@ -133,7 +140,7 @@ pub fn typed_device_ptr<T: 'static>(
             crate::Error::backend_failure(op, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    Ok(resource.resource().ptr as usize as *mut c_void)
+    cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
@@ -214,6 +221,6 @@ fn device_bytes_from_handle(
     })?;
     Ok(DeviceByteBuffer {
         handle: Some(handle),
-        ptr: resource.resource().ptr as usize as *mut c_void,
+        ptr: cuda_device_ptr_from_addr(resource.resource().ptr, op)?,
     })
 }

@@ -1146,11 +1146,11 @@ fn scale_real_eval_and_grad_sum() {
     let x =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
 
-    let y = x.scale_real(2.0);
+    let y = x.scale_real(2.0).unwrap();
     let y_eval = eval_tensor(y);
     assert_close_slice(get_f64_data(&y_eval), &[2.0, 4.0, 6.0]);
 
-    let loss = x.scale_real(2.0).reduce_sum(&[0]).unwrap();
+    let loss = x.scale_real(2.0).unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice(get_f64_data(&grad_eval), &[2.0, 2.0, 2.0]);

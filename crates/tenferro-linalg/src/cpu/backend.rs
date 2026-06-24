@@ -969,8 +969,35 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
-fn batch_count(batch_shape: &[usize]) -> usize {
-    batch_shape.iter().product::<usize>().max(1)
+fn checked_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> tenferro_tensor::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| Error::InvalidConfig {
+            op,
+            message: format!("{role} element count overflow"),
+        })
+    })
+}
+
+fn batch_count(op: &'static str, batch_shape: &[usize]) -> tenferro_tensor::Result<usize> {
+    Ok(checked_product(op, "batch shape", batch_shape)?.max(1))
+}
+
+fn checked_batch_offset(
+    op: &'static str,
+    role: &'static str,
+    batch: usize,
+    stride: usize,
+) -> tenferro_tensor::Result<usize> {
+    batch
+        .checked_mul(stride)
+        .ok_or_else(|| Error::InvalidConfig {
+            op,
+            message: format!("{role} overflows usize"),
+        })
 }
 
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
@@ -1202,8 +1229,8 @@ fn apply_lu_pivots_typed<T: Clone>(
             rhs: shape.to_vec(),
         });
     }
-    let batch_total = batch_count(&shape[2..]);
-    let matrix_stride = rows * cols;
+    let batch_total = batch_count("lu_solve_prepared", &shape[2..])?;
+    let matrix_stride = checked_product("lu_solve_prepared", "matrix shape", &[rows, cols])?;
     let pivot_stride = k;
     let input_data = input.host_data()?;
     let pivot_data = pivots.host_data()?;
@@ -1211,7 +1238,12 @@ fn apply_lu_pivots_typed<T: Clone>(
 
     for batch in 0..batch_total {
         let mut perm: Vec<usize> = (0..rows).collect();
-        let pivot_offset = batch * pivot_stride;
+        let pivot_offset = checked_batch_offset(
+            "lu_solve_prepared",
+            "pivot batch offset",
+            batch,
+            pivot_stride,
+        )?;
         for step in 0..k {
             let pivot_one_based = pivot_data[pivot_offset + step];
             if pivot_one_based <= 0 {
@@ -1240,7 +1272,12 @@ fn apply_lu_pivots_typed<T: Clone>(
         } else {
             perm
         };
-        let batch_offset = batch * matrix_stride;
+        let batch_offset = checked_batch_offset(
+            "lu_solve_prepared",
+            "matrix batch offset",
+            batch,
+            matrix_stride,
+        )?;
         for col in 0..cols {
             for &source_row in &row_map {
                 data.push(input_data[batch_offset + source_row + col * rows].clone());

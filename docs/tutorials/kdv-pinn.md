@@ -211,7 +211,7 @@ let u_t = u.jvp(t, &ones_t)?;
 let u_x = u.jvp(x, &ones_x)?;
 let u_xx = u_x.jvp(x, &ones_x)?;
 let u_xxx = u_xx.jvp(x, &ones_x)?;
-let nonlinear = u.mul(&u_x)?.scale_real(6.0);
+let nonlinear = u.mul(&u_x)?.scale_real(6.0)?;
 let residual = u_t.add(&nonlinear)?.add(&u_xxx)?;
 ```
 

@@ -4,7 +4,8 @@
 //! provides backend-parametric operation methods through [`TensorOpsExt`].
 
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
-use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Error, Result, TensorBackend};
+use tenferro_tensor::validate::matmul_config_for_shapes;
+use tenferro_tensor::{CompareDir, DType, Error, Result, TensorBackend};
 
 use crate::TensorOpsExt;
 use tenferro_tensor::Tensor;
@@ -390,12 +391,7 @@ fn clamp(
 /// let c = a.matmul(&b, &mut backend).unwrap();
 /// ```
 fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![a.shape().len() - 1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
+    let config = matmul_config_for_shapes("matmul", a.shape(), b.shape())?;
     backend.with_backend_session(|exec| exec.dot_general(a, b, &config))
 }
 

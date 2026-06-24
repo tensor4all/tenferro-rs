@@ -24,11 +24,13 @@ macro_rules! impl_real_eig_to_complex_outputs {
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut col = 0;
             while col < n {
-                if eig_imag_is_effectively_zero(
-                    s_re[col] as f64,
-                    s_im[col] as f64,
-                    <$real>::EPSILON as f64,
-                ) {
+                if col + 1 >= n
+                    || eig_imag_is_effectively_zero(
+                        s_re[col] as f64,
+                        s_im[col] as f64,
+                        <$real>::EPSILON as f64,
+                    )
+                {
                     values[col] = <$complex>::new(s_re[col], 0.0);
                     for row in 0..n {
                         vectors[row + col * n] = <$complex>::new(u_real[row + col * n], 0.0);

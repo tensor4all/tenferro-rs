@@ -397,18 +397,17 @@ fn lower_extension_instruction(
                 ),
             });
         }
-        if output_idx == 0 {
-            validate_dtype(inst.dtype(), "extension output")?;
-            if value.ty.dtype != inst.dtype() {
-                return Err(Error::InvalidProgram {
-                    message: format!(
-                        "extension family {:?} standard-op lowering output 0 dtype {:?} does not match expected {:?}",
-                        op.family_id(),
-                        value.ty.dtype,
-                        inst.dtype()
-                    ),
-                });
-            }
+        validate_dtype(inst.dtype(), "extension output")?;
+        validate_dtype(value.ty.dtype, "extension output")?;
+        if value.ty.dtype != inst.dtype() {
+            return Err(Error::InvalidProgram {
+                message: format!(
+                    "extension family {:?} standard-op lowering output {output_idx} dtype {:?} does not match expected {:?}",
+                    op.family_id(),
+                    value.ty.dtype,
+                    inst.dtype()
+                ),
+            });
         }
         let Some(slot_ref) = slots.get_mut(parent_slot) else {
             return Err(Error::InvalidProgram {
@@ -707,7 +706,9 @@ fn stablehlo_dot_shape(
 ) -> Result<Vec<usize>> {
     config
         .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(|message| Error::InvalidProgram { message })?;
+        .map_err(|err| Error::InvalidProgram {
+            message: err.to_string(),
+        })?;
     let lhs_free = free_dims(
         lhs_shape.len(),
         &config.lhs_contracting_dims,

@@ -64,13 +64,13 @@ fn traced_tensor_scaling_covers_dtype_specific_constants() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
     )
     .unwrap();
-    assert_eq!(f32_tensor.scale_real(2.5).dtype, DType::F32);
+    assert_eq!(f32_tensor.scale_real(2.5).unwrap().dtype, DType::F32);
 
     let i64_tensor = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![1], vec![2_i64]).unwrap(),
     )
     .unwrap();
-    assert_eq!(i64_tensor.scale_real(2.5).dtype, DType::I64);
+    assert_eq!(i64_tensor.scale_real(2.5).unwrap().dtype, DType::I64);
 
     let real_complex_scaled = i64_tensor.scale_complex(Complex64::new(0.0, 1.0));
     assert!(real_complex_scaled.is_err());
@@ -79,7 +79,7 @@ fn traced_tensor_scaling_covers_dtype_specific_constants() {
         Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap(),
     )
     .unwrap();
-    assert_eq!(c64_tensor.scale_real(2.0).dtype, DType::C64);
+    assert_eq!(c64_tensor.scale_real(2.0).unwrap().dtype, DType::C64);
     assert_eq!(
         c64_tensor
             .scale_complex(Complex64::new(0.0, 1.0))
@@ -92,7 +92,7 @@ fn traced_tensor_scaling_covers_dtype_specific_constants() {
         Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]).unwrap(),
     )
     .unwrap();
-    assert_eq!(c32_tensor.scale_real(2.0).dtype, DType::C32);
+    assert_eq!(c32_tensor.scale_real(2.0).unwrap().dtype, DType::C32);
     assert_eq!(
         c32_tensor
             .scale_complex(Complex64::new(0.0, 1.0))

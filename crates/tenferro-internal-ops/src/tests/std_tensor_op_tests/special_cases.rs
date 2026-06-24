@@ -250,6 +250,20 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(transpose_transpose_none_result, vec![None]);
     assert!(transpose_transpose_none_graph.operations().is_empty());
 
+    let mut invalid_builder = GraphBuilder::<StdTensorOp>::new();
+    let invalid_ct = invalid_builder.add_input(tensor_input_key(401));
+    let invalid = StdTensorOp::Transpose { perm: vec![1, 1] }.transpose_rule(
+        &mut invalid_builder,
+        &[Some(invalid_ct)],
+        &external_inputs(931, 1),
+        &linear_mode(&[true]),
+        &mut ShapeGuardContext::default(),
+    );
+    assert!(
+        invalid.is_err(),
+        "transpose transpose rule must reject invalid inverse permutations instead of panicking"
+    );
+
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
     let none_broadcast = StdTensorOp::BroadcastInDim {

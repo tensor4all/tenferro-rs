@@ -99,7 +99,7 @@ fn dot_general_config_validate_dims_out_of_bounds() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.contains("out of bounds"));
+    assert!(err.to_string().contains("out of bounds"));
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn dot_general_config_validate_dims_contracting_count_mismatch() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.contains("contracting dim counts differ"));
+    assert!(err.to_string().contains("contracting dim counts differ"));
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.contains("batch dim counts differ"));
+    assert!(err.to_string().contains("batch dim counts differ"));
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn dot_general_config_validate_dims_rhs_out_of_bounds() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.contains("out of bounds"));
+    assert!(err.to_string().contains("out of bounds"));
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn dot_general_config_validate_dims_duplicate_batch_dims() {
         rhs_batch_dims: vec![1, 1],
     };
     let err = config.validate_dims_with_ranks(3, 3).unwrap_err();
-    assert!(err.contains("duplicate dim"));
+    assert!(err.to_string().contains("duplicate dim"));
 }
 
 #[test]

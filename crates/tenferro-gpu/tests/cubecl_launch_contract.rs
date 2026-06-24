@@ -10,6 +10,15 @@ fn cubecl_source(file: &str) -> String {
     .unwrap_or_else(|err| panic!("CubeCL source {file} should be readable: {err}"))
 }
 
+fn gpu_source(path: &[&str]) -> String {
+    let mut full_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for component in path {
+        full_path = full_path.join(component);
+    }
+    fs::read_to_string(&full_path)
+        .unwrap_or_else(|err| panic!("GPU source {full_path:?} should be readable: {err}"))
+}
+
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source
         .find(start)
@@ -20,6 +29,13 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start_idx + offset)
         .unwrap_or(source.len());
     &source[start_idx..end_idx]
+}
+
+fn source_tail<'a>(source: &'a str, start: &str) -> &'a str {
+    let start_idx = source
+        .find(start)
+        .unwrap_or_else(|| panic!("source should contain section start {start:?}"));
+    &source[start_idx..]
 }
 
 fn assert_ordered_needles(source_name: &str, source: &str, needles: &[&str]) {
@@ -329,6 +345,107 @@ fn cubecl_scatter_validates_all_device_inputs_before_binding() {
 }
 
 #[test]
+fn cubecl_indexing_kernels_use_saturating_window_arithmetic() {
+    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
+    let clamp = source_section(
+        &indexing_source,
+        "pub(crate) fn clamp_window_start",
+        "#[cube]\npub(crate) fn index_component",
+    );
+    assert!(
+        clamp.contains("dim_size.saturating_sub(window_size)"),
+        "GPU gather/scatter clamp_window_start must not underflow when window_size exceeds dim_size"
+    );
+    assert!(
+        !clamp.contains("dim_size - window_size"),
+        "GPU clamp_window_start must not use unchecked usize subtraction"
+    );
+
+    let scatter_float = source_section(
+        &indexing_source,
+        "pub fn scatter_float_kernel",
+        "#[cube(launch_unchecked)]\npub fn scatter_complex_kernel",
+    );
+    assert!(
+        scatter_float.contains("clamp_window_start::<I>"),
+        "GPU float scatter must clamp out-of-range starts like the CPU backend"
+    );
+    assert!(
+        !scatter_float.contains("start < I::from_int(0)"),
+        "GPU float scatter must not skip negative starts instead of clamping them"
+    );
+
+    let scatter_complex = source_tail(&indexing_source, "pub fn scatter_complex_kernel");
+    assert!(
+        scatter_complex.contains("clamp_window_start::<I>"),
+        "GPU complex scatter must clamp out-of-range starts like the CPU backend"
+    );
+    assert!(
+        !scatter_complex.contains("start < I::from_int(0)"),
+        "GPU complex scatter must not skip negative starts instead of clamping them"
+    );
+
+    let structural_source = gpu_source(&["kernels", "structural.rs"]);
+    let reverse = source_section(
+        &structural_source,
+        "pub fn reverse_kernel",
+        "#[cube(launch_unchecked)]\npub fn concatenate_copy_kernel",
+    );
+    assert!(
+        reverse.contains("dim.saturating_sub(1)"),
+        "GPU reverse_kernel should guard zero-sized dimensions with saturating_sub"
+    );
+    assert!(
+        !reverse.contains("dim - 1"),
+        "GPU reverse_kernel must not compute dim - 1 directly"
+    );
+}
+
+#[test]
+fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
+    let mod_source = cubecl_source("mod.rs");
+    let gather_meta = source_section(
+        &mod_source,
+        "fn gather_launch_meta(",
+        "struct ScatterLaunchMeta",
+    );
+    assert!(
+        gather_meta.contains("validate_slice_sizes_within_operand(\"gather\""),
+        "GPU gather launch metadata must reject per-axis slice sizes larger than the operand"
+    );
+
+    let pad_shape = source_section(&mod_source, "fn pad_output_shape(", "fn index_vector_size(");
+    assert!(
+        pad_shape.contains("i64::try_from(input_shape[axis])"),
+        "GPU pad output shape must not cast usize dimensions to i64 with `as`"
+    );
+    assert!(
+        !pad_shape.contains("input_shape[axis] as i64"),
+        "GPU pad output shape must use checked conversion before signed arithmetic"
+    );
+}
+
+#[test]
+fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
+    let mod_source = cubecl_source("mod.rs");
+    let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");
+    for needle in [
+        "(Tensor::I32(_), _, _)",
+        "(Tensor::I64(_), _, _)",
+        "(Tensor::Bool(_), _, _)",
+    ] {
+        assert!(
+            scatter_source.contains(needle),
+            "GPU scatter should explicitly reject unsupported operand dtype arm {needle}"
+        );
+    }
+    assert!(
+        scatter_source.contains("Err(unsupported_dtype(\"scatter\", operand.dtype()))"),
+        "GPU scatter unsupported operand arms should report unsupported dtype rather than ternary mismatch"
+    );
+}
+
+#[test]
 fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
     let runtime_source = cubecl_source("runtime.rs");
     let new_source = source_section(
@@ -342,7 +459,7 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
         &[
             "cudarc::runtime::result::device::set",
             "cudarc::driver::result::init()",
-            "cudarc::driver::result::primary_ctx::retain",
+            "let primary_context = CudaPrimaryContext::retain(cuda_device)?;",
             "cudarc::driver::result::ctx::set_current",
             "let device = CudaDevice::new(device_ordinal);",
             "let client =",
@@ -355,8 +472,8 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
         "CudaRuntime::drop",
         drop_source,
         &[
-            "let _ = self.synchronize();",
-            "primary_ctx::release(self.cuda_device)",
+            "if let Err(err) = self.synchronize()",
+            "report_cuda_runtime_drop_error(&err);",
         ],
     );
 }
@@ -382,6 +499,121 @@ fn cubecl_gemm_zero_contracting_path_stays_device_native() {
             "alloc_output::<T>(rt, shape)",
             "structural::fill_zero_kernel",
         ],
+    );
+}
+
+#[test]
+fn cubecl_raw_device_pointer_paths_use_exposed_provenance() {
+    for (name, source) in [
+        ("cubecl/interop.rs", cubecl_source("interop.rs")),
+        ("cubecl/gemm.rs", cubecl_source("gemm.rs")),
+    ] {
+        assert!(
+            !source.contains("as usize as *mut c_void"),
+            "{name} must not recreate raw CUDA pointers through an integer-pointer roundtrip"
+        );
+        assert!(
+            source.contains("cuda_device_ptr_from_addr"),
+            "{name} should centralize CUDA device address conversion through the provenance-aware helper"
+        );
+    }
+}
+
+#[test]
+fn cubecl_runtime_uses_primary_context_guard_during_initialization() {
+    let runtime_source = cubecl_source("runtime.rs");
+    assert!(
+        runtime_source.contains("struct CudaPrimaryContext"),
+        "CudaRuntime initialization should retain the CUDA primary context through an RAII guard"
+    );
+    assert!(
+        runtime_source.contains("primary_context: CudaPrimaryContext"),
+        "CudaRuntime should own the retained primary context guard"
+    );
+    assert!(
+        runtime_source.contains("impl Drop for CudaPrimaryContext"),
+        "Cuda primary context release should be tied to the guard Drop implementation"
+    );
+    assert!(
+        !runtime_source.contains("let _ = unsafe { cudarc::driver::result::primary_ctx::release"),
+        "Cuda primary context release status should not be silently discarded from CudaRuntime::drop"
+    );
+}
+
+#[test]
+fn cubecl_extension_cache_guard_validates_downcast_before_deref() {
+    let mod_source = cubecl_source("mod.rs");
+    let cache_source = source_section(
+        &mod_source,
+        "pub fn get_or_try_init<T>",
+        "impl Default for CudaExtensionCache",
+    );
+    let guard_source = source_section(
+        &mod_source,
+        "pub struct CudaExtensionCacheGuard",
+        "impl CudaBackend",
+    );
+
+    assert!(
+        cache_source.contains("downcast_ref::<T>()"),
+        "CudaExtensionCacheGuard construction should validate the cached value type before returning"
+    );
+    assert!(
+        guard_source.contains("value:"),
+        "CudaExtensionCacheGuard should store a typed pointer validated during construction"
+    );
+    assert!(
+        !guard_source
+            .contains(".expect(\"CudaExtensionCache stored value under the wrong TypeId\")"),
+        "CudaExtensionCacheGuard::deref should not panic on cache corruption"
+    );
+}
+
+#[test]
+fn cutensor_drop_paths_report_destroy_status() {
+    let source = cubecl_source("ffi/cutensor.rs");
+    for banned in [
+        "let _ = unsafe { (self.lib.vtable.destroy)(self.raw) };",
+        "let _ = unsafe { (self.lib.vtable.destroy_tensor_descriptor)(self.raw) };",
+        "let _ = unsafe { (self.lib.vtable.destroy_operation_descriptor)(self.raw) };",
+        "let _ = unsafe { (self.lib.vtable.destroy_plan_preference)(self.raw) };",
+        "let _ = unsafe { (self.lib.vtable.destroy_plan)(self.raw) };",
+    ] {
+        assert!(
+            !source.contains(banned),
+            "cuTENSOR Drop paths must inspect destroy status instead of discarding it: found {banned}"
+        );
+    }
+    assert!(
+        source.contains("report_cutensor_destroy_status"),
+        "cuTENSOR Drop paths should share a helper that reports non-success destroy statuses"
+    );
+}
+
+#[test]
+fn cutensor_data_symbols_validate_pointer_before_deref() {
+    let source = cubecl_source("ffi/cutensor.rs");
+    let section = source_section(
+        &source,
+        "unsafe fn load_data_symbol",
+        "struct CutensorLibrary",
+    );
+
+    assert!(
+        !section.contains("Ok(**symbol)"),
+        "cuTENSOR data symbol loading must not blindly double-deref the exported pointer"
+    );
+    assert!(
+        section.contains("let ptr = *symbol;"),
+        "cuTENSOR data symbol loading should name the exported pointer before validation"
+    );
+    assert!(
+        section.contains("ptr.is_null()") && section.contains("ptr.is_aligned()"),
+        "cuTENSOR data symbol loading must reject null or misaligned descriptor pointers"
+    );
+    assert!(
+        section.contains("std::ptr::read(ptr)"),
+        "cuTENSOR data symbol loading should read the validated data symbol pointer explicitly"
     );
 }
 

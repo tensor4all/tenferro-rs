@@ -13,6 +13,7 @@ use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
+use super::interop::cuda_device_ptr_from_addr;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
@@ -287,7 +288,7 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     })?;
     Ok(Workspace {
         _handle: Some(handle),
-        ptr: resource.resource().ptr as usize as *mut c_void,
+        ptr: cuda_device_ptr_from_addr(resource.resource().ptr, OP)?,
         size: workspace_size,
     })
 }
@@ -305,7 +306,7 @@ fn typed_device_ptr<T: 'static>(
             crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    Ok(resource.resource().ptr as usize as *mut c_void)
+    cuda_device_ptr_from_addr(resource.resource().ptr, OP)
 }
 
 fn zero_alloc<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>

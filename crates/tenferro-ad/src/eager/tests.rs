@@ -31,8 +31,9 @@ use super::backward::{
     zero_from_exact_metadata, TenferroBackwardCallbacks,
 };
 use super::{
-    eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
-    profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerRuntime, EagerTensor,
+    eager_op_profile_enabled, eager_op_profile_per_call_us, maybe_print_eager_op_profile,
+    one_like_tensor, print_and_reset_eager_op_profile, profile_eager_op_section,
+    record_eager_op_profile, zero_like_tensor, EagerOpProfileEntry, EagerRuntime, EagerTensor,
 };
 
 fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>> {
@@ -360,6 +361,10 @@ fn eager_op_profile_helpers_cover_enabled_paths() {
 
     assert!(eager_op_profile_enabled());
     assert_eq!(profile_eager_op_section("coverage.profile", || 7), 7);
+    assert_eq!(
+        eager_op_profile_per_call_us(&EagerOpProfileEntry::default()),
+        None
+    );
     record_eager_op_profile("nary_op.total", Duration::from_micros(3));
     record_eager_op_profile("nary_op.total", Duration::from_micros(5));
     maybe_print_eager_op_profile();
@@ -666,6 +671,22 @@ fn zero_like_tensor_covers_non_f64_dtypes() {
     for input in cases {
         let zero = zero_like_tensor(&input, &mut backend).unwrap();
         assert_eq!(zero.shape(), input.shape());
+    }
+}
+
+#[test]
+fn one_like_tensor_covers_integer_and_bool_dtypes_without_analytic_backend_ops() {
+    let mut backend = CpuBackend::new();
+    let cases = [
+        Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
+        Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+        Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
+    ];
+
+    for input in cases {
+        let one = one_like_tensor(&input, &mut backend).unwrap();
+        assert_eq!(one.shape(), input.shape());
+        assert_eq!(one.dtype(), input.dtype());
     }
 }
 

@@ -232,6 +232,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[10.0]);
     /// ```
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reduce_sum", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
         })
@@ -258,6 +259,12 @@ impl EagerTensor {
     /// assert_eq!(c.shape(), &[2, 2]);
     /// ```
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Result<Self> {
+        validate_eager_dot_general_config(
+            "EagerTensor::dot_general",
+            &config,
+            self.shape().len(),
+            other.shape().len(),
+        )?;
         self.binary_op(other, StdTensorOp::DotGeneral { config })
     }
 
@@ -280,6 +287,12 @@ impl EagerTensor {
                 rhs: other.ctx_id(),
             });
         }
+        validate_eager_dot_general_config(
+            "EagerTensor::dot_general_with_conj",
+            config,
+            self.shape().len(),
+            other.shape().len(),
+        )?;
 
         if !self.requires_grad && !other.requires_grad {
             let ctx = Arc::clone(&self.ctx);
@@ -579,6 +592,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 3.0, 2.0, 1.0]);
     /// ```
     pub fn reverse(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reverse", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::Reverse {
             axes: axes.to_vec(),
         })
@@ -788,6 +802,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[24.0]);
     /// ```
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reduce_prod", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceProd {
             axes: axes.to_vec(),
         })
@@ -808,6 +823,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
     /// ```
     pub fn reduce_max(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reduce_max", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceMax {
             axes: axes.to_vec(),
         })
@@ -828,6 +844,7 @@ impl EagerTensor {
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// ```
     pub fn reduce_min(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reduce_min", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceMin {
             axes: axes.to_vec(),
         })
@@ -973,6 +990,27 @@ impl EagerTensor {
         maybe_print_eager_op_profile();
         result
     }
+}
+
+fn validate_eager_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
+    tenferro_tensor::validate::validate_unique_axes(op, "axis", rank, axes)
+        .map_err(Error::TensorRuntime)
+}
+
+fn validate_eager_dot_general_config(
+    op: &'static str,
+    config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
+) -> Result<()> {
+    config
+        .validate_dims_with_ranks(lhs_rank, rhs_rank)
+        .map_err(|err| {
+            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: err.to_string(),
+            })
+        })
 }
 
 fn empty_nary_input_error(op: &StdTensorOp) -> Error {

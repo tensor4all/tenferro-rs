@@ -4,8 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, check_lapack_info, dim_i32, has_zero_dim, matrix_dims, matrix_with_batch_shape,
-    split_core_and_batch_result, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
+    batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
+    dim_i32, has_zero_dim, matrix_dims, matrix_with_batch_shape, split_core_and_batch_result,
+    tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
@@ -309,16 +310,19 @@ pub(crate) fn svd_values<T: LapackSvd>(
         return svd_values_2d(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_total: usize = batch_shape.iter().product();
+    let slice_size = checked_product("svd_values", "core shape", core_shape)?;
+    let batch_total = batch_element_count("svd_values", batch_shape)?;
     let k = core_shape[0].min(core_shape[1]);
-    let mut data = Vec::with_capacity(k * batch_total);
+    let mut data = Vec::with_capacity(checked_product(
+        "svd_values",
+        "values output",
+        &[k, batch_total],
+    )?);
     for batch in 0..batch_total {
-        let start = batch * slice_size;
-        let end = start + slice_size;
+        let range = checked_slice_range("svd_values", batch, slice_size)?;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()?[start..end].to_vec(),
+            input.host_data()?[range].to_vec(),
             input,
         )?;
         let values = svd_values_2d(buffers, &batch_input)?;

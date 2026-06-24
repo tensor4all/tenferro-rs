@@ -1,4 +1,4 @@
-use crate::DotGeneralConfig;
+use crate::{DotGeneralConfig, Error};
 
 #[test]
 fn validate_dims_with_explicit_ranks_rejects_out_of_range_contract() {
@@ -11,7 +11,14 @@ fn validate_dims_with_explicit_ranks_rejects_out_of_range_contract() {
     let err = config
         .validate_dims_with_ranks(2, 2)
         .expect_err("dim index 2 is out of range for rank 2");
-    assert!(err.contains("out of bounds"));
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "dot_general",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("out of bounds"));
 }
 
 #[test]

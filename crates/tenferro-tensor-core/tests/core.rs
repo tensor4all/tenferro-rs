@@ -89,7 +89,7 @@ fn compact_layout_for_static_rank_has_column_major_strides() {
     assert_eq!(layout.shape(), &[2, 3]);
     assert_eq!(layout.strides(), &[1, 2]);
     assert_eq!(layout.offset(), 0);
-    assert!(layout.is_compact_col_major());
+    assert!(layout.is_compact_col_major().unwrap());
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn scalar_layout_with_static_rank_zero_is_compact() {
     assert_eq!(layout.shape(), &[]);
     assert_eq!(layout.strides(), &[]);
     assert_eq!(layout.offset(), 0);
-    assert!(layout.is_compact_col_major());
+    assert!(layout.is_compact_col_major().unwrap());
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn non_compact_layout_reports_false() {
     let layout = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0, 6).unwrap();
     assert_eq!(layout.shape(), &[2, 3]);
     assert_eq!(layout.strides(), &[2, 1]);
-    assert!(!layout.is_compact_col_major());
+    assert!(!layout.is_compact_col_major().unwrap());
 }
 
 #[test]
@@ -375,8 +375,8 @@ fn owned_view_has_expected_shape_stride_offset() {
     assert_eq!(view.shape(), &[2, 3]);
     assert_eq!(view.strides(), &[1, 2]);
     assert_eq!(view.offset(), 0);
-    assert!(view.is_compact_col_major());
-    assert!(view.is_zero_offset_col_major());
+    assert!(view.is_compact_col_major().unwrap());
+    assert!(view.is_zero_offset_col_major().unwrap());
 }
 
 #[test]
@@ -674,7 +674,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
 
     let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap();
     let view = tensor.as_view();
-    assert!(view.is_compact_col_major());
+    assert!(view.is_compact_col_major().unwrap());
     assert!(matches!(
         view.transpose_view(&[0]).unwrap_err(),
         Error::InvalidPermutationLength {

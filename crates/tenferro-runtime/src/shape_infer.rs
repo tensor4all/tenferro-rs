@@ -200,7 +200,7 @@ pub fn infer_output_shapes(
             vec![require_input(op, input_shapes, 0)?.to_vec()]
         }
         StdTensorOp::Transpose { perm } => {
-            vec![permute_shape(require_input(op, input_shapes, 0)?, perm)]
+            vec![permute_shape(require_input(op, input_shapes, 0)?, perm)?]
         }
         StdTensorOp::Reshape { to_shape, .. } => vec![to_shape.clone()],
         StdTensorOp::BroadcastInDim { shape, .. } => vec![shape.clone()],
@@ -262,7 +262,7 @@ pub fn infer_output_shapes(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
             config,
-        )],
+        )?],
         StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)?],
         StdTensorOp::ShapeOf { .. } => vec![Vec::new()],
         StdTensorOp::DynamicTruncate { axis } => {
@@ -473,27 +473,20 @@ fn require_input_expr(
         })
 }
 
-fn permute_shape(input_shape: &[DimExpr], perm: &[usize]) -> Vec<DimExpr> {
-    perm.iter().map(|&axis| input_shape[axis].clone()).collect()
+fn permute_shape(input_shape: &[DimExpr], perm: &[usize]) -> Result<Vec<DimExpr>> {
+    tenferro_tensor::validate::validate_permutation_axes("transpose", input_shape.len(), perm)
+        .map_err(shape_infer_from_tensor_error)?;
+    Ok(perm.iter().map(|&axis| input_shape[axis].clone()).collect())
 }
 
 fn validate_reduction_axes(input_shape: &[DimExpr], axes: &[usize]) -> Result<()> {
-    let mut seen = vec![false; input_shape.len()];
-    for &axis in axes {
-        if axis >= input_shape.len() {
-            return Err(shape_infer_error(format!(
-                "reduction axis {axis} out of bounds for rank {}",
-                input_shape.len()
-            )));
-        }
-        if seen[axis] {
-            return Err(shape_infer_error(format!(
-                "duplicate reduction axis {axis}"
-            )));
-        }
-        seen[axis] = true;
-    }
-    Ok(())
+    tenferro_tensor::validate::validate_unique_axes(
+        "shape_infer_reduction",
+        "reduction",
+        input_shape.len(),
+        axes,
+    )
+    .map_err(shape_infer_from_tensor_error)
 }
 
 fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Result<Vec<DimExpr>> {
@@ -547,6 +540,10 @@ fn shape_infer_error(message: impl Into<String>) -> Error {
     }
 }
 
+fn shape_infer_from_tensor_error(err: tenferro_tensor::Error) -> Error {
+    shape_infer_error(err.to_string())
+}
+
 fn extract_diag_shape(
     input_shape: &[DimExpr],
     axis_a: usize,
@@ -591,9 +588,12 @@ fn dot_general_shape(
     lhs_shape: &[DimExpr],
     rhs_shape: &[DimExpr],
     config: &DotGeneralConfig,
-) -> Vec<DimExpr> {
+) -> Result<Vec<DimExpr>> {
     let lhs_rank = lhs_shape.len();
     let rhs_rank = rhs_shape.len();
+    config
+        .validate_dims_with_ranks(lhs_rank, rhs_rank)
+        .map_err(|err| shape_infer_error(err.to_string()))?;
 
     let lhs_free = (0..lhs_rank).filter(|axis| {
         !config.lhs_contracting_dims.contains(axis) && !config.lhs_batch_dims.contains(axis)
@@ -611,7 +611,7 @@ fn dot_general_shape(
             .iter()
             .map(|&axis| lhs_shape[axis].clone()),
     );
-    output_shape
+    Ok(output_shape)
 }
 
 fn gather_shape(
@@ -650,6 +650,7 @@ fn gather_shape_from_slice_sizes(
             operand_shape.len()
         )));
     }
+    validate_gather_slice_sizes_within_operand(operand_shape, slice_sizes)?;
     if index_vector_dim > index_shape.len() {
         return Err(shape_infer_error(format!(
             "gather: index_vector_dim {index_vector_dim} out of bounds for index rank {}",
@@ -712,6 +713,22 @@ fn gather_shape_from_slice_sizes(
     }
 
     Ok(out_shape)
+}
+
+fn validate_gather_slice_sizes_within_operand(
+    operand_shape: &[DimExpr],
+    slice_sizes: &[DimExpr],
+) -> Result<()> {
+    for (axis, (slice_size, dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
+        if let (DimExpr::Const(slice_size), DimExpr::Const(dim_size)) = (slice_size, dim_size) {
+            if slice_size > dim_size {
+                return Err(shape_infer_error(format!(
+                    "gather: slice_sizes[{axis}]={slice_size} exceeds operand dimension {dim_size}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_unique_axes(op: &'static str, role: &'static str, axes: &[usize]) -> Result<()> {

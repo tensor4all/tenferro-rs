@@ -104,7 +104,7 @@ fn test_scatter_to_diagonal() {
 }
 
 #[test]
-fn test_scatter_skips_negative_and_out_of_bounds_windows() {
+fn test_scatter_clamps_negative_and_out_of_bounds_windows() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![4]).unwrap());
     let scatter_indices = Tensor::from_vec_col_major(vec![3, 1], vec![-1_i64, 2, 4]).unwrap();
     let updates =
@@ -118,10 +118,10 @@ fn test_scatter_skips_negative_and_out_of_bounds_windows() {
 
     let out = scatter(&operand, &scatter_indices, &updates, &config).unwrap();
     assert_eq!(out.shape(), &[4]);
-    assert_eq!(get_f64(&out, &[0]), 0.0);
+    assert_eq!(get_f64(&out, &[0]), 5.0);
     assert_eq!(get_f64(&out, &[1]), 0.0);
     assert_eq!(get_f64(&out, &[2]), 6.0);
-    assert_eq!(get_f64(&out, &[3]), 0.0);
+    assert_eq!(get_f64(&out, &[3]), 7.0);
 }
 
 #[test]
@@ -432,6 +432,55 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
             _ => unreachable!("unexpected conversion case"),
         }
     }
+}
+
+#[test]
+fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
+    let mut backend = CpuBackend::new();
+
+    let f64_bad = Tensor::F64(
+        TypedTensor::from_vec_col_major(
+            vec![4],
+            vec![
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                i32::MAX as f64 + 1.0,
+            ],
+        )
+        .unwrap(),
+    );
+    let err = backend.cast(&f64_bad, DType::I32).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "cast",
+            ref message,
+        } if message.contains("finite") || message.contains("out of i32 range")
+    ));
+
+    let f32_bad =
+        Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![i64::MAX as f32]).unwrap());
+    let err = backend.cast(&f32_bad, DType::I64).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "cast",
+            ref message,
+        } if message.contains("out of i64 range")
+    ));
+
+    let c64_bad = Tensor::C64(
+        TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(f64::INFINITY, 0.0)]).unwrap(),
+    );
+    let err = backend.cast(&c64_bad, DType::I64).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "cast",
+            ref message,
+        } if message.contains("finite")
+    ));
 }
 
 #[test]

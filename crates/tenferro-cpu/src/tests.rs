@@ -1,18 +1,20 @@
 #![allow(dead_code)]
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
+use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-blas")]
 use crate::CpuBackendKind;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
-    CpuBackend, CpuContext,
+    typed_array_uninit_from_pool, CpuBackend, CpuContext,
 };
 #[cfg(feature = "cpu-blas")]
 use tenferro_tensor::StridedSliceSpec;
@@ -131,6 +133,26 @@ fn conjugate_transpose_c64(mat: &[Complex64], rows: usize, cols: usize) -> Vec<C
         }
     }
     out
+}
+
+#[test]
+fn typed_array_uninit_from_pool_rejects_shape_product_overflow_without_panicking() {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
+        let mut buffers = BufferPool::new();
+        typed_array_uninit_from_pool::<f64>(&mut buffers, &[usize::MAX, 2])
+    }));
+
+    assert!(
+        result.is_ok(),
+        "typed_array_uninit_from_pool must return a typed error, not panic"
+    );
+    assert!(matches!(
+        result.unwrap(),
+        Err(tenferro_tensor::Error::InvalidConfig {
+            op: "typed_array_uninit_from_pool",
+            ..
+        })
+    ));
 }
 
 fn matmul_f64(lhs: &[f64], rhs: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {

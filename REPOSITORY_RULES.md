@@ -88,6 +88,11 @@ rules from `tensor4all-agent-rules`.
   specified under `docs/spec/` before implementation. Keep checked `convert`
   separate from explicit `cast`, and keep CPU/GPU/eager/traced behavior aligned
   unless the owning spec names a backend limitation and its typed error.
+- AD cotangent seed helpers must use dtype-aware tensor constructors such as
+  shared zero/one helpers, not backend analytic operations like `exp`, `log`,
+  or `sin` as a shortcut for constants. Seed construction is dtype plumbing,
+  not math dispatch; it must work consistently for all supported tensor dtypes
+  or return an intentional typed limitation.
 - If the cleanest fix requires reshaping `tidu` AD-transform APIs used by
   tenferro, make that upstream API cleanup the preferred repair path and
   optimize for the long-term clean `tidu` contract first. Do not hide a
@@ -109,6 +114,24 @@ rules from `tensor4all-agent-rules`.
   hand-written checks across owned/read, eager/traced, CPU/GPU, or extension
   paths when a helper can enforce validation before fast paths and reduce public
   panic risk.
+- Public validation APIs must return crate error types, not `String` or `&str`
+  errors. If a caller needs to translate into another layer's error type, it
+  should do so explicitly while preserving the original typed validation error
+  in the message or source path.
+- Validation helpers for operation configs should return typed prepared
+  metadata when downstream code will otherwise repeat indexing, rank-minus-one,
+  shape-product, or dimension-role calculations. Prefer passing a validated
+  `DotGeneral`, gather/scatter, slice, pad, linalg, or batch-layout metadata
+  value to backend code over separately calling `validate_*` and then
+  recomputing unchecked offsets.
+- Do not construct runtime operation configs from raw rank arithmetic such as
+  `shape().len() - 1` or `rank - 1` unless a preceding checked helper proves the
+  rank is large enough in the same expression or validated metadata type. Common
+  rank-derived configs such as rank-2 matmul must use shared helpers.
+- Source-contract tests should guard high-risk public-boundary patterns that
+  have previously regressed, including raw `shape.iter().product`, unchecked
+  rank-minus-one, shape inference indexing before config validation, and
+  allocation helpers that bypass shared checked shape-product functions.
 - Parallel operation surfaces must keep validation and promotion semantics in
   parity across owned/read, eager/traced, CPU/GPU, and extension wrapper paths.
   A bug in one surface should trigger an audit of the corresponding surfaces

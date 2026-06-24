@@ -97,7 +97,7 @@ fn test_div_broadcast_vector_by_scalar() {
 fn test_scale_real() {
     let x =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
-    let y = x.scale_real(2.0);
+    let y = x.scale_real(2.0).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[2.0, 4.0, 6.0]);
@@ -107,7 +107,7 @@ fn test_scale_real() {
 fn test_scale_real_operator_overload() {
     let x =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
-    let y = &x * 3.0;
+    let y = (&x * 3.0).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[3.0, 6.0, 9.0]);
@@ -116,7 +116,7 @@ fn test_scale_real_operator_overload() {
 #[test]
 fn test_scale_real_i64_rounds_factor() {
     let x = TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![3], vec![1, 2, -3])).unwrap();
-    let y = x.scale_real(2.7);
+    let y = x.scale_real(2.7).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
     assert_eq!(get_i64_data(&result), &[3, 6, -9]);

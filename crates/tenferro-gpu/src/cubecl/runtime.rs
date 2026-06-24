@@ -34,8 +34,7 @@ pub fn gpu_available() -> bool {
 pub struct CudaRuntime {
     client: ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
-    cuda_device: CUdevice,
-    cuda_context: CUcontext,
+    primary_context: CudaPrimaryContext,
 }
 
 impl fmt::Debug for CudaRuntime {
@@ -50,6 +49,50 @@ impl fmt::Debug for CudaRuntime {
 // methods set the context current before raw CUDA-library calls, and
 // higher-level eager execution serializes backend access through a mutex.
 unsafe impl Send for CudaRuntime {}
+
+struct CudaPrimaryContext {
+    cuda_device: CUdevice,
+    cuda_context: CUcontext,
+}
+
+impl CudaPrimaryContext {
+    fn retain(cuda_device: CUdevice) -> crate::Result<Self> {
+        let cuda_context = unsafe { cudarc::driver::result::primary_ctx::retain(cuda_device) }
+            .map_err(|err| {
+                crate::Error::backend_failure(
+                    "cubecl_runtime_init",
+                    format!("failed to retain CUDA primary context: {err:?}"),
+                )
+            })?;
+        Ok(Self {
+            cuda_device,
+            cuda_context,
+        })
+    }
+
+    fn context(&self) -> CUcontext {
+        self.cuda_context
+    }
+}
+
+impl Drop for CudaPrimaryContext {
+    fn drop(&mut self) {
+        if let Err(err) = unsafe { cudarc::driver::result::primary_ctx::release(self.cuda_device) }
+        {
+            report_cuda_primary_context_release_error(&err);
+        }
+    }
+}
+
+#[cold]
+fn report_cuda_primary_context_release_error(err: &impl fmt::Debug) {
+    eprintln!("tenferro-gpu: failed to release CUDA primary context during Drop: {err:?}");
+}
+
+#[cold]
+fn report_cuda_runtime_drop_error(err: &crate::Error) {
+    eprintln!("tenferro-gpu: failed to synchronize CUDA runtime during Drop: {err}");
+}
 
 impl CudaRuntime {
     /// Initialize the CubeCL CUDA runtime on the given device ordinal.
@@ -81,26 +124,21 @@ impl CudaRuntime {
                     format!("failed to obtain CUDA device {device_ordinal}: {err:?}"),
                 )
             })?;
-        let cuda_context = unsafe { cudarc::driver::result::primary_ctx::retain(cuda_device) }
-            .map_err(|err| {
+        let primary_context = CudaPrimaryContext::retain(cuda_device)?;
+        unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }.map_err(
+            |err| {
                 crate::Error::backend_failure(
                     "cubecl_runtime_init",
-                    format!("failed to retain CUDA primary context: {err:?}"),
+                    format!("failed to set CUDA primary context current: {err:?}"),
                 )
-            })?;
-        unsafe { cudarc::driver::result::ctx::set_current(cuda_context) }.map_err(|err| {
-            crate::Error::backend_failure(
-                "cubecl_runtime_init",
-                format!("failed to set CUDA primary context current: {err:?}"),
-            )
-        })?;
+            },
+        )?;
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
             client,
             device_ordinal,
-            cuda_device,
-            cuda_context,
+            primary_context,
         })
     }
 
@@ -126,12 +164,14 @@ impl CudaRuntime {
         cudarc::runtime::result::device::set(self.device_ordinal as i32).map_err(|err| {
             crate::Error::backend_failure(op, format!("failed to set CUDA runtime device: {err:?}"))
         })?;
-        unsafe { cudarc::driver::result::ctx::set_current(self.cuda_context) }.map_err(|err| {
-            crate::Error::backend_failure(
-                op,
-                format!("failed to activate CUDA primary context: {err:?}"),
-            )
-        })
+        unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }.map_err(
+            |err| {
+                crate::Error::backend_failure(
+                    op,
+                    format!("failed to activate CUDA primary context: {err:?}"),
+                )
+            },
+        )
     }
 
     pub(crate) fn raw_cuda_stream(&self) -> crate::Result<u64> {
@@ -173,7 +213,8 @@ impl Drop for CudaRuntime {
     fn drop(&mut self) {
         // Drop cannot surface errors, but the runtime must not release the
         // primary context while queued kernels may still reference it.
-        let _ = self.synchronize();
-        let _ = unsafe { cudarc::driver::result::primary_ctx::release(self.cuda_device) };
+        if let Err(err) = self.synchronize() {
+            report_cuda_runtime_drop_error(&err);
+        }
     }
 }

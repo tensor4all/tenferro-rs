@@ -227,6 +227,29 @@ fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
 }
 
 #[test]
+fn cuda_linalg_drop_paths_report_destroy_status() {
+    let source = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
+    for banned in [
+        "let _ = unsafe { (self.lib.vtable.destroy)(self.raw) };",
+        "(self.handle.lib.vtable.destroy_gesvdj_info)(self.raw);",
+    ] {
+        assert!(
+            !source.contains(banned),
+            "CUDA linalg Drop paths must inspect destroy status instead of discarding it: found {banned}"
+        );
+    }
+    for helper in [
+        "report_cusolver_destroy_status",
+        "report_cublas_destroy_status",
+    ] {
+        assert!(
+            source.contains(helper),
+            "CUDA linalg Drop paths should report non-success destroy statuses through {helper}"
+        );
+    }
+}
+
+#[test]
 fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let svd_read_source = source_section(&source, "fn svd_read", "fn qr");
@@ -586,6 +609,49 @@ fn gpu_validate_nonsingular_synchronizes_before_host_download() {
         "backend.runtime().synchronize()?;",
         "download_tensor(backend.runtime(), &min_val)?;",
     );
+}
+
+#[test]
+fn gpu_validate_nonsingular_uses_complex_magnitude_and_tolerance() {
+    let source = linalg_source();
+    let validate = source_section(
+        &source,
+        "fn validate_nonsingular_gpu",
+        "fn singularity_tolerance",
+    );
+    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
+
+    assert!(
+        validate.contains("diagonal_magnitude(backend, &diag)?"),
+        "GPU singularity validation should compute diagonal magnitudes through a dedicated helper"
+    );
+    assert!(
+        !validate.contains("backend.cast(&diag, DType::F64)"),
+        "GPU singularity validation must not cast complex diagonals to real and discard imaginary parts"
+    );
+    assert!(
+        validate.contains("let max_val = backend.reduce_max(&flat, &[0])?;"),
+        "GPU singularity validation should compute max diagonal magnitude for a scaled tolerance"
+    );
+    assert!(
+        source.contains("fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> f64"),
+        "GPU singularity validation should use a dtype-aware tolerance helper"
+    );
+    assert!(
+        validate.contains("value <= tolerance"),
+        "GPU singularity validation should reject near-zero pivots with an epsilon-scaled tolerance"
+    );
+
+    for needle in [
+        "pub fn complex32_magnitude",
+        "pub fn complex64_magnitude",
+        ".abs()",
+    ] {
+        assert!(
+            kernels.contains(needle),
+            "GPU linalg kernels should compute complex magnitude on device: missing {needle}"
+        );
+    }
 }
 
 #[test]

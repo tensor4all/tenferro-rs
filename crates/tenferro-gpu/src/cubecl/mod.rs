@@ -82,6 +82,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use cubecl::client::ComputeClient;
@@ -414,9 +415,24 @@ impl CudaExtensionCache {
         if !inner.entries.contains_key(&type_id) {
             inner.insert(type_id, init()?, std::mem::size_of::<T>());
         }
+        let value = inner
+            .entries
+            .get(&type_id)
+            .and_then(|entry| entry.value.downcast_ref::<T>())
+            .map(NonNull::from)
+            .ok_or_else(|| {
+                crate::Error::backend_failure(
+                    "cuda_extension_cache",
+                    format!(
+                        "stored entry for {} is missing or has the wrong type",
+                        std::any::type_name::<T>()
+                    ),
+                )
+            })?;
         Ok(CudaExtensionCacheGuard {
             inner,
             type_id,
+            value,
             _marker: std::marker::PhantomData,
         })
     }
@@ -433,6 +449,7 @@ impl Default for CudaExtensionCache {
 pub struct CudaExtensionCacheGuard<'a, T> {
     inner: MutexGuard<'a, CudaExtensionCacheInner>,
     type_id: TypeId,
+    value: NonNull<T>,
     _marker: std::marker::PhantomData<&'a T>,
 }
 
@@ -455,13 +472,10 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        // Internal TypeId invariant: get_or_try_init stores entries under
-        // TypeId::of::<T>(), so a downcast miss indicates cache corruption.
-        self.inner
-            .entries
-            .get(&self.type_id)
-            .and_then(|entry| entry.value.downcast_ref::<T>())
-            .expect("CudaExtensionCache stored value under the wrong TypeId")
+        // SAFETY: get_or_try_init validates the downcast while holding this
+        // same mutex guard. The entry cannot move or be evicted while this
+        // guard owns the mutex.
+        unsafe { self.value.as_ref() }
     }
 }
 
@@ -1578,21 +1592,24 @@ impl CudaBackend {
         ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
         ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
         ensure_atomic_add_supported::<T>(client, "scatter")?;
-        let output_arg = typed_tensor_binding(&output, "scatter")?;
+        let output_parts =
+            typed_tensor_array_arg_as::<T, T>(&output, output.n_elements(), "scatter")?;
         let operand_arg = typed_tensor_binding(operand, "scatter")?;
         let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
         let updates_arg = typed_tensor_binding(updates, "scatter")?;
         unsafe {
             // SAFETY: `scatter_launch_meta` validates the scatter/update
             // shapes and dimension-number mappings. `typed_tensor_binding`
-            // validates every logical tensor buffer length. The launch domain
-            // is `scatter_update_len(meta)`, and the kernel maps each launched
+            // validates input logical tensor buffers, while
+            // `typed_tensor_array_arg_as` proves the atomic output view stays
+            // within its backing allocation. The launch domain is
+            // `scatter_update_len(meta)`, and the kernel maps each launched
             // update through the validated metadata before indexing.
             indexing::scatter_float_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
                 client,
                 cube_count_for_len(update_len)?,
                 cube_dim_1d(),
-                output_arg.into_tensor_arg(),
+                output_parts,
                 operand_arg.into_tensor_arg(),
                 scatter_arg.into_tensor_arg(),
                 updates_arg.into_tensor_arg(),
@@ -2450,6 +2467,9 @@ impl TensorIndexing for CudaBackend {
                 "scatter",
                 "complex index tensors are not supported",
             )),
+            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) | (Tensor::Bool(_), _, _) => {
+                Err(unsupported_dtype("scatter", operand.dtype()))
+            }
             (_, _, _) => Err(ternary_dtype_mismatch(
                 "scatter",
                 operand,
@@ -2919,12 +2939,36 @@ fn pad_output_shape(input_shape: &[usize], config: &PadConfig) -> crate::Result<
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
-        let base = if input_shape[axis] == 0 {
+        let input_dim =
+            i64::try_from(input_shape[axis]).map_err(|_| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("input dimension on axis {axis} must fit in i64"),
+            })?;
+        let base = if input_dim == 0 {
             0
         } else {
-            (input_shape[axis] as i64 - 1) * (config.interior_padding[axis] + 1) + 1
+            let spacing = config.interior_padding[axis]
+                .checked_add(1)
+                .ok_or_else(|| crate::Error::InvalidConfig {
+                    op: "pad",
+                    message: format!("interior padding overflow on axis {axis}"),
+                })?;
+            input_dim
+                .checked_sub(1)
+                .and_then(|extent| extent.checked_mul(spacing))
+                .and_then(|extent| extent.checked_add(1))
+                .ok_or_else(|| crate::Error::InvalidConfig {
+                    op: "pad",
+                    message: format!("padded interior extent overflow on axis {axis}"),
+                })?
         };
-        let dim = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
+        let dim = config.edge_padding_low[axis]
+            .checked_add(config.edge_padding_high[axis])
+            .and_then(|edge| edge.checked_add(base))
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("output dimension overflow on axis {axis}"),
+            })?;
         out_shape.push(
             usize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
                 op: "pad",
@@ -2933,6 +2977,25 @@ fn pad_output_shape(input_shape: &[usize], config: &PadConfig) -> crate::Result<
         );
     }
     Ok(out_shape)
+}
+
+fn validate_slice_sizes_within_operand(
+    op: &'static str,
+    operand_shape: &[usize],
+    slice_sizes: &[usize],
+) -> crate::Result<()> {
+    ensure_rank(op, operand_shape.len(), slice_sizes.len())?;
+    for (axis, (&slice_size, &dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
+        if slice_size > dim_size {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!(
+                    "slice_sizes[{axis}]={slice_size} exceeds operand dimension {dim_size}"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn index_vector_size(shape: &[usize], index_vector_dim: usize) -> usize {
@@ -2971,6 +3034,7 @@ fn gather_launch_meta(
     config: &GatherConfig,
 ) -> crate::Result<GatherLaunchMeta> {
     ensure_rank("gather", operand_shape.len(), config.slice_sizes.len())?;
+    validate_slice_sizes_within_operand("gather", operand_shape, &config.slice_sizes)?;
     if config.index_vector_dim > start_indices_shape.len() {
         return Err(crate::Error::AxisOutOfBounds {
             op: "gather",

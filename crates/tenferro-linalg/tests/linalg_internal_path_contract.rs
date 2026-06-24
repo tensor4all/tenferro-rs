@@ -267,6 +267,29 @@ fn linalg_ad_has_prepared_solve_rules() {
 }
 
 #[test]
+fn prepared_solve_transpose_rule_keeps_matrix_cotangent_path() {
+    let source = crate_source("src/ad/rules/solve.rs");
+    let transpose_rule = source_section(
+        &source,
+        "pub(crate) fn transpose_lu_solve_prepared",
+        "pub(crate) fn transpose_full_piv_lu_solve",
+    );
+
+    assert!(
+        transpose_rule.contains("ADRuleResult<Vec<Option<LocalValueId>>>"),
+        "prepared LU solve transpose rule must be able to report unsupported active inputs"
+    );
+    assert!(
+        transpose_rule.contains("active_mask[0]"),
+        "prepared LU solve transpose rule must inspect matrix A activity"
+    );
+    assert!(
+        transpose_rule.contains("solve_matrix_cotangent"),
+        "prepared LU solve transpose rule must build the matrix A cotangent"
+    );
+}
+
+#[test]
 fn backend_surface_does_not_expose_internal_lu_solve_mode_type() {
     let source = crate_source("src/backend.rs");
 

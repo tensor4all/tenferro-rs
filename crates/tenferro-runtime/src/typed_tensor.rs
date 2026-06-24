@@ -4,9 +4,8 @@
 //! in their extension crates.
 
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
-use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
-};
+use tenferro_tensor::validate::matmul_config_for_shapes;
+use tenferro_tensor::{CompareDir, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar};
 
 use crate::{TypedTensorMaskOpsExt, TypedTensorOpsExt};
 use tenferro_tensor::TypedTensor;
@@ -439,12 +438,7 @@ fn matmul<T: TensorScalar>(
     b: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![a.shape().len() - 1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
+    let config = matmul_config_for_shapes("matmul", a.shape(), b.shape())?;
     let out = backend.with_backend_session(|exec| {
         exec.dot_general_read(T::tensor_read(a), T::tensor_read(b), &config)
     })?;

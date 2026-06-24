@@ -855,6 +855,12 @@ fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
+    if !p.is_finite() || p == 0.0 {
+        return Err(Error::InvalidGraphBuild {
+            op: "norm",
+            message: format!("p-norm order must be finite and nonzero, got {p}"),
+        });
+    }
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;
     power.reduce_sum(axes)?.pow(&inv_p)
@@ -1003,4 +1009,24 @@ fn restore_keepdim(
         kept_shape[axis] = 1;
     }
     reduced.reshape(&kept_shape)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::p_norm;
+    use tenferro_runtime::TracedTensor;
+
+    #[test]
+    fn p_norm_rejects_zero_and_non_finite_orders() {
+        let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let abs = x.abs();
+
+        for p in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = p_norm(&abs, &[0], p).unwrap_err();
+            assert!(
+                err.to_string().contains("finite") || err.to_string().contains("nonzero"),
+                "expected finite nonzero order error, got {err:?}"
+            );
+        }
+    }
 }

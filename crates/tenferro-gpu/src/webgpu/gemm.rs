@@ -166,9 +166,9 @@ fn build_dot_general_plan(
 ) -> crate::Result<DotGeneralPlan> {
     config
         .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(|message| Error::InvalidConfig {
+        .map_err(|err| Error::InvalidConfig {
             op: DOT_GENERAL_OP,
-            message,
+            message: err.to_string(),
         })?;
 
     let lhs_free = free_axes(

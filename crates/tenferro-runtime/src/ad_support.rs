@@ -171,7 +171,8 @@ pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
         DType::I32 => Ok(Tensor::I32(TypedTensor::ones(shape)?)),
         DType::I64 => Ok(Tensor::I64(TypedTensor::ones(shape)?)),
         DType::Bool => {
-            let len = shape.iter().product();
+            let len =
+                tenferro_tensor::validate::checked_shape_product("ones_tensor", "shape", &shape)?;
             Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
                 shape,
                 vec![true; len],

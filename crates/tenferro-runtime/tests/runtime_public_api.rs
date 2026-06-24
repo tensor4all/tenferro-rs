@@ -3,6 +3,7 @@ use tenferro_runtime::{
     DType, DotGeneralConfig, Error, GatherConfig, GraphCompiler, GraphExecutor, PadConfig,
     ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue, TracedTensor,
 };
+use tenferro_tensor::Error as TensorError;
 
 #[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {
@@ -43,6 +44,24 @@ fn tensor_extension_trait_covers_eager_runtime_paths() {
     let summed = input.reduce_sum(&[0], &mut backend).unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(summed.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
+}
+
+#[test]
+fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
+    let mut backend = CpuBackend::new();
+    let scalar = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let vector = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+
+    let err = scalar.matmul(&vector, &mut backend).unwrap_err();
+
+    assert!(matches!(
+        err,
+        TensorError::RankMismatch {
+            op: "matmul",
+            expected: 2,
+            actual: 0,
+        }
+    ));
 }
 
 #[test]

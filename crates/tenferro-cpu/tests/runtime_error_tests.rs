@@ -4,8 +4,9 @@ use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorAnalytic, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorIndexing, TensorStructural, TypedTensor,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorStructural,
+    TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -14,6 +15,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+}
+
+fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -131,6 +136,50 @@ fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
         !filled_section.contains("let len = shape.iter().product();"),
         "CPU zero/fill pooled output allocation must not use unchecked shape.iter().product()"
     );
+}
+
+#[test]
+fn cpu_uninit_pooled_output_allocation_uses_checked_shape_product() {
+    let cpu_lib = include_str!("../src/lib.rs");
+    let section = source_section(
+        cpu_lib,
+        "pub(crate) unsafe fn typed_array_uninit_from_pool",
+        "pub(crate) fn tensor_from_array",
+    );
+
+    assert!(
+        section.contains("checked_shape_product("),
+        "CPU uninitialized pooled output allocation must reject shape-product overflow"
+    );
+    assert!(
+        !section.contains("shape.iter().product"),
+        "CPU uninitialized pooled output allocation must not use unchecked shape.iter().product()"
+    );
+}
+
+#[test]
+fn affinity_unsafe_blocks_document_safety_invariants() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/affinity.rs");
+    let source = std::fs::read_to_string(&path).expect("affinity.rs should be readable");
+    let lines: Vec<_> = source.lines().collect();
+
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.contains("unsafe {") {
+            continue;
+        }
+
+        let has_safety_comment = lines
+            .iter()
+            .take(idx)
+            .rev()
+            .take(4)
+            .any(|line| line.trim_start().starts_with("// SAFETY:"));
+        assert!(
+            has_safety_comment,
+            "src/affinity.rs:{} missing SAFETY comment before unsafe block: {line}",
+            idx + 1
+        );
+    }
 }
 
 #[test]
@@ -575,4 +624,27 @@ fn concatenate_accepts_valid_inputs() {
     assert!(result.is_ok());
     let out = result.unwrap();
     assert_eq!(out.shape(), &[4, 2]);
+}
+
+#[test]
+fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
+    let mut backend = CpuBackend::new();
+    let operand = f64_tensor(vec![3], vec![0.0, 0.0, 0.0]);
+    let scatter_indices = i64_tensor(vec![1], vec![-1]);
+    let updates = f64_tensor(vec![1], vec![5.0]);
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let out = backend
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap();
+
+    match out {
+        Tensor::F64(inner) => assert_eq!(inner.host_data().unwrap(), &[5.0, 0.0, 0.0]),
+        other => panic!("unexpected output dtype: {:?}", other.dtype()),
+    }
 }

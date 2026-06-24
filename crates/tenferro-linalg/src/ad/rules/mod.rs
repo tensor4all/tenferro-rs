@@ -53,7 +53,7 @@ use support::*;
 fn primal_input_shape(
     ctx: &mut ShapeGuardContext,
     primal_in: &[ValueKey<StdTensorOp>],
-) -> Option<Vec<DimExpr>> {
+) -> ADRuleResult<Option<Vec<DimExpr>>> {
     let input = ValueRef::External(primal_in[0].clone());
     if let Some(exact_shape) = ctx.shape_if_available(&input) {
         return if let Some(concrete) = exact_shape
@@ -61,22 +61,24 @@ fn primal_input_shape(
             .map(|dim| dim.constant_value())
             .collect::<Option<Vec<_>>>()
         {
-            Some(DimExpr::from_concrete(&concrete))
+            Ok(Some(DimExpr::from_concrete(&concrete)))
         } else {
-            Some(DimExpr::input_shape(0, exact_shape.len()))
+            Ok(Some(DimExpr::input_shape(0, exact_shape.len())))
         };
     }
 
-    let rank = ctx.rank_of(&input).ok()?;
-    Some(DimExpr::input_shape(0, rank))
+    let rank = ctx.rank_of(&input)?;
+    Ok(Some(DimExpr::input_shape(0, rank)))
 }
 
 fn primal_matrix_input_shape(
     ctx: &mut ShapeGuardContext,
     primal_in: &[ValueKey<StdTensorOp>],
-) -> Option<Vec<DimExpr>> {
-    let input_shape = primal_input_shape(ctx, primal_in)?;
-    (input_shape.len() >= 2).then_some(input_shape)
+) -> ADRuleResult<Option<Vec<DimExpr>>> {
+    let Some(input_shape) = primal_input_shape(ctx, primal_in)? else {
+        return Ok(None);
+    };
+    Ok((input_shape.len() >= 2).then_some(input_shape))
 }
 
 fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
@@ -102,7 +104,7 @@ pub(crate) fn linearize_lu(
         return Ok(vec![None, None, None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None, None]);
     };
     let input_shape = input_shape.as_slice();
@@ -211,7 +213,7 @@ pub(crate) fn linearize_full_piv_lu(
         return Ok(vec![None, None, None, None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None, None, None]);
     };
     let input_shape = input_shape.as_slice();
@@ -289,13 +291,13 @@ pub(crate) fn linearize_eig(
     tangent_in: &[Option<LocalValueId>],
     input_dtype: DType,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None, None];
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
+        return Ok(vec![None, None]);
     };
     let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
@@ -322,7 +324,7 @@ pub(crate) fn linearize_eig(
             },
         )[0],
         DType::C64 | DType::C32 => da,
-        DType::I32 | DType::I64 | DType::Bool => return vec![None, None],
+        DType::I32 | DType::I64 | DType::Bool => return Ok(vec![None, None]),
     };
 
     let dav = matmul_linear(
@@ -334,7 +336,7 @@ pub(crate) fn linearize_eig(
     );
     let projected = solve_in_graph(builder, v, ValueRef::Local(dav), rank);
     let dw = extract_diag_linear(builder, projected);
-    vec![Some(dw), None]
+    Ok(vec![Some(dw), None])
 }
 
 pub(crate) fn linearize_eig_values(
@@ -343,13 +345,13 @@ pub(crate) fn linearize_eig_values(
     tangent_in: &[Option<LocalValueId>],
     input_dtype: DType,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(da) = tangent_in[0] else {
-        return vec![None];
+        return Ok(vec![None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
-        return vec![None];
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
+        return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
@@ -381,7 +383,7 @@ pub(crate) fn linearize_eig_values(
             },
         )[0],
         DType::C64 | DType::C32 => da,
-        DType::I32 | DType::I64 | DType::Bool => return vec![None],
+        DType::I32 | DType::I64 | DType::Bool => return Ok(vec![None]),
     };
 
     let dav = matmul_linear(
@@ -393,7 +395,7 @@ pub(crate) fn linearize_eig_values(
     );
     let projected = solve_in_graph(builder, v, ValueRef::Local(dav), rank);
     let dw = extract_diag_linear(builder, projected);
-    vec![Some(dw)]
+    Ok(vec![Some(dw)])
 }
 
 pub(crate) fn linearize_svd(
@@ -408,7 +410,7 @@ pub(crate) fn linearize_svd(
         return Ok(vec![None, None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None]);
     };
     let input_shape = input_shape.as_slice();
@@ -583,7 +585,7 @@ pub(crate) fn linearize_svd_values(
         return Ok(vec![None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
@@ -627,7 +629,7 @@ pub(crate) fn linearize_eigh(
         return Ok(vec![None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
     let input_shape = input_shape.as_slice();
@@ -699,7 +701,7 @@ pub(crate) fn linearize_eigh_values(
         return Ok(vec![None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
@@ -742,7 +744,7 @@ pub(crate) fn linearize_cholesky(
         return Ok(vec![None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None]);
     };
     let input_shape = input_shape.as_slice();
@@ -810,7 +812,7 @@ pub(crate) fn linearize_qr(
         return Ok(vec![None, None]);
     };
 
-    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in) else {
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
     let input_shape = input_shape.as_slice();

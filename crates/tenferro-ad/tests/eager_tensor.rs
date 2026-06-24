@@ -185,6 +185,62 @@ fn eager_concatenate_empty_reports_typed_validation_error() {
 }
 
 #[test]
+fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
+    let ctx = test_ctx();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+
+    let out_of_bounds = x.reduce_sum(&[2]).unwrap_err();
+    assert!(matches!(
+        out_of_bounds,
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+            op: "EagerTensor::reduce_sum",
+            axis: 2,
+            rank: 2,
+        })
+    ));
+
+    for err in [
+        x.reduce_sum(&[0, 0]).unwrap_err(),
+        x.reduce_prod(&[0, 0]).unwrap_err(),
+        x.reduce_max(&[0, 0]).unwrap_err(),
+        x.reduce_min(&[0, 0]).unwrap_err(),
+        x.reverse(&[0, 0]).unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                err,
+                tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::DuplicateAxis {
+                    axis: 0,
+                    role: "axis",
+                    ..
+                })
+            ),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn eager_backward_seed_for_integer_scalar_does_not_call_float_analytic_ops() {
+    let ctx = test_ctx();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![], vec![3_i32]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+
+    let cotangents = x.backward().unwrap();
+
+    assert_eq!(cotangents.len(), 1);
+    let grad = x.grad().unwrap().unwrap();
+    assert_eq!(grad.as_slice::<i32>().unwrap(), &[1]);
+}
+
+#[test]
 fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
     let ctx = test_ctx();
     let plain = EagerTensor::from_tensor_in(
@@ -256,6 +312,39 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
         c64_data(explicit.materialized().unwrap().as_ref()),
         TOL,
     );
+}
+
+#[test]
+fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatch() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![3],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let err = lhs
+        .dot_general_with_conj(&rhs, &config, true, false)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+            op: "EagerTensor::dot_general_with_conj",
+            ..
+        })
+    ));
 }
 
 #[test]

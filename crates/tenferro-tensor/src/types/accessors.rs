@@ -12,15 +12,8 @@ fn linear_offset_unchecked(shape: &[usize], indices: &[usize]) -> usize {
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (&idx, &extent) in indices.iter().zip(shape) {
-        offset = offset
-            .checked_add(
-                idx.checked_mul(stride)
-                    .unwrap_or_else(|| panic!("linear offset multiply overflows")),
-            )
-            .unwrap_or_else(|| panic!("linear offset add overflows"));
-        stride = stride
-            .checked_mul(extent)
-            .unwrap_or_else(|| panic!("linear offset stride overflows"));
+        offset = offset.wrapping_add(idx.wrapping_mul(stride));
+        stride = stride.wrapping_mul(extent);
     }
     offset
 }
@@ -439,6 +432,6 @@ mod tests {
         let shape = [usize::MAX, 3];
 
         assert!(try_linear_offset_for_shape(&shape, &[0, 2], "test").is_err());
-        assert!(std::panic::catch_unwind(|| linear_offset_unchecked(&shape, &[0, 2])).is_err());
+        assert!(std::panic::catch_unwind(|| linear_offset_unchecked(&shape, &[0, 2])).is_ok());
     }
 }

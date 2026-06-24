@@ -236,21 +236,90 @@ impl XlaExecutor {
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
     pub fn run_with_inputs(&self, program: &GraphProgram, inputs: &[&Tensor]) -> Result<Tensor> {
-        let mut outputs = self.run_many_with_inputs(program, inputs)?;
-        if outputs.len() != 1 {
-            return Err(crate::Error::InvalidProgram {
-                message: format!(
-                    "PJRT single-output execution expected 1 output, got {}",
-                    outputs.len()
-                ),
-            });
-        }
-        Ok(outputs.remove(0))
+        single_output_tensor(self.run_many_with_inputs(program, inputs)?)
     }
 }
 
 impl Default for XlaExecutor {
     fn default() -> Self {
         Self::new(XlaExecutorOptions::default())
+    }
+}
+
+fn single_output_tensor(mut outputs: Vec<Tensor>) -> Result<Tensor> {
+    if outputs.len() != 1 {
+        return Err(crate::Error::InvalidProgram {
+            message: format!(
+                "PJRT single-output execution expected 1 output, got {}",
+                outputs.len()
+            ),
+        });
+    }
+    Ok(outputs.remove(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{single_output_tensor, XlaExecutor, XlaExecutorOptions};
+    use crate::Error;
+    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_tensor::Tensor;
+
+    #[test]
+    fn executor_options_and_debug_are_directly_covered() {
+        let options = XlaExecutorOptions::default();
+        let executor = XlaExecutor::new(options);
+
+        assert_eq!(executor.options(), options);
+        assert!(!executor.has_loaded_pjrt_plugin());
+        assert_eq!(format!("{options:?}"), "XlaExecutorOptions");
+        assert!(format!("{executor:?}").contains("has_loaded_pjrt_plugin"));
+    }
+
+    #[test]
+    fn default_executor_reports_missing_pjrt_before_dispatch() {
+        let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+        let mut compiler = GraphCompiler::new();
+        let program = compiler.compile(&x.neg()).unwrap();
+        let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+
+        let err = XlaExecutor::default()
+            .run_many_with_inputs(&program, &[&input])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded
+        ));
+        let err = XlaExecutor::default()
+            .run_with_inputs(&program, &[&input])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded
+        ));
+    }
+
+    #[test]
+    fn single_output_tensor_rejects_zero_or_multiple_outputs() {
+        let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+        assert_eq!(
+            single_output_tensor(vec![tensor.clone()])
+                .unwrap()
+                .as_slice::<f64>()
+                .unwrap(),
+            &[1.0]
+        );
+
+        let err = single_output_tensor(Vec::new()).unwrap_err();
+        assert!(
+            err.to_string().contains("got 0"),
+            "expected zero-output error, got {err:?}"
+        );
+
+        let err = single_output_tensor(vec![tensor.clone(), tensor]).unwrap_err();
+        assert!(
+            err.to_string().contains("got 2"),
+            "expected multi-output error, got {err:?}"
+        );
     }
 }

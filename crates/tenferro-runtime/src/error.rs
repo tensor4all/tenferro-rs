@@ -9,7 +9,11 @@
 //! assert!(err.to_string().contains("bad label"));
 //! ```
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use tenferro_tensor::DType;
+
+static NEXT_CONTEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Errors produced by einsum, eval, and other tenferro operations.
 ///
@@ -115,9 +119,14 @@ pub enum Error {
 pub struct ContextId(usize);
 
 impl ContextId {
-    #[doc(hidden)]
-    pub fn from_ptr<T>(ptr: *const T) -> Self {
-        Self(ptr as usize)
+    /// Generate a fresh opaque runtime context identifier.
+    ///
+    /// Runtime implementations use this when constructing a new execution
+    /// context. The value is intentionally opaque and is only useful in error
+    /// reporting and equality checks.
+    pub fn fresh() -> Self {
+        let id = NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
+        Self(id)
     }
 }
 

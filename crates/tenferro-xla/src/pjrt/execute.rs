@@ -97,19 +97,44 @@ fn validate_inputs(program: &GraphProgram, inputs: &[&Tensor]) -> Result<()> {
 fn output_specs(program: &GraphProgram) -> Result<Vec<TensorSpec>> {
     let view = program.lowering_view();
     let mut slots: Vec<Option<TensorSpec>> = vec![None; view.slot_count()];
-    for (index, input) in program.input_specs().iter().enumerate() {
-        slots[view.input_slots()[index]] = Some(TensorSpec {
+    if program.input_specs().len() != view.input_slots().len() {
+        return Err(Error::InvalidProgram {
+            message: format!(
+                "PJRT input spec count {} does not match input slot count {}",
+                program.input_specs().len(),
+                view.input_slots().len()
+            ),
+        });
+    }
+    for (index, (input, &input_slot)) in program
+        .input_specs()
+        .iter()
+        .zip(view.input_slots().iter())
+        .enumerate()
+    {
+        let slots_len = slots.len();
+        let Some(slot_ref) = slots.get_mut(input_slot) else {
+            return Err(Error::InvalidProgram {
+                message: format!(
+                    "PJRT input {index} slot {input_slot} is outside slot table length {slots_len}"
+                ),
+            });
+        };
+        *slot_ref = Some(TensorSpec {
             dtype: input.dtype(),
             shape: input.shape().to_vec(),
         });
     }
     for inst in view.instructions() {
-        if inst.output_slots().len() != 1 {
-            return Err(Error::UnsupportedOp {
-                op: inst.op_name(),
-                reason: "multiple outputs are not part of the initial PJRT execution subset",
-            });
-        }
+        let output_slot = match inst.output_slots() {
+            [slot] => *slot,
+            _ => {
+                return Err(Error::UnsupportedOp {
+                    op: inst.op_name(),
+                    reason: "multiple outputs are not part of the initial PJRT execution subset",
+                });
+            }
+        };
         validate_supported_dtype(inst.dtype(), "PJRT output")?;
         let input_shapes = inst
             .input_slots()
@@ -125,7 +150,15 @@ fn output_specs(program: &GraphProgram) -> Result<Vec<TensorSpec>> {
             })
             .collect::<Result<Vec<_>>>()?;
         let shape = crate::lowering::shape::static_output_shape(inst, 0, &input_shapes)?;
-        slots[inst.output_slots()[0]] = Some(TensorSpec {
+        let slots_len = slots.len();
+        let Some(slot_ref) = slots.get_mut(output_slot) else {
+            return Err(Error::InvalidProgram {
+                message: format!(
+                    "PJRT output slot {output_slot} is outside slot table length {slots_len}"
+                ),
+            });
+        };
+        *slot_ref = Some(TensorSpec {
             dtype: inst.dtype(),
             shape,
         });
@@ -693,14 +726,9 @@ impl PjrtBuffer<'_> {
             event: ptr::null_mut(),
         };
         let error = unsafe { (self.api.pjrt_buffer_to_host_buffer)(&mut args) };
+        let mut event = PjrtEvent::from_raw(self.api, args.event);
         check(self.api, "PJRT_Buffer_ToHostBuffer", error)?;
-        if !args.event.is_null() {
-            let mut event = PjrtEvent {
-                api: self.api,
-                ptr: args.event,
-            };
-            event.await_ready("PJRT_Buffer_ToHostBuffer.event")?;
-        }
+        event.await_ready_if_present("PJRT_Buffer_ToHostBuffer.event")?;
         Ok(output)
     }
 }
@@ -735,6 +763,17 @@ struct PjrtEvent<'a> {
 }
 
 impl PjrtEvent<'_> {
+    fn from_raw(api: &PJRT_Api, ptr: *mut PJRT_Event) -> PjrtEvent<'_> {
+        PjrtEvent { api, ptr }
+    }
+
+    fn await_ready_if_present(&mut self, call: &'static str) -> Result<()> {
+        if self.ptr.is_null() {
+            return Ok(());
+        }
+        self.await_ready(call)
+    }
+
     fn await_ready(&mut self, call: &'static str) -> Result<()> {
         let mut args = PJRT_Event_Await_Args {
             struct_size: mem::size_of::<PJRT_Event_Await_Args>(),

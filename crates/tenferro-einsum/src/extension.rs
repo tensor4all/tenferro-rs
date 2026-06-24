@@ -873,15 +873,15 @@ fn broadcast_einsum_vjp_to_input_shape(
         )
     })?;
     let mut inputs = vec![ValueRef::Local(cotangent)];
+    let mut active_mask = vec![true];
     if !shape.is_empty() {
         inputs.push(shape_source);
+        active_mask.push(false);
     }
     let broadcast = builder.add_operation(
         StdTensorOp::BroadcastInDim { shape, dims },
         inputs,
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
+        OperationRole::Linearized { active_mask },
     )[0];
     Ok(project_repeated_labels_to_diagonal(
         builder,

@@ -43,3 +43,82 @@ fn pjrt_output_download_does_not_materialize_row_major_conversion_buffer() {
         "PJRT output download should request column-major host layout instead of post-copying"
     );
 }
+
+#[test]
+fn pjrt_output_specs_validate_slot_bounds_before_indexing() {
+    let source = pjrt_execute_source();
+    let section = source
+        .split_once("fn output_specs(program: &GraphProgram)")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn validate_supported_dtype")
+                .map(|(body, _)| body)
+        })
+        .expect("PJRT output_specs source section should exist");
+
+    assert!(
+        section.contains("program.input_specs().len() != view.input_slots().len()"),
+        "PJRT output_specs must validate input spec/slot count before zipping or indexing"
+    );
+    assert!(
+        !section.contains("view.input_slots()[index]"),
+        "PJRT output_specs must not index input_slots by input spec position without bounds checks"
+    );
+    assert!(
+        !section.contains("inst.output_slots()[0]"),
+        "PJRT output_specs must not index output_slots[0] without get/get_mut validation"
+    );
+    assert!(
+        section.contains("slots.get_mut(input_slot)")
+            && section.contains("slots.get_mut(output_slot)"),
+        "PJRT output_specs should populate slots through checked get_mut calls"
+    );
+}
+
+#[test]
+fn pjrt_download_host_vec_owns_event_before_error_check() {
+    let source = pjrt_execute_source();
+    let section = source
+        .split_once("fn download_host_vec<T: Copy + Default>")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn col_major_minor_to_major")
+                .map(|(body, _)| body)
+        })
+        .expect("PJRT download_host_vec source section should exist");
+
+    let event_idx = section
+        .find("let mut event = PjrtEvent::from_raw(self.api, args.event);")
+        .expect("download_host_vec should wrap the returned event in an RAII guard");
+    let check_idx = section
+        .find("check(self.api, \"PJRT_Buffer_ToHostBuffer\", error)?;")
+        .expect("download_host_vec should check PJRT_Buffer_ToHostBuffer errors");
+    assert!(
+        event_idx < check_idx,
+        "PJRT_Buffer_ToHostBuffer event must be owned before returning an error"
+    );
+    assert!(
+        section.contains("event.await_ready_if_present(\"PJRT_Buffer_ToHostBuffer.event\")?;"),
+        "download_host_vec should await the owned event after a successful enqueue"
+    );
+}
+
+#[test]
+fn extension_lowering_validates_every_output_dtype() {
+    let source = lowering_program_source();
+    let section = source
+        .split_once("fn lower_extension_instruction")
+        .and_then(|(_, rest)| rest.split_once("fn lower_constant").map(|(body, _)| body))
+        .expect("extension lowering source section should exist");
+
+    assert!(
+        !section.contains("if output_idx == 0"),
+        "extension lowering must not restrict dtype validation to the first output"
+    );
+    assert!(
+        section.contains("validate_dtype(value.ty.dtype, \"extension output\")"),
+        "extension lowering should validate the actual dtype of every lowered extension output"
+    );
+    assert!(
+        section.contains("value.ty.dtype != inst.dtype()"),
+        "extension lowering should compare every lowered output dtype with the parent instruction dtype"
+    );
+}

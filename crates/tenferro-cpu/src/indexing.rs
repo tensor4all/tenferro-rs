@@ -411,7 +411,13 @@ where
     T: Copy + Clone + PoolScalar,
     Tensor: TensorAsTyped<T>,
 {
-    let first_dtype = inputs[0].dtype();
+    let first_dtype = inputs
+        .first()
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op: "concatenate",
+            message: "concatenate requires at least one input".into(),
+        })?
+        .dtype();
     let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
     typed_concatenate(buffers, &typed_inputs, axis)
 }
@@ -440,7 +446,13 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    let first = inputs[0];
+    let first = inputs
+        .first()
+        .copied()
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op: "concatenate",
+            message: "concatenate requires at least one input".into(),
+        })?;
     let first_shape = first.shape();
     let rank = first_shape.len();
     if axis >= rank {
@@ -646,9 +658,23 @@ fn checked_product(op: &'static str, role: &'static str, shape: &[usize]) -> cra
 }
 
 fn linear_offset(op: &'static str, shape: &[usize], indices: &[usize]) -> crate::Result<usize> {
+    if indices.len() != shape.len() {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: shape.len(),
+            actual: indices.len(),
+        });
+    }
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (axis, &index) in indices.iter().enumerate() {
+        if index >= shape[axis] {
+            return Err(crate::Error::AxisOutOfBounds {
+                op,
+                axis,
+                rank: shape.len(),
+            });
+        }
         let scaled = index
             .checked_mul(stride)
             .ok_or_else(|| crate::Error::InvalidConfig {
@@ -730,7 +756,26 @@ fn index_component(
         return Ok(indices.values[linear_offset(op, &indices.shape, batch_idx)?]);
     }
 
-    debug_assert_eq!(index_scratch.len(), indices.shape.len());
+    if index_scratch.len() != indices.shape.len() {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "index scratch length {} must match index tensor rank {}",
+                index_scratch.len(),
+                indices.shape.len()
+            ),
+        });
+    }
+    if batch_idx.len() + 1 != indices.shape.len() {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "batch index rank {} must be one less than index tensor rank {}",
+                batch_idx.len(),
+                indices.shape.len()
+            ),
+        });
+    }
     let mut batch_axis = 0usize;
     for (axis, slot) in index_scratch.iter_mut().enumerate() {
         if axis == index_vector_dim {
@@ -1150,11 +1195,12 @@ where
                 component,
                 &mut index_scratch,
             )?;
-            if start < 0 {
-                window_fits = false;
-                break;
-            }
-            operand_base[operand_dim] = start as usize;
+            operand_base[operand_dim] = clamp_window_start(
+                "scatter",
+                start,
+                operand_shape[operand_dim],
+                window_shape[operand_dim],
+            )?;
         }
         if !window_fits {
             advance_col_major_index(&mut batch_idx, &batch_shape);
@@ -1430,3 +1476,6 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
 
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests;

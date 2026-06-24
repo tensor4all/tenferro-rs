@@ -116,7 +116,11 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// # Safety
     ///
     /// The returned vector may contain uninitialized or stale elements. Reading
-    /// any element before writing it is undefined behavior.
+    /// any element before writing it is undefined behavior. Once acquired, the
+    /// buffer is removed from pool retention accounting. If the caller panics
+    /// before returning it with [`PoolScalar::pool_release`], the in-flight vector
+    /// is dropped rather than reinserted into the pool so partially initialized
+    /// buffers are not retained.
     ///
     /// # Examples
     ///

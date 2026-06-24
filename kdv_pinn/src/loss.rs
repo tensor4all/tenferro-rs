@@ -14,7 +14,7 @@ pub(crate) fn mean_square(
     let diff = pred.add(&target.neg())?;
     let sq = diff.mul(&diff)?;
     let sum = sq.reduce_sum(&[0, 1])?;
-    Ok(sum.scale_real(1.0 / n as f64))
+    sum.scale_real(1.0 / n as f64)
 }
 
 /// Mean squared error of a single tensor against zero, scaled by `1 / n`.
@@ -24,7 +24,7 @@ pub(crate) fn mean_square_single(tensor: &TracedTensor, n: usize) -> Result<Trac
     assert!(n > 0, "mean_square_single count must be positive");
     let sq = tensor.mul(tensor)?;
     let sum = sq.reduce_sum(&[0, 1])?;
-    Ok(sum.scale_real(1.0 / n as f64))
+    sum.scale_real(1.0 / n as f64)
 }
 
 /// Composite KdV PINN loss.
@@ -45,9 +45,9 @@ pub(crate) fn total_loss(
     lambda_ic: f64,
     lambda_bc: f64,
 ) -> Result<TracedTensor> {
-    let loss_pde = mean_square_single(residual, n_col)?.scale_real(lambda_pde);
-    let loss_ic = mean_square(u_ic, u_ic_true, n_ic)?.scale_real(lambda_ic);
-    let loss_bc = mean_square(u_bc, u_bc_true, n_bc)?.scale_real(lambda_bc);
+    let loss_pde = mean_square_single(residual, n_col)?.scale_real(lambda_pde)?;
+    let loss_ic = mean_square(u_ic, u_ic_true, n_ic)?.scale_real(lambda_ic)?;
+    let loss_bc = mean_square(u_bc, u_bc_true, n_bc)?.scale_real(lambda_bc)?;
     loss_pde.add(&loss_ic)?.add(&loss_bc)
 }
 

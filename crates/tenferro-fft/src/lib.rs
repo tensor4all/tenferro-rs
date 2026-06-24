@@ -276,10 +276,7 @@ impl ExtensionOp for FftOp {
                 }
             }
             FftKind::C2R => {
-                out_shape[self.axis] = match self.n {
-                    Some(n) => SymDim::from(n),
-                    None => (input_shape[self.axis].clone() - 1usize) * 2usize,
-                };
+                out_shape[self.axis] = output_dim_c2r(&input_shape[self.axis], self.n)?;
                 match input_dtype {
                     DType::C32 => DType::F32,
                     DType::C64 => DType::F64,
@@ -690,6 +687,11 @@ fn apply_unary_fft(
     validate_n(op_name, n)?;
     let axis = normalize_axis(op_name, axis, input.rank)?;
     validate_resolved_transform_len(op_name, input, n, axis)?;
+    if matches!(kind, FftKind::C2R) {
+        if let Some(shape) = input.try_concrete_shape() {
+            output_shape_c2r(&shape, axis, n)?;
+        }
+    }
     let op = Arc::new(FftOp::new(kind, axis, n, norm));
     let mut outputs = apply(op, &[input])?;
     outputs
@@ -817,21 +819,9 @@ fn output_shape_c2r(
 ) -> tenferro_tensor::Result<Vec<usize>> {
     validate_axis("irfft", shape, axis)?;
     let input_len = shape[axis];
-    if input_len == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "irfft",
-            message: "input spectrum axis length must be positive".to_string(),
-        });
-    }
     let len = match n {
         Some(len) => len,
-        None => input_len
-            .checked_sub(1)
-            .and_then(|len| len.checked_mul(2))
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                op: "irfft",
-                message: "default output length overflows usize".to_string(),
-            })?,
+        None => default_c2r_output_len(input_len)?,
     };
     if len == 0 {
         return Err(tenferro_tensor::Error::InvalidConfig {
@@ -839,9 +829,68 @@ fn output_shape_c2r(
             message: "output length must be positive".to_string(),
         });
     }
+    validate_c2r_spectrum_len(input_len, len)?;
     let mut out_shape = shape.to_vec();
     out_shape[axis] = len;
     Ok(out_shape)
+}
+
+fn output_dim_c2r(input_dim: &SymDim, n: Option<usize>) -> tenferro_tensor::Result<SymDim> {
+    match (input_dim.constant_value(), n) {
+        (Some(input_len), Some(output_len)) => {
+            if output_len == 0 {
+                return Err(tenferro_tensor::Error::InvalidConfig {
+                    op: "irfft",
+                    message: "output length must be positive".to_string(),
+                });
+            }
+            validate_c2r_spectrum_len(input_len, output_len)?;
+            Ok(SymDim::from(output_len))
+        }
+        (Some(input_len), None) => Ok(SymDim::from(default_c2r_output_len(input_len)?)),
+        (None, Some(output_len)) => {
+            if output_len == 0 {
+                return Err(tenferro_tensor::Error::InvalidConfig {
+                    op: "irfft",
+                    message: "output length must be positive".to_string(),
+                });
+            }
+            Ok(SymDim::from(output_len))
+        }
+        (None, None) => Ok((input_dim.clone() - 1usize) * 2usize),
+    }
+}
+
+fn default_c2r_output_len(input_len: usize) -> tenferro_tensor::Result<usize> {
+    if input_len == 0 {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "irfft",
+            message: "input spectrum axis length must be positive".to_string(),
+        });
+    }
+    input_len
+        .checked_sub(1)
+        .and_then(|len| len.checked_mul(2))
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op: "irfft",
+            message: "default output length overflows usize".to_string(),
+        })
+}
+
+fn validate_c2r_spectrum_len(
+    input_len: usize,
+    output_len: usize,
+) -> tenferro_tensor::Result<usize> {
+    let expected = output_len / 2 + 1;
+    if input_len != expected {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "irfft",
+            message: format!(
+                "one-sided spectrum axis length mismatch: expected {expected} for output length {output_len}, got {input_len}"
+            ),
+        });
+    }
+    Ok(expected)
 }
 
 fn transform_len(shape: &[usize], axis: usize, n: Option<usize>) -> tenferro_tensor::Result<usize> {
@@ -1031,7 +1080,7 @@ where
     let in_shape = input.shape();
     let out_shape = output_shape_c2r(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
-    let expected_half = out_axis_len / 2 + 1;
+    let expected_half = validate_c2r_spectrum_len(in_shape[axis], out_axis_len)?;
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
@@ -1042,8 +1091,7 @@ where
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
         lane.fill(Complex::zero());
-        let copy_len = lane_ctx.in_axis_len.min(expected_half);
-        for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
+        for (k, slot) in lane.iter_mut().take(expected_half).enumerate() {
             *slot = input_data[lane_ctx.input_offset(k)?];
         }
         for k in expected_half..out_axis_len {

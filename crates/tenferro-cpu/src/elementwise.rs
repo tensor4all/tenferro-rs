@@ -616,7 +616,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view_from_view(op, lhs)?,
@@ -628,7 +628,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
         // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
             f(scalar, x)
         })
@@ -637,7 +637,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
         // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
             f(x, scalar)
         })
@@ -663,7 +663,7 @@ where
     R: TensorRank,
 {
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
         .map_err(|err| crate::Error::backend_failure(op, err))?;
     Ok(tensor_from_array(out))
@@ -690,7 +690,7 @@ where
         });
     }
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view_from_view(op, lhs)?,
@@ -728,7 +728,7 @@ where
         });
     }
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view_from_view("select", pred)?,
@@ -767,7 +767,7 @@ where
         });
     }
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view_from_view("clamp", input)?,
@@ -997,7 +997,7 @@ where
     };
 
     // SAFETY: every element in the column-major output is assigned below.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
     let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
     let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
     match plan.layout {
@@ -1243,7 +1243,7 @@ where
             })?;
 
             // SAFETY: every element in the physical base output is assigned below.
-            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
+            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) }?;
             batched_outer_product_into(
                 &mut base.view_mut(),
                 &lhs_outer,
@@ -1294,7 +1294,7 @@ where
             })?;
 
             // SAFETY: every element in the physical base output is assigned below.
-            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) };
+            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) }?;
             batched_outer_product_into(
                 &mut base.view_mut(),
                 &rhs_outer,
@@ -1349,7 +1349,7 @@ where
     if lhs_is_scalar && rhs_is_full_output {
         let scalar = typed_view_from_view("broadcast_multiply", lhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("broadcast_multiply", rhs)?,
@@ -1361,7 +1361,7 @@ where
     if rhs_is_scalar && lhs_is_full_output {
         let scalar = typed_view_from_view("broadcast_multiply", rhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("broadcast_multiply", lhs)?,
@@ -1372,7 +1372,7 @@ where
     }
 
     // SAFETY: broadcast_mul_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
     let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
     let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
     broadcast_mul_into(
@@ -2327,7 +2327,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view("add", lhs)?,
@@ -2339,7 +2339,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("add", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
             scalar + x
         })
@@ -2348,7 +2348,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("add", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
             x + scalar
         })
@@ -2375,7 +2375,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view_from_view("add", lhs)?,
@@ -2387,7 +2387,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", lhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("add", rhs)?,
@@ -2398,7 +2398,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", rhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("add", lhs)?,
@@ -2425,7 +2425,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: mul_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         mul_into(
             &mut out.view_mut(),
             &typed_view("mul", lhs)?,
@@ -2436,7 +2436,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("mul", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("mul", rhs)?, |x| {
             scalar * x
         })
@@ -2445,7 +2445,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("mul", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("mul", lhs)?, |x| {
             x * scalar
         })
@@ -2472,7 +2472,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: mul_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         mul_into(
             &mut out.view_mut(),
             &typed_view_from_view("mul", lhs)?,
@@ -2483,7 +2483,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("mul", lhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("mul", rhs)?,
@@ -2494,7 +2494,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("mul", rhs)?.get(&[]);
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("mul", lhs)?,
@@ -2521,7 +2521,7 @@ where
 {
     if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view("div", lhs)?,
@@ -2533,7 +2533,7 @@ where
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("div", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("div", rhs)?, |x| {
             scalar / x
         })
@@ -2542,7 +2542,7 @@ where
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("div", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("div", lhs)?, |x| {
             x / scalar
         })
@@ -2565,7 +2565,7 @@ where
     T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
         .map_err(|err| crate::Error::backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
@@ -2579,7 +2579,7 @@ where
     T: Copy + Clone + Zero + ConjElem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("conj", input)?, |x| {
         x.conj_elem()
     })
@@ -2595,7 +2595,7 @@ where
     T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.abs_elem()
     })
@@ -2611,7 +2611,7 @@ where
     T: num_traits::Float + PoolScalar,
 {
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.norm()
     })
@@ -2628,7 +2628,7 @@ where
     R: TensorRank,
 {
     // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(
         &mut out.view_mut(),
         &typed_view_from_view("abs", input)?,
@@ -2646,7 +2646,7 @@ where
     T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("sign", input)?, |x| {
         x.sign_elem()
     })
@@ -2670,7 +2670,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("maximum", lhs)?,
@@ -2697,7 +2697,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("minimum", lhs)?,
@@ -2725,7 +2725,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("compare", lhs)?,
@@ -2760,7 +2760,7 @@ where
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view("select", pred)?,
@@ -2796,7 +2796,7 @@ where
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view("clamp", input)?,
