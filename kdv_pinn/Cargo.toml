@@ -1,0 +1,14 @@
+[package]
+name = "kdv_pinn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tenferro-ad = { path = "../crates/tenferro-ad" }
+tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+plotters = "0.3"
+rand.workspace = true
