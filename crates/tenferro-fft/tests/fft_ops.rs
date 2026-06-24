@@ -343,6 +343,49 @@ fn irfft_c32_reconstructs_real_signal() {
 }
 
 #[test]
+fn irfft_rejects_spectrum_shorter_than_expected_one_sided_length() {
+    let spectrum = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0)],
+    )
+    .unwrap();
+
+    let err = match spectrum.irfft(Some(4), -1, FftNorm::Backward) {
+        Ok(_) => panic!("expected irfft to reject a short one-sided spectrum"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+
+    assert!(message.contains("one-sided"), "{message}");
+    assert!(message.contains("expected 3"), "{message}");
+    assert!(message.contains("got 2"), "{message}");
+}
+
+#[test]
+fn irfft_rejects_spectrum_longer_than_expected_one_sided_length() {
+    let spectrum = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+            Complex64::new(99.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let err = match spectrum.irfft(Some(4), -1, FftNorm::Backward) {
+        Ok(_) => panic!("expected irfft to reject a long one-sided spectrum"),
+        Err(err) => err,
+    };
+    let message = err.to_string();
+
+    assert!(message.contains("one-sided"), "{message}");
+    assert!(message.contains("expected 3"), "{message}");
+    assert!(message.contains("got 4"), "{message}");
+}
+
+#[test]
 fn traced_fft_rejects_invalid_dtype_axis_and_length() {
     let int_input = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
     let err = match int_input.fft(None, -1, FftNorm::Backward) {

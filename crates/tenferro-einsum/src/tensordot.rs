@@ -76,7 +76,7 @@ pub(crate) fn dot_general_config(
     };
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .map_err(contraction_error)?;
+        .map_err(|err| contraction_error(err.to_string()))?;
     Ok(config)
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn validate_concrete_contract_dims(
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(contraction_error)?;
+        .map_err(|err| contraction_error(err.to_string()))?;
     for (&lhs_axis, &rhs_axis) in config
         .lhs_contracting_dims
         .iter()
@@ -110,7 +110,7 @@ pub(crate) fn validate_traced_contract_dims(
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs.rank, rhs.rank)
-        .map_err(contraction_error)?;
+        .map_err(|err| contraction_error(err.to_string()))?;
     for (&lhs_axis, &rhs_axis) in config
         .lhs_contracting_dims
         .iter()
