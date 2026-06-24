@@ -24,6 +24,9 @@ tutorial page that links the sample into the Quarto docs sidebar.
   pattern.
 - Limited `plotters` features to bitmap PNG/GIF and line-series rendering so
   the sample does not require system `fontconfig` packages in workspace-wide CI.
+- Added coverage thresholds for the KdV sample binary, because coverage CI
+  exercises module tests but intentionally does not run the full training loop
+  or optional image writers.
 - Applied the PDE loss weight after `mean(residual^2)` so the scalar weight is
   not squared implicitly.
 - Updated KdV PINN graph construction and tests for APIs that now return
