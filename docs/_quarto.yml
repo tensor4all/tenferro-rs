@@ -41,6 +41,7 @@ website:
           - tutorials/einsum-subscripts-to-gradients.md
           - tutorials/xla-einsum-backend.md
           - tutorials/dynamic-shape-truncated-svd.md
+          - tutorials/kdv-pinn.md
       - section: "Guides"
         contents:
           - text: "Choosing a Tensor API"

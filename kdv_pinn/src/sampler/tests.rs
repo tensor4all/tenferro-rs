@@ -16,8 +16,8 @@ fn collocation_columns_are_x_and_t() {
     let (x, t) = sampler.collocation(32, &mut rng);
     let x_vals = x.as_slice::<f64>().unwrap();
     let t_vals = t.as_slice::<f64>().unwrap();
-    assert!(x_vals.iter().all(|&v| v >= -5.0 && v <= 5.0));
-    assert!(t_vals.iter().all(|&v| v >= 0.0 && v <= 1.0));
+    assert!(x_vals.iter().all(|&v| (-5.0..=5.0).contains(&v)));
+    assert!(t_vals.iter().all(|&v| (0.0..=1.0).contains(&v)));
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn initial_has_correct_shape_and_x_range() {
     assert_eq!(x.shape(), &[16, 1]);
     assert_eq!(u.shape(), &[16, 1]);
     let x_vals = x.as_slice::<f64>().unwrap();
-    assert!(x_vals.iter().all(|&v| v >= -5.0 && v <= 5.0));
+    assert!(x_vals.iter().all(|&v| (-5.0..=5.0).contains(&v)));
 }
 
 #[test]

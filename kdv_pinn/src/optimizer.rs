@@ -96,12 +96,14 @@ impl Adam {
             for param in params.iter() {
                 let shape: Vec<usize> = param.shape().to_vec();
                 let len = shape.iter().product::<usize>();
-                self.m.push(Tensor::from_vec_col_major(
-                    shape.clone(),
-                    vec![0.0_f64; len],
-                ));
-                self.v
-                    .push(Tensor::from_vec_col_major(shape, vec![0.0_f64; len]));
+                self.m.push(
+                    Tensor::from_vec_col_major(shape.clone(), vec![0.0_f64; len])
+                        .expect("Adam first-moment buffer shape matches data length"),
+                );
+                self.v.push(
+                    Tensor::from_vec_col_major(shape, vec![0.0_f64; len])
+                        .expect("Adam second-moment buffer shape matches data length"),
+                );
             }
         }
 

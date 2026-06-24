@@ -26,8 +26,8 @@ pub(crate) fn kdv_residual(
     let u_x = u.jvp(x, &ones_x)?;
     let u_xx = u_x.jvp(x, &ones_x)?;
     let u_xxx = u_xx.jvp(x, &ones_x)?;
-    let nonlinear = u.mul(&u_x).scale_real(6.0);
-    Ok(u_t.add(&nonlinear).add(&u_xxx))
+    let nonlinear = u.mul(&u_x)?.scale_real(6.0);
+    u_t.add(&nonlinear)?.add(&u_xxx)
 }
 
 /// Return a constant tensor of ones with the same shape and dtype as `tensor`.
@@ -47,7 +47,7 @@ fn ones_like(tensor: &TracedTensor) -> Result<TracedTensor> {
             )))
         }
     };
-    Ok(ones)
+    ones
 }
 
 #[cfg(test)]

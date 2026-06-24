@@ -4,8 +4,10 @@ These tutorials are ordered, runnable introductions to the main tenferro
 workflows. They complement the guides: tutorials show one complete path, while
 guides describe the broader APIs and tradeoffs.
 
-All non-trivial code in this section is sourced from `docs/tutorial-code` and
-is run by the workspace test workflow.
+Short tutorial programs in this section are sourced from `docs/tutorial-code`
+and are run by the workspace test workflow. Longer application samples, such
+as the KdV PINN tutorial, point at their workspace package and provide a
+separate package-level test command.
 
 ## Suggested Order
 
@@ -17,6 +19,7 @@ is run by the workspace test workflow.
 | [Einsum: subscripts to gradients](einsum-subscripts-to-gradients.md) | You contract more than two tensors and want planned contraction order plus AD. |
 | [XLA backend: einsum to StableHLO](xla-einsum-backend.md) | You want to lower a fixed-shape N-ary einsum path through the experimental XLA executor. |
 | [Dynamic shapes: truncated SVD](dynamic-shape-truncated-svd.md) | Output ranks depend on runtime values such as singular-value thresholds. |
+| [KdV PINN sample](kdv-pinn.md) | You want a full traced-graph PINN training loop with PDE residuals and scalar loss gradients. |
 
 ## Running The Tutorial Code
 
@@ -29,3 +32,9 @@ cargo test -p tenferro-tutorial-code --release
 The CI workflow runs this package through the existing workspace test command,
 so tutorial execution does not add a second tenferro compilation step after
 unit tests.
+
+The KdV PINN sample is tested separately:
+
+```bash
+cargo test -p kdv_pinn
+```

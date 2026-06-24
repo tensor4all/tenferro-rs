@@ -4,7 +4,7 @@
 //! computational graph can be compiled once and executed many times with
 //! different concrete parameter bindings.
 
-use tenferro_runtime::{DType, DotGeneralConfig, TracedTensor};
+use tenferro_runtime::{DType, DotGeneralConfig, Result, TracedTensor};
 use tenferro_tensor::Tensor;
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.
@@ -15,14 +15,14 @@ pub(crate) struct Linear {
 
 impl Linear {
     /// Create a new `Linear` layer with the given input/output feature sizes.
-    pub(crate) fn new(in_features: usize, out_features: usize) -> Self {
-        let weight = TracedTensor::input_concrete_shape(DType::F64, &[in_features, out_features]);
-        let bias = TracedTensor::input_concrete_shape(DType::F64, &[out_features]);
-        Self { weight, bias }
+    pub(crate) fn new(in_features: usize, out_features: usize) -> Result<Self> {
+        let weight = TracedTensor::input_concrete_shape(DType::F64, &[in_features, out_features])?;
+        let bias = TracedTensor::input_concrete_shape(DType::F64, &[out_features])?;
+        Ok(Self { weight, bias })
     }
 
     /// Apply the layer to an input tensor.
-    pub(crate) fn forward(&self, x: &TracedTensor) -> TracedTensor {
+    pub(crate) fn forward(&self, x: &TracedTensor) -> Result<TracedTensor> {
         let y = x.dot_general(
             &self.weight,
             DotGeneralConfig {
@@ -31,7 +31,7 @@ impl Linear {
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
             },
-        );
+        )?;
         let bias_broadcast = self.bias.reshape(&[
             1,
             self.bias
@@ -49,28 +49,28 @@ pub(crate) struct Mlp {
 
 impl Mlp {
     /// Create a new `Mlp` from a slice of layer sizes.
-    pub(crate) fn new(layer_sizes: &[usize]) -> Self {
+    pub(crate) fn new(layer_sizes: &[usize]) -> Result<Self> {
         assert!(
             layer_sizes.len() >= 2,
             "Mlp needs at least input and output sizes"
         );
         let mut layers = Vec::new();
         for i in 0..layer_sizes.len() - 1 {
-            layers.push(Linear::new(layer_sizes[i], layer_sizes[i + 1]));
+            layers.push(Linear::new(layer_sizes[i], layer_sizes[i + 1])?);
         }
-        Self { layers }
+        Ok(Self { layers })
     }
 
     /// Run a forward pass through the network.
-    pub(crate) fn forward(&self, x: &TracedTensor) -> TracedTensor {
+    pub(crate) fn forward(&self, x: &TracedTensor) -> Result<TracedTensor> {
         let mut y = x.clone();
         for (i, layer) in self.layers.iter().enumerate() {
-            y = layer.forward(&y);
+            y = layer.forward(&y)?;
             if i < self.layers.len() - 1 {
                 y = y.tanh();
             }
         }
-        y
+        Ok(y)
     }
 
     /// Return references to all parameter placeholders.
@@ -101,14 +101,20 @@ impl Mlp {
             let w_data: Vec<f64> = (0..shape.iter().product::<usize>())
                 .map(|_| dist.sample(rng))
                 .collect();
-            tensors.push(Tensor::from_vec_col_major(shape.clone(), w_data));
+            tensors.push(
+                Tensor::from_vec_col_major(shape.clone(), w_data)
+                    .expect("valid Xavier weight tensor shape"),
+            );
 
             let b_shape = layer
                 .bias
                 .try_concrete_shape()
                 .expect("bias placeholder must have a concrete shape");
             let b_data = vec![0.0_f64; b_shape.iter().product::<usize>()];
-            tensors.push(Tensor::from_vec_col_major(b_shape.clone(), b_data));
+            tensors.push(
+                Tensor::from_vec_col_major(b_shape.clone(), b_data)
+                    .expect("valid bias tensor shape"),
+            );
         }
         tensors
     }

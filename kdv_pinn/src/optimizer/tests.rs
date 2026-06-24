@@ -3,8 +3,8 @@ use tenferro_tensor::Tensor;
 
 #[test]
 fn sgd_updates_correctly() {
-    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]);
+    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]).unwrap();
     let mut opt = Sgd::new(0.1);
     opt.step(std::slice::from_mut(&mut param), &[grad]);
     let data = param.as_slice::<f64>().unwrap();
@@ -14,8 +14,8 @@ fn sgd_updates_correctly() {
 
 #[test]
 fn adam_updates_correctly() {
-    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]);
+    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]).unwrap();
     let mut opt = Adam::new(0.1);
     opt.step(std::slice::from_mut(&mut param), &[grad]);
     let data = param.as_slice::<f64>().unwrap();
@@ -28,8 +28,8 @@ fn adam_updates_correctly() {
 fn adam_set_lr_changes_step_size() {
     // After lowering the learning rate to zero, a step must leave the
     // parameters unchanged, proving `set_lr` overrides the constructor value.
-    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]);
+    let mut param = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let grad = Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 1.0]).unwrap();
     let mut opt = Adam::new(0.1);
     opt.set_lr(0.0);
     opt.step(std::slice::from_mut(&mut param), &[grad]);

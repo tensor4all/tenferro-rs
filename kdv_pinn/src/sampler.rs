@@ -39,8 +39,10 @@ impl Sampler {
             t.push(t_dist.sample(rng));
         }
         (
-            Tensor::from_vec_col_major(vec![n, 1], x),
-            Tensor::from_vec_col_major(vec![n, 1], t),
+            Tensor::from_vec_col_major(vec![n, 1], x)
+                .expect("collocation x data length matches shape"),
+            Tensor::from_vec_col_major(vec![n, 1], t)
+                .expect("collocation t data length matches shape"),
         )
     }
 
@@ -58,8 +60,9 @@ impl Sampler {
             u.push(2.0 * (1.0 / xi.cosh()).powi(2));
         }
         (
-            Tensor::from_vec_col_major(vec![n, 1], x),
-            Tensor::from_vec_col_major(vec![n, 1], u),
+            Tensor::from_vec_col_major(vec![n, 1], x).expect("initial x data length matches shape"),
+            Tensor::from_vec_col_major(vec![n, 1], u)
+                .expect("initial target data length matches shape"),
         )
     }
 
@@ -82,9 +85,12 @@ impl Sampler {
             u.push(2.0 * (1.0 / ((xi - 4.0 * ti).cosh())).powi(2));
         }
         (
-            Tensor::from_vec_col_major(vec![n, 1], x),
-            Tensor::from_vec_col_major(vec![n, 1], t),
-            Tensor::from_vec_col_major(vec![n, 1], u),
+            Tensor::from_vec_col_major(vec![n, 1], x)
+                .expect("boundary x data length matches shape"),
+            Tensor::from_vec_col_major(vec![n, 1], t)
+                .expect("boundary t data length matches shape"),
+            Tensor::from_vec_col_major(vec![n, 1], u)
+                .expect("boundary target data length matches shape"),
         )
     }
 }
