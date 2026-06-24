@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
@@ -134,6 +135,12 @@ impl<'a> BufferPoolLoan<'a> {
 impl Drop for BufferPoolLoan<'_> {
     fn drop(&mut self) {
         if let Some(buffers) = self.buffers.take() {
+            let mut buffers = buffers;
+            if thread::panicking() {
+                buffers.replenish_in_flight_retained();
+            } else {
+                buffers.clear_in_flight_retained();
+            }
             *self.target = buffers;
         }
     }
