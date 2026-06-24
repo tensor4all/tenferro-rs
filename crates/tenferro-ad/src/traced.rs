@@ -145,7 +145,7 @@ fn grad_with_optional_rules(
 /// use tenferro_runtime::TracedTensor;
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-/// let loss = x.scale_real(2.0);
+/// let loss = x.scale_real(2.0).unwrap();
 /// let maybe_dx = loss.grad_optional(&x).unwrap();
 /// assert!(maybe_dx.is_some());
 /// ```

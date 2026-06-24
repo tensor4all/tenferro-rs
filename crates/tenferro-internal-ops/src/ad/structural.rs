@@ -1,8 +1,8 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{PadConfig, SliceConfig};
-use tidu::ADRuleResult;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
-use crate::ad::context::ShapeGuardContext;
+use crate::ad::context::{ShapeGuardContext, ShapeGuardError};
 use crate::ad::support::is_differentiable_dtype;
 use crate::ad::zeros::build_zero_like;
 use crate::ad::PrimitiveRuleBuilder;
@@ -315,16 +315,35 @@ pub fn transpose_transpose(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     perm: &[usize],
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let mut inv = vec![0; perm.len()];
+    let mut seen = vec![false; perm.len()];
     for (index, &value) in perm.iter().enumerate() {
+        if value >= perm.len() {
+            return Err(ADRuleError::invalid_input(
+                "transpose",
+                ADRuleKind::Transpose,
+                format!(
+                    "permutation axis {value} is out of bounds for rank {}",
+                    perm.len()
+                ),
+            ));
+        }
+        if seen[value] {
+            return Err(ADRuleError::invalid_input(
+                "transpose",
+                ADRuleKind::Transpose,
+                format!("permutation axis {value} appears more than once"),
+            ));
+        }
+        seen[value] = true;
         inv[value] = index;
     }
 
-    match cotangent_out[0] {
+    Ok(match cotangent_out[0] {
         Some(ct) => {
             if is_identity_perm(&inv) {
-                return vec![Some(ct)];
+                return Ok(vec![Some(ct)]);
             }
             let out = builder.add_operation(
                 StdTensorOp::Transpose { perm: inv },
@@ -336,7 +355,7 @@ pub fn transpose_transpose(
             vec![Some(out[0])]
         }
         None => vec![None],
-    }
+    })
 }
 
 pub fn transpose_reshape(
@@ -391,7 +410,7 @@ pub fn transpose_broadcast_in_dim(
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let (reduce_axes, needs_input_shape_restore) =
-        broadcast_transpose_reduce_axes(shape, dims, inputs, ctx);
+        broadcast_transpose_reduce_axes(shape, dims, inputs, ctx)?;
 
     let primary = match cotangent_out[0] {
         Some(ct) => {
@@ -453,7 +472,7 @@ fn broadcast_transpose_reduce_axes(
     dims: &[usize],
     inputs: &[ValueRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,
-) -> (Vec<usize>, bool) {
+) -> ADRuleResult<(Vec<usize>, bool)> {
     let mut reduce_axes: Vec<usize> = (0..shape.len()).filter(|dim| !dims.contains(dim)).collect();
     let mut needs_input_shape_restore = false;
 
@@ -461,7 +480,7 @@ fn broadcast_transpose_reduce_axes(
         if input_shapes.is_empty()
             || DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx >= input_shapes.len())
         {
-            return (reduce_axes, false);
+            return Ok((reduce_axes, false));
         }
 
         let input_shape = &input_shapes[0];
@@ -481,25 +500,32 @@ fn broadcast_transpose_reduce_axes(
                 needs_input_shape_restore = true;
             }
         }
-    } else if let Some(input_extents) = inputs
-        .first()
-        .and_then(|input| ctx.extents_of(input).ok().map(|extents| extents.to_vec()))
-    {
-        for (input_axis, &output_axis) in dims.iter().enumerate() {
-            if input_axis >= input_extents.len()
-                || !extent_is_definitely_one(&input_extents[input_axis])
-                || !output_axis_needs_singleton_reduction(shape.get(output_axis), input_axis)
-            {
-                continue;
+    } else if let Some(input) = inputs.first() {
+        match ctx.extents_of(input) {
+            Ok(input_extents) => {
+                let input_extents = input_extents.to_vec();
+                for (input_axis, &output_axis) in dims.iter().enumerate() {
+                    if input_axis >= input_extents.len()
+                        || !extent_is_definitely_one(&input_extents[input_axis])
+                        || !output_axis_needs_singleton_reduction(
+                            shape.get(output_axis),
+                            input_axis,
+                        )
+                    {
+                        continue;
+                    }
+                    reduce_axes.push(output_axis);
+                    needs_input_shape_restore = true;
+                }
             }
-            reduce_axes.push(output_axis);
-            needs_input_shape_restore = true;
+            Err(ShapeGuardError::MissingMetadata { .. }) => {}
+            Err(err) => return Err(err.into()),
         }
     }
 
     reduce_axes.sort_unstable();
     reduce_axes.dedup();
-    (reduce_axes, needs_input_shape_restore)
+    Ok((reduce_axes, needs_input_shape_restore))
 }
 
 fn extent_is_definitely_one(extent: &ShapeExtent<SymDim>) -> bool {

@@ -104,6 +104,15 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
     );
     assert!(eager_zero_like.contains(".upload_host_tensor(&host)"));
 
+    let eager_one_like = source_section(
+        &eager,
+        "pub(crate) fn one_like_tensor<B: TensorBackend>",
+        "#[cfg(test)]",
+    );
+    assert!(eager_one_like.contains("ones_tensor(input.dtype(), input.shape().to_vec())"));
+    assert!(eager_one_like.contains(".upload_host_tensor(&host)"));
+    assert!(!eager_one_like.contains(".exp("));
+
     let eager_builder = ad_source("eager_builder.rs");
     let builder_zero_like = source_section(
         &eager_builder,

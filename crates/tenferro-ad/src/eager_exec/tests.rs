@@ -77,17 +77,21 @@ fn dynamic_truncate_clamps_oversize() {
 }
 
 #[test]
-fn dynamic_truncate_nan_gives_empty() {
+fn dynamic_truncate_rejects_nan_size() {
     let mut b = CpuBackend::new();
     let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
     let size = scalar(f64::NAN);
-    let result = exec_op_on_tensors(
+    let err = exec_op_on_tensors(
         &StdTensorOp::DynamicTruncate { axis: 0 },
         &[&x, &size],
         &mut b,
     )
-    .unwrap();
-    assert_eq!(result[0].shape(), &[0]);
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("finite"),
+        "expected finite-value error, got {err:?}"
+    );
 }
 
 #[test]

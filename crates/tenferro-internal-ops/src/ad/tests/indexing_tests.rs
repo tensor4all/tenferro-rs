@@ -365,6 +365,40 @@ fn transpose_dynamic_update_slice_returns_operand_and_update_cotangents() {
 }
 
 #[test]
+fn transpose_dynamic_update_slice_propagates_missing_update_metadata() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(122));
+    let operand_key = input_key(123);
+    let update_key = input_key(124);
+    let starts_key = input_key(125);
+    seed_metadata(
+        &mut ctx,
+        &[(operand_key.clone(), &[5]), (starts_key.clone(), &[1])],
+    );
+
+    let inputs = vec![
+        ValueRef::External(operand_key),
+        ValueRef::External(update_key),
+        ValueRef::External(starts_key),
+    ];
+    let err = StdTensorOp::DynamicUpdateSlice
+        .transpose_rule(
+            &mut builder,
+            &[Some(cot)],
+            &inputs,
+            &OperationRole::Linearized {
+                active_mask: vec![false, true, false],
+            },
+            &mut ctx,
+        )
+        .unwrap_err();
+
+    assert!(err.to_string().contains("missing TensorMeta"));
+    assert!(builder.build().operations().is_empty());
+}
+
+#[test]
 fn transpose_gather_emits_scatter_with_inverted_config() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();

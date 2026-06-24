@@ -259,6 +259,30 @@ fn transpose_broadcast_returns_none_for_dynamic_shape_sources() {
 }
 
 #[test]
+fn transpose_broadcast_propagates_unresolved_local_shape_error() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(35));
+    let inputs = vec![ValueRef::Local(999)];
+
+    let err = StdTensorOp::BroadcastInDim {
+        shape: vec![DimExpr::Const(3)],
+        dims: vec![0],
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("without an attached graph"));
+    assert!(builder.build().operations().is_empty());
+}
+
+#[test]
 fn transpose_broadcast_reduces_singleton_input_axes() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();

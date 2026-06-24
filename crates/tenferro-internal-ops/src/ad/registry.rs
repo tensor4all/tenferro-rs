@@ -873,11 +873,7 @@ fn transpose_transpose(
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let perm = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Transpose { perm } => perm);
-    Ok(structural::transpose_transpose(
-        builder,
-        cotangent_out,
-        perm,
-    ))
+    structural::transpose_transpose(builder, cotangent_out, perm)
 }
 
 fn linearize_reshape(

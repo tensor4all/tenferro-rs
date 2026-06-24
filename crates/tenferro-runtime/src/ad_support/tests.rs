@@ -7,7 +7,7 @@ use tenferro_tensor::{DType, Tensor};
 
 use crate::sym_dim::SymDim;
 
-use super::{allocate_input_key, tensor_from_parts, TracedTensorParts};
+use super::{allocate_input_key, ones_tensor, tensor_from_parts, TracedTensorParts};
 
 #[test]
 fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
@@ -69,5 +69,24 @@ fn tensor_from_parts_preserves_summary_fields() {
     assert!(matches!(
         tensor.graph.values()[tensor.val].key,
         ValueKey::Input(_)
+    ));
+}
+
+#[test]
+fn bool_ones_tensor_rejects_shape_product_overflow_without_panicking() {
+    let result = std::panic::catch_unwind(|| ones_tensor(DType::Bool, vec![usize::MAX, 2]));
+
+    assert!(
+        result.is_ok(),
+        "ones_tensor must return a typed error, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+            op: "ones_tensor",
+            ..
+        })
     ));
 }
