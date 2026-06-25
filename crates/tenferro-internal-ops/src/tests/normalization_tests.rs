@@ -39,8 +39,11 @@ fn normalize_axis_accepts_negative_axes_and_rejects_out_of_bounds() {
     assert_eq!(normalize_axis(0, 3).unwrap(), 0);
     assert_eq!(normalize_axis(-1, 3).unwrap(), 2);
     assert_eq!(normalize_axis(-3, 3).unwrap(), 0);
+    assert_eq!(normalize_axis(0, usize::MAX).unwrap(), 0);
+    assert_eq!(normalize_axis(-1, usize::MAX).unwrap(), usize::MAX - 1);
     assert!(normalize_axis(3, 3).is_err());
     assert!(normalize_axis(-4, 3).is_err());
+    assert!(normalize_axis(isize::MIN, 3).is_err());
 }
 
 #[test]

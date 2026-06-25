@@ -12,10 +12,23 @@ fn linear_offset_unchecked(shape: &[usize], indices: &[usize]) -> usize {
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (&idx, &extent) in indices.iter().zip(shape) {
-        offset = offset.wrapping_add(idx.wrapping_mul(stride));
-        stride = stride.wrapping_mul(extent);
+        let term = idx
+            .checked_mul(stride)
+            .unwrap_or_else(|| linear_offset_invariant_violation(shape));
+        offset = offset
+            .checked_add(term)
+            .unwrap_or_else(|| linear_offset_invariant_violation(shape));
+        stride = stride
+            .checked_mul(extent)
+            .unwrap_or_else(|| linear_offset_invariant_violation(shape));
     }
     offset
+}
+
+#[cold]
+#[track_caller]
+fn linear_offset_invariant_violation(shape: &[usize]) -> ! {
+    panic!("linear offset overflow for validated tensor shape {shape:?}");
 }
 
 impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
@@ -432,6 +445,9 @@ mod tests {
         let shape = [usize::MAX, 3];
 
         assert!(try_linear_offset_for_shape(&shape, &[0, 2], "test").is_err());
-        assert!(std::panic::catch_unwind(|| linear_offset_unchecked(&shape, &[0, 2])).is_ok());
+        assert!(
+            std::panic::catch_unwind(|| linear_offset_unchecked(&shape, &[0, 2])).is_err(),
+            "unchecked offset helper must not silently wrap when its shape invariant is violated"
+        );
     }
 }

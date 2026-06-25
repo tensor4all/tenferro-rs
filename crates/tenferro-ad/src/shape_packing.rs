@@ -4,8 +4,17 @@ use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
-    let normalized = if axis < 0 { rank as isize + axis } else { axis };
-    if normalized < 0 || normalized >= rank as isize {
+    let normalized = if axis >= 0 {
+        axis as usize
+    } else {
+        rank.checked_sub(axis.unsigned_abs())
+            .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
+                op,
+                axis: axis.unsigned_abs(),
+                rank,
+            })?
+    };
+    if normalized >= rank {
         return Err(tenferro_tensor::Error::AxisOutOfBounds {
             op,
             axis: axis.unsigned_abs(),
@@ -13,24 +22,37 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result
         }
         .into());
     }
-    Ok(normalized as usize)
+    Ok(normalized)
 }
 
 fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
-    let normalized = if axis < 0 {
-        rank as isize + 1 + axis
+    let insert_rank = rank
+        .checked_add(1)
+        .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
+            op,
+            axis: axis.unsigned_abs(),
+            rank,
+        })?;
+    let normalized = if axis >= 0 {
+        axis as usize
     } else {
-        axis
+        insert_rank.checked_sub(axis.unsigned_abs()).ok_or(
+            tenferro_tensor::Error::AxisOutOfBounds {
+                op,
+                axis: axis.unsigned_abs(),
+                rank: insert_rank,
+            },
+        )?
     };
-    if normalized < 0 || normalized > rank as isize {
+    if normalized > rank {
         return Err(tenferro_tensor::Error::AxisOutOfBounds {
             op,
             axis: axis.unsigned_abs(),
-            rank: rank + 1,
+            rank: insert_rank,
         }
         .into());
     }
-    Ok(normalized as usize)
+    Ok(normalized)
 }
 
 fn index_select_config(
@@ -276,5 +298,24 @@ impl EagerTensor {
             .collect::<Result<Vec<_>>>()?;
         let refs = expanded.iter().collect::<Vec<_>>();
         Self::concatenate(&refs, axis)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_existing_axis, normalize_insert_axis};
+
+    #[test]
+    fn axis_normalization_handles_ranks_larger_than_isize_max() {
+        assert_eq!(normalize_existing_axis("test", 0, usize::MAX).unwrap(), 0);
+        assert_eq!(
+            normalize_existing_axis("test", -1, usize::MAX).unwrap(),
+            usize::MAX - 1
+        );
+        assert_eq!(
+            normalize_insert_axis("test", -1, usize::MAX - 1).unwrap(),
+            usize::MAX - 1
+        );
+        assert!(normalize_insert_axis("test", -1, usize::MAX).is_err());
     }
 }

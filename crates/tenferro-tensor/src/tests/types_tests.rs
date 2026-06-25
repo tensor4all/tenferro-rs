@@ -1785,3 +1785,16 @@ fn runtime_error_formats_include_op_name() {
 
     assert!(err.to_string().contains("dot_general"));
 }
+
+#[test]
+fn n_elements_invariant_checks_do_not_use_unsafe_unreachable() {
+    let source = include_str!("../types.rs");
+    assert!(
+        !source.contains("unreachable_unchecked"),
+        "n_elements invariant checks must never use unsafe unreachable_unchecked"
+    );
+    assert!(
+        source.contains("TypedTensor compact shape is validated at construction"),
+        "n_elements panic path should document the constructor-validation invariant"
+    );
+}
