@@ -102,6 +102,16 @@ pub enum Error {
         message: String,
     },
 
+    /// An AD transform requires a primitive or extension rule that is not
+    /// registered for the requested operation.
+    #[error("unsupported {transform} AD rule for {op}")]
+    UnsupportedAdRule {
+        /// AD transform that requested the rule, such as `grad` or `backward`.
+        transform: &'static str,
+        /// Operation or extension family identifier that has no applicable rule.
+        op: String,
+    },
+
     /// Lowering rejected an inconsistent compiled graph.
     #[error("invalid compiled graph: {message}")]
     InvalidCompiledGraph {

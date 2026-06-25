@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement,
-    Tensor, TypedTensor,
+    Buffer, BufferHandle, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind,
+    Placement, Tensor, TypedTensor,
 };
 
-use super::{LinalgExtensionOp, LinalgOp};
+use super::{promote_dtypes, LinalgExtensionOp, LinalgOp};
 
 #[test]
 fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
@@ -51,4 +51,32 @@ fn infer_output_meta_returns_error_on_input_count_mismatch() {
             ..
         }
     ));
+}
+
+#[test]
+fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
+    let source = include_str!("../extension.rs");
+    assert!(
+        !source.contains("fn promote_dtype("),
+        "linalg extension metadata must not duplicate the canonical dtype promotion lattice"
+    );
+
+    let dtypes = [
+        DType::Bool,
+        DType::I32,
+        DType::I64,
+        DType::F32,
+        DType::F64,
+        DType::C32,
+        DType::C64,
+    ];
+    for lhs in dtypes {
+        for rhs in dtypes {
+            assert_eq!(
+                promote_dtypes(&[lhs, rhs]),
+                tenferro_tensor::validate::promote_dtype(lhs, rhs),
+                "promotion mismatch for {lhs:?}, {rhs:?}"
+            );
+        }
+    }
 }

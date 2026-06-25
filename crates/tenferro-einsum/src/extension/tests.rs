@@ -26,6 +26,34 @@ fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
 }
 
 #[test]
+fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
+    let source = include_str!("../extension.rs");
+    assert!(
+        !source.contains("fn promote_dtype("),
+        "einsum extension metadata must not duplicate the canonical dtype promotion lattice"
+    );
+
+    let dtypes = [
+        DType::Bool,
+        DType::I32,
+        DType::I64,
+        DType::F32,
+        DType::F64,
+        DType::C32,
+        DType::C64,
+    ];
+    for lhs in dtypes {
+        for rhs in dtypes {
+            assert_eq!(
+                promote_dtypes([lhs, rhs]),
+                tenferro_tensor::validate::promote_dtype(lhs, rhs),
+                "promotion mismatch for {lhs:?}, {rhs:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn infer_output_meta_returns_error_for_invalid_extension_metadata() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
