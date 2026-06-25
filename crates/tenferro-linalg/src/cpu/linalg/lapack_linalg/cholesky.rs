@@ -15,6 +15,8 @@ pub(crate) trait LapackCholesky: Clone + Copy + Default + PoolScalar {
 
 impl LapackCholesky for f64 {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
+        // validated i32 dimensions, and a live `info` output for this call.
         unsafe {
             lapack::dpotrf(uplo, n, factor, lda, info);
         }
@@ -23,6 +25,8 @@ impl LapackCholesky for f64 {
 
 impl LapackCholesky for f32 {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
+        // validated i32 dimensions, and a live `info` output for this call.
         unsafe {
             lapack::spotrf(uplo, n, factor, lda, info);
         }
@@ -31,6 +35,8 @@ impl LapackCholesky for f32 {
 
 impl LapackCholesky for Complex32 {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
+        // validated i32 dimensions, and a live `info` output for this call.
         unsafe {
             lapack::cpotrf(uplo, n, factor, lda, info);
         }
@@ -39,6 +45,8 @@ impl LapackCholesky for Complex32 {
 
 impl LapackCholesky for Complex64 {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
+        // validated i32 dimensions, and a live `info` output for this call.
         unsafe {
             lapack::zpotrf(uplo, n, factor, lda, info);
         }

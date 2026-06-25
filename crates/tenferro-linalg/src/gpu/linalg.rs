@@ -546,8 +546,16 @@ where
     for batch in 0..batch_total {
         let a_offset =
             checked_batch_offset(OP, "cholesky matrix batch offset", batch, matrix_stride)?;
-        let batch_a = unsafe { batch_ptr::<T>(first_ptr, a_offset) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+        // SAFETY: `a_offset` and `batch` were checked against the matrix and
+        // info strides, and both base pointers come from live device tensors.
+        let (batch_a, batch_info) = unsafe {
+            (
+                batch_ptr::<T>(first_ptr, a_offset),
+                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+            )
+        };
+        // SAFETY: the batch pointers, workspace, dimensions, and stream-bound
+        // handle satisfy cuSOLVER potrf's in-place matrix and info contracts.
         unsafe {
             handles.cusolver().potrf(
                 T::DATA_TYPE,
@@ -659,13 +667,21 @@ where
                 checked_batch_offset(op, "triangular matrix batch offset", batch, a_stride)?;
             let b_offset =
                 checked_batch_offset(op, "triangular rhs batch offset", batch, out_stride)?;
-            let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), a_offset) };
-            let batch_b = unsafe { batch_ptr::<T>(out_ptr, b_offset) };
+            // SAFETY: checked offsets keep both pointers inside the live
+            // triangular matrix and RHS device allocations for this batch.
+            let (batch_a, batch_b) = unsafe {
+                (
+                    batch_const_ptr::<T>(a_ptr.cast_const(), a_offset),
+                    batch_ptr::<T>(out_ptr, b_offset),
+                )
+            };
             a_pointers.push(batch_a as usize);
             b_pointers.push(batch_b as usize);
         }
         let a_array = upload_pointer_array(backend.runtime(), &a_pointers, op)?;
         let b_array = upload_pointer_array(backend.runtime(), &b_pointers, op)?;
+        // SAFETY: uploaded pointer arrays contain one valid matrix/RHS device
+        // pointer per batch, and scalar dimensions/leading dimensions are validated.
         unsafe {
             handles.cublas().trsm_batched(
                 T::DATA_TYPE,
@@ -685,8 +701,16 @@ where
             )?;
         }
     } else {
-        let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), 0) };
-        let batch_b = unsafe { batch_ptr::<T>(out_ptr, 0) };
+        // SAFETY: zero offset points at the first element of the live matrix
+        // and RHS device allocations already validated for this single batch.
+        let (batch_a, batch_b) = unsafe {
+            (
+                batch_const_ptr::<T>(a_ptr.cast_const(), 0),
+                batch_ptr::<T>(out_ptr, 0),
+            )
+        };
+        // SAFETY: pointers, scalar dimensions, and leading dimensions satisfy
+        // cuBLAS trsm for the validated single-batch triangular solve.
         unsafe {
             handles.cublas().trsm(
                 T::DATA_TYPE,
@@ -778,9 +802,17 @@ where
     for batch in 0..batch_total {
         let a_offset = checked_batch_offset(OP, "lu matrix batch offset", batch, matrix_stride)?;
         let pivot_offset = checked_batch_offset(OP, "lu pivot batch offset", batch, k)?;
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-        let batch_pivots = unsafe { batch_ptr::<i32>(pivots_ptr, pivot_offset) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+        // SAFETY: checked matrix, pivot, and info offsets stay inside their
+        // live device allocations for this batch.
+        let (batch_a, batch_pivots, batch_info) = unsafe {
+            (
+                batch_ptr::<T>(a_ptr, a_offset),
+                batch_ptr::<i32>(pivots_ptr, pivot_offset),
+                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+            )
+        };
+        // SAFETY: batch pointers, dimensions, workspace, and stream-bound
+        // handle satisfy cuSOLVER getrf's in-place LU and pivot contracts.
         unsafe {
             handles.cusolver().getrf(
                 T::DATA_TYPE,
@@ -923,6 +955,8 @@ where
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
+    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+    // covers exactly the output domain for the V-to-VT copy kernel.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -951,6 +985,8 @@ where
     let vt_arg = typed_tensor_binding(vt, op)?;
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
+    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+    // covers exactly the output domain for the conjugating V-to-VT copy kernel.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -1056,12 +1092,19 @@ where
                     )?;
                     let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
                     let v_offset = checked_batch_offset(OP, "svd v batch offset", batch, v_stride)?;
-                    let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-                    let batch_s =
-                        unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset) };
-                    let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
-                    let batch_v = unsafe { batch_ptr::<T>(v_ptr, v_offset) };
-                    let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                    // SAFETY: all offsets are checked against their per-batch
+                    // strides and each base pointer belongs to a live device tensor.
+                    let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
+                        (
+                            batch_ptr::<T>(a_ptr, a_offset),
+                            batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
+                            batch_ptr::<T>(u_ptr, u_offset),
+                            batch_ptr::<T>(v_ptr, v_offset),
+                            batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                        )
+                    };
+                    // SAFETY: batch pointers, workspaces, dimensions, and
+                    // gesvdj params satisfy cuSOLVER's vector SVD contract.
                     unsafe {
                         handles.cusolver().gesvdj(
                             T::DATA_TYPE,
@@ -1128,11 +1171,19 @@ where
                     checked_batch_offset(OP, "svd singular value batch offset", batch, s_stride)?;
                 let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
                 let vt_offset = checked_batch_offset(OP, "svd vt batch offset", batch, vt_stride)?;
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-                let batch_s = unsafe { batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset) };
-                let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
-                let batch_vt = unsafe { batch_ptr::<T>(vt_ptr, vt_offset) };
-                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                // SAFETY: all offsets are checked against their per-batch
+                // strides and each base pointer belongs to a live device tensor.
+                let (batch_a, batch_s, batch_u, batch_vt, batch_info) = unsafe {
+                    (
+                        batch_ptr::<T>(a_ptr, a_offset),
+                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
+                        batch_ptr::<T>(u_ptr, u_offset),
+                        batch_ptr::<T>(vt_ptr, vt_offset),
+                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                    )
+                };
+                // SAFETY: batch pointers, workspace/rwork, dimensions, and
+                // stream-bound handle satisfy cuSOLVER gesvd's thin SVD contract.
                 unsafe {
                     handles.cusolver().gesvd(
                         T::DATA_TYPE,
@@ -1242,11 +1293,19 @@ where
                     checked_batch_offset(OP, "svd_values u batch offset", batch, u_stride)?;
                 let v_offset =
                     checked_batch_offset(OP, "svd_values v batch offset", batch, v_stride)?;
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, s_offset) };
-                let batch_u = unsafe { batch_ptr::<T>(u_ptr, u_offset) };
-                let batch_v = unsafe { batch_ptr::<T>(v_ptr, v_offset) };
-                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                // SAFETY: all offsets are checked against their per-batch
+                // strides and each base pointer belongs to a live device tensor.
+                let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
+                    (
+                        batch_ptr::<T>(a_ptr, a_offset),
+                        batch_ptr::<T::Real>(s_ptr, s_offset),
+                        batch_ptr::<T>(u_ptr, u_offset),
+                        batch_ptr::<T>(v_ptr, v_offset),
+                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                    )
+                };
+                // SAFETY: batch pointers, scratch U/V buffers, workspace, and
+                // params satisfy cuSOLVER gesvdj's no-vector SVD contract.
                 unsafe {
                     handles.cusolver().gesvdj(
                         T::DATA_TYPE,
@@ -1309,9 +1368,17 @@ where
                     batch,
                     s_stride,
                 )?;
-                let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-                let batch_s = unsafe { batch_ptr::<T::Real>(s_ptr, s_offset) };
-                let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+                // SAFETY: checked offsets keep the input, singular-value, and
+                // info pointers inside live device allocations for this batch.
+                let (batch_a, batch_s, batch_info) = unsafe {
+                    (
+                        batch_ptr::<T>(a_ptr, a_offset),
+                        batch_ptr::<T::Real>(s_ptr, s_offset),
+                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                    )
+                };
+                // SAFETY: no-vector gesvd permits null U/VT pointers with
+                // unit leading dimensions; other pointers and workspace are validated.
                 unsafe {
                     handles.cusolver().gesvd(
                         T::DATA_TYPE,
@@ -1406,10 +1473,18 @@ where
     for batch in 0..batch_total {
         let work_offset = checked_batch_offset(OP, "qr work batch offset", batch, work_stride)?;
         let q_offset = checked_batch_offset(OP, "qr q batch offset", batch, q_stride)?;
-        let batch_work = unsafe { batch_ptr::<T>(work_ptr, work_offset) };
-        let batch_q = unsafe { batch_ptr::<T>(q_ptr, q_offset) };
-        let batch_geqrf_info = unsafe { batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>() };
-        let batch_orgqr_info = unsafe { batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>() };
+        // SAFETY: checked offsets keep work, Q, and info pointers inside
+        // their live device allocations for this batch.
+        let (batch_work, batch_q, batch_geqrf_info, batch_orgqr_info) = unsafe {
+            (
+                batch_ptr::<T>(work_ptr, work_offset),
+                batch_ptr::<T>(q_ptr, q_offset),
+                batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>(),
+                batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>(),
+            )
+        };
+        // SAFETY: batch pointers, tau/workspace buffers, dimensions, and
+        // stream-bound handle satisfy cuSOLVER geqrf's QR factorization contract.
         unsafe {
             handles.cusolver().geqrf(
                 T::DATA_TYPE,
@@ -1432,6 +1507,8 @@ where
             q_stride * std::mem::size_of::<T>(),
             OP,
         )?;
+        // SAFETY: `batch_q` contains the copied reflectors, `tau` and
+        // workspace are live, and dimensions match the validated reduced-Q shape.
         unsafe {
             handles.cusolver().orgqr(
                 T::DATA_TYPE,
@@ -1509,9 +1586,17 @@ where
         let a_offset = checked_batch_offset(OP, "eigh matrix batch offset", batch, matrix_stride)?;
         let values_offset =
             checked_batch_offset(OP, "eigh values batch offset", batch, values_stride)?;
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, values_offset) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+        // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
+        // inside live device allocations for this batch.
+        let (batch_a, batch_w, batch_info) = unsafe {
+            (
+                batch_ptr::<T>(a_ptr, a_offset),
+                batch_ptr::<T::Real>(values_ptr, values_offset),
+                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+            )
+        };
+        // SAFETY: batch pointers, workspace, dimensions, and stream-bound
+        // handle satisfy cuSOLVER syevd's vector eigensolver contract.
         unsafe {
             handles.cusolver().syevd(
                 T::DATA_TYPE,
@@ -1584,9 +1669,17 @@ where
             checked_batch_offset(OP, "eigh_values matrix batch offset", batch, matrix_stride)?;
         let values_offset =
             checked_batch_offset(OP, "eigh_values values batch offset", batch, values_stride)?;
-        let batch_a = unsafe { batch_ptr::<T>(a_ptr, a_offset) };
-        let batch_w = unsafe { batch_ptr::<T::Real>(values_ptr, values_offset) };
-        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch).cast::<i32>() };
+        // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
+        // inside live device allocations for this batch.
+        let (batch_a, batch_w, batch_info) = unsafe {
+            (
+                batch_ptr::<T>(a_ptr, a_offset),
+                batch_ptr::<T::Real>(values_ptr, values_offset),
+                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+            )
+        };
+        // SAFETY: batch pointers, workspace, dimensions, and stream-bound
+        // handle satisfy cuSOLVER syevd's no-vector eigensolver contract.
         unsafe {
             handles.cusolver().syevd(
                 T::DATA_TYPE,
@@ -1649,6 +1742,8 @@ where
     let work_arg = typed_tensor_binding(lu, "lu")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
     let launch_count = cube_count_for_len(launch_len)?;
+    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+    // covers the maximum P/L/U/parity output domain consumed by the kernel.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -1682,6 +1777,8 @@ where
     let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
     let launch_count = cube_count_for_len(parity.n_elements())?;
+    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+    // covers exactly the parity output domain.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_parity::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -1707,6 +1804,8 @@ where
     let out = alloc_output::<T>(rt, shape)?;
     let out_arg = typed_tensor_binding(&out, op)?;
     let launch_count = cube_count_for_len(out.n_elements())?;
+    // SAFETY: `out_arg` describes a live CUDA output tensor, and
+    // `launch_count` covers every output element exactly once.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -1737,6 +1836,8 @@ where
     let input_arg = typed_tensor_binding(input, "lu_solve_prepared")?;
     let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
     let launch_count = cube_count_for_len(out.n_elements())?;
+    // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
+    // matches the validated LU shape, and `launch_count` covers the output domain.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
@@ -1782,6 +1883,8 @@ fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
 
 fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
     let stream = raw_stream(rt, op)? as cudaStream_t;
+    // SAFETY: `raw_stream` returns the live CUDA stream owned by this runtime's
+    // current context; synchronizing it does not outlive the runtime.
     unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
         Error::backend_failure(op, format!("CUDA stream synchronize failed: {err:?}"))
     })
@@ -1867,6 +1970,8 @@ fn copy_device_to_device(
         return Ok(());
     }
     let stream = raw_stream(rt, op)? as cudaStream_t;
+    // SAFETY: callers pass device pointers obtained from live tensors or
+    // workspaces, `nbytes` is checked before zero-size return, and the stream is current.
     unsafe { cuda_result::memcpy_dtod_async(dst, src, nbytes, stream) }
         .map_err(|err| Error::backend_failure(op, format!("cudaMemcpyAsync DtoD failed: {err:?}")))
 }
@@ -2152,6 +2257,8 @@ fn complex32_magnitude(
         return Ok(output);
     }
     let launch_count = cube_count_for_len(output.n_elements())?;
+    // SAFETY: bindings describe live CUDA tensors, and `launch_count` covers
+    // exactly the complex32 magnitude output domain.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::complex32_magnitude::launch_unchecked::<CubeclCudaRuntime>(
             client,
@@ -2176,6 +2283,8 @@ fn complex64_magnitude(
         return Ok(output);
     }
     let launch_count = cube_count_for_len(output.n_elements())?;
+    // SAFETY: bindings describe live CUDA tensors, and `launch_count` covers
+    // exactly the complex64 magnitude output domain.
     with_cubecl_client(rt, |client| unsafe {
         cubecl_linalg::complex64_magnitude::launch_unchecked::<CubeclCudaRuntime>(
             client,

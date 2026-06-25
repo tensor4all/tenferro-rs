@@ -37,6 +37,8 @@ macro_rules! impl_real_eigh {
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
+                // SAFETY: `vectors` is a mutable column-major `n x n` buffer,
+                // `values` has `n` entries, and `lwork = -1` writes only the query slot.
                 unsafe {
                     $syev(
                         b'V',
@@ -53,6 +55,8 @@ macro_rules! impl_real_eigh {
                 check_lapack_info("eigh", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: dimensions and `lwork` come from validated shape
+                // metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
                     $syev(
                         b'V',
@@ -84,6 +88,8 @@ macro_rules! impl_real_eigh {
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
+                // SAFETY: `work_matrix` is a mutable column-major `n x n`
+                // buffer, `values` has `n` entries, and `lwork = -1` queries workspace.
                 unsafe {
                     $syev(
                         b'N',
@@ -100,6 +106,8 @@ macro_rules! impl_real_eigh {
                 check_lapack_info("eigh_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh_values", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: dimensions and `lwork` come from validated shape
+                // metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
                     $syev(
                         b'N',
@@ -137,6 +145,8 @@ macro_rules! impl_complex_eigh {
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
                 let mut info = 0;
+                // SAFETY: `vectors`, `values`, and `rwork` satisfy LAPACK's
+                // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.
                 unsafe {
                     $heev(
                         b'V',
@@ -154,6 +164,8 @@ macro_rules! impl_complex_eigh {
                 check_lapack_info("eigh", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "eigh", $routine)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: `vectors`, `values`, `work`, and `rwork` match the
+                // validated `n x n` problem and queried workspace length.
                 unsafe {
                     $heev(
                         b'V',
@@ -194,6 +206,8 @@ macro_rules! impl_complex_eigh {
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
                 let mut info = 0;
+                // SAFETY: `work_matrix`, `values`, and `rwork` satisfy LAPACK's
+                // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.
                 unsafe {
                     $heev(
                         b'N',
@@ -211,6 +225,8 @@ macro_rules! impl_complex_eigh {
                 check_lapack_info("eigh_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "eigh_values", $routine)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: `work_matrix`, `values`, `work`, and `rwork` match
+                // the validated `n x n` problem and queried workspace length.
                 unsafe {
                     $heev(
                         b'N',

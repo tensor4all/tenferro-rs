@@ -36,6 +36,18 @@ fn cpu_lapack_eig_source() -> String {
     .unwrap_or_else(|err| panic!("LAPACK eig source should be readable: {err}"))
 }
 
+fn cpu_lapack_source(path: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cpu")
+            .join("linalg")
+            .join("lapack_linalg")
+            .join(path),
+    )
+    .unwrap_or_else(|err| panic!("LAPACK source {path} should be readable: {err}"))
+}
+
 fn cpu_faer_linalg_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -57,6 +69,28 @@ fn cpu_backend_source() -> String {
     .unwrap_or_else(|err| panic!("CPU linalg backend source should be readable: {err}"))
 }
 
+fn assert_unsafe_blocks_have_safety_comments(path: &str, source: &str) {
+    let lines: Vec<_> = source.lines().collect();
+    let mut missing = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.contains("unsafe {") {
+            continue;
+        }
+        let window_start = idx.saturating_sub(3);
+        let has_safety = lines[window_start..idx]
+            .iter()
+            .any(|candidate| candidate.trim_start().starts_with("// SAFETY:"));
+        if !has_safety {
+            missing.push(format!("{}:{}", path, idx + 1));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "LAPACK unsafe blocks need local SAFETY comments:\n{}",
+        missing.join("\n")
+    );
+}
+
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source
         .find(start)
@@ -67,6 +101,23 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start_idx + offset)
         .unwrap_or(source.len());
     &source[start_idx..end_idx]
+}
+
+#[test]
+fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
+    for path in [
+        "cholesky.rs",
+        "eig.rs",
+        "eigh.rs",
+        "full_piv_lu.rs",
+        "lu.rs",
+        "qr.rs",
+        "solve.rs",
+        "svd.rs",
+        "triangular_solve.rs",
+    ] {
+        assert_unsafe_blocks_have_safety_comments(path, &cpu_lapack_source(path));
+    }
 }
 
 #[test]

@@ -37,6 +37,8 @@ impl LapackTriangularSolve for f64 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: callers validate the triangular matrix and RHS shapes,
+        // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
             lapack::dtrtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
         }
@@ -56,6 +58,8 @@ impl LapackTriangularSolve for f32 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: callers validate the triangular matrix and RHS shapes,
+        // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
             lapack::strtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
         }
@@ -75,6 +79,8 @@ impl LapackTriangularSolve for Complex32 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: callers validate the triangular matrix and RHS shapes,
+        // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
             lapack::ctrtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
         }
@@ -94,6 +100,8 @@ impl LapackTriangularSolve for Complex64 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: callers validate the triangular matrix and RHS shapes,
+        // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
             lapack::ztrtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
         }

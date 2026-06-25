@@ -56,6 +56,33 @@ fn assert_before(section: &str, earlier: &str, later: &str) {
     );
 }
 
+fn assert_unsafe_blocks_have_safety_comments(path: &str, source: &str) {
+    let lines: Vec<_> = source.lines().collect();
+    let mut missing = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if !line.contains("unsafe {") {
+            continue;
+        }
+        let window_start = idx.saturating_sub(3);
+        let has_safety = lines[window_start..idx]
+            .iter()
+            .any(|candidate| candidate.trim_start().starts_with("// SAFETY:"));
+        if !has_safety {
+            missing.push(format!("{}:{}", path, idx + 1));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "GPU linalg unsafe blocks need local SAFETY comments:\n{}",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn gpu_linalg_unsafe_blocks_document_safety_invariants() {
+    assert_unsafe_blocks_have_safety_comments("src/gpu/linalg.rs", &linalg_source());
+}
+
 #[test]
 fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
     for path in [
