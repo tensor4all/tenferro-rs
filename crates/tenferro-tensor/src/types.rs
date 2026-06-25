@@ -2790,17 +2790,16 @@ fn tensor_layout_error(op: &'static str, err: tenferro_tensor_core::Error) -> cr
 }
 
 fn checked_view_element_count(shape: &[usize], op: &'static str) -> crate::Result<usize> {
+    if shape.contains(&0) {
+        return Ok(0);
+    }
     shape.iter().try_fold(1usize, |product, &dim| {
-        if dim == 0 {
-            Ok(0)
-        } else {
-            product
-                .checked_mul(dim)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op,
-                    message: format!("shape product overflows for shape {shape:?}"),
-                })
-        }
+        product
+            .checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("shape product overflows for shape {shape:?}"),
+            })
     })
 }
 

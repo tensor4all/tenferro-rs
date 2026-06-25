@@ -1498,6 +1498,18 @@ fn strided_tensor_view_validation_covers_error_edges() {
         Err(Error::InvalidConfig { .. })
     ));
     assert!(matches!(
+        TypedTensorView::<i32>::from_slice(
+            [usize::MAX / 2 + 1, usize::MAX / 2 + 1],
+            [0, 0],
+            0,
+            &[7],
+        ),
+        Err(Error::InvalidConfig { .. })
+    ));
+    let empty_after_large_prefix =
+        TypedTensorView::from_slice([2, usize::MAX, 0], [0, 0, 1], 0, &[7]).unwrap();
+    assert_eq!(empty_after_large_prefix.n_elements(), 0);
+    assert!(matches!(
         TypedTensorView::<i32>::from_slice([3], [isize::MAX], 0, &[]),
         Err(Error::InvalidConfig { .. })
     ));

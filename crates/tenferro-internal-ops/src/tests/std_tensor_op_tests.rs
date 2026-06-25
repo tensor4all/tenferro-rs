@@ -118,6 +118,9 @@ fn run_linearize_case(
     let mut ad_ctx = ShapeGuardContext::default();
     let primal_in = add_input_keys(&mut builder, 100, n_primal_in);
     let primal_out = add_input_keys(&mut builder, 200, n_primal_out);
+    for key in primal_in.iter().chain(primal_out.iter()) {
+        ad_ctx.insert_metadata(key.clone(), TensorMeta::exact(DType::F64, sym_shape(&[2])));
+    }
     if matches!(&op, StdTensorOp::DotGeneral { .. }) {
         seed_dot_general_input_metadata(&mut ad_ctx, &primal_in);
     }
@@ -172,6 +175,8 @@ fn run_transpose_case_with_input_shape(
         seed_dot_general_ref_metadata(&mut ad_ctx, &inputs);
     } else if let Some(shape) = input_shape {
         seed_uniform_ref_metadata(&mut ad_ctx, &inputs, shape);
+    } else {
+        seed_uniform_ref_metadata(&mut ad_ctx, &inputs, sym_shape(&[2]));
     }
     let result = op
         .transpose_rule(
@@ -957,6 +962,13 @@ fn test_std_tensor_op_analytic_linearize_emits_ops_for_remaining_variants() {
 
     let (tanh_result, tanh_graph) = run_linearize_case(StdTensorOp::Tanh, 0, 1, &[true]);
     assert!(tanh_result[0].is_some());
+    assert!(
+        tanh_graph
+            .operations()
+            .iter()
+            .all(|op| op.operation != StdTensorOp::Exp),
+        "tanh linearization should build its one-like coefficient from constants, not Exp"
+    );
     assert_eq!(
         tanh_graph.operations().last().unwrap().operation,
         StdTensorOp::Mul
