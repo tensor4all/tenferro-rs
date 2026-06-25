@@ -25,6 +25,8 @@ impl LapackLu for f64 {
     }
 
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
+        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
         unsafe {
             lapack::dgetrf(m, n, data, lda, ipiv, info);
         }
@@ -41,6 +43,8 @@ impl LapackLu for f32 {
     }
 
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
+        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
         unsafe {
             lapack::sgetrf(m, n, data, lda, ipiv, info);
         }
@@ -57,6 +61,8 @@ impl LapackLu for Complex32 {
     }
 
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
+        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
         unsafe {
             lapack::cgetrf(m, n, data, lda, ipiv, info);
         }
@@ -73,6 +79,8 @@ impl LapackLu for Complex64 {
     }
 
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
+        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
         unsafe {
             lapack::zgetrf(m, n, data, lda, ipiv, info);
         }

@@ -43,6 +43,8 @@ macro_rules! impl_real_svd {
                 let mut vt = vec![0.0 as $scalar; k * n];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
+                // dimensions, and `lwork = -1` makes `query` the workspace output.
                 unsafe {
                     $gesvd(
                         b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
@@ -52,6 +54,8 @@ macro_rules! impl_real_svd {
                 check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "svd", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: buffers and leading dimensions match the validated
+                // SVD problem, and `work` uses the queried workspace length.
                 unsafe {
                     $gesvd(
                         b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
@@ -80,6 +84,8 @@ macro_rules! impl_real_svd {
                 let mut s = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
+                // SAFETY: `a` and `s` match the validated SVD dimensions;
+                // no-vector mode ignores the dummy U/VT buffers, and `lwork = -1` queries workspace.
                 unsafe {
                     $gesvd(
                         b'N',
@@ -101,6 +107,8 @@ macro_rules! impl_real_svd {
                 check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "svd_values", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: `a`, `s`, dummy no-vector buffers, and `work`
+                // satisfy the validated SVD dimensions and queried workspace length.
                 unsafe {
                     $gesvd(
                         b'N',
@@ -149,6 +157,8 @@ macro_rules! impl_complex_svd {
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
                 let mut info = 0;
+                // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
+                // validated complex SVD dimensions; `lwork = -1` queries workspace.
                 unsafe {
                     $gesvd(
                         b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
@@ -158,6 +168,8 @@ macro_rules! impl_complex_svd {
                 check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "svd", $routine)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: buffers, real workspace, and leading dimensions
+                // match the validated complex SVD problem and queried workspace length.
                 unsafe {
                     $gesvd(
                         b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
@@ -193,6 +205,8 @@ macro_rules! impl_complex_svd {
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
                 let mut info = 0;
+                // SAFETY: `a`, `s`, and `rwork` match the validated complex
+                // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
                 unsafe {
                     $gesvd(
                         b'N',
@@ -215,6 +229,8 @@ macro_rules! impl_complex_svd {
                 check_lapack_info("svd_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "svd_values", $routine)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: `a`, `s`, dummy no-vector buffers, `work`, and
+                // `rwork` satisfy the validated complex SVD dimensions and queried workspace length.
                 unsafe {
                     $gesvd(
                         b'N',

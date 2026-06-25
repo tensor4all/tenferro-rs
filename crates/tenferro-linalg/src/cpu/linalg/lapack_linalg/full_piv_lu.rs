@@ -145,6 +145,9 @@ impl LapackFullPivLu for f32 {
         jpiv: &mut [i32],
         info: &mut i32,
     ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
         unsafe {
             sgetc2_ffi(
                 &n,
@@ -166,6 +169,9 @@ impl LapackFullPivLu for f32 {
         jpiv: &[i32],
         scale: &mut Self::Scale,
     ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
         unsafe {
             sgesc2_ffi(
                 &n,
@@ -283,6 +289,9 @@ impl LapackFullPivLu for Complex32 {
         jpiv: &mut [i32],
         info: &mut i32,
     ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
         unsafe {
             cgetc2_ffi(
                 &n,
@@ -304,6 +313,9 @@ impl LapackFullPivLu for Complex32 {
         jpiv: &[i32],
         scale: &mut Self::Scale,
     ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
         unsafe {
             cgesc2_ffi(
                 &n,

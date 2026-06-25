@@ -85,6 +85,8 @@ macro_rules! impl_eig_real_2d {
             let mut vectors_real = vec![0.0 as $real; n * n];
             let mut query = vec![0.0 as $real; 1];
             let mut info = 0;
+            // SAFETY: all matrix/vector buffers match the validated `n x n`
+            // problem, and `lwork = -1` makes `query` the only workspace output.
             unsafe {
                 $geev(
                     b'N',
@@ -106,6 +108,8 @@ macro_rules! impl_eig_real_2d {
             check_lapack_info("eig", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0] as f64, "eig", $routine)?;
             let mut work = vec![0.0 as $real; lwork as usize];
+            // SAFETY: buffers and leading dimensions match the validated
+            // problem, and `work` uses the length returned by the LAPACK query.
             unsafe {
                 $geev(
                     b'N',
@@ -150,6 +154,8 @@ macro_rules! impl_eig_values_real_2d {
             let mut vr = vec![0.0 as $real; 1];
             let mut query = vec![0.0 as $real; 1];
             let mut info = 0;
+            // SAFETY: all matrix/vector buffers match the validated `n x n`
+            // problem, and `lwork = -1` makes `query` the only workspace output.
             unsafe {
                 $geev(
                     b'N',
@@ -171,6 +177,8 @@ macro_rules! impl_eig_values_real_2d {
             check_lapack_info("eig_values", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0] as f64, "eig_values", $routine)?;
             let mut work = vec![0.0 as $real; lwork as usize];
+            // SAFETY: buffers and leading dimensions match the validated
+            // problem, and `work` uses the length returned by the LAPACK query.
             unsafe {
                 $geev(
                     b'N',
@@ -212,6 +220,8 @@ macro_rules! impl_eig_complex_2d {
             let mut query = vec![<$complex>::new(0.0, 0.0); 1];
             let mut rwork = vec![0.0 as $real; 2 * n.max(1)];
             let mut info = 0;
+            // SAFETY: all complex matrix/vector buffers and real workspace
+            // match the validated `n x n` problem; `lwork = -1` queries workspace.
             unsafe {
                 $geev(
                     b'N',
@@ -233,6 +243,8 @@ macro_rules! impl_eig_complex_2d {
             check_lapack_info("eig", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0].re as f64, "eig", $routine)?;
             let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+            // SAFETY: buffers, real workspace, and leading dimensions match
+            // the validated problem, and `work` has the queried length.
             unsafe {
                 $geev(
                     b'N',
@@ -276,6 +288,8 @@ macro_rules! impl_eig_values_complex_2d {
             let mut query = vec![<$complex>::new(0.0, 0.0); 1];
             let mut rwork = vec![0.0 as $real; 2 * n.max(1)];
             let mut info = 0;
+            // SAFETY: all complex matrix/vector buffers and real workspace
+            // match the validated `n x n` problem; `lwork = -1` queries workspace.
             unsafe {
                 $geev(
                     b'N',
@@ -297,6 +311,8 @@ macro_rules! impl_eig_values_complex_2d {
             check_lapack_info("eig_values", concat!($routine, "(work query)"), info)?;
             let lwork = work_len(query[0].re as f64, "eig_values", $routine)?;
             let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+            // SAFETY: buffers, real workspace, and leading dimensions match
+            // the validated problem, and `work` has the queried length.
             unsafe {
                 $geev(
                     b'N',

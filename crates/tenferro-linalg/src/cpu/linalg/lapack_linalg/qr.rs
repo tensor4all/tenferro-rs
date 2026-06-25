@@ -33,6 +33,8 @@ macro_rules! impl_real_qr {
                 let mut tau = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
+                // SAFETY: `qr` is a mutable column-major `m x n` buffer,
+                // `tau` has `k` entries, and `lwork = -1` makes `query` the only workspace output.
                 unsafe {
                     $geqrf(
                         m_i32, n_i32, &mut qr, m_i32, &mut tau, &mut query, -1, &mut info,
@@ -41,6 +43,8 @@ macro_rules! impl_real_qr {
                 check_lapack_info("qr", concat!($geqrf_name, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "qr", $geqrf_name)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: dimensions and `lwork` come from validated inputs
+                // and the LAPACK workspace query; `qr`, `tau`, `work`, and `info` are live.
                 unsafe {
                     $geqrf(
                         m_i32, n_i32, &mut qr, m_i32, &mut tau, &mut work, lwork, &mut info,
@@ -56,6 +60,8 @@ macro_rules! impl_real_qr {
                 }
 
                 let mut query = vec![0.0 as $scalar; 1];
+                // SAFETY: `q` stores the first `k` reflectors in an `m x k`
+                // column-major buffer, `tau` has `k` entries, and query workspace is length 1.
                 unsafe {
                     $orgqr(
                         m_i32, k_i32, k_i32, &mut q, m_i32, &tau, &mut query, -1, &mut info,
@@ -64,6 +70,8 @@ macro_rules! impl_real_qr {
                 check_lapack_info("qr", concat!($orgqr_name, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "qr", $orgqr_name)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
+                // SAFETY: `q`, `tau`, and `work` satisfy the dimensions and
+                // workspace length returned by the preceding LAPACK query.
                 unsafe {
                     $orgqr(
                         m_i32, k_i32, k_i32, &mut q, m_i32, &tau, &mut work, lwork, &mut info,
@@ -97,6 +105,8 @@ macro_rules! impl_complex_qr {
                 let mut tau = vec![<$complex>::new(0.0, 0.0); k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
                 let mut info = 0;
+                // SAFETY: `qr` is a mutable column-major `m x n` buffer,
+                // `tau` has `k` entries, and `lwork = -1` makes `query` the only workspace output.
                 unsafe {
                     $geqrf(
                         m_i32, n_i32, &mut qr, m_i32, &mut tau, &mut query, -1, &mut info,
@@ -105,6 +115,8 @@ macro_rules! impl_complex_qr {
                 check_lapack_info("qr", concat!($geqrf_name, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "qr", $geqrf_name)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: dimensions and `lwork` come from validated inputs
+                // and the LAPACK workspace query; `qr`, `tau`, `work`, and `info` are live.
                 unsafe {
                     $geqrf(
                         m_i32, n_i32, &mut qr, m_i32, &mut tau, &mut work, lwork, &mut info,
@@ -120,6 +132,8 @@ macro_rules! impl_complex_qr {
                 }
 
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
+                // SAFETY: `q` stores the first `k` reflectors in an `m x k`
+                // column-major buffer, `tau` has `k` entries, and query workspace is length 1.
                 unsafe {
                     $ungqr(
                         m_i32, k_i32, k_i32, &mut q, m_i32, &tau, &mut query, -1, &mut info,
@@ -128,6 +142,8 @@ macro_rules! impl_complex_qr {
                 check_lapack_info("qr", concat!($ungqr_name, "(work query)"), info)?;
                 let lwork = work_len(query[0].re as f64, "qr", $ungqr_name)?;
                 let mut work = vec![<$complex>::new(0.0, 0.0); lwork as usize];
+                // SAFETY: `q`, `tau`, and `work` satisfy the dimensions and
+                // workspace length returned by the preceding LAPACK query.
                 unsafe {
                     $ungqr(
                         m_i32, k_i32, k_i32, &mut q, m_i32, &tau, &mut work, lwork, &mut info,

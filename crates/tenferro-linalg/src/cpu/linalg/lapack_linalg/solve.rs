@@ -25,6 +25,8 @@ pub(crate) trait LapackSolve: Clone + Copy + PoolScalar {
 
 impl LapackSolve for f64 {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate dimensions and provide a mutable
+        // column-major `lda x n` matrix, pivot storage, and live `info`.
         unsafe {
             lapack::dgetrf(m, n, data, lda, ipiv, info);
         }
@@ -41,6 +43,8 @@ impl LapackSolve for f64 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
+        // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
             lapack::dgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info);
         }
@@ -49,6 +53,8 @@ impl LapackSolve for f64 {
 
 impl LapackSolve for f32 {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate dimensions and provide a mutable
+        // column-major `lda x n` matrix, pivot storage, and live `info`.
         unsafe {
             lapack::sgetrf(m, n, data, lda, ipiv, info);
         }
@@ -65,6 +71,8 @@ impl LapackSolve for f32 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
+        // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
             lapack::sgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info);
         }
@@ -73,6 +81,8 @@ impl LapackSolve for f32 {
 
 impl LapackSolve for Complex32 {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate dimensions and provide a mutable
+        // column-major `lda x n` matrix, pivot storage, and live `info`.
         unsafe {
             lapack::cgetrf(m, n, data, lda, ipiv, info);
         }
@@ -89,6 +99,8 @@ impl LapackSolve for Complex32 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
+        // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
             lapack::cgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info);
         }
@@ -97,6 +109,8 @@ impl LapackSolve for Complex32 {
 
 impl LapackSolve for Complex64 {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        // SAFETY: callers validate dimensions and provide a mutable
+        // column-major `lda x n` matrix, pivot storage, and live `info`.
         unsafe {
             lapack::zgetrf(m, n, data, lda, ipiv, info);
         }
@@ -113,6 +127,8 @@ impl LapackSolve for Complex64 {
         ldb: i32,
         info: &mut i32,
     ) {
+        // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
+        // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
             lapack::zgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info);
         }
