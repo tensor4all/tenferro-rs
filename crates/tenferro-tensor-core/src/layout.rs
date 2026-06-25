@@ -1,6 +1,6 @@
 use crate::{
-    checked_product, col_major_strides, validate_permutation, DynRank, Error, Result, ShapeVec,
-    SliceSpec, StrideVec, TensorRank,
+    checked_logical_element_count, checked_product, col_major_strides, validate_permutation,
+    DynRank, Error, Result, ShapeVec, SliceSpec, StrideVec, TensorRank,
 };
 use smallvec::SmallVec;
 use std::collections::HashSet;
@@ -221,6 +221,7 @@ impl<R: TensorRank> TensorLayout<R> {
         offset: isize,
         buffer_len: usize,
     ) -> Result<Self> {
+        checked_logical_element_count(shape.as_ref())?;
         validate_reachable_bounds(shape.as_ref(), strides.as_ref(), offset, buffer_len)?;
         Ok(Self {
             shape,

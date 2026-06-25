@@ -78,6 +78,59 @@ fn zero_like_covers_scalar_and_broadcasted_dtype_paths() {
 }
 
 #[test]
+fn one_like_uses_dtype_aware_constant_without_exp_shortcut() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let anchor = builder.add_input(tensor_input(1));
+
+    let scalar_one =
+        super::super::zeros::build_one_like(&mut builder, DType::I64, ValueRef::Local(anchor), 0);
+    let vector_one =
+        super::super::zeros::build_one_like(&mut builder, DType::F64, ValueRef::Local(anchor), 2);
+    let graph = builder.build();
+
+    assert!(
+        graph
+            .operations()
+            .iter()
+            .all(|op| op.operation != StdTensorOp::Exp),
+        "one-like seed helper must not synthesize constants through Exp"
+    );
+
+    let (scalar_op_id, _) = graph.values()[scalar_one]
+        .producer
+        .expect("scalar one must be produced by a constant op");
+    match graph.operations()[scalar_op_id].operation.clone() {
+        StdTensorOp::Constant { dtype, bytes } => {
+            assert_eq!(dtype, DType::I64);
+            assert_eq!(bytes, 1_i64.to_le_bytes().to_vec());
+        }
+        other => panic!("expected constant one, got {other:?}"),
+    }
+
+    let (broadcast_op_id, _) = graph.values()[vector_one]
+        .producer
+        .expect("ranked one must be produced by broadcast");
+    let op = &graph.operations()[broadcast_op_id];
+    assert_eq!(
+        op.operation,
+        StdTensorOp::BroadcastInDim {
+            shape: vec![
+                crate::dim_expr::DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0
+                },
+                crate::dim_expr::DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 1
+                },
+            ],
+            dims: vec![],
+        }
+    );
+    assert_eq!(op.inputs[1], ValueRef::Local(anchor));
+}
+
+#[test]
 fn linearize_elementwise_inactive_inputs_return_none_without_ops() {
     let mut ctx = ShapeGuardContext::default();
     let keys = vec![input_key(1), input_key(2), input_key(3)];

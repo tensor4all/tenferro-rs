@@ -217,6 +217,19 @@ fn compact_layout_reports_stride_overflow() {
 }
 
 #[test]
+fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
+    let huge_extent = usize::MAX / 2 + 1;
+    let err = TensorLayout::<DynRank>::from_parts(
+        vec![huge_extent, huge_extent].into(),
+        vec![0, 0].into(),
+        0,
+        1,
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::IntegerOverflow));
+}
+
+#[test]
 fn compact_host_tensor_view_reuses_checked_col_major_stride_helper() {
     let source = include_str!("../src/lib.rs");
     let helper = source
@@ -341,14 +354,11 @@ fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
 }
 
 #[test]
-fn mutable_layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
+fn layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
     let huge_extent = isize::MAX as usize + 1;
-    let layout =
-        TensorLayout::<DynRank>::from_parts(vec![huge_extent, 3].into(), vec![0, 1].into(), 0, 3)
-            .unwrap();
     assert!(matches!(
-        layout.validate_mutable_no_overlap(),
-        Err(Error::OverlappingMutableLayout)
+        TensorLayout::<DynRank>::from_parts(vec![huge_extent, 3].into(), vec![0, 1].into(), 0, 3),
+        Err(Error::IntegerOverflow)
     ));
 }
 

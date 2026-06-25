@@ -3,8 +3,10 @@ use crate::ad::support::{
     conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
     dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
 };
+use crate::ad::zeros::build_one_like;
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use tidu::ADRuleResult;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -80,10 +82,11 @@ fn emit_fixed_div(
 fn emit_one_like_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
     anchor: ValueRef<StdTensorOp>,
-) -> LocalValueId {
-    let neg = emit_fixed_neg(builder, anchor.clone());
-    let zero = emit_fixed_add(builder, anchor, ValueRef::Local(neg));
-    emit_fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(zero))
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<LocalValueId> {
+    let dtype = dtype_of_or_real(ctx, &anchor);
+    let rank = ctx.rank_of(&anchor)?;
+    Ok(build_one_like(builder, dtype, anchor, rank))
 }
 
 fn emit_linear_mul_fixed(
@@ -237,21 +240,22 @@ pub fn linearize_tanh(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-) -> Vec<Option<LocalValueId>> {
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match tangent_in[0] {
         Some(dx) => {
             let y = ValueRef::External(primal_out[0].clone());
             let y_sq = emit_fixed_mul(builder, y.clone(), y.clone());
-            let one = emit_one_like_fixed(builder, y);
+            let one = emit_one_like_fixed(builder, y, ctx)?;
             let neg_y_sq = emit_fixed_neg(builder, ValueRef::Local(y_sq));
             let coeff = emit_fixed_add(builder, ValueRef::Local(one), ValueRef::Local(neg_y_sq));
-            vec![Some(emit_linear_mul_fixed(
+            Ok(vec![Some(emit_linear_mul_fixed(
                 builder,
                 ValueRef::Local(coeff),
                 dx,
-            ))]
+            ))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -306,14 +310,14 @@ pub fn linearize_pow(
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
     let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
     let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
-        let one = emit_one_like_fixed(builder, ValueRef::External(primal_in[1].clone()));
+        let one = emit_one_like_fixed(builder, ValueRef::External(primal_in[1].clone()), ctx)?;
         let exponent_minus_one = emit_fixed_sub(
             builder,
             ValueRef::External(primal_in[1].clone()),
@@ -384,8 +388,8 @@ pub fn linearize_pow(
     }
 
     match terms.as_slice() {
-        [] => vec![None],
-        [only] => vec![Some(*only)],
+        [] => Ok(vec![None]),
+        [only] => Ok(vec![Some(*only)]),
         [lhs, rhs] => {
             let sum = builder.add_operation(
                 StdTensorOp::Add,
@@ -394,7 +398,7 @@ pub fn linearize_pow(
                     active_mask: vec![true, true],
                 },
             );
-            vec![Some(sum[0])]
+            Ok(vec![Some(sum[0])])
         }
         _ => unreachable!("pow linearization creates at most two terms"),
     }
@@ -404,19 +408,20 @@ pub fn linearize_expm1(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-) -> Vec<Option<LocalValueId>> {
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match tangent_in[0] {
         Some(dx) => {
             let y = ValueRef::External(primal_out[0].clone());
-            let one = emit_one_like_fixed(builder, y.clone());
+            let one = emit_one_like_fixed(builder, y.clone(), ctx)?;
             let coeff = emit_fixed_add(builder, y, ValueRef::Local(one));
-            vec![Some(emit_linear_mul_fixed(
+            Ok(vec![Some(emit_linear_mul_fixed(
                 builder,
                 ValueRef::Local(coeff),
                 dx,
-            ))]
+            ))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -424,19 +429,20 @@ pub fn linearize_log1p(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-) -> Vec<Option<LocalValueId>> {
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match tangent_in[0] {
         Some(dx) => {
             let x = ValueRef::External(primal_in[0].clone());
-            let one = emit_one_like_fixed(builder, x.clone());
+            let one = emit_one_like_fixed(builder, x.clone(), ctx)?;
             let denom = emit_fixed_add(builder, x, ValueRef::Local(one));
-            vec![Some(emit_linear_div_fixed_denominator(
+            Ok(vec![Some(emit_linear_div_fixed_denominator(
                 builder,
                 dx,
                 ValueRef::Local(denom),
-            ))]
+            ))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -537,22 +543,22 @@ pub fn transpose_tanh(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if !unary_is_active(mode) {
-        return vec![None];
+        return Ok(vec![None]);
     }
     match cotangent_out[0] {
         Some(ct) => {
             let tanh_x = emit_fixed_unary(builder, StdTensorOp::Tanh, inputs[0].clone());
             let tanh_sq = emit_fixed_mul(builder, ValueRef::Local(tanh_x), ValueRef::Local(tanh_x));
-            let one = emit_one_like_fixed(builder, inputs[0].clone());
+            let one = emit_one_like_fixed(builder, inputs[0].clone(), ctx)?;
             let neg_tanh_sq = emit_fixed_neg(builder, ValueRef::Local(tanh_sq));
             let coeff = emit_fixed_add(builder, ValueRef::Local(one), ValueRef::Local(neg_tanh_sq));
             let coeff =
                 conjugate_for_unary_input_dtype(builder, ValueRef::Local(coeff), inputs, ctx);
-            vec![Some(emit_linear_mul_fixed(builder, coeff, ct))]
+            Ok(vec![Some(emit_linear_mul_fixed(builder, coeff, ct))])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }
 
@@ -620,15 +626,15 @@ pub fn transpose_pow(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
 
     let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
@@ -637,7 +643,7 @@ pub fn transpose_pow(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let one = emit_one_like_fixed(builder, inputs[1].clone());
+        let one = emit_one_like_fixed(builder, inputs[1].clone(), ctx)?;
         let exponent_minus_one = emit_fixed_sub(builder, inputs[1].clone(), ValueRef::Local(one));
         let promoted_base =
             convert_fixed_ref_to_dtype(builder, inputs[0].clone(), lhs_dtype, output_dtype);
@@ -686,7 +692,7 @@ pub fn transpose_pow(
         ));
     }
 
-    result
+    Ok(result)
 }
 
 pub fn transpose_expm1(
@@ -716,13 +722,13 @@ pub fn transpose_log1p(
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if !unary_is_active(mode) {
-        return vec![None];
+        return Ok(vec![None]);
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let one = emit_one_like_fixed(builder, inputs[0].clone());
+            let one = emit_one_like_fixed(builder, inputs[0].clone(), ctx)?;
             let denom = emit_fixed_add(builder, inputs[0].clone(), ValueRef::Local(one));
             let denominator =
                 conjugate_for_unary_input_dtype(builder, ValueRef::Local(denom), inputs, ctx);
@@ -733,8 +739,8 @@ pub fn transpose_log1p(
                     active_mask: vec![true, false],
                 },
             );
-            vec![Some(out[0])]
+            Ok(vec![Some(out[0])])
         }
-        None => vec![None],
+        None => Ok(vec![None]),
     }
 }

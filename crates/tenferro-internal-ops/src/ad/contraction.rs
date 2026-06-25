@@ -7,7 +7,7 @@ use crate::ad::support::{
     conjugate_primal_if_complex, conjugate_primal_if_dtype_complex, convert_fixed_ref_to_dtype,
     convert_linear_to_dtype, dtype_of_or_real, project_linear_to_dtype, promote_dtype,
 };
-use crate::ad::zeros::build_zero_like;
+use crate::ad::zeros::{build_one_like, build_zero_like};
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
@@ -712,66 +712,6 @@ fn reduce_prod_derivative_coeff(
         ],
         OperationRole::Primary,
     )[0]
-}
-
-fn build_one_like(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    dtype: DType,
-    anchor: ValueRef<StdTensorOp>,
-    anchor_rank: usize,
-) -> LocalValueId {
-    build_scalar_like(builder, dtype, one_bytes(dtype), anchor, anchor_rank)
-}
-
-fn build_scalar_like(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    dtype: DType,
-    bytes: Vec<u8>,
-    anchor: ValueRef<StdTensorOp>,
-    anchor_rank: usize,
-) -> LocalValueId {
-    let scalar = builder.add_operation(
-        StdTensorOp::Constant { dtype, bytes },
-        vec![],
-        OperationRole::Primary,
-    )[0];
-    if anchor_rank == 0 {
-        return scalar;
-    }
-
-    let shape: Vec<DimExpr> = (0..anchor_rank)
-        .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
-        .collect();
-    builder.add_operation(
-        StdTensorOp::BroadcastInDim {
-            shape,
-            dims: vec![],
-        },
-        vec![ValueRef::Local(scalar), anchor],
-        OperationRole::Primary,
-    )[0]
-}
-
-fn one_bytes(dtype: DType) -> Vec<u8> {
-    match dtype {
-        DType::F32 => 1.0_f32.to_le_bytes().to_vec(),
-        DType::F64 => 1.0_f64.to_le_bytes().to_vec(),
-        DType::I32 => 1_i32.to_le_bytes().to_vec(),
-        DType::I64 => 1_i64.to_le_bytes().to_vec(),
-        DType::Bool => vec![1],
-        DType::C32 => {
-            let mut bytes = Vec::with_capacity(8);
-            bytes.extend_from_slice(&1.0_f32.to_le_bytes());
-            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
-            bytes
-        }
-        DType::C64 => {
-            let mut bytes = Vec::with_capacity(16);
-            bytes.extend_from_slice(&1.0_f64.to_le_bytes());
-            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
-            bytes
-        }
-    }
 }
 
 fn reduction_location_indicators(

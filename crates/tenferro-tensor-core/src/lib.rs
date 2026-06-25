@@ -375,6 +375,13 @@ fn checked_product(shape: &[usize]) -> Result<usize> {
     })
 }
 
+fn checked_logical_element_count(shape: &[usize]) -> Result<usize> {
+    if shape.contains(&0) {
+        return Ok(0);
+    }
+    checked_product(shape)
+}
+
 fn checked_shape_len(shape: &[usize], data_len: usize) -> Result<usize> {
     validate_shape_metadata(shape)?;
     let expected = checked_product(shape)?;
@@ -445,6 +452,7 @@ fn validate_view_bounds<T>(
     strides: &[isize],
     offset: isize,
 ) -> Result<()> {
+    checked_logical_element_count(shape)?;
     layout::validate_reachable_bounds(shape, strides, offset, data.len())
 }
 

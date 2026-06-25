@@ -677,7 +677,16 @@ analytic_linearize!(linearize_exp, analytic::linearize_exp, primal_out);
 analytic_linearize!(linearize_log, analytic::linearize_log, primal_in);
 analytic_linearize!(linearize_sin, analytic::linearize_sin, primal_in);
 analytic_linearize!(linearize_cos, analytic::linearize_cos, primal_in);
-analytic_linearize!(linearize_tanh, analytic::linearize_tanh, primal_out);
+fn linearize_tanh(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::linearize_tanh(builder, primal_out, tangent_in, ctx)
+}
 analytic_linearize!(linearize_sqrt, analytic::linearize_sqrt, primal_out);
 fn linearize_rsqrt(
     _op: &StdTensorOp,
@@ -699,12 +708,28 @@ fn linearize_pow(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(analytic::linearize_pow(
-        builder, primal_in, primal_out, tangent_in, ctx,
-    ))
+    analytic::linearize_pow(builder, primal_in, primal_out, tangent_in, ctx)
 }
-analytic_linearize!(linearize_expm1, analytic::linearize_expm1, primal_out);
-analytic_linearize!(linearize_log1p, analytic::linearize_log1p, primal_in);
+fn linearize_expm1(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    _primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::linearize_expm1(builder, primal_out, tangent_in, ctx)
+}
+fn linearize_log1p(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::linearize_log1p(builder, primal_in, tangent_in, ctx)
+}
 
 macro_rules! analytic_transpose {
     ($name:ident, $callee:path) => {
@@ -725,12 +750,39 @@ analytic_transpose!(transpose_exp, analytic::transpose_exp);
 analytic_transpose!(transpose_log, analytic::transpose_log);
 analytic_transpose!(transpose_sin, analytic::transpose_sin);
 analytic_transpose!(transpose_cos, analytic::transpose_cos);
-analytic_transpose!(transpose_tanh, analytic::transpose_tanh);
+fn transpose_tanh(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::transpose_tanh(builder, cotangent_out, inputs, mode, ctx)
+}
 analytic_transpose!(transpose_sqrt, analytic::transpose_sqrt);
 analytic_transpose!(transpose_rsqrt, analytic::transpose_rsqrt);
-analytic_transpose!(transpose_pow, analytic::transpose_pow);
+fn transpose_pow(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::transpose_pow(builder, cotangent_out, inputs, mode, ctx)
+}
 analytic_transpose!(transpose_expm1, analytic::transpose_expm1);
-analytic_transpose!(transpose_log1p, analytic::transpose_log1p);
+fn transpose_log1p(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::transpose_log1p(builder, cotangent_out, inputs, mode, ctx)
+}
 
 fn linearize_dot_general(
     op: &StdTensorOp,
