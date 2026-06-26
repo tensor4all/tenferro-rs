@@ -1905,19 +1905,10 @@ impl TracedTensor {
                 message: "diagonal axes must be distinct".into(),
             });
         }
-        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
-            shape
-                .iter()
-                .enumerate()
-                .filter_map(|(axis, dim)| (axis != axis_b).then_some(dim.clone()))
-                .collect()
-        });
-        Ok(apply_unary(
-            StdTensorOp::ExtractDiag { axis_a, axis_b },
-            self,
-            self.rank - 1,
-            out_shape_hint,
-        ))
+        let op = StdTensorOp::ExtractDiag { axis_a, axis_b };
+        let (out_rank, out_shape_hint) =
+            infer_traced_single_output_shape("TracedTensor::extract_diag", &op, &[self])?;
+        Ok(apply_unary(op, self, out_rank, out_shape_hint))
     }
 
     /// Embed a vector or lower-rank tensor along a diagonal.
@@ -2017,12 +2008,13 @@ impl TracedTensor {
                 message: format!("size must be a scalar tensor, got rank {}", size.rank),
             });
         }
-        Ok(apply_binary(
+        Ok(apply_binary_preserve_input_dtypes(
             StdTensorOp::DynamicTruncate { axis },
             self,
             size,
             self.rank,
             None,
+            self.dtype,
         ))
     }
 
@@ -2052,12 +2044,19 @@ impl TracedTensor {
     pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::pad_to_match")?;
         validate_traced_axis(reference, axis, "TracedTensor::pad_to_match")?;
-        Ok(apply_binary(
-            StdTensorOp::PadToMatch { axis },
+        let op = StdTensorOp::PadToMatch { axis };
+        let (out_rank, out_shape_hint) = infer_traced_single_output_shape(
+            "TracedTensor::pad_to_match",
+            &op,
+            &[self, reference],
+        )?;
+        Ok(apply_binary_preserve_input_dtypes(
+            op,
             self,
             reference,
-            self.rank,
-            reference.shape_hint.clone(),
+            out_rank,
+            out_shape_hint,
+            self.dtype,
         ))
     }
 }

@@ -457,6 +457,12 @@ fn validate_view_bounds<T>(
 }
 
 fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> Result<bool> {
+    if shape.contains(&0) {
+        // Empty logical views do not touch storage, so arbitrary strides are
+        // indistinguishable from compact strides for slice/reshape purposes.
+        return Ok(true);
+    }
+
     let mut expected = 1isize;
     for (&extent, &stride) in shape.iter().zip(strides) {
         if extent <= 1 {

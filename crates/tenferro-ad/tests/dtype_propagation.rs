@@ -114,3 +114,24 @@ fn test_indexing_dtype_inference_ignores_index_operands() {
         DType::F32
     );
 }
+
+#[test]
+fn test_dynamic_shape_ops_preserve_data_dtype() {
+    assert_eq!(
+        infer_output_dtype(
+            &StdTensorOp::DynamicTruncate { axis: 0 },
+            &[DType::F32, DType::F64],
+        )
+        .unwrap(),
+        DType::F32
+    );
+
+    assert_eq!(
+        infer_output_dtype(
+            &StdTensorOp::PadToMatch { axis: 0 },
+            &[DType::F32, DType::F64],
+        )
+        .unwrap(),
+        DType::F32
+    );
+}

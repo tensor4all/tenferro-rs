@@ -19,6 +19,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
+fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+}
+
 fn f64_scalar(value: f64) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
 }
@@ -48,6 +52,13 @@ fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
     match tensor {
         Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
         other => panic!("expected F64 tensor, got {:?}", other.dtype()),
+    }
+}
+
+fn get_f32_data(tensor: &Tensor) -> Vec<f32> {
+    match tensor {
+        Tensor::F32(inner) => inner.host_data().unwrap().to_vec(),
+        other => panic!("expected F32 tensor, got {:?}", other.dtype()),
     }
 }
 
@@ -108,6 +119,22 @@ fn dynamic_truncate_accepts_i64_size() {
 }
 
 #[test]
+fn dynamic_truncate_preserves_data_dtype_and_size_dtype() {
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let x = TracedTensor::from_tensor_concrete_shape(f32_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
+        .unwrap();
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+
+    let result = x.dynamic_truncate(&size, 0).unwrap();
+    assert_eq!(result.dtype, DType::F32);
+
+    let out = result.run_with(&mut engine).unwrap();
+    assert_eq!(out.dtype(), DType::F32);
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(get_f32_data(&out), vec![1.0, 2.0]);
+}
+
+#[test]
 fn dynamic_truncate_rejects_backend_size_binding_on_cpu() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
@@ -152,6 +179,30 @@ fn pad_to_match_no_op_when_same_size() {
     let result = x.pad_to_match(&reference, 0).unwrap();
     let data = get_f64_data(&result.run_with(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn pad_to_match_preserves_data_dtype_and_infers_output_shape() {
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let x = TracedTensor::from_tensor_concrete_shape(f32_tensor(
+        vec![3, 2],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ))
+    .unwrap();
+    let reference =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5, 7], vec![0.0; 35])).unwrap();
+
+    let result = x.pad_to_match(&reference, 0).unwrap();
+    assert_eq!(result.dtype, DType::F32);
+    assert_eq!(result.try_concrete_shape().unwrap(), vec![5, 2]);
+
+    let out = result.run_with(&mut engine).unwrap();
+    assert_eq!(out.dtype(), DType::F32);
+    assert_eq!(out.shape(), &[5, 2]);
+    assert_eq!(
+        get_f32_data(&out),
+        vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0, 5.0, 6.0, 0.0, 0.0]
+    );
 }
 
 #[test]

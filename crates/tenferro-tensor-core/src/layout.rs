@@ -104,6 +104,9 @@ fn normalize_slice(slice: SliceSpec, axis_len: usize) -> Result<(isize, usize)> 
     if slice.step == 0 {
         return Err(Error::InvalidSliceStep { step: slice.step });
     }
+    if axis_len == 0 {
+        return Ok((0, 0));
+    }
 
     let axis_len = isize::try_from(axis_len).map_err(|_| Error::IntegerOverflow)?;
     if slice.step > 0 {
@@ -287,6 +290,10 @@ impl<R: TensorRank> TensorLayout<R> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn is_compact_col_major(&self) -> Result<bool> {
+        if self.shape().contains(&0) {
+            return Ok(true);
+        }
+
         col_major_strides(self.shape()).map(|strides| strides.as_slice() == self.strides())
     }
 
