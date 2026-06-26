@@ -195,3 +195,12 @@ fn zero_retention_limit_drops_released_buffers() {
     assert!(pool.is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 0);
 }
+
+#[test]
+fn retention_limit_documents_zero_byte_eviction_progress() {
+    let source = include_str!("../buffer_pool.rs");
+    assert!(
+        source.contains("evicted_bytes == 0"),
+        "retention-limit eviction must explicitly handle zero-byte retained entries"
+    );
+}

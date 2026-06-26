@@ -158,6 +158,25 @@ fn cpu_context_faer_policy_is_seq_for_one_thread() {
     assert!(matches!(ctx.faer_par(), faer::Par::Seq));
 }
 
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn cpu_context_faer_policy_uses_current_context_pool_for_multithreaded_context() {
+    let ctx = CpuContext::with_threads(2).unwrap();
+    let par = ctx.install(|| ctx.faer_par());
+    assert_eq!(par.degree(), 2);
+}
+
+#[test]
+fn performance_notes_match_current_cpu_threading_contract() {
+    let notes = include_str!("../../../../../docs/performance/tt-inner-product-overhead.md");
+    assert!(
+        !notes.contains("The faer backend is therefore run without a tenferro-owned Rayon pool")
+            && !notes.contains("maps multi-threaded execution to `Par::rayon(n)`")
+            && !notes.contains("The global-Rayon columns became the production policy"),
+        "performance notes must describe CpuContext::install plus Par::rayon(0), not the stale global-Rayon policy"
+    );
+}
+
 #[test]
 fn cpu_context_with_threads_reports_requested_size() {
     let ctx = CpuContext::with_threads(2).unwrap();
