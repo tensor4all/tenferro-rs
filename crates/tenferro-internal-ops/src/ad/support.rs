@@ -175,6 +175,18 @@ pub(crate) fn is_differentiable_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
 }
 
+pub(crate) fn linear_transpose_input_active(mode: &OperationRole, input_index: usize) -> bool {
+    match mode {
+        // Direct transpose-rule tests use `Primary` for globally linear
+        // primitives. Only an explicit Linearized active mask suppresses an
+        // inactive cotangent path.
+        OperationRole::Primary => true,
+        OperationRole::Linearized { active_mask } => {
+            active_mask.get(input_index).copied().unwrap_or(false)
+        }
+    }
+}
+
 fn is_complex_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::C32 | DType::C64)
 }

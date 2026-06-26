@@ -1,5 +1,15 @@
 use super::*;
 
+fn assert_ordered_complex_error<T>(result: crate::Result<T>, op: &'static str) {
+    assert!(matches!(
+        result,
+        Err(crate::Error::InvalidConfig {
+            op: actual,
+            ref message,
+        }) if actual == op && message.contains("total order")
+    ));
+}
+
 #[test]
 fn elementwise_add_accepts_transposed_host_view_input() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
@@ -517,21 +527,15 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let sign_c32 = sign(&input_c32).unwrap();
     assert_eq!(get_c32(&sign_c32, &[1]), Complex32::new(0.0, 0.0));
 
-    let max_c32 = maximum(&lhs_c32, &rhs_c32).unwrap();
-    assert_eq!(get_c32(&max_c32, &[0]), Complex32::new(3.0, 4.0));
-
-    let min_c32 = minimum(&lhs_c32, &rhs_c32).unwrap();
-    assert_eq!(get_c32(&min_c32, &[1]), Complex32::new(1.0, 0.0));
-
-    let cmp_c32 = compare(&lhs_c32, &rhs_c32, &CompareDir::Eq).unwrap();
-    assert!(!get_bool(&cmp_c32, &[0]));
+    assert_ordered_complex_error(maximum(&lhs_c32, &rhs_c32), "maximum");
+    assert_ordered_complex_error(minimum(&lhs_c32, &rhs_c32), "minimum");
+    assert_ordered_complex_error(compare(&lhs_c32, &rhs_c32, &CompareDir::Eq), "compare");
 
     let select_c32 = select(&pred_bool, &lhs_c32, &rhs_c32).unwrap();
     assert_eq!(get_c32(&select_c32, &[0]), Complex32::new(1.0, 0.0));
     assert_eq!(get_c32(&select_c32, &[1]), Complex32::new(1.0, 0.0));
 
-    let clamp_c32 = clamp(&lhs_c32, &lower_c32, &upper_c32).unwrap();
-    assert_eq!(get_c32(&clamp_c32, &[0]), Complex32::new(4.0, 0.0));
+    assert_ordered_complex_error(clamp(&lhs_c32, &lower_c32, &upper_c32), "clamp");
 
     let scalar_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![], vec![2.0f32]).unwrap());
     let add_c32 = add(&scalar_f32, &rhs_c32).unwrap();
@@ -839,22 +843,16 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     let conj_c64 = conj(&lhs_c64).unwrap();
     assert_c64_close(get_c64(&conj_c64, &[0]), Complex64::new(3.0, -4.0));
 
-    let compare_lt = compare(&lhs_c64, &rhs_c64, &CompareDir::Lt).unwrap();
-    let compare_le = compare(&lhs_c64, &rhs_c64, &CompareDir::Le).unwrap();
-    let compare_gt = compare(&lhs_c64, &rhs_c64, &CompareDir::Gt).unwrap();
-    let compare_ge = compare(&lhs_c64, &rhs_c64, &CompareDir::Ge).unwrap();
-    assert!(!get_bool(&compare_lt, &[0]));
-    assert!(!get_bool(&compare_le, &[0]));
-    assert!(get_bool(&compare_gt, &[0]));
-    assert!(get_bool(&compare_ge, &[0]));
+    assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Lt), "compare");
+    assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Le), "compare");
+    assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Gt), "compare");
+    assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Ge), "compare");
 
     let select_c64 = select(&pred_bool, &lhs_c64, &rhs_c64).unwrap();
     assert_c64_close(get_c64(&select_c64, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&select_c64, &[1]), Complex64::new(1.0, 0.0));
 
-    let clamp_c64 = clamp(&lhs_c64, &lower_c64, &upper_c64).unwrap();
-    assert_c64_close(get_c64(&clamp_c64, &[0]), Complex64::new(4.0, 0.0));
-    assert_c64_close(get_c64(&clamp_c64, &[1]), Complex64::new(1.0, 0.0));
+    assert_ordered_complex_error(clamp(&lhs_c64, &lower_c64, &upper_c64), "clamp");
 
     let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap());
 

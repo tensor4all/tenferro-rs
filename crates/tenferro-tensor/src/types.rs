@@ -3088,6 +3088,10 @@ fn relaxed_col_major_contiguous(
     strides: &[isize],
     op: &'static str,
 ) -> crate::Result<bool> {
+    if shape.contains(&0) {
+        return Ok(true);
+    }
+
     let mut expected = 1isize;
     for (&extent, &stride) in shape.iter().zip(strides) {
         if extent <= 1 {

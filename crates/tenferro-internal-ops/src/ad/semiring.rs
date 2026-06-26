@@ -4,7 +4,8 @@ use tidu::ADRuleResult;
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_complex, convert_fixed_ref_to_dtype,
-    convert_linear_to_dtype, dtype_of_or_real, project_linear_to_dtype, promote_dtype,
+    convert_linear_to_dtype, dtype_of_or_real, linear_transpose_input_active,
+    project_linear_to_dtype, promote_dtype,
 };
 use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
@@ -144,6 +145,7 @@ pub fn transpose_add(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     match cotangent_out[0] {
@@ -151,20 +153,11 @@ pub fn transpose_add(
             let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
             let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
             let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
-            Ok(vec![
-                Some(project_linear_to_dtype(
-                    builder,
-                    ct,
-                    output_dtype,
-                    lhs_dtype,
-                )),
-                Some(project_linear_to_dtype(
-                    builder,
-                    ct,
-                    output_dtype,
-                    rhs_dtype,
-                )),
-            ])
+            let lhs = linear_transpose_input_active(mode, 0)
+                .then(|| project_linear_to_dtype(builder, ct, output_dtype, lhs_dtype));
+            let rhs = linear_transpose_input_active(mode, 1)
+                .then(|| project_linear_to_dtype(builder, ct, output_dtype, rhs_dtype));
+            Ok(vec![lhs, rhs])
         }
         None => Ok(vec![None, None]),
     }
@@ -234,7 +227,12 @@ pub fn transpose_mul(
 pub fn transpose_neg(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
+    mode: &OperationRole,
 ) -> Vec<Option<LocalValueId>> {
+    if !linear_transpose_input_active(mode, 0) {
+        return vec![None];
+    }
+
     match cotangent_out[0] {
         Some(ct) => {
             let out = builder.add_operation(
@@ -254,8 +252,13 @@ pub fn transpose_conj(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !linear_transpose_input_active(mode, 0) {
+        return Ok(vec![None]);
+    }
+
     match cotangent_out[0] {
         Some(ct) => {
             let dtype = ctx.dtype_of(&inputs[0])?;

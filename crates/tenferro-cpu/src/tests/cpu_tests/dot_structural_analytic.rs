@@ -786,11 +786,18 @@ fn test_tier2_elementwise_ops_complex() {
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 
-    let maximum = backend.maximum(&lhs, &rhs).unwrap();
-    assert_c64_close(get_c64(&maximum, &[0]), Complex64::new(3.0, 4.0));
-    assert_c64_close(get_c64(&maximum, &[1]), Complex64::new(0.0, 2.0));
-
-    let minimum = backend.minimum(&lhs, &rhs).unwrap();
-    assert_c64_close(get_c64(&minimum, &[0]), Complex64::new(1.0, 0.0));
-    assert_c64_close(get_c64(&minimum, &[1]), Complex64::new(1.0, 0.0));
+    assert!(matches!(
+        backend.maximum(&lhs, &rhs),
+        Err(crate::Error::InvalidConfig {
+            op: "maximum",
+            ref message,
+        }) if message.contains("total order")
+    ));
+    assert!(matches!(
+        backend.minimum(&lhs, &rhs),
+        Err(crate::Error::InvalidConfig {
+            op: "minimum",
+            ref message,
+        }) if message.contains("total order")
+    ));
 }

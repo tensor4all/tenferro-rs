@@ -25,8 +25,6 @@ macro_rules! dispatch_ternary_result_with_pool {
         match ($a, $b, $c) {
             (Tensor::F32($x), Tensor::F32($y), Tensor::F32($z)) => Ok(Tensor::F32($body?)),
             (Tensor::F64($x), Tensor::F64($y), Tensor::F64($z)) => Ok(Tensor::F64($body?)),
-            (Tensor::C32($x), Tensor::C32($y), Tensor::C32($z)) => Ok(Tensor::C32($body?)),
-            (Tensor::C64($x), Tensor::C64($y), Tensor::C64($z)) => Ok(Tensor::C64($body?)),
             _ => Err(crate::Error::backend_failure($op, "dtype mismatch")),
         }
     };
@@ -48,9 +46,32 @@ fn read_pair_error(op: &'static str, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -
     dtype_pair_error(op, lhs.dtype(), rhs.dtype())
 }
 
+fn is_complex_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::C32 | DType::C64)
+}
+
+fn ordered_complex_error(op: &'static str) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op,
+        message: "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations".into(),
+    }
+}
+
+fn reject_complex_ordered_dtypes(op: &'static str, dtypes: &[DType]) -> crate::Result<()> {
+    if dtypes.iter().copied().any(is_complex_dtype) {
+        return Err(ordered_complex_error(op));
+    }
+    Ok(())
+}
+
 pub(crate) trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
     fn abs_elem(self) -> Self;
     fn sign_elem(self) -> Self;
+}
+
+// Keep ordering separate from abs/sign so complex tensors cannot silently pick
+// a magnitude ordering. Callers should compute abs/norm explicitly first.
+pub(crate) trait OrderedElem: Copy + Clone + Send + Sync {
     fn max_elem(self, other: Self) -> Self;
     fn min_elem(self, other: Self) -> Self;
 }
@@ -73,7 +94,9 @@ macro_rules! impl_tier2_elem_real {
                     self.signum()
                 }
             }
+        }
 
+        impl OrderedElem for $ty {
             fn max_elem(self, other: Self) -> Self {
                 if self.is_nan() || other.is_nan() {
                     <$ty>::NAN
@@ -121,42 +144,6 @@ macro_rules! impl_tier2_elem_complex {
                     Self::zero()
                 } else {
                     self / self.abs_elem()
-                }
-            }
-
-            fn max_elem(self, other: Self) -> Self {
-                let lhs_norm = self.norm_sqr();
-                let rhs_norm = other.norm_sqr();
-                if lhs_norm.is_nan() || rhs_norm.is_nan() {
-                    Self::new(<$real>::NAN, <$real>::NAN)
-                } else if lhs_norm >= rhs_norm {
-                    self
-                } else {
-                    other
-                }
-            }
-
-            fn min_elem(self, other: Self) -> Self {
-                let lhs_norm = self.norm_sqr();
-                let rhs_norm = other.norm_sqr();
-                if lhs_norm.is_nan() || rhs_norm.is_nan() {
-                    Self::new(<$real>::NAN, <$real>::NAN)
-                } else if lhs_norm <= rhs_norm {
-                    self
-                } else {
-                    other
-                }
-            }
-        }
-
-        impl CompareElem for Complex<$real> {
-            fn compare_elem(self, other: Self, dir: &CompareDir) -> bool {
-                match dir {
-                    CompareDir::Eq => self == other,
-                    CompareDir::Lt => self.norm_sqr() < other.norm_sqr(),
-                    CompareDir::Le => self.norm_sqr() <= other.norm_sqr(),
-                    CompareDir::Gt => self.norm_sqr() > other.norm_sqr(),
-                    CompareDir::Ge => self.norm_sqr() >= other.norm_sqr(),
                 }
             }
         }
@@ -747,7 +734,7 @@ fn typed_clamp_view_with_pool<T, I, L, U>(
     upper: &TypedTensorView<'_, T, U>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar + 'static,
+    T: OrderedElem + PoolScalar + 'static,
     I: TensorRank,
     L: TensorRank,
     U: TensorRank,
@@ -773,7 +760,7 @@ where
         &typed_view_from_view("clamp", input)?,
         &typed_view_from_view("clamp", lower)?,
         &typed_view_from_view("clamp", upper)?,
-        |x, lo, hi| lo.max_elem(hi.min_elem(x)),
+        |x, lo, hi| hi.min_elem(lo.max_elem(x)),
     )
     .map_err(|err| crate::Error::backend_failure("clamp", err))?;
     Ok(tensor_from_array(out))
@@ -1919,18 +1906,14 @@ pub(crate) fn maximum_with_pool(
     lhs: &Tensor,
     rhs: &Tensor,
 ) -> crate::Result<Tensor> {
+    reject_complex_ordered_dtypes("maximum", &[lhs.dtype(), rhs.dtype()])?;
+
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => {
             Ok(Tensor::F32(typed_maximum_with_pool(buffers, a, b)?))
         }
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_maximum_with_pool(buffers, a, b)?))
-        }
-        (Tensor::C32(a), Tensor::C32(b)) => {
-            Ok(Tensor::C32(typed_maximum_with_pool(buffers, a, b)?))
-        }
-        (Tensor::C64(a), Tensor::C64(b)) => {
-            Ok(Tensor::C64(typed_maximum_with_pool(buffers, a, b)?))
         }
         _ => Err(tensor_pair_error("maximum", lhs, rhs)),
     }
@@ -1943,6 +1926,8 @@ pub(crate) fn maximum_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
+    reject_complex_ordered_dtypes("maximum", &[lhs_dtype, rhs_dtype])?;
+
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
             typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
@@ -1950,16 +1935,6 @@ pub(crate) fn maximum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
-        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(
-            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
-                x.max_elem(y)
-            })?,
-        )),
-        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(
             typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
                 x.max_elem(y)
             })?,
@@ -1991,18 +1966,14 @@ pub(crate) fn minimum_with_pool(
     lhs: &Tensor,
     rhs: &Tensor,
 ) -> crate::Result<Tensor> {
+    reject_complex_ordered_dtypes("minimum", &[lhs.dtype(), rhs.dtype()])?;
+
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => {
             Ok(Tensor::F32(typed_minimum_with_pool(buffers, a, b)?))
         }
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_minimum_with_pool(buffers, a, b)?))
-        }
-        (Tensor::C32(a), Tensor::C32(b)) => {
-            Ok(Tensor::C32(typed_minimum_with_pool(buffers, a, b)?))
-        }
-        (Tensor::C64(a), Tensor::C64(b)) => {
-            Ok(Tensor::C64(typed_minimum_with_pool(buffers, a, b)?))
         }
         _ => Err(tensor_pair_error("minimum", lhs, rhs)),
     }
@@ -2015,6 +1986,8 @@ pub(crate) fn minimum_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
+    reject_complex_ordered_dtypes("minimum", &[lhs_dtype, rhs_dtype])?;
+
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(
             typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
@@ -2022,16 +1995,6 @@ pub(crate) fn minimum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
-        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(
-            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
-                x.min_elem(y)
-            })?,
-        )),
-        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::C64(
             typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
                 x.min_elem(y)
             })?,
@@ -2064,6 +2027,8 @@ pub(crate) fn compare_with_pool(
     rhs: &Tensor,
     dir: &CompareDir,
 ) -> crate::Result<Tensor> {
+    reject_complex_ordered_dtypes("compare", &[lhs.dtype(), rhs.dtype()])?;
+
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => {
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
@@ -2078,12 +2043,6 @@ pub(crate) fn compare_with_pool(
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         (Tensor::Bool(a), Tensor::Bool(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::C32(a), Tensor::C32(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::C64(a), Tensor::C64(b)) => {
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -2102,6 +2061,8 @@ pub(crate) fn compare_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
+    reject_complex_ordered_dtypes("compare", &[lhs_dtype, rhs_dtype])?;
+
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::Bool(
             typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
@@ -2124,16 +2085,6 @@ pub(crate) fn compare_read_with_pool(
             })?,
         )),
         (CpuReadView::Bool(a), CpuReadView::Bool(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
-        )),
-        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
-        )),
-        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::Bool(
             typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
                 x.compare_elem(y, dir)
             })?,
@@ -2279,6 +2230,8 @@ pub(crate) fn clamp_with_pool(
     lower: &Tensor,
     upper: &Tensor,
 ) -> crate::Result<Tensor> {
+    reject_complex_ordered_dtypes("clamp", &[input.dtype(), lower.dtype(), upper.dtype()])?;
+
     dispatch_ternary_result_with_pool!("clamp", input, lower, upper, |x, lo, hi| {
         typed_clamp_with_pool(buffers, x, lo, hi)
     })
@@ -2292,6 +2245,9 @@ pub(crate) fn clamp_read_with_pool(
 ) -> crate::Result<Tensor> {
     let input_dtype = input.dtype();
     let lower_dtype = lower.dtype();
+    let upper_dtype = upper.dtype();
+    reject_complex_ordered_dtypes("clamp", &[input_dtype, lower_dtype, upper_dtype])?;
+
     match (
         read_as_cpu_view(input),
         read_as_cpu_view(lower),
@@ -2302,12 +2258,6 @@ pub(crate) fn clamp_read_with_pool(
         ),
         (CpuReadView::F64(input), CpuReadView::F64(lower), CpuReadView::F64(upper)) => Ok(
             Tensor::F64(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
-        ),
-        (CpuReadView::C32(input), CpuReadView::C32(lower), CpuReadView::C32(upper)) => Ok(
-            Tensor::C32(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
-        ),
-        (CpuReadView::C64(input), CpuReadView::C64(lower), CpuReadView::C64(upper)) => Ok(
-            Tensor::C64(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
         ),
         _ => Err(crate::Error::DTypeMismatch {
             op: "clamp",
@@ -2660,7 +2610,7 @@ pub(crate) fn typed_maximum_with_pool<T>(
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: OrderedElem + PoolScalar,
 {
     if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
@@ -2687,7 +2637,7 @@ pub(crate) fn typed_minimum_with_pool<T>(
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: OrderedElem + PoolScalar,
 {
     if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
@@ -2779,7 +2729,7 @@ pub(crate) fn typed_clamp_with_pool<T>(
     upper: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: OrderedElem + PoolScalar,
 {
     if input.shape() != lower.shape() {
         return Err(crate::Error::ShapeMismatch {
@@ -2802,7 +2752,7 @@ where
         &typed_view("clamp", input)?,
         &typed_view("clamp", lower)?,
         &typed_view("clamp", upper)?,
-        |x, lo, hi| lo.max_elem(hi.min_elem(x)),
+        |x, lo, hi| hi.min_elem(lo.max_elem(x)),
     )
     .map_err(|err| crate::Error::backend_failure("clamp", err))?;
     Ok(tensor_from_array(out))

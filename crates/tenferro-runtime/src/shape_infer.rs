@@ -59,12 +59,44 @@ pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
     promote_dtype(lhs, rhs)
 }
 
+fn is_complex_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::C32 | DType::C64)
+}
+
+fn ordered_dtype_op_name(op: &StdTensorOp) -> Option<&'static str> {
+    // Complex values have no total order; keep magnitude ordering explicit by
+    // rejecting ordered primitives before dtype promotion.
+    match op {
+        StdTensorOp::Compare(_) => Some("Compare"),
+        StdTensorOp::Maximum => Some("Maximum"),
+        StdTensorOp::Minimum => Some("Minimum"),
+        StdTensorOp::Clamp => Some("Clamp"),
+        StdTensorOp::ReduceMax { axes } if !axes.is_empty() => Some("ReduceMax"),
+        StdTensorOp::ReduceMin { axes } if !axes.is_empty() => Some("ReduceMin"),
+        _ => None,
+    }
+}
+
+fn reject_complex_ordered_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<()> {
+    let Some(op_name) = ordered_dtype_op_name(op) else {
+        return Ok(());
+    };
+    if input_dtypes.iter().copied().any(is_complex_dtype) {
+        return Err(shape_infer_error(format!(
+            "{op_name} does not support complex dtypes because complex numbers have no total order"
+        )));
+    }
+    Ok(())
+}
+
 /// Infer output dtype for a single instruction given its op and input dtypes.
 ///
 /// For `StdTensorOp::Extension`, prefer the combined
 /// `infer_extension_output_meta` helper when shape metadata is also needed.
 /// This function returns only the first output's dtype.
 pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DType> {
+    reject_complex_ordered_dtypes(op, input_dtypes)?;
+
     let dtype = match op {
         StdTensorOp::Constant { dtype, .. } => *dtype,
         StdTensorOp::Convert { to, .. } => *to,
@@ -84,9 +116,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
         | StdTensorOp::DotGeneral { .. }
-        | StdTensorOp::Concatenate { .. }
-        | StdTensorOp::PadToMatch { .. }
-        | StdTensorOp::DynamicTruncate { .. } => promote_dtype(
+        | StdTensorOp::Concatenate { .. } => promote_dtype(
             dtype_input(op, input_dtypes, 0)?,
             dtype_input(op, input_dtypes, 1)?,
         ),
@@ -129,6 +159,8 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         | StdTensorOp::Gather(_)
         | StdTensorOp::GatherDynamicSliceSizes { .. }
         | StdTensorOp::DynamicSlice { .. }
+        | StdTensorOp::DynamicTruncate { .. }
+        | StdTensorOp::PadToMatch { .. }
         | StdTensorOp::Slice(_)
         | StdTensorOp::Pad(_)
         | StdTensorOp::Reverse { .. } => dtype_input(op, input_dtypes, 0)?,

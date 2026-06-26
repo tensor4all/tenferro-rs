@@ -16,6 +16,8 @@ mod tests;
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
+pub(crate) const DEFAULT_DECOMPOSITION_AD_EPS: f64 = 1e-12;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[doc(hidden)]
 pub(crate) enum LinalgOp {

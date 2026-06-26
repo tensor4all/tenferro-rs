@@ -4,7 +4,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
-use crate::extension::{LinalgExtensionOp, LinalgOp};
+use crate::extension::{LinalgExtensionOp, LinalgOp, DEFAULT_DECOMPOSITION_AD_EPS};
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
@@ -157,7 +157,7 @@ impl TracedTensorLinalgExt for TracedTensor {
 /// assert_eq!(vt.rank, 2);
 /// ```
 pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-    svd_with_eps(a, 1e-12)
+    svd_with_eps(a, DEFAULT_DECOMPOSITION_AD_EPS)
 }
 
 /// Build a traced singular value decomposition op with an explicit epsilon.
@@ -219,7 +219,7 @@ pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// assert_eq!(vectors.rank, 2);
 /// ```
 pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
-    eigh_with_eps(a, 1e-12)
+    eigh_with_eps(a, DEFAULT_DECOMPOSITION_AD_EPS)
 }
 
 /// Build a traced Hermitian eigenvalue decomposition op with an explicit epsilon.
@@ -911,7 +911,9 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
 fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals { eps: 1e-12 })),
+            Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            })),
             &[a],
         )?,
         "svd_values",
@@ -921,7 +923,9 @@ fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
 fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals { eps: 1e-12 })),
+            Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            })),
             &[a],
         )?,
         "eigh_values",

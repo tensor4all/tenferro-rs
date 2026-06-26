@@ -1469,6 +1469,18 @@ fn strided_tensor_view_validation_covers_error_edges() {
             .unwrap(),
         &[] as &[i32]
     );
+    assert_eq!(empty.try_reshape(&[0]).unwrap().shape(), &[0]);
+    let reversed_empty = empty
+        .try_slice_axis(0, StridedSliceSpec::reverse())
+        .unwrap();
+    assert_eq!(reversed_empty.shape(), &[0, 3]);
+    assert_eq!(
+        materialize_typed_view_col_major(&reversed_empty, "test")
+            .unwrap()
+            .as_slice()
+            .unwrap(),
+        &[] as &[i32]
+    );
     assert_eq!(empty.get(&[0, 0]), None);
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([0], [1], 4, &data),

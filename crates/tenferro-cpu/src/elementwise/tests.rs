@@ -362,6 +362,32 @@ fn assert_backend_failure<T>(result: crate::Result<T>, op: &'static str) {
     ));
 }
 
+fn assert_invalid_config_contains<T>(result: crate::Result<T>, op: &'static str, expected: &str) {
+    assert!(matches!(
+        result,
+        Err(crate::Error::InvalidConfig {
+            op: actual,
+            ref message,
+        }) if actual == op && message.contains(expected)
+    ));
+}
+
+#[test]
+fn complex_ordered_ops_are_explicitly_rejected() {
+    let lhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![1], vec![c64(1.0, 0.0)]).unwrap());
+    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![1], vec![c64(0.0, 1.0)]).unwrap());
+
+    for (op, result) in [
+        ("maximum", maximum(&lhs, &rhs)),
+        ("minimum", minimum(&lhs, &rhs)),
+        ("compare", compare(&lhs, &rhs, &CompareDir::Le)),
+    ] {
+        assert_invalid_config_contains(result, op, "total order");
+    }
+
+    assert_invalid_config_contains(clamp(&lhs, &rhs, &lhs), "clamp", "total order");
+}
+
 #[test]
 fn typed_view_helpers_cover_scalar_and_validation_paths() {
     let mut buffers = BufferPool::default();
@@ -458,6 +484,20 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
     let clamped =
         typed_clamp_view_with_pool(&mut buffers, &lhs_view, &lower_view, &upper_view).unwrap();
     assert_eq!(clamped.as_slice().unwrap(), &[1.0, 4.0]);
+
+    let degenerate_lower: TypedTensor<f64> =
+        TypedTensor::from_vec_col_major(vec![2], vec![5.0_f64, 5.0]).unwrap();
+    let degenerate_upper: TypedTensor<f64> =
+        TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 3.0]).unwrap();
+    let degenerate = typed_clamp_view_with_pool(
+        &mut buffers,
+        &lhs_view,
+        &degenerate_lower.as_view(),
+        &degenerate_upper.as_view(),
+    )
+    .unwrap();
+    assert_eq!(degenerate.as_slice().unwrap(), &[3.0, 3.0]);
+
     assert_shape_mismatch(
         typed_clamp_view_with_pool(&mut buffers, &lhs_view, &short_view, &upper_view),
         "clamp",
@@ -761,26 +801,23 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         c32(0.6, 0.8),
     );
 
-    let max_c32 = maximum_read_with_pool(
-        &mut buffers,
-        TensorRead::from_view(TensorView::C32(c32_a.as_view())),
-        TensorRead::from_tensor(&c32_b_tensor),
-    )
-    .unwrap();
-    assert_c32_close(
-        max_c32.as_slice::<Complex<f32>>().unwrap()[0],
-        c32(3.0, 4.0),
+    assert_invalid_config_contains(
+        maximum_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+            TensorRead::from_tensor(&c32_b_tensor),
+        ),
+        "maximum",
+        "total order",
     );
-
-    let min_c64 = minimum_read_with_pool(
-        &mut buffers,
-        TensorRead::from_view(TensorView::C64(c64_a.as_view())),
-        TensorRead::from_tensor(&c64_b_tensor),
-    )
-    .unwrap();
-    assert_c64_close(
-        min_c64.as_slice::<Complex<f64>>().unwrap()[0],
-        c64(1.0, 0.0),
+    assert_invalid_config_contains(
+        minimum_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+            TensorRead::from_tensor(&c64_b_tensor),
+        ),
+        "minimum",
+        "total order",
     );
 
     let cmp_i32 = compare_read_with_pool(
@@ -810,14 +847,16 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     .unwrap();
     assert_eq!(cmp_bool.as_slice::<bool>().unwrap(), &[false, true]);
 
-    let cmp_c32 = compare_read_with_pool(
-        &mut buffers,
-        TensorRead::from_view(TensorView::C32(c32_a.as_view())),
-        TensorRead::from_view(TensorView::C32(c32_b.as_view())),
-        &CompareDir::Gt,
-    )
-    .unwrap();
-    assert_eq!(cmp_c32.as_slice::<bool>().unwrap(), &[true, false]);
+    assert_invalid_config_contains(
+        compare_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+            TensorRead::from_view(TensorView::C32(c32_b.as_view())),
+            &CompareDir::Gt,
+        ),
+        "compare",
+        "total order",
+    );
 
     let select_i64 = select_read_with_pool(
         &mut buffers,
@@ -868,28 +907,25 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         "select",
     );
 
-    let clamp_c32 = clamp_read_with_pool(
-        &mut buffers,
-        TensorRead::from_view(TensorView::C32(c32_a.as_view())),
-        TensorRead::from_view(TensorView::C32(c32_b.as_view())),
-        TensorRead::from_view(TensorView::C32(c32_a.as_view())),
-    )
-    .unwrap();
-    assert_c32_close(
-        clamp_c32.as_slice::<Complex<f32>>().unwrap()[0],
-        c32(3.0, 4.0),
+    assert_invalid_config_contains(
+        clamp_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+            TensorRead::from_view(TensorView::C32(c32_b.as_view())),
+            TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+        ),
+        "clamp",
+        "total order",
     );
-
-    let clamp_c64 = clamp_read_with_pool(
-        &mut buffers,
-        TensorRead::from_view(TensorView::C64(c64_a.as_view())),
-        TensorRead::from_view(TensorView::C64(c64_b.as_view())),
-        TensorRead::from_view(TensorView::C64(c64_a.as_view())),
-    )
-    .unwrap();
-    assert_c64_close(
-        clamp_c64.as_slice::<Complex<f64>>().unwrap()[1],
-        c64(0.0, 2.0),
+    assert_invalid_config_contains(
+        clamp_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+            TensorRead::from_view(TensorView::C64(c64_b.as_view())),
+            TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+        ),
+        "clamp",
+        "total order",
     );
 
     assert_dtype_mismatch(

@@ -3,6 +3,7 @@ use tenferro_tensor::SliceConfig;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::linear_transpose_input_active;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -56,8 +57,13 @@ pub fn transpose_dynamic_truncate(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     axis: usize,
 ) -> Vec<Option<LocalValueId>> {
+    if !linear_transpose_input_active(mode, 0) {
+        return vec![None, None];
+    }
+
     match cotangent_out[0] {
         Some(ct) => {
             let out = builder.add_operation(
@@ -165,10 +171,7 @@ pub fn transpose_pad_to_match(
 }
 
 fn first_input_active(mode: &OperationRole) -> bool {
-    matches!(
-        mode,
-        OperationRole::Linearized { active_mask } if active_mask.first().copied().unwrap_or(false)
-    )
+    linear_transpose_input_active(mode, 0)
 }
 
 fn static_truncated_shape(

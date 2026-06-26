@@ -436,9 +436,9 @@ impl ExtensionAdRule for FftAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
-        _ctx: &mut ShapeGuardContext,
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
+        ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
@@ -446,6 +446,9 @@ impl ExtensionAdRule for FftAdRule {
                 fft_ad_family_id(fft_op.kind),
                 ADRuleKind::Transpose,
             ));
+        }
+        if !linear_transpose_input_active(mode, 0) {
+            return Ok(vec![None]);
         }
 
         match cotangent_out[0] {
@@ -460,11 +463,77 @@ impl ExtensionAdRule for FftAdRule {
                         active_mask: vec![true],
                     },
                 );
-                Ok(vec![Some(outputs[0])])
+                let restored =
+                    restore_c2c_adjoint_input_length(builder, outputs[0], inputs, fft_op, ctx)?;
+                Ok(vec![Some(restored)])
             }
             None => Ok(vec![None]),
         }
     }
+}
+
+#[cfg(feature = "autodiff")]
+fn linear_transpose_input_active(mode: &OperationRole, input_index: usize) -> bool {
+    match mode {
+        // Direct transpose-rule tests use `Primary` for globally linear
+        // extension ops. Only an explicit Linearized active mask suppresses an
+        // inactive cotangent path.
+        OperationRole::Primary => true,
+        OperationRole::Linearized { active_mask } => {
+            active_mask.get(input_index).copied().unwrap_or(false)
+        }
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn restore_c2c_adjoint_input_length(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    adjoint: LocalValueId,
+    inputs: &[ValueRef<StdTensorOp>],
+    fft_op: &FftOp,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<LocalValueId> {
+    let Some(transform_len) = fft_op.n else {
+        return Ok(adjoint);
+    };
+    let Some(input) = inputs.first() else {
+        return Err(ADRuleError::invalid_input(
+            FFT_EXTENSION_FAMILY_ID,
+            ADRuleKind::Transpose,
+            "FFT transpose rule expected one primal input",
+        ));
+    };
+    if ctx
+        .shape_of(input)
+        .ok()
+        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
+        == Some(transform_len)
+    {
+        return Ok(adjoint);
+    }
+
+    let size = builder.add_operation(
+        StdTensorOp::ShapeOf { axis: fft_op.axis },
+        vec![input.clone()],
+        OperationRole::Linearized {
+            active_mask: vec![false],
+        },
+    )[0];
+    let truncated = builder.add_operation(
+        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
+        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        },
+    )[0];
+    let padded = builder.add_operation(
+        StdTensorOp::PadToMatch { axis: fft_op.axis },
+        vec![ValueRef::Local(truncated), input.clone()],
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        },
+    )[0];
+    Ok(padded)
 }
 
 /// Return the explicit FFT extension AD rule set.
@@ -1242,5 +1311,29 @@ mod tests {
             .expect_err("lane layout should reject stride overflow");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");
+    }
+
+    #[cfg(feature = "autodiff")]
+    #[test]
+    fn fft_transpose_rule_respects_inactive_linearized_input() {
+        let rule = FftAdRule;
+        let op = FftOp::new(FftKind::C2C { forward: true }, 0, None, FftNorm::Backward);
+        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
+        let result = rule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent)],
+                &[],
+                &OperationRole::Linearized {
+                    active_mask: vec![false],
+                },
+                &mut ShapeGuardContext::default(),
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![None]);
+        assert!(builder.build().operations().is_empty());
     }
 }

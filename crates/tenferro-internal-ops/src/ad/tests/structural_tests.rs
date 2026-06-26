@@ -487,6 +487,53 @@ fn transpose_embed_diag_accepts_upper_bound_input_metadata_for_rank_only_perm() 
 }
 
 #[test]
+fn transpose_diagonal_rules_respect_inactive_data_input() {
+    let mut extract_builder = GraphBuilder::<StdTensorOp>::new();
+    let mut extract_ctx = ShapeGuardContext::default();
+    let extract_ct = extract_builder.add_input(tensor_input(57));
+    let extract_input = input_key(58);
+    extract_ctx.insert_metadata(extract_input.clone(), meta(&[2, 2]));
+
+    let extract_result = StdTensorOp::ExtractDiag {
+        axis_a: 0,
+        axis_b: 1,
+    }
+    .transpose_rule(
+        &mut extract_builder,
+        &[Some(extract_ct)],
+        &[ValueRef::External(extract_input)],
+        &linear_mode(&[false]),
+        &mut extract_ctx,
+    )
+    .unwrap();
+
+    assert_eq!(extract_result, vec![None]);
+    assert!(extract_builder.build().operations().is_empty());
+
+    let mut embed_builder = GraphBuilder::<StdTensorOp>::new();
+    let mut embed_ctx = ShapeGuardContext::default();
+    let embed_ct = embed_builder.add_input(tensor_input(59));
+    let embed_input = input_key(60);
+    embed_ctx.insert_metadata(embed_input.clone(), meta(&[2]));
+
+    let embed_result = StdTensorOp::EmbedDiag {
+        axis_a: 0,
+        axis_b: 1,
+    }
+    .transpose_rule(
+        &mut embed_builder,
+        &[Some(embed_ct)],
+        &[ValueRef::External(embed_input)],
+        &linear_mode(&[false]),
+        &mut embed_ctx,
+    )
+    .unwrap();
+
+    assert_eq!(embed_result, vec![None]);
+    assert!(embed_builder.build().operations().is_empty());
+}
+
+#[test]
 fn transpose_concatenate_returns_none_for_symbolic_concat_axis() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();

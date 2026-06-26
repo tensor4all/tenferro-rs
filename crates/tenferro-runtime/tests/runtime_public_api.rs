@@ -168,6 +168,12 @@ fn traced_tensor_methods_cover_structural_surface() {
         run(&matrix.triu(0)).as_slice::<f64>().unwrap(),
         &[1.0, 0.0, 3.0, 4.0]
     );
+    let rectangular =
+        TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let diag = rectangular.extract_diag(1, 0).unwrap();
+    assert_eq!(diag.try_concrete_shape(), Some(vec![2]));
+    assert_eq!(run(&diag).shape(), &[2]);
 
     let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();

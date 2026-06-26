@@ -44,6 +44,40 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
 }
 
 #[test]
+fn eager_tensor_einsum_repeated_output_occurrences_keep_axis_order() {
+    let ctx = test_ctx();
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], (1..=6).map(f64::from).collect()).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+
+    let out = [&a].einsum("ij->iji").unwrap();
+    let materialized = out.materialized().unwrap();
+
+    assert_eq!(materialized.shape(), &[2, 3, 2]);
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let expected = if i == k {
+                    *a.materialized()
+                        .unwrap()
+                        .as_ref()
+                        .get::<f64>(&[i, j])
+                        .unwrap()
+                } else {
+                    0.0
+                };
+                assert_eq!(
+                    *materialized.as_ref().get::<f64>(&[i, j, k]).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(

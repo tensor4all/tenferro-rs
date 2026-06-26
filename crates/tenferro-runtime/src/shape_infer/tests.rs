@@ -61,6 +61,32 @@ fn promote_dtypes_fold() {
 }
 
 #[test]
+fn ordered_ops_reject_complex_dtypes() {
+    let cases = [
+        (
+            StdTensorOp::Compare(tenferro_tensor::CompareDir::Eq),
+            vec![DType::C64, DType::C64],
+        ),
+        (
+            StdTensorOp::Compare(tenferro_tensor::CompareDir::Lt),
+            vec![DType::C64, DType::C64],
+        ),
+        (StdTensorOp::Maximum, vec![DType::C32, DType::C32]),
+        (StdTensorOp::Minimum, vec![DType::C64, DType::C64]),
+        (StdTensorOp::Clamp, vec![DType::C64, DType::C64, DType::C64]),
+        (StdTensorOp::ReduceMax { axes: vec![0] }, vec![DType::C64]),
+        (StdTensorOp::ReduceMin { axes: vec![0] }, vec![DType::C32]),
+    ];
+
+    for (op, dtypes) in cases {
+        let err = infer_output_dtype(&op, &dtypes).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("complex"), "{op:?}: {message}");
+        assert!(message.contains("total order"), "{op:?}: {message}");
+    }
+}
+
+#[test]
 fn invalid_shape_configs_return_errors_instead_of_panicking() {
     let shape = DimExpr::from_concrete(&[2, 3]);
 

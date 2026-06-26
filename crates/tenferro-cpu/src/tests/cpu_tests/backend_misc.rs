@@ -897,24 +897,39 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         )
         .unwrap(),
     );
-    assert_c64_close(
-        get_c64(&maximum(&a, &b).unwrap(), &[0]),
-        Complex64::new(3.0, 4.0),
-    );
-    assert_c64_close(
-        get_c64(&minimum(&a, &b).unwrap(), &[0]),
-        Complex64::new(0.0, 2.0),
-    );
-    assert!(get_bool(&compare(&a, &b, &CompareDir::Ge).unwrap(), &[0]));
+    assert!(matches!(
+        maximum(&a, &b),
+        Err(crate::Error::InvalidConfig {
+            op: "maximum",
+            ref message,
+        }) if message.contains("total order")
+    ));
+    assert!(matches!(
+        minimum(&a, &b),
+        Err(crate::Error::InvalidConfig {
+            op: "minimum",
+            ref message,
+        }) if message.contains("total order")
+    ));
+    assert!(matches!(
+        compare(&a, &b, &CompareDir::Ge),
+        Err(crate::Error::InvalidConfig {
+            op: "compare",
+            ref message,
+        }) if message.contains("total order")
+    ));
     let pred = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap());
     assert_c64_close(
         get_c64(&select(&pred, &a, &b).unwrap(), &[1]),
         Complex64::new(1.0, 0.0),
     );
-    assert_c64_close(
-        get_c64(&clamp(&a, &b, &a).unwrap(), &[1]),
-        Complex64::new(5.0, 0.0),
-    );
+    assert!(matches!(
+        clamp(&a, &b, &a),
+        Err(crate::Error::InvalidConfig {
+            op: "clamp",
+            ref message,
+        }) if message.contains("total order")
+    ));
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::linear_transpose_input_active;
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tidu::ADRuleResult;
@@ -53,15 +54,24 @@ pub fn transpose_extract_diag(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     axis_a: usize,
     axis_b: usize,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !linear_transpose_input_active(mode, 0) {
+        return Ok(vec![None]);
+    }
+
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
+            let source_axis = if axis_a < axis_b { axis_a } else { axis_a - 1 };
             let out = builder.add_operation(
-                StdTensorOp::EmbedDiag { axis_a, axis_b },
+                StdTensorOp::EmbedDiag {
+                    axis_a: source_axis,
+                    axis_b,
+                },
                 vec![ValueRef::Local(ct)],
                 OperationRole::Linearized {
                     active_mask: vec![true],
@@ -91,10 +101,15 @@ pub fn transpose_embed_diag(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
     axis_a: usize,
     axis_b: usize,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !linear_transpose_input_active(mode, 0) {
+        return Ok(vec![None]);
+    }
+
     // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {

@@ -506,6 +506,45 @@ fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
 }
 
 #[test]
+fn empty_views_are_contiguous_even_with_degenerate_strides() {
+    let data = [1_i32, 2, 3];
+    let empty = HostTensorView::from_slice(vec![0, 3], vec![1, 0], 3, &data).unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert_eq!(empty.reshape_view(vec![0]).unwrap().shape(), &[0]);
+
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![0, 3].into(), vec![99, -7].into(), 3, data.len())
+            .unwrap();
+    assert!(layout.is_compact_col_major().unwrap());
+    assert_eq!(
+        layout
+            .reshape_view_as::<DynRank>(vec![0].into(), data.len())
+            .unwrap()
+            .shape(),
+        &[0]
+    );
+}
+
+#[test]
+fn empty_axis_allows_negative_step_slices() {
+    let layout = TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 0, 0).unwrap();
+    let reversed = layout
+        .slice_view(
+            [SliceSpec {
+                start: 0,
+                end: 0,
+                step: -1,
+            }],
+            0,
+        )
+        .unwrap();
+
+    assert_eq!(reversed.shape(), &[0]);
+    assert_eq!(reversed.offset(), 0);
+}
+
+#[test]
 fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
     let data = [1_i32, 2, 3, 4, 5];
     let contiguous = HostTensorView::from_slice(vec![3], vec![1], 1, &data).unwrap();
