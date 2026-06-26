@@ -21,7 +21,7 @@ fn einsum_vjp_broadcast_active_mask_matches_dynamic_inputs() {
     let section = source
         .split_once("fn broadcast_einsum_vjp_to_input_shape")
         .and_then(|(_, rest)| {
-            rest.split_once("fn map_label_occurrences")
+            rest.split_once("fn project_repeated_labels_to_diagonal")
                 .map(|(body, _)| body)
         })
         .expect("broadcast_einsum_vjp_to_input_shape source section should exist");

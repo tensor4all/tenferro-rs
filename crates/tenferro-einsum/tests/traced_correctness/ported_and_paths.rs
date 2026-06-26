@@ -811,6 +811,33 @@ fn einsum_input_output_repeated_ii_to_ii() {
 }
 
 #[test]
+fn einsum_input_output_repeated_ij_to_iji_preserves_occurrences() {
+    // "ij->iji" — the second `i` occurrence must map to the newly embedded
+    // diagonal axis, not back to the first `i` axis.
+    let data: Vec<f64> = (1..=6).map(f64::from).collect();
+    let a = f64_tensor(vec![2, 3], data);
+
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let ty = einsum(&mut engine, &[&ta], "ij->iji").unwrap();
+    let result = ty.run_with(&mut engine).unwrap();
+
+    assert_eq!(result.shape(), &[2, 3, 2]);
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let expected = if i == k { get_v2(&a, &[i, j]) } else { 0.0 };
+                assert_close(
+                    get_v2(&result, &[i, j, k]),
+                    expected,
+                    &format!("ij_to_iji[{i},{j},{k}]"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn einsum_unit_extent_contraction() {
     // "abcdef,ace->bdf" — contraction with unit-extent dimensions
     let a = f64_tensor(vec![1, 1, 1, 1, 1, 1], vec![2.0]);

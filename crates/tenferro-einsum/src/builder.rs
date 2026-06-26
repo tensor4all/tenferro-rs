@@ -45,6 +45,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DotGeneralConfig;
 
 use crate::planning::tree::ContractionTree;
+use crate::util::map_label_occurrences;
 use crate::{Error, Result};
 
 pub(crate) type AxisVec = SmallVec<[usize; 4]>;
@@ -85,6 +86,16 @@ fn find_label_axis(labels: &[u32], label: u32) -> Result<usize> {
         .iter()
         .position(|candidate| *candidate == label)
         .ok_or_else(|| builder_invalid_argument(format!("missing label {label} in {labels:?}")))
+}
+
+fn map_label_axes(source_labels: &[u32], target_labels: &[u32]) -> Result<AxisVec> {
+    map_label_occurrences(source_labels, target_labels)
+        .map(|axes| axes.into_iter().collect())
+        .ok_or_else(|| {
+            builder_invalid_argument(format!(
+                "cannot map label occurrences {source_labels:?} into {target_labels:?}"
+            ))
+        })
 }
 
 fn local_shape(rank: usize) -> Vec<DimExpr> {
@@ -376,10 +387,7 @@ fn binary_contract(
     }
 
     // Build permutation
-    let perm: AxisVec = target_labels
-        .iter()
-        .map(|l| find_label_axis(current_labels, *l))
-        .collect::<Result<_>>()?;
+    let perm = map_label_axes(&target_labels, current_labels)?;
 
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
         return Ok(result);
@@ -432,16 +440,8 @@ fn outer_product(
     }
 
     // Broadcast both to combined shape, then Mul
-    let lhs_dims: AxisVec = lhs
-        .labels
-        .iter()
-        .map(|l| find_label_axis(&combined_labels, *l))
-        .collect::<Result<_>>()?;
-    let rhs_dims: AxisVec = rhs
-        .labels
-        .iter()
-        .map(|l| find_label_axis(&combined_labels, *l))
-        .collect::<Result<_>>()?;
+    let lhs_dims = map_label_axes(&lhs.labels, &combined_labels)?;
+    let rhs_dims = map_label_axes(&rhs.labels, &combined_labels)?;
 
     let lhs_shape =
         combined_shape_for_broadcast(&combined_labels, lhs, rhs, BroadcastPrimary::Lhs)?;
@@ -633,10 +633,7 @@ pub(crate) fn build_einsum_graph_dim_expr(
         if result.labels == *output_labels {
             return Ok(localize_value_ref(builder, result.val, &result.shape));
         }
-        let perm: AxisVec = output_labels
-            .iter()
-            .map(|l| find_label_axis(&result.labels, *l))
-            .collect::<Result<_>>()?;
+        let perm = map_label_axes(output_labels, &result.labels)?;
         if perm.iter().enumerate().all(|(i, &p)| i == p) {
             return Ok(localize_value_ref(builder, result.val, &result.shape));
         }
@@ -698,10 +695,7 @@ pub(crate) fn build_einsum_graph_dim_expr(
         return Ok(localize_value_ref(builder, result.val, &result.shape));
     }
 
-    let perm: AxisVec = output_labels
-        .iter()
-        .map(|l| find_label_axis(&result.labels, *l))
-        .collect::<Result<_>>()?;
+    let perm = map_label_axes(output_labels, &result.labels)?;
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
         return Ok(localize_value_ref(builder, result.val, &result.shape));
     }

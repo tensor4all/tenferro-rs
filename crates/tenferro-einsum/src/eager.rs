@@ -8,6 +8,7 @@ use tenferro_tensor::{
 };
 
 use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
+use crate::util::map_label_occurrences;
 use crate::{ContractionTree, Subscripts};
 
 mod profile;
@@ -304,6 +305,14 @@ fn find_label_axis(labels: &[u32], label: u32) -> Result<usize> {
         .ok_or_else(|| eager_invalid_config(format!("label {label} missing from tensor labels")))
 }
 
+fn map_label_axes(source_labels: &[u32], target_labels: &[u32]) -> Result<Vec<usize>> {
+    map_label_occurrences(source_labels, target_labels).ok_or_else(|| {
+        eager_invalid_config(format!(
+            "cannot map label occurrences {source_labels:?} into {target_labels:?}"
+        ))
+    })
+}
+
 fn label_size(label: u32, operands: &[&LabeledTensor<'_>]) -> Result<usize> {
     for operand in operands {
         if let Some(axis) = operand
@@ -435,10 +444,7 @@ fn transpose_to_labels<'a>(
         return Ok(operand);
     }
 
-    let perm: Vec<usize> = target_labels
-        .iter()
-        .map(|label| find_label_axis(&operand.labels, *label))
-        .collect::<Result<_>>()?;
+    let perm = map_label_axes(target_labels, &operand.labels)?;
     if perm
         .iter()
         .enumerate()
@@ -487,16 +493,8 @@ fn outer_product<'a>(
         .iter()
         .map(|label| label_size(*label, &[&lhs, &rhs]))
         .collect::<Result<_>>()?;
-    let lhs_dims: Vec<usize> = lhs
-        .labels
-        .iter()
-        .map(|label| find_label_axis(&combined_labels, *label))
-        .collect::<Result<_>>()?;
-    let rhs_dims: Vec<usize> = rhs
-        .labels
-        .iter()
-        .map(|label| find_label_axis(&combined_labels, *label))
-        .collect::<Result<_>>()?;
+    let lhs_dims = map_label_axes(&lhs.labels, &combined_labels)?;
+    let rhs_dims = map_label_axes(&rhs.labels, &combined_labels)?;
 
     let tensor = match exec.execute_broadcast_multiply(
         lhs.tensor.tensor_read(),

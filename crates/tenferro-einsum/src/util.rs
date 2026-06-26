@@ -80,3 +80,48 @@ pub(crate) fn intermediate_subs(
     }
     output
 }
+
+/// Map each source label occurrence to a distinct matching target axis.
+///
+/// Repeated labels are occurrence-sensitive: mapping `["i", "j", "i"]` into
+/// `["i", "i", "j"]` must use axes `[0, 2, 1]`, not `[0, 2, 0]`.
+pub(crate) fn map_label_occurrences(
+    source_labels: &[u32],
+    target_labels: &[u32],
+) -> Option<Vec<usize>> {
+    let mut used = vec![false; target_labels.len()];
+    source_labels
+        .iter()
+        .map(|label| {
+            let axis = target_labels
+                .iter()
+                .enumerate()
+                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))?;
+            used[axis] = true;
+            Some(axis)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_label_occurrences;
+
+    #[test]
+    fn label_occurrence_mapping_uses_each_target_axis_once() {
+        assert_eq!(
+            map_label_occurrences(
+                &[b'i' as u32, b'j' as u32, b'i' as u32],
+                &[b'i' as u32, b'i' as u32, b'j' as u32,]
+            ),
+            Some(vec![0, 2, 1])
+        );
+        assert_eq!(
+            map_label_occurrences(
+                &[b'i' as u32, b'i' as u32, b'i' as u32],
+                &[b'i' as u32, b'i' as u32,]
+            ),
+            None
+        );
+    }
+}

@@ -48,6 +48,8 @@ use crate::optimize::default_auto_options;
 #[cfg(feature = "autodiff")]
 use crate::optimize::jax_path_to_v1_pairs;
 use crate::optimize::{hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec, EinsumPlanSpec};
+#[cfg(feature = "autodiff")]
+use crate::util::map_label_occurrences;
 use crate::{
     ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
 };
@@ -888,22 +890,6 @@ fn broadcast_einsum_vjp_to_input_shape(
         broadcast,
         input_labels,
     ))
-}
-
-#[cfg(feature = "autodiff")]
-fn map_label_occurrences(source_labels: &[u32], target_labels: &[u32]) -> Option<Vec<usize>> {
-    let mut used = vec![false; target_labels.len()];
-    source_labels
-        .iter()
-        .map(|label| {
-            let axis = target_labels
-                .iter()
-                .enumerate()
-                .find_map(|(axis, target)| (!used[axis] && target == label).then_some(axis))?;
-            used[axis] = true;
-            Some(axis)
-        })
-        .collect()
 }
 
 #[cfg(feature = "autodiff")]
