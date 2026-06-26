@@ -29,6 +29,7 @@
 //! assert_eq!(dx.rank, 0);
 //! ```
 
+mod ad_rule_error;
 mod context;
 mod eager;
 mod eager_backend;

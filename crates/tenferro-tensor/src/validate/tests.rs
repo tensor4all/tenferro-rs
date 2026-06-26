@@ -410,6 +410,16 @@ fn f64_batched_error_includes_batch_index_and_position() {
 }
 
 #[test]
+fn singular_diagonal_uses_checked_shape_products_before_indexing() {
+    let source = include_str!("mod.rs");
+    assert!(
+        !source.contains("t.shape()[2..].iter().product()")
+            && !source.contains("let slice_size = rows * cols"),
+        "singular diagonal validation must not use unchecked shape products before indexing"
+    );
+}
+
+#[test]
 fn f64_unbatched_error_omits_batch_index_and_includes_position() {
     let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();

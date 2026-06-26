@@ -1,5 +1,6 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::SliceConfig;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
@@ -103,23 +104,28 @@ pub fn transpose_pad_to_match(
     mode: &OperationRole,
     axis: usize,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     };
     if !first_input_active(mode) {
-        return vec![None, None];
+        return Ok(vec![None, None]);
     }
 
     // For concrete input metadata the adjoint is just a prefix slice back to
     // the original input shape. This keeps the transposed graph statically
     // shape-exact across checkpoint aliases.
     if let Some(input_shape) = ctx.shape_if_available(&inputs[0]) {
-        assert!(
-            axis < input_shape.len(),
-            "transpose_pad_to_match: axis {axis} out of bounds for rank {}",
-            input_shape.len()
-        );
+        if axis >= input_shape.len() {
+            return Err(ADRuleError::invalid_input(
+                "PadToMatch",
+                ADRuleKind::Transpose,
+                format!(
+                    "axis {axis} out of bounds for input rank {}",
+                    input_shape.len()
+                ),
+            ));
+        }
         if let Some(limits) = input_shape
             .iter()
             .map(|dim| dim.constant_value())
@@ -137,7 +143,7 @@ pub fn transpose_pad_to_match(
                     active_mask: vec![true],
                 },
             );
-            return vec![Some(out[0]), None];
+            return Ok(vec![Some(out[0]), None]);
         }
     }
 
@@ -155,7 +161,7 @@ pub fn transpose_pad_to_match(
             active_mask: vec![true, false],
         },
     );
-    vec![Some(out[0]), None]
+    Ok(vec![Some(out[0]), None])
 }
 
 fn first_input_active(mode: &OperationRole) -> bool {

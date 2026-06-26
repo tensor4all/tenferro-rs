@@ -581,26 +581,8 @@ fn promote_dtypes(dtypes: &[DType]) -> DType {
     dtypes
         .iter()
         .copied()
-        .reduce(promote_dtype)
+        .reduce(tenferro_tensor::validate::promote_dtype)
         .unwrap_or(DType::F64)
-}
-
-fn promote_dtype(lhs: DType, rhs: DType) -> DType {
-    use DType::*;
-    match (lhs, rhs) {
-        (Bool, Bool) => Bool,
-        (Bool, other) | (other, Bool) => other,
-        (I32, I32) => I32,
-        (I32, I64) | (I64, I32) | (I64, I64) => I64,
-        (I32 | I64, F32 | F64) | (F32 | F64, I32 | I64) => F64,
-        (I32 | I64, C32 | C64) | (C32 | C64, I32 | I64) => C64,
-        (F32, F32) => F32,
-        (F32, F64) | (F64, F32) | (F64, F64) => F64,
-        (F32, C32) | (C32, F32) | (C32, C32) => C32,
-        (F32, C64) | (C64, F32) => C64,
-        (F64, C32 | C64) | (C32 | C64, F64) => C64,
-        (C32, C64) | (C64, C32) | (C64, C64) => C64,
-    }
 }
 
 fn hash_dtype(hasher: &mut dyn Hasher, dtype: DType) {

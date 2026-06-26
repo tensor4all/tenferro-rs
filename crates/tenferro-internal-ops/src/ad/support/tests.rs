@@ -53,3 +53,31 @@ fn promote_dtype_covers_supported_pairs_without_runtime_unreachable() {
     assert_eq!(promote_dtype(DType::F64, DType::C32), DType::C64);
     assert_eq!(promote_dtype(DType::C32, DType::C64), DType::C64);
 }
+
+#[test]
+fn promote_dtype_delegates_to_canonical_tensor_validation_rules() {
+    let source = include_str!("../support.rs");
+    assert!(
+        source.contains("tenferro_tensor::validate::promote_dtype"),
+        "AD support must delegate to the canonical tensor dtype promotion lattice"
+    );
+
+    let dtypes = [
+        DType::Bool,
+        DType::I32,
+        DType::I64,
+        DType::F32,
+        DType::F64,
+        DType::C32,
+        DType::C64,
+    ];
+    for lhs in dtypes {
+        for rhs in dtypes {
+            assert_eq!(
+                promote_dtype(lhs, rhs),
+                tenferro_tensor::validate::promote_dtype(lhs, rhs),
+                "promotion mismatch for {lhs:?}, {rhs:?}"
+            );
+        }
+    }
+}

@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::ad_rule_error::ad_rule_error;
 use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
 use tenferro_ops::input_key::TensorInputKey;
@@ -16,7 +17,7 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
-use tidu::{linear_transpose, linearize, ADRuleError};
+use tidu::{linear_transpose, linearize};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -39,18 +40,6 @@ fn shape_guard_context(extension_rules: Option<&ExtensionRuleSet>) -> ShapeGuard
     match extension_rules {
         Some(rules) => ctx.with_extension_rules(rules.clone()),
         None => ctx,
-    }
-}
-
-fn ad_rule_error(transform: &'static str, err: ADRuleError) -> Error {
-    match err {
-        ADRuleError::Unsupported { op, .. } => {
-            Error::Internal(format!("unsupported {transform} AD rule for {op}"))
-        }
-        ADRuleError::InvalidInput { op, message, .. } => Error::InvalidGraphBuild {
-            op: transform,
-            message: format!("{op}: {message}"),
-        },
     }
 }
 
@@ -86,7 +75,7 @@ pub(crate) fn grad_optional_with_rules(
 
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-    vjp_optional_impl(output, wrt, &seed, Some(extension_rules))
+    vjp_optional_impl(output, wrt, &seed, Some(extension_rules), "grad")
 }
 
 pub(crate) fn jvp_optional_with_rules(
@@ -105,7 +94,7 @@ pub(crate) fn vjp_with_rules(
     extension_rules: &ExtensionRuleSet,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules))?
+    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules), "vjp")?
         .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
 }
 
@@ -115,7 +104,7 @@ pub(crate) fn vjp_optional_with_rules(
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<Option<TracedTensor>> {
-    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules))
+    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules), "vjp")
 }
 
 fn grad_with_optional_rules(
@@ -132,7 +121,7 @@ fn grad_with_optional_rules(
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(output, wrt, &seed, extension_rules)?
+    vjp_optional_impl(output, wrt, &seed, extension_rules, "grad")?
         .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
 }
 
@@ -333,7 +322,7 @@ impl TracedTensorAdExt for TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![])?;
         let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-        vjp_optional_impl(self, wrt, &seed, None)
+        vjp_optional_impl(self, wrt, &seed, None, "grad")
     }
 
     fn checkpoint<B: TensorBackend>(
@@ -378,7 +367,7 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        vjp_optional_impl(self, wrt, cotangent, None)
+        vjp_optional_impl(self, wrt, cotangent, None, "vjp")
     }
 }
 
@@ -468,6 +457,7 @@ fn vjp_optional_impl(
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
+    transform: &'static str,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
     let output_key = output.graph().values()[output.val].key.clone();
@@ -492,7 +482,7 @@ fn vjp_optional_impl(
         &mut ad_ctx,
         &aliases,
     )
-    .map_err(|err| ad_rule_error("vjp", err))?;
+    .map_err(|err| ad_rule_error(transform, err))?;
     if linear.tangent_outputs()[0].is_none() {
         return Ok(None);
     }
@@ -506,7 +496,7 @@ fn vjp_optional_impl(
     )?;
     ad_ctx.refresh_global_metadata();
     let transposed =
-        linear_transpose(&linear, &mut ad_ctx).map_err(|err| ad_rule_error("vjp", err))?;
+        linear_transpose(&linear, &mut ad_ctx).map_err(|err| ad_rule_error(transform, err))?;
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
     let cotangent_data =

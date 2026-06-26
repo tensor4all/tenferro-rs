@@ -949,14 +949,13 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
         }
     }
 
-    for (component, &operand_dim) in config.start_index_map.iter().enumerate() {
+    for &operand_dim in &config.start_index_map {
         let _ = clamp_window_start(
             "gather",
             0,
             operand_shape[operand_dim],
             config.slice_sizes[operand_dim],
         )?;
-        let _ = component;
     }
 
     // SAFETY: the gather loop below assigns every output coordinate exactly once.
@@ -1171,6 +1170,9 @@ where
         window_shape_updates[pos] = dim;
         window_shape[window_dims[pos]] = dim;
     }
+    for axis in 0..op_rank {
+        let _ = clamp_window_start("scatter", 0, operand_shape[axis], window_shape[axis])?;
+    }
 
     let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?;
     let window_elems = checked_product("scatter", "window update shape", &window_shape_updates)?;
@@ -1184,7 +1186,6 @@ where
     let mut index_scratch = vec![0usize; scatter_indices.shape.len()];
 
     for _ in 0..batch_elems {
-        let mut window_fits = true;
         operand_base.fill(0);
         for (component, &operand_dim) in config.scatter_dims_to_operand_dims.iter().enumerate() {
             let start = index_component(
@@ -1201,21 +1202,6 @@ where
                 operand_shape[operand_dim],
                 window_shape[operand_dim],
             )?;
-        }
-        if !window_fits {
-            advance_col_major_index(&mut batch_idx, &batch_shape);
-            continue;
-        }
-
-        for axis in 0..op_rank {
-            if operand_base[axis] + window_shape[axis] > operand_shape[axis] {
-                window_fits = false;
-                break;
-            }
-        }
-        if !window_fits {
-            advance_col_major_index(&mut batch_idx, &batch_shape);
-            continue;
         }
 
         window_idx.fill(0);

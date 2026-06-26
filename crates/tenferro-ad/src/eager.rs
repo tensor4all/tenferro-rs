@@ -1447,8 +1447,8 @@ impl EagerTensor {
         let callback_error = callbacks.take_error();
         drop(callbacks);
         let cotangents = match (cotangents_result, callback_error) {
-            (_, Some(err)) => return Err(Error::Internal(err.to_string())),
-            (Err(err), None) => return Err(Error::Internal(err.to_string())),
+            (_, Some(err)) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
+            (Err(err), None) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
             (Ok(cotangents), None) => cotangents,
         };
         self.ctx.store_grads(&cotangents, &mut backend)?;

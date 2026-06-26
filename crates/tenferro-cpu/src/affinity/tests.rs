@@ -40,3 +40,14 @@ fn available_parallelism_helpers_report_positive_counts() {
         assert!(count >= 1);
     }
 }
+
+#[test]
+fn windows_group_affinity_probe_documents_expected_failure_path() {
+    let source = include_str!("../affinity.rs");
+    assert!(
+        source.contains("expected failure path")
+            && source.contains("required processor-group")
+            && source.contains("count. That probe"),
+        "Windows GetProcessGroupAffinity null-array probe must document that failure with a count is expected"
+    );
+}

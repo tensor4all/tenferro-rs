@@ -9,6 +9,7 @@ use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ShapeExtent, SymDim, TensorMeta};
+use tidu::ADRuleError;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -178,6 +179,35 @@ fn transpose_reshape_accepts_upper_bound_input_metadata() {
             active_mask: vec![true, false],
         }
     );
+}
+
+#[test]
+fn transpose_pad_to_match_rejects_axis_outside_input_metadata() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(18));
+    let input = input_key(19);
+    let reference = input_key(20);
+    ctx.insert_metadata(input.clone(), meta(&[3]));
+
+    let err = StdTensorOp::PadToMatch { axis: 1 }
+        .transpose_rule(
+            &mut builder,
+            &[Some(cotangent)],
+            &[ValueRef::External(input), ValueRef::External(reference)],
+            &linear_mode(&[true, false]),
+            &mut ctx,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ADRuleError::InvalidInput {
+            ref op,
+            ref message,
+            ..
+        } if op == "PadToMatch" && message.contains("axis 1")
+    ));
 }
 
 #[test]

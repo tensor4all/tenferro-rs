@@ -1492,14 +1492,7 @@ fn transpose_pad_to_match(
         ADRuleKind::Transpose,
         StdTensorOp::PadToMatch { axis } => axis
     );
-    Ok(dynamic::transpose_pad_to_match(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        *axis,
-        ctx,
-    ))
+    dynamic::transpose_pad_to_match(builder, cotangent_out, inputs, mode, *axis, ctx)
 }
 
 fn linearize_constant(

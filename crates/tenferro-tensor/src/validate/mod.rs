@@ -289,9 +289,8 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     let rows = t.shape()[0];
     let cols = t.shape()[1];
     let n = rows.min(cols);
-    let batch_total: usize = t.shape()[2..].iter().product();
-    let batch_total = batch_total.max(1);
-    let slice_size = rows * cols;
+    let batch_total = checked_shape_product("solve", "batch shape", &t.shape()[2..])?;
+    let slice_size = checked_shape_product("solve", "matrix shape", &t.shape()[..2])?;
     let data = t.host_data()?;
     for batch_idx in 0..batch_total {
         let batch = &data[batch_idx * slice_size..(batch_idx + 1) * slice_size];

@@ -33,7 +33,7 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TensorRead, TypedTensor};
 use tidu::ADRuleResult;
 
@@ -935,7 +935,13 @@ fn missing_extension_rule_errors_in_traced_grad() {
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("tenferro-tests.no_ad.v1"));
+    assert!(matches!(
+        err,
+        RuntimeError::UnsupportedAdRule {
+            transform: "grad",
+            ref op,
+        } if op == "tenferro-tests.no_ad.v1"
+    ));
 }
 
 #[test]
@@ -958,5 +964,11 @@ fn missing_extension_rule_errors_in_eager_backward() {
         .backward()
         .expect_err("missing extension AD rule should error");
 
-    assert!(err.to_string().contains("tenferro-tests.no_ad.v1"));
+    assert!(matches!(
+        err,
+        RuntimeError::UnsupportedAdRule {
+            transform: "backward",
+            ref op,
+        } if op == "tenferro-tests.no_ad.v1"
+    ));
 }

@@ -235,15 +235,17 @@ pub enum Parallelism {
 }
 ```
 
-Both APIs describe the requested thread count, not the thread pool that must run
-the work. faer and spindle rely on the current or global Rayon context through
+Both APIs describe the requested thread count, not a thread-pool handle. faer
+and spindle rely on the current or global Rayon context through
 `rayon::current_num_threads`, `rayon::scope`, `into_par_iter`, and
 `spindle::for_each`.
 
-The faer backend is therefore run without a tenferro-owned Rayon pool.
+The current faer backend runs GEMM work inside `CpuContext::install`.
 `CpuContext` stores the requested thread count, maps one thread to `Par::Seq`,
-and maps multi-threaded execution to `Par::rayon(n)`. faer/rayon then uses the
-current or global Rayon pool directly.
+and maps multi-threaded execution to `Par::rayon(0)` while executing inside the
+context-owned Rayon pool. faer expands `Par::rayon(0)` through
+`rayon::current_num_threads()`, so `CpuContext::with_threads(n)` still controls
+the faer parallelism degree for work run under the context.
 
 The benchmark below is cached `site_update`, `Complex64`, `d = 2`, with all
 known BLAS/OpenMP thread pools set to one thread. Times are Criterion means in
@@ -265,16 +267,16 @@ increasing faer thread count does not help; it usually adds parallel dispatch
 overhead. The important optimization is removing per-GEMM `install`, not making
 each tiny GEMM parallel.
 
-The global-Rayon columns became the production policy. This removes the pool
-entry cost, but it also means `CpuContext` no longer provides pool isolation or
-affinity. Its `num_threads` value is a faer parallelism hint rather than a
-private worker-pool size.
+The production policy keeps `CpuContext` as the owner of CPU execution scope.
+This preserves pool isolation for backends that enter through
+`CpuContext::install`; within that scope, faer uses `Par::rayon(0)` to read the
+current context pool size instead of receiving `n` as an independent count.
 
 Design implications:
 
 - For one-thread faer, `Par::Seq` avoids Rayon dispatch.
-- For multi-thread faer, prefer process- or MPI-level workload partitioning when
-  pool isolation and CPU affinity matter.
+- For multi-thread faer, call faer-backed kernels from within
+  `CpuContext::install` so `Par::rayon(0)` observes the configured context pool.
 - Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
   backend context has more than one thread.
 - A true pool-handle patch would need changes across faer, spindle, and the
@@ -310,8 +312,9 @@ This preserves Rayon pool semantics, but it is expensive for tiny GEMMs.
 - For the `cpu-blas` backend, LAPACK-backed linalg methods now use the same
   caller-thread pool wrapper. This covers `cholesky`, `triangular_solve`, `lu`,
   `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, and `eig`. The
-  `cpu-faer` backend now also avoids a tenferro-owned Rayon pool and passes the
-  `CpuContext` thread count to faer as `Par::Seq` or `Par::rayon(n)`.
+  `cpu-faer` backend uses `CpuContext::install`; one-thread contexts pass
+  `Par::Seq`, and multi-thread contexts pass `Par::rayon(0)` so faer reads the
+  current context pool size.
 - The BLAS conjugation path now detects row-contiguous conjugated operands before
   acquiring an output buffer for a direct BLAS attempt that cannot succeed.
 

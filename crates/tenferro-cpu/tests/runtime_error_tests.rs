@@ -217,6 +217,15 @@ fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
 
     let scatter_section = source_section(indexing, "fn typed_scatter", "fn typed_dynamic_slice");
     assert!(
+        !source_section(indexing, "fn typed_gather", "fn typed_scatter")
+            .contains("let _ = component"),
+        "CPU gather validation should not need placeholder assignments for enumerated components"
+    );
+    assert!(
+        !scatter_section.contains("window_fits"),
+        "CPU scatter must not keep dead window-fit branches after clamp_window_start validation"
+    );
+    assert!(
         !scatter_section
             .contains("checked_product(\"scatter\", \"batch shape\", &batch_shape)?.max(1)"),
         "CPU scatter must not force a phantom iteration over zero-size batch domains"

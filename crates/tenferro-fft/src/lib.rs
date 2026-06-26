@@ -703,15 +703,23 @@ fn normalize_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     if rank == 0 {
         return Err(fft_config_error(op, "tenferro-fft requires rank >= 1"));
     }
-    let rank_isize = rank as isize;
-    let normalized = if axis < 0 { rank_isize + axis } else { axis };
-    if normalized < 0 || normalized >= rank_isize {
+    let normalized = if axis >= 0 {
+        axis as usize
+    } else {
+        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+            fft_config_error(
+                op,
+                format!("tenferro-fft axis {axis} out of bounds for rank {rank}"),
+            )
+        })?
+    };
+    if normalized >= rank {
         return Err(fft_config_error(
             op,
             format!("tenferro-fft axis {axis} out of bounds for rank {rank}"),
         ));
     }
-    Ok(normalized as usize)
+    Ok(normalized)
 }
 
 fn validate_n(op: &'static str, n: Option<usize>) -> Result<()> {
@@ -1216,6 +1224,16 @@ mod tests {
             .expect_err("default irfft output length should reject overflow");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");
+    }
+
+    #[test]
+    fn normalize_axis_handles_large_rank_without_isize_cast_wrap() {
+        assert_eq!(normalize_axis("fft", 0, usize::MAX).unwrap(), 0);
+        assert_eq!(
+            normalize_axis("fft", -1, usize::MAX).unwrap(),
+            usize::MAX - 1
+        );
+        assert!(normalize_axis("fft", isize::MIN, 3).is_err());
     }
 
     #[test]

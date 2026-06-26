@@ -133,8 +133,10 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
     }
 
     let mut group_count: Word = 0;
-    // SAFETY: Windows accepts a null group array to query the required group
-    // count; `group_count` is a live output variable.
+    // SAFETY: Windows accepts a null group array to query the required processor-group
+    // count. That probe is the expected failure path: `group_count` is a live output
+    // variable and a nonzero count after a failed call is the value needed for the
+    // second call below.
     let ok = unsafe {
         GetProcessGroupAffinity(
             process,

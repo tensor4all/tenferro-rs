@@ -22,12 +22,16 @@ pub enum AxisError {
 /// assert!(normalize_axis(3, 3).is_err());
 /// ```
 pub fn normalize_axis(axis: isize, rank: usize) -> Result<usize, AxisError> {
-    let rank_i = rank as isize;
-    let normalized = if axis < 0 { rank_i + axis } else { axis };
-    if normalized < 0 || normalized >= rank_i {
+    let normalized = if axis >= 0 {
+        axis as usize
+    } else {
+        rank.checked_sub(axis.unsigned_abs())
+            .ok_or(AxisError::OutOfBounds { axis, rank })?
+    };
+    if normalized >= rank {
         return Err(AxisError::OutOfBounds { axis, rank });
     }
-    Ok(normalized as usize)
+    Ok(normalized)
 }
 
 /// Normalize a list of possibly-negative axes and reject duplicates.

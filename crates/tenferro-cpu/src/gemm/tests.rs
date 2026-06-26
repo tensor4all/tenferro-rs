@@ -129,6 +129,32 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
 }
 
 #[test]
+fn canonical_gemm_layout_remains_behind_dot_general_validation() {
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
+    let invalid = DotGeneralConfig {
+        lhs_contracting_dims: vec![2],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = GemmAnalysisCache::default();
+
+    assert!(
+        analyse_gemm_cached(
+            &mut cache,
+            None,
+            GemmAnalysisCacheKind::Canonical,
+            &lhs,
+            &rhs,
+            &invalid,
+        )
+        .is_err(),
+        "canonical GEMM analysis must validate configs before canonicalizing layouts"
+    );
+}
+
+#[test]
 fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();

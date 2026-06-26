@@ -675,6 +675,13 @@ impl BufferPool {
                 self.retained_capacity_bytes = 0;
                 return;
             };
+            if evicted_bytes == 0 {
+                if self.is_empty() {
+                    self.retained_capacity_bytes = 0;
+                    return;
+                }
+                continue;
+            }
             self.retained_capacity_bytes =
                 self.retained_capacity_bytes.saturating_sub(evicted_bytes);
         }
