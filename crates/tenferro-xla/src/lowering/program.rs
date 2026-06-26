@@ -439,13 +439,13 @@ fn lower_constant(
             let bytes: [u8; 4] = bytes.try_into().map_err(|_| Error::InvalidProgram {
                 message: format!("F32 constant expected 4 bytes, got {}", bytes.len()),
             })?;
-            format_float(f32::from_le_bytes(bytes) as f64)
+            format_f32(f32::from_le_bytes(bytes))
         }
         DType::F64 => {
             let bytes: [u8; 8] = bytes.try_into().map_err(|_| Error::InvalidProgram {
                 message: format!("F64 constant expected 8 bytes, got {}", bytes.len()),
             })?;
-            format_float(f64::from_le_bytes(bytes))
+            format_f64(f64::from_le_bytes(bytes))
         }
         other => {
             return Err(Error::UnsupportedDType {
@@ -635,9 +635,6 @@ fn lower_dot_general(
         name: dot,
         ty: stable_ty,
     };
-    if dot_value.ty.shape == output_ty.shape {
-        return Ok(dot_value);
-    }
 
     let lhs_free = free_dims(
         lhs.ty.shape.len(),
@@ -654,6 +651,13 @@ fn lower_dot_general(
     perm.extend(batch_count..batch_count + lhs_free.len());
     perm.extend(batch_count + lhs_free.len()..batch_count + lhs_free.len() + rhs_free.len());
     perm.extend(0..batch_count);
+    let identity_perm = perm
+        .iter()
+        .enumerate()
+        .all(|(axis, &mapped)| axis == mapped);
+    if identity_perm && dot_value.ty.shape == output_ty.shape {
+        return Ok(dot_value);
+    }
     emit_transpose(&dot_value, &perm, output_ty, emitter)
 }
 
@@ -758,6 +762,30 @@ fn format_float(value: f64) -> String {
         format!("{value:.8e}")
     } else if value.is_nan() {
         "0x7ff8000000000000".to_string()
+    } else if value.is_sign_negative() {
+        "-0x7ff0000000000000".to_string()
+    } else {
+        "0x7ff0000000000000".to_string()
+    }
+}
+
+fn format_f32(value: f32) -> String {
+    if value.is_finite() {
+        format!("{value:.8e}")
+    } else if value.is_nan() {
+        format!("0x{:08x}", value.to_bits())
+    } else if value.is_sign_negative() {
+        "-0x7f800000".to_string()
+    } else {
+        "0x7f800000".to_string()
+    }
+}
+
+fn format_f64(value: f64) -> String {
+    if value.is_finite() {
+        format!("{value:.8e}")
+    } else if value.is_nan() {
+        format!("0x{:016x}", value.to_bits())
     } else if value.is_sign_negative() {
         "-0x7ff0000000000000".to_string()
     } else {

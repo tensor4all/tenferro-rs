@@ -101,6 +101,20 @@ fn constant_lowering_rejects_malformed_literal_bytes() {
 }
 
 #[test]
+fn special_float_literals_preserve_dtype_width_and_nan_payload() {
+    assert_eq!(format_f32(f32::from_bits(0x7fc0_1234)), "0x7fc01234");
+    assert_eq!(format_f32(f32::INFINITY), "0x7f800000");
+    assert_eq!(format_f32(f32::NEG_INFINITY), "-0x7f800000");
+
+    assert_eq!(
+        format_f64(f64::from_bits(0x7ff8_0000_0000_1234)),
+        "0x7ff8000000001234"
+    );
+    assert_eq!(format_f64(f64::INFINITY), "0x7ff0000000000000");
+    assert_eq!(format_f64(f64::NEG_INFINITY), "-0x7ff0000000000000");
+}
+
+#[test]
 fn dot_shape_rejects_invalid_dimension_config() {
     let err = stablehlo_dot_shape(
         &[2, 3],

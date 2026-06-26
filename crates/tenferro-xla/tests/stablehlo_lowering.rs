@@ -216,6 +216,40 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
 }
 
 #[test]
+fn equal_extent_batched_dot_general_still_transposes_batch_last_result() {
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let product = lhs
+        .dot_general(
+            &rhs,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![2],
+                rhs_contracting_dims: vec![1],
+                lhs_batch_dims: vec![0],
+                rhs_batch_dims: vec![0],
+            },
+        )
+        .unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(
+            &product,
+            &[
+                (&lhs, DType::F64, &[2, 2, 2]),
+                (&rhs, DType::F64, &[2, 2, 2]),
+            ],
+        )
+        .unwrap();
+
+    let module = lower_to_stablehlo(&program).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains("stablehlo.dot_general"));
+    assert!(text.contains("stablehlo.transpose"));
+    assert!(text.contains("dims = [1, 2, 0]"));
+}
+
+#[test]
 fn lowers_multi_output_program_and_special_scalar_constants() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let scaled_nan = x.scale_real(f64::NAN).unwrap();
