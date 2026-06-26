@@ -523,8 +523,14 @@ pub fn linearize_clamp(
     let input_gt_lower = emit_fixed_compare(builder, CompareDir::Gt, input.clone(), lower.clone());
     let input_lt_upper = emit_fixed_compare(builder, CompareDir::Lt, input.clone(), upper.clone());
     let lower_gt_input = emit_fixed_compare(builder, CompareDir::Gt, lower.clone(), input.clone());
-    let lower_lt_upper = emit_fixed_compare(builder, CompareDir::Lt, lower, upper.clone());
-    let upper_lt_input = emit_fixed_compare(builder, CompareDir::Lt, upper, input);
+    let lower_lt_upper = emit_fixed_compare(builder, CompareDir::Lt, lower.clone(), upper.clone());
+    let max_input_lower = emit_fixed_binary(builder, StdTensorOp::Maximum, input, lower);
+    let upper_lt_max_input_lower = emit_fixed_compare(
+        builder,
+        CompareDir::Lt,
+        upper,
+        ValueRef::Local(max_input_lower),
+    );
 
     let mut terms = Vec::new();
     if let Some(d_input) = tangent_in[0] {
@@ -545,7 +551,7 @@ pub fn linearize_clamp(
         terms.push(mask_active_by_conditions(
             builder,
             d_upper,
-            &[upper_lt_input],
+            &[upper_lt_max_input_lower],
         ));
     }
 
@@ -799,18 +805,25 @@ pub fn transpose_clamp(
         inputs[1].clone(),
         inputs[2].clone(),
     );
-    let upper_lt_input = emit_fixed_compare(
+    let max_input_lower = emit_fixed_binary(
+        builder,
+        StdTensorOp::Maximum,
+        inputs[0].clone(),
+        inputs[1].clone(),
+    );
+    let upper_lt_max_input_lower = emit_fixed_compare(
         builder,
         CompareDir::Lt,
         inputs[2].clone(),
-        inputs[0].clone(),
+        ValueRef::Local(max_input_lower),
     );
 
     let input_ct = input_active
         .then(|| mask_active_by_conditions(builder, ct, &[input_gt_lower, input_lt_upper]));
     let lower_ct = lower_active
         .then(|| mask_active_by_conditions(builder, ct, &[lower_gt_input, lower_lt_upper]));
-    let upper_ct = upper_active.then(|| mask_active_by_conditions(builder, ct, &[upper_lt_input]));
+    let upper_ct =
+        upper_active.then(|| mask_active_by_conditions(builder, ct, &[upper_lt_max_input_lower]));
 
     vec![input_ct, lower_ct, upper_ct]
 }

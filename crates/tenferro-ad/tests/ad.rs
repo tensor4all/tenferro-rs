@@ -855,6 +855,23 @@ fn grad_extract_diag_sum() {
 }
 
 #[test]
+fn grad_extract_diag_reversed_rectangular_axes_sum() {
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ))
+    .unwrap();
+    let diag = a.extract_diag(1, 0).unwrap();
+    assert_eq!(diag.try_concrete_shape(), Some(vec![2]));
+    let loss = diag.reduce_sum(&[0]).unwrap();
+    let grad = loss.grad(&a).unwrap();
+
+    let result = eval_tensor(grad);
+    assert_eq!(result.shape(), &[2, 3]);
+    assert_close_slice(get_f64_data(&result), &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+}
+
+#[test]
 fn grad_embed_diag_sum() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, -1.0, 4.0]))
         .unwrap();
@@ -1363,6 +1380,50 @@ fn clamp_ad_uses_strict_jax_boundary_masks() {
     assert_close_slice(get_f64_data(&results[3]), &[0.0, 0.0, 0.0, 0.0]);
     assert_close_slice(get_f64_data(&results[4]), &[10.0, 0.0, 0.0, 0.0]);
     assert_close_slice(get_f64_data(&results[5]), &[0.0, 0.0, 0.0, 40.0]);
+}
+
+#[test]
+fn clamp_ad_handles_degenerate_bounds_like_min_max() {
+    let input =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![0.0, 4.0, 8.0])).unwrap();
+    let lower =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![5.0, 5.0, 5.0])).unwrap();
+    let upper =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![3.0, 3.0, 3.0])).unwrap();
+    let d_input =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![10.0, 20.0, 30.0]))
+            .unwrap();
+    let d_lower =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let d_upper =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
+    let cotangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![7.0, 8.0, 9.0])).unwrap();
+
+    let clamped = input.clamp(&lower, &upper).unwrap();
+    let primal = eval_tensor(clamped.clone());
+    let input_jvp = clamped.jvp(&input, &d_input).unwrap();
+    let lower_jvp = clamped.jvp(&lower, &d_lower).unwrap();
+    let upper_jvp = clamped.jvp(&upper, &d_upper).unwrap();
+    let input_vjp = clamped.vjp(&input, &cotangent).unwrap();
+    let lower_vjp = clamped.vjp(&lower, &cotangent).unwrap();
+    let upper_vjp = clamped.vjp(&upper, &cotangent).unwrap();
+
+    let results = run_many_traced_with(
+        &mut GraphExecutor::new(CpuBackend::new()),
+        &[
+            &input_jvp, &lower_jvp, &upper_jvp, &input_vjp, &lower_vjp, &upper_vjp,
+        ],
+    )
+    .unwrap();
+
+    assert_close_slice(get_f64_data(&primal), &[3.0, 3.0, 3.0]);
+    assert_close_slice(get_f64_data(&results[0]), &[0.0, 0.0, 0.0]);
+    assert_close_slice(get_f64_data(&results[1]), &[0.0, 0.0, 0.0]);
+    assert_close_slice(get_f64_data(&results[2]), &[4.0, 5.0, 6.0]);
+    assert_close_slice(get_f64_data(&results[3]), &[0.0, 0.0, 0.0]);
+    assert_close_slice(get_f64_data(&results[4]), &[0.0, 0.0, 0.0]);
+    assert_close_slice(get_f64_data(&results[5]), &[7.0, 8.0, 9.0]);
 }
 
 #[test]

@@ -1,8 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
-#[cfg(feature = "autodiff")]
-use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
@@ -63,6 +61,14 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
     for (idx, (a, e)) in actual.iter().zip(expected).enumerate() {
         assert!((a - e).abs() < 1e-5, "idx {idx}: actual={a}, expected={e}");
     }
+}
+
+#[cfg(feature = "autodiff")]
+fn fft_ad_context() -> tenferro_ad::AdContext {
+    tenferro_ad::AdContext::builder()
+        .with_extension_rules(tenferro_fft::ad_rules().unwrap())
+        .build()
+        .unwrap()
 }
 
 #[cfg(feature = "autodiff")]
@@ -443,7 +449,7 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
     .unwrap();
 
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
-    let dy = y.jvp(&x, &dx).unwrap();
+    let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let out = run(&dy);
 
     assert_c64_close(
@@ -476,7 +482,7 @@ fn fft_c64_jvp_matches_finite_diff() {
     let dx = TracedTensor::from_vec_col_major(vec![4], tangent_data.clone()).unwrap();
 
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
-    let dy = y.jvp(&x, &dx).unwrap();
+    let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let out = run(&dy);
 
     let expected = finite_diff_c64_directional(
@@ -517,7 +523,7 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
     .unwrap();
 
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
-    let dx = y.vjp(&x, &cotangent).unwrap();
+    let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
     assert_c64_close(
@@ -527,6 +533,71 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
             Complex64::new(1.0, 2.25),
             Complex64::new(-2.25, 4.5),
             Complex64::new(3.0, -1.25),
+        ],
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn fft_c64_vjp_longer_transform_slices_to_input_length() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(0.25, -2.0),
+        ],
+    )
+    .unwrap();
+
+    let y = x.fft(Some(4), -1, FftNorm::Backward).unwrap();
+    let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
+    let out = run(&dx);
+
+    assert_eq!(out.shape(), &[2]);
+    assert_c64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(2.25, -1.5), Complex64::new(1.0, 2.25)],
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn fft_c64_vjp_shorter_transform_pads_to_input_length() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(3.0, 1.0), Complex64::new(-1.0, 2.0)],
+    )
+    .unwrap();
+
+    let y = x.fft(Some(2), -1, FftNorm::Backward).unwrap();
+    let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
+    let out = run(&dx);
+
+    assert_eq!(out.shape(), &[4]);
+    assert_c64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(2.0, 3.0),
+            Complex64::new(4.0, -1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ],
     );
 }
@@ -556,7 +627,7 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
     .unwrap();
 
     let y = x.ifft(None, -1, FftNorm::Backward).unwrap();
-    let dx = y.vjp(&x, &cotangent).unwrap();
+    let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
     assert_c64_close(
@@ -585,7 +656,7 @@ fn rfft_vjp_unsupported_error_names_rfft_and_vjp() {
     .unwrap();
 
     let y = x.rfft(None, -1, FftNorm::Backward).unwrap();
-    let err = match y.vjp_optional(&x, &cotangent) {
+    let err = match fft_ad_context().vjp_optional(&y, &x, &cotangent) {
         Ok(_) => panic!("rfft VJP should remain unsupported"),
         Err(err) => err,
     };
@@ -620,7 +691,7 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
     .unwrap();
 
     let y = spectrum.irfft(Some(4), -1, FftNorm::Backward).unwrap();
-    let err = match y.jvp_optional(&spectrum, &tangent) {
+    let err = match fft_ad_context().jvp_optional(&y, &spectrum, &tangent) {
         Ok(_) => panic!("irfft JVP should remain unsupported"),
         Err(err) => err,
     };

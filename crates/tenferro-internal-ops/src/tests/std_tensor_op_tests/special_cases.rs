@@ -283,6 +283,54 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
 }
 
 #[test]
+fn test_std_tensor_op_linear_transpose_rules_respect_inactive_inputs() {
+    let (add_result, _, add_graph) = run_transpose_case(StdTensorOp::Add, 2, &[true, false], true);
+    assert_eq!(add_result.len(), 2);
+    assert!(add_result[0].is_some());
+    assert_eq!(add_result[1], None);
+    assert!(add_graph.operations().is_empty());
+
+    let (neg_result, _, neg_graph) = run_transpose_case(StdTensorOp::Neg, 1, &[false], true);
+    assert_eq!(neg_result, vec![None]);
+    assert!(neg_graph.operations().is_empty());
+
+    let (transpose_result, _, transpose_graph) = run_transpose_case(
+        StdTensorOp::Transpose { perm: vec![1, 0] },
+        1,
+        &[false],
+        true,
+    );
+    assert_eq!(transpose_result, vec![None]);
+    assert!(transpose_graph.operations().is_empty());
+
+    let (reshape_result, _, reshape_graph) = run_transpose_case_with_input_shape(
+        StdTensorOp::Reshape {
+            to_shape: shape![4],
+        },
+        1,
+        &[false],
+        true,
+        Some(vec![SymDim::from(2usize), SymDim::from(2usize)]),
+    );
+    assert_eq!(reshape_result, vec![None]);
+    assert!(reshape_graph.operations().is_empty());
+
+    let (tril_result, _, tril_graph) =
+        run_transpose_case(StdTensorOp::Tril { k: 0 }, 1, &[false], true);
+    assert_eq!(tril_result, vec![None]);
+    assert!(tril_graph.operations().is_empty());
+
+    let (truncate_result, _, truncate_graph) = run_transpose_case(
+        StdTensorOp::DynamicTruncate { axis: 0 },
+        2,
+        &[false, false],
+        true,
+    );
+    assert_eq!(truncate_result, vec![None, None]);
+    assert!(truncate_graph.operations().is_empty());
+}
+
+#[test]
 fn test_std_tensor_op_convert_linearize_and_transpose_swap_dtypes() {
     let convert = StdTensorOp::Convert {
         from: DType::F64,
