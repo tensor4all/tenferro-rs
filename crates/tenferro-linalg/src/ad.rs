@@ -216,6 +216,7 @@ fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&Linal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::DEFAULT_DECOMPOSITION_AD_EPS;
     use computegraph::graph::GraphBuilder;
     use tenferro_ops::input_key::TensorInputKey;
     use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
@@ -471,11 +472,19 @@ mod tests {
             LinalgOp::Cholesky,
             LinalgOp::Lu,
             LinalgOp::FullPivLu,
-            LinalgOp::Svd { eps: 1e-12 },
-            LinalgOp::SvdVals { eps: 1e-12 },
+            LinalgOp::Svd {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            LinalgOp::SvdVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
             LinalgOp::Qr,
-            LinalgOp::Eigh { eps: 1e-12 },
-            LinalgOp::EighVals { eps: 1e-12 },
+            LinalgOp::Eigh {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            LinalgOp::EighVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
             LinalgOp::Eig {
                 input_dtype: DType::F64,
             },

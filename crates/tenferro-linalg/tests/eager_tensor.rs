@@ -41,6 +41,26 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     }
 }
 
+fn assert_finite_f64_tensor(tensor: &Tensor) {
+    let values = f64_data(tensor);
+    assert!(
+        values.iter().all(|value| value.is_finite()),
+        "expected finite f64 tensor, got {values:?}"
+    );
+}
+
+fn weighted_square_sum(input: &EagerTensor, weights: Vec<f64>) -> EagerTensor {
+    let weights = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(input.shape().to_vec(), weights).unwrap(),
+        input.runtime().clone(),
+    )
+    .unwrap();
+    let squared = input.mul(input).unwrap();
+    let weighted = squared.mul(&weights).unwrap();
+    let axes: Vec<usize> = (0..input.shape().len()).collect();
+    weighted.reduce_sum(&axes).unwrap()
+}
+
 fn matmul2(lhs: &[f64], rhs: &[f64]) -> [f64; 4] {
     let mut out = [0.0; 4];
     for col in 0..2 {
@@ -102,6 +122,25 @@ fn svd_singular_value_sum_backward_does_not_panic() {
     loss.backward().unwrap();
 
     assert!(a.grad().unwrap().is_some());
+}
+
+#[test]
+fn svd_vector_observable_backward_grad_is_finite() {
+    let ctx = ad_test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.2, -0.3, 0.7, 0.4, 1.5, -0.8]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let (u, _s, vt) = a.svd().unwrap();
+    let u_loss = weighted_square_sum(&u, vec![0.5, -0.2, 0.7, 1.1, -0.4, 0.3]);
+    let vt_loss = weighted_square_sum(&vt, vec![1.3, -0.6, 0.8, 0.2]);
+    let loss = u_loss.add(&vt_loss).unwrap();
+
+    loss.backward().unwrap();
+
+    let grad = a.grad().unwrap().unwrap();
+    assert_finite_f64_tensor(grad.as_ref());
 }
 
 #[test]
@@ -271,6 +310,23 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
         &[1.0, 3.0],
         1.0e-12,
     );
+}
+
+#[test]
+fn eigh_vector_observable_backward_grad_is_finite() {
+    let ctx = ad_test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.2, 0.2, 4.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let (_values, vectors) = a.eigh().unwrap();
+    let loss = weighted_square_sum(&vectors, vec![0.6, -0.7, 1.3, 0.4]);
+
+    loss.backward().unwrap();
+
+    let grad = a.grad().unwrap().unwrap();
+    assert_finite_f64_tensor(grad.as_ref());
 }
 
 #[test]

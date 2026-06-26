@@ -1,5 +1,7 @@
 use tenferro_tensor::DType;
 
+use crate::extension::DEFAULT_DECOMPOSITION_AD_EPS;
+
 use super::*;
 
 #[test]
@@ -20,12 +22,29 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             LinalgOp::FullPivLuSolve { transpose_a: false },
             LinalgAdOpKind::FullPivLuSolve,
         ),
-        (LinalgOp::Svd { eps: 1.0e-12 }, LinalgAdOpKind::Svd),
-        (LinalgOp::SvdVals { eps: 1.0e-12 }, LinalgAdOpKind::SvdVals),
-        (LinalgOp::Qr, LinalgAdOpKind::Qr),
-        (LinalgOp::Eigh { eps: 1.0e-12 }, LinalgAdOpKind::Eigh),
         (
-            LinalgOp::EighVals { eps: 1.0e-12 },
+            LinalgOp::Svd {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            LinalgAdOpKind::Svd,
+        ),
+        (
+            LinalgOp::SvdVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            LinalgAdOpKind::SvdVals,
+        ),
+        (LinalgOp::Qr, LinalgAdOpKind::Qr),
+        (
+            LinalgOp::Eigh {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            LinalgAdOpKind::Eigh,
+        ),
+        (
+            LinalgOp::EighVals {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
             LinalgAdOpKind::EighVals,
         ),
         (

@@ -4,7 +4,7 @@ use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
-use crate::extension::{LinalgExtensionOp, LinalgOp};
+use crate::extension::{LinalgExtensionOp, LinalgOp, DEFAULT_DECOMPOSITION_AD_EPS};
 use crate::register_runtime;
 
 /// Linear algebra extension methods for [`EagerTensor`].
@@ -121,7 +121,13 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
-    let mut outputs = apply_linalg_eager(LinalgOp::Svd { eps: 0.0 }, &[a])?.into_iter();
+    let mut outputs = apply_linalg_eager(
+        LinalgOp::Svd {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        },
+        &[a],
+    )?
+    .into_iter();
     match (
         outputs.next(),
         outputs.next(),
@@ -358,7 +364,12 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 /// ```
 pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     two_outputs(
-        apply_linalg_eager(LinalgOp::Eigh { eps: 0.0 }, &[a])?,
+        apply_linalg_eager(
+            LinalgOp::Eigh {
+                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            },
+            &[a],
+        )?,
         "eigh",
     )
 }
