@@ -2,7 +2,9 @@
 //!
 //! This crate is an out-of-tree `ExtensionOp` package. The initial
 //! implementation executes on host tensors through `rustfft`; it does not add
-//! FFT to the core `tenferro` backend trait surface.
+//! FFT to the core `tenferro` backend trait surface. Concrete non-AD execution
+//! uses [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction
+//! uses [`TracedTensorFftExt`].
 //!
 //! # Examples
 //!
@@ -30,6 +32,19 @@
 //! executor.register_extension(tenferro_fft::register_runtime).unwrap();
 //! let out = executor.run(&program).unwrap();
 //! assert_eq!(out.shape(), &[4]);
+//! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! ```
+//!
+//! ```
+//! use num_complex::Complex64;
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_fft::{FftNorm, TensorFftExt};
+//! use tenferro_tensor::Tensor;
+//!
+//! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let mut backend = CpuBackend::new();
+//! let out = x.fft(None, -1, FftNorm::Backward, &mut backend).unwrap();
+//!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
 
@@ -96,6 +111,275 @@ impl TracedTensorFftExt for TracedTensor {
 
     fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
         irfft(self, n, axis, norm)
+    }
+}
+
+/// Backend-explicit FFT methods for concrete [`Tensor`] values.
+///
+/// This is the non-AD immediate execution surface. It uses unsuffixed method
+/// names because the receiver is an owned compact tensor value. Use
+/// [`TensorReadFftExt`] when the input is a borrowed view or other
+/// [`TensorRead`] value.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_fft::{FftNorm, TensorFftExt};
+/// use tenferro_tensor::Tensor;
+///
+/// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+/// let mut backend = CpuBackend::new();
+///
+/// let spectrum = input.fft(None, -1, FftNorm::Backward, &mut backend)?;
+/// assert_eq!(spectrum.shape(), &[4]);
+/// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub trait TensorFftExt {
+    /// Execute a one-dimensional FFT along `axis`.
+    fn fft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional inverse FFT along `axis`.
+    fn ifft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional real FFT along `axis`.
+    fn rfft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional inverse real FFT along `axis`.
+    fn irfft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+}
+
+impl TensorFftExt for Tensor {
+    fn fft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let op = concrete_fft_op(
+            "TensorFftExt::fft",
+            concrete_fft_kind("TensorFftExt::fft", self.dtype())?,
+            self.shape(),
+            n,
+            axis,
+            norm,
+        )?;
+        execute_concrete_fft_op(self, &op, backend)
+    }
+
+    fn ifft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let op = concrete_fft_op(
+            "TensorFftExt::ifft",
+            concrete_ifft_kind("TensorFftExt::ifft", self.dtype())?,
+            self.shape(),
+            n,
+            axis,
+            norm,
+        )?;
+        execute_concrete_fft_op(self, &op, backend)
+    }
+
+    fn rfft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let op = concrete_fft_op(
+            "TensorFftExt::rfft",
+            concrete_rfft_kind("TensorFftExt::rfft", self.dtype())?,
+            self.shape(),
+            n,
+            axis,
+            norm,
+        )?;
+        execute_concrete_fft_op(self, &op, backend)
+    }
+
+    fn irfft<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let op = concrete_fft_op(
+            "TensorFftExt::irfft",
+            concrete_irfft_kind("TensorFftExt::irfft", self.dtype())?,
+            self.shape(),
+            n,
+            axis,
+            norm,
+        )?;
+        execute_concrete_fft_op(self, &op, backend)
+    }
+}
+
+/// Backend-explicit FFT methods for read-only tensor inputs.
+///
+/// The `_read` suffix follows the repository convention for APIs that
+/// explicitly accept [`TensorRead`] values such as borrowed views.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_fft::{FftNorm, TensorReadFftExt};
+/// use tenferro_tensor::{TensorRead, TensorView};
+///
+/// let shape = [4usize];
+/// let data = [1.0_f64, 2.0, 3.0, 4.0];
+/// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
+/// let mut backend = CpuBackend::new();
+///
+/// let spectrum = input.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
+/// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub trait TensorReadFftExt {
+    /// Execute a one-dimensional FFT along `axis`.
+    fn fft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional inverse FFT along `axis`.
+    fn ifft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional real FFT along `axis`.
+    fn rfft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+
+    /// Execute a one-dimensional inverse real FFT along `axis`.
+    fn irfft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
+}
+
+impl TensorReadFftExt for TensorRead<'_> {
+    fn fft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        execute_concrete_fft_read_op(
+            self,
+            concrete_fft_kind("TensorReadFftExt::fft_read", self.dtype())?,
+            "TensorReadFftExt::fft_read",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    fn ifft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        execute_concrete_fft_read_op(
+            self,
+            concrete_ifft_kind("TensorReadFftExt::ifft_read", self.dtype())?,
+            "TensorReadFftExt::ifft_read",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    fn rfft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        execute_concrete_fft_read_op(
+            self,
+            concrete_rfft_kind("TensorReadFftExt::rfft_read", self.dtype())?,
+            "TensorReadFftExt::rfft_read",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    fn irfft_read<B: TensorBackend>(
+        &self,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        execute_concrete_fft_read_op(
+            self,
+            concrete_irfft_kind("TensorReadFftExt::irfft_read", self.dtype())?,
+            "TensorReadFftExt::irfft_read",
+            n,
+            axis,
+            norm,
+            backend,
+        )
     }
 }
 
@@ -357,6 +641,159 @@ fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Resul
         }
     };
     Ok(vec![output])
+}
+
+fn execute_concrete_fft_op<B: TensorBackend>(
+    input: &Tensor,
+    op: &FftOp,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|_exec| single_fft_output(execute_host_fft_op(op, &[input])?))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_concrete_fft_read_op<B: TensorBackend>(
+    input: &TensorRead<'_>,
+    kind: FftKind,
+    op_name: &'static str,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    let op = concrete_fft_op(op_name, kind, input.shape(), n, axis, norm)?;
+    let materialized = input.to_tensor()?;
+    execute_concrete_fft_op(&materialized, &op, backend)
+}
+
+fn single_fft_output(mut outputs: Vec<Tensor>) -> tenferro_tensor::Result<Tensor> {
+    if outputs.len() != 1 {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "tenferro-fft",
+            message: format!("expected 1 FFT output, got {}", outputs.len()),
+        });
+    }
+    Ok(outputs.remove(0))
+}
+
+fn concrete_fft_op(
+    op: &'static str,
+    kind: FftKind,
+    input_shape: &[usize],
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> tenferro_tensor::Result<FftOp> {
+    validate_concrete_n(op, n)?;
+    let axis = normalize_concrete_axis(op, axis, input_shape.len())?;
+    validate_concrete_transform_len(op, input_shape, n, axis)?;
+    if matches!(kind, FftKind::C2R) {
+        output_shape_c2r(input_shape, axis, n)?;
+    }
+    Ok(FftOp::new(kind, axis, n, norm))
+}
+
+fn concrete_fft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+    match dtype {
+        DType::C32 | DType::C64 => Ok(FftKind::C2C { forward: true }),
+        DType::F32 | DType::F64 => Ok(FftKind::R2C { onesided: false }),
+        DType::I32 | DType::I64 | DType::Bool => Err(tensor_fft_config_error(
+            op,
+            format!("fft expects real or complex floating input, got {dtype:?}"),
+        )),
+    }
+}
+
+fn concrete_ifft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+    match dtype {
+        DType::C32 | DType::C64 => Ok(FftKind::C2C { forward: false }),
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Err(
+            tensor_fft_config_error(op, format!("ifft expects C32 or C64 input; got {dtype:?}")),
+        ),
+    }
+}
+
+fn concrete_rfft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+    match dtype {
+        DType::F32 | DType::F64 => Ok(FftKind::R2C { onesided: true }),
+        DType::C32 | DType::C64 | DType::I32 | DType::I64 | DType::Bool => Err(
+            tensor_fft_config_error(op, format!("rfft expects F32 or F64 input; got {dtype:?}")),
+        ),
+    }
+}
+
+fn concrete_irfft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+    match dtype {
+        DType::C32 | DType::C64 => Ok(FftKind::C2R),
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => Err(
+            tensor_fft_config_error(op, format!("irfft expects C32 or C64 input; got {dtype:?}")),
+        ),
+    }
+}
+
+fn validate_concrete_n(op: &'static str, n: Option<usize>) -> tenferro_tensor::Result<()> {
+    if n == Some(0) {
+        return Err(tensor_fft_config_error(
+            op,
+            "tenferro-fft transform length n must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_concrete_transform_len(
+    op: &'static str,
+    input_shape: &[usize],
+    n: Option<usize>,
+    axis: usize,
+) -> tenferro_tensor::Result<()> {
+    if n.is_none() && input_shape.get(axis).copied() == Some(0) {
+        return Err(tensor_fft_config_error(
+            op,
+            "tenferro-fft transform length n must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_concrete_axis(
+    op: &'static str,
+    axis: isize,
+    rank: usize,
+) -> tenferro_tensor::Result<usize> {
+    if rank == 0 {
+        return Err(tensor_fft_config_error(
+            op,
+            "tenferro-fft requires rank >= 1",
+        ));
+    }
+    let normalized = if axis >= 0 {
+        axis as usize
+    } else {
+        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+            tensor_fft_config_error(
+                op,
+                format!("tenferro-fft axis {axis} out of bounds for rank {rank}"),
+            )
+        })?
+    };
+    if normalized >= rank {
+        return Err(tensor_fft_config_error(
+            op,
+            format!("tenferro-fft axis {axis} out of bounds for rank {rank}"),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn tensor_fft_config_error(
+    op: &'static str,
+    message: impl std::fmt::Display,
+) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::InvalidConfig {
+        op,
+        message: message.to_string(),
+    }
 }
 
 fn tensor_placement(input: &Tensor) -> &Placement {
@@ -1259,6 +1696,9 @@ fn for_axis_lane(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod concrete_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,11 +1,13 @@
 # Einsum
 
 `einsum` is a standard extension, not part of `tenferro` core. Add the
-`tenferro-einsum` crate and import its extension traits. Traced graph
-construction uses `GraphCompilerEinsumExt`; eager execution uses
-`EagerEinsumExt`; `tensordot` contraction sugar uses tensor extension traits.
-Compiled execution also requires explicit runtime registration for einsum
-extension ops.
+`tenferro-einsum` crate and import its extension traits. Concrete tensor
+execution uses `TensorEinsumExt`, `TypedTensorEinsumExt`, and
+`TensorReadEinsumExt`; repeated-shape concrete workloads can use
+`ConcreteEinsumPlan`. Traced graph construction uses `GraphCompilerEinsumExt`;
+autodiff eager execution uses `EagerEinsumExt`; `tensordot` contraction sugar
+uses tensor extension traits. Compiled traced execution also requires explicit
+runtime registration for einsum extension ops.
 
 When working from a local checkout, use paths that match your project layout.
 For a scratch crate created directly inside the `tenferro-rs` checkout, include
@@ -21,9 +23,13 @@ Then add the dependencies:
 ```toml
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
-tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
+
+# Only needed for EagerTensor/autodiff examples.
+tenferro-ad = { path = "../crates/tenferro-ad" }
+num-complex = "0.4"
 ```
 
 For published crates, use the same crate set with version requirements:
@@ -31,14 +37,100 @@ For published crates, use the same crate set with version requirements:
 ```toml
 [dependencies]
 tenferro-runtime = "..."
+tenferro-tensor = "..."
 tenferro-cpu = "..."
-tenferro-ad = "..."
 tenferro-einsum = { version = "...", features = ["autodiff"] }
+
+# Only needed for EagerTensor/autodiff examples.
+tenferro-ad = "..."
+num-complex = "0.4"
 ```
 
-Graph-only users can omit `tenferro-ad` and the `autodiff` feature. The traced
-examples below are fragments; copy them into `fn main() -> Result<(), Box<dyn
-std::error::Error>>` when turning them into a standalone `src/main.rs`.
+Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
+feature. Enable `tenferro-einsum`'s `autodiff` feature when using
+`EagerEinsumExt` or einsum AD rules. The traced examples below are fragments;
+copy them into `fn main() -> Result<(), Box<dyn std::error::Error>>` when
+turning them into a standalone `src/main.rs`.
+
+## Concrete Tensor And TypedTensor
+
+Use the concrete route when you have `Tensor` or `TypedTensor` values and want
+to run the contraction immediately on an explicit backend without autodiff.
+Arrays such as `[&lhs, &rhs]` implement the extension traits directly; their
+receiver type is the fixed-size array of borrowed tensor references.
+
+```rust
+use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
+use tenferro_einsum::{TensorEinsumExt, TypedTensorEinsumExt};
+use tenferro_tensor::{Tensor, TypedTensor};
+
+let lhs = Tensor::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+)?;
+let rhs = Tensor::from_vec_col_major(
+    vec![3, 2],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+)?;
+let mut backend = CpuBackend::new();
+let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
+assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
+
+let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
+    vec![2, 2],
+    vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(4.0, 2.0),
+    ],
+)?;
+let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
+    vec![2, 1],
+    vec![Complex64::new(5.0, 0.0), Complex64::new(6.0, -1.0)],
+)?;
+let complex = [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", &mut backend)?;
+assert_eq!(
+    complex.as_slice()?,
+    &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
+);
+# Ok::<(), tenferro_tensor::Error>(())
+```
+
+## TensorRead And Prepared Plans
+
+Use `TensorReadEinsumExt` when any input is a borrowed view. The `_read` suffix
+is reserved for this `TensorRead`-style API; compact owned `Tensor` inputs use
+the unsuffixed `einsum` method.
+
+Use `ConcreteEinsumPlan` when the same subscripts, dtypes, and shapes are
+executed repeatedly. Preparing the plan parses and optimizes the contraction
+tree once; each execution validates the input count, dtype, and shape before
+running the stored tree.
+
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+
+let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
+let vector = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?;
+let inputs = [
+    TensorRead::from_view(TensorView::F64(matrix)),
+    TensorRead::from_tensor(&vector),
+];
+
+let mut backend = CpuBackend::new();
+let result = inputs.einsum_read("ij,j->i", &mut backend)?;
+assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
+
+let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
+let planned = plan.execute_read(inputs, &mut backend)?;
+assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
+# Ok::<(), tenferro_tensor::Error>(())
+```
 
 ## Traced Matrix Multiply
 

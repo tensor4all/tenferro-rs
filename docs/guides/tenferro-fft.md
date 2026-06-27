@@ -1,13 +1,14 @@
 # FFT (extension)
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
-crate imported directly alongside `tenferro-runtime`: users add the package,
-import `TracedTensorFftExt`, and use FFT methods with `TracedTensor` graphs.
+crate imported directly alongside `tenferro-runtime` or `tenferro-tensor`.
+Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; traced
+graphs use `TracedTensorFftExt`.
 
 The current implementation provides one-dimensional CPU-host transforms backed
-by `rustfft` through tenferro extension operations. The public functions are
-ordinary Rust wrappers, so most users do not need to work with the lower-level
-extension machinery directly.
+by `rustfft` through tenferro extension operations. The public API is ordinary
+Rust extension-trait methods, so most users do not need to work with the
+lower-level extension machinery directly.
 
 ## Setup
 
@@ -25,6 +26,7 @@ Then add the dependencies:
 [dependencies]
 num-complex = "0.4"
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
 tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
@@ -36,16 +38,16 @@ For published crates, use the same crate set with version requirements:
 [dependencies]
 num-complex = "0.4"
 tenferro-runtime = "..."
+tenferro-tensor = "..."
 tenferro-cpu = "..."
 tenferro-ad = "..."
 tenferro-fft = { version = "...", features = ["autodiff"] }
 ```
 
-Graph-only users can omit `tenferro-ad` and the `autodiff` feature. The
-`traced_tensor` module path in rustdoc contains the traced-graph FFT helpers
-implemented by `TracedTensorFftExt`. `rustfft` is pulled in automatically by
-`tenferro-fft`, and the first local build can take a few minutes on a fresh
-machine.
+Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
+feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
+rules. `rustfft` is pulled in automatically by `tenferro-fft`, and the first
+local build can take a few minutes on a fresh machine.
 
 ## Current API
 
@@ -68,6 +70,41 @@ normalization modes are:
 | `FftNorm::Ortho` | forward and inverse scaled by `1 / sqrt(n)` |
 
 `Backward` is the default and matches NumPy, PyTorch, and JAX.
+
+### Concrete Tensor And TensorRead
+
+Use `TensorFftExt` when you have an owned compact `Tensor` and want immediate
+non-AD execution on an explicit backend. Use `TensorReadFftExt` when the input
+is a borrowed view or other read-oriented value. The `_read` suffix is reserved
+for that `TensorRead` surface; compact `Tensor` inputs use unsuffixed method
+names.
+
+```rust
+use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
+use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+
+let mut backend = CpuBackend::new();
+let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let full = x.fft(None, -1, FftNorm::Backward, &mut backend)?;
+let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut backend)?;
+assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+assert_eq!(one_sided.shape(), &[3]);
+
+let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+let read = TensorRead::from_view(TensorView::F64(view));
+let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
+assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+# Ok::<(), tenferro_tensor::Error>(())
+```
+
+`TypedTensor<T>` wrappers are not part of the current API. FFT operations can
+change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
+contracts need a separate design.
+
+### Traced Graphs
 
 <!-- snippet-source: crates/tenferro-fft/examples/traced_fft.rs -->
 ```rust

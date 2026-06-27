@@ -8,7 +8,7 @@ publish.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Subscripts, contraction planning, traced/eager einsum APIs, extension runtime, and AD rule for tenferro."
+description = "Subscripts, contraction planning, concrete/traced/eager einsum APIs, extension runtime, and AD rule for tenferro."
 
 [features]
 default = ["cpu-faer"]

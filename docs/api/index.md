@@ -27,11 +27,12 @@ For contributors, internal crate APIs are also available in the
 - [tenferro-gpu](./tenferro_gpu/index.html): CubeCL/CUDA backend and GPU
   transfer helpers
 - [tenferro-einsum](./tenferro_einsum/index.html): subscripts,
-  contraction planning, traced/eager einsum APIs, extension runtime, and AD rule
+  contraction planning, concrete/traced/eager einsum APIs, extension runtime,
+  and AD rule
 - [tenferro-linalg](./tenferro_linalg/index.html): linear algebra traced APIs,
   eager helpers, extension runtime, and optional linalg AD rules
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
-  public FFT APIs
+  public concrete/traced FFT APIs
 
 ## Internal Implementation Crates
 

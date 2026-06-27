@@ -12,10 +12,14 @@
 //!   contraction order via [`ContractionTree`]
 //! - **Tensordot sugar**: NumPy-style axis-pair contraction extension methods,
 //!   implemented as contraction sugar rather than as linear algebra APIs.
+//! - **Concrete execution**: backend-explicit [`TensorEinsumExt`],
+//!   [`TypedTensorEinsumExt`], [`TensorReadEinsumExt`], and
+//!   [`ConcreteEinsumPlan`] APIs for non-AD tensor values.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
-//! - **Tensor extension traits**: graph-building helpers are available as
-//!   methods on `GraphCompiler`, eager input slices, and tensor receivers.
+//! - **Tensor extension traits**: graph-building and immediate-execution
+//!   helpers are available as methods on `GraphCompiler`, concrete input
+//!   slices/arrays, eager input slices/arrays, and tensor receivers.
 //!
 //! # Examples
 //!
@@ -25,6 +29,20 @@
 //! let subs = Subscripts::parse("ij,jk->ik").unwrap();
 //! let tree = ContractionTree::optimize(&subs, &[&[2, 3], &[3, 4]]).unwrap();
 //! assert_eq!(tree.step_count(), 1);
+//! ```
+//!
+//! ```
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_einsum::TensorEinsumExt;
+//! use tenferro_tensor::Tensor;
+//!
+//! let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+//! let b = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+//! let mut backend = CpuBackend::new();
+//!
+//! let out = [&a, &b].einsum("ij,jk->ik", &mut backend)?;
+//! assert_eq!(out.shape(), &[2, 4]);
+//! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 //!
 //! ```
@@ -44,6 +62,7 @@
 mod binary_dot;
 mod builder;
 mod cache;
+mod concrete;
 mod eager;
 #[cfg(feature = "autodiff")]
 mod eager_ad;
@@ -61,6 +80,9 @@ mod typed_eager;
 pub(crate) mod util;
 
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
+pub use concrete::{
+    ConcreteEinsumPlan, TensorEinsumExt, TensorReadEinsumExt, TypedTensorEinsumExt,
+};
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
 pub use error::{Error, Result};
@@ -75,6 +97,8 @@ pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
 pub use traced::{GraphCompilerEinsumExt, TracedTensorEinsumExt};
 
+#[cfg(test)]
+mod concrete_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

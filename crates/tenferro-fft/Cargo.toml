@@ -8,7 +8,7 @@ publish.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "FFT extension runtime and public FFT APIs for tenferro."
+description = "FFT extension runtime and public concrete/traced FFT APIs for tenferro."
 
 [features]
 default = ["cpu-faer"]

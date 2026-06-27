@@ -2,9 +2,13 @@
 
 Einsum is a standard extension crate, not part of a root facade.
 The public user-facing paths live under `tenferro_einsum` as crate-root
-extension traits: `GraphCompilerEinsumExt` for traced graph construction,
-`EagerEinsumExt` for immediate eager execution, and tensor extension traits for
-`tensordot` contraction sugar. `tensordot` is not a `tenferro-linalg` API.
+extension traits: `TensorEinsumExt`, `TypedTensorEinsumExt`, and
+`TensorReadEinsumExt` for concrete backend-explicit execution,
+`GraphCompilerEinsumExt` for traced graph construction, `EagerEinsumExt` for
+autodiff eager execution, and tensor extension traits for `tensordot`
+contraction sugar. `ConcreteEinsumPlan` owns repeated concrete executions with
+fixed input dtype and shape metadata. `tensordot` is not a `tenferro-linalg`
+API.
 
 The workspace intentionally has no root `tenferro` crate and no einsum facade
 paths. Programs that use traced einsum must explicitly register the extension
@@ -15,11 +19,15 @@ The implementation is split between:
 - `crates/tenferro-einsum/src/traced.rs` for the user-facing traced API,
   contraction strategy selection, symbolic-shape handling, and graph cache
   integration,
+- `crates/tenferro-einsum/src/concrete.rs` for the user-facing concrete tensor,
+  read, typed, and prepared-plan APIs,
 - `crates/tenferro-einsum/src/extension.rs` for runtime extension execution,
 - `crates/tenferro-einsum/src/syntax/` for subscript and nested-order parsing,
 - `crates/tenferro-einsum/src/planning/` for contraction tree planning and per-step
   lowering plans,
 - `crates/tenferro-einsum/src/builder.rs` for graph-fragment lowering,
+- `crates/tenferro-einsum/src/eager.rs` for the shared concrete executor used by
+  concrete wrappers and extension runtime execution,
 - `crates/tenferro-einsum/src/eager_ad.rs` for eager tensor execution.
 
 Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
@@ -47,6 +55,31 @@ executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
+
+## Concrete Tensor API
+
+Concrete non-AD execution is exposed through crate-root extension traits on
+input slices and arrays, not through public module free functions:
+
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_einsum::TensorEinsumExt;
+use tenferro_tensor::Tensor;
+
+let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+let mut backend = CpuBackend::new();
+let c = [&a, &b].einsum("ij,jk->ik", &mut backend).unwrap();
+
+assert_eq!(c.shape(), &[2, 2]);
+```
+
+`TensorEinsumExt` is the unsuffixed API for compact `Tensor` references.
+`TypedTensorEinsumExt` preserves a statically known scalar type.
+`TensorReadEinsumExt::einsum_read` accepts `TensorRead` values and therefore
+uses the repository-wide `_read` suffix convention. `ConcreteEinsumPlan`
+precomputes the contraction tree for fixed input metadata and validates later
+executions against the prepared input count, dtypes, and shapes.
 
 `einsum_with` accepts an explicit `EinsumOptimize` strategy:
 
@@ -83,8 +116,8 @@ let c = [&a, &b].einsum("ij,jk->ik").unwrap();
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
-Runtime-owned concrete execution is internal to the extension runtime. It is
-not exposed through a facade crate.
+Autodiff eager execution remains separate from concrete `Tensor` execution:
+`EagerEinsumExt` is available only when the `autodiff` feature is enabled.
 
 ## Subscripts And Repeated Labels
 
