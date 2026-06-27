@@ -42,9 +42,9 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, extension runtime registration, and extension cache storage |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced programs |
 | `tenferro-ad` | Eager runtime, eager tensors, and traced AD extension traits |
-| `tenferro-einsum` | Subscripts, contraction planning, traced/eager einsum APIs, extension runtime, and AD rule |
+| `tenferro-einsum` | Subscripts, contraction planning, concrete/traced/eager einsum APIs, extension runtime, and AD rule |
 | `tenferro-linalg` | Linear algebra traced APIs, eager helpers, extension runtime, and optional linalg AD rules |
-| `tenferro-fft` | FFT extension runtime and public FFT APIs |
+| `tenferro-fft` | FFT extension runtime and public concrete/traced FFT APIs |
 | `tenferro-core-ops` | Internal core primitive operation catalog used by graph, runtime, and backend dispatch |
 | `tenferro-internal-ops` | Graph op vocabulary and AD rule implementations |
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |

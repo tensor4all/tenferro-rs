@@ -79,9 +79,9 @@ The release API should make crate ownership obvious.
 | `tenferro-internal-ops` | Internal graph operation vocabulary and graph-level AD rule implementations. |
 | `tenferro-runtime` | Backend-agnostic runtime helpers, traced tensor construction, graph compilation and execution, extension registration, and extension cache storage. |
 | `tenferro-ad` | Eager AD surfaces, eager tensors, AD contexts, traced AD helper traits, and user-facing differentiation APIs. |
-| `tenferro-einsum` | Einsum public API, subscript parsing, contraction planning, extension runtime, extension-owned caches, eager/traced wrappers, and optional AD rule ownership. |
+| `tenferro-einsum` | Einsum public API, subscript parsing, contraction planning, concrete/traced/autodiff-eager wrappers, extension runtime, extension-owned caches, and optional AD rule ownership. |
 | `tenferro-linalg` | Linalg public API, extension payloads, linalg backend hooks, CPU linalg kernels, optional CUDA linalg bridge code, eager/traced wrappers, and optional AD rule ownership. |
-| `tenferro-fft` | FFT public API, extension runtime registration, eager/traced wrappers, and FFT-specific execution behavior. |
+| `tenferro-fft` | FFT public API, extension runtime registration, concrete/traced wrappers, optional AD rule ownership, and FFT-specific execution behavior. |
 
 If an implementation needs a cross-crate bridge, the bridge must be narrower
 than the internal subsystem it exposes. `#[doc(hidden)] pub` is not a substitute
@@ -128,8 +128,12 @@ Release APIs should follow these naming and shape rules.
 - Unary single-output traced ops are methods on `TracedTensor`.
 - Binary single-output ops use operator overloads when the operator is natural;
   otherwise they use methods.
-- Multi-output linalg and decomposition ops are free functions.
-- Einsum is a free function owned by `tenferro-einsum`.
+- Multi-output linalg and decomposition ops are tensor extension-trait methods.
+- Einsum is owned by `tenferro-einsum` through crate-root extension traits:
+  concrete input slices/arrays use `TensorEinsumExt`, `TypedTensorEinsumExt`,
+  and `TensorReadEinsumExt`; repeated concrete executions use
+  `ConcreteEinsumPlan`; traced graph construction uses
+  `GraphCompilerEinsumExt`; autodiff eager inputs use `EagerEinsumExt`.
 - Traced tensor methods do not use a `traced_` prefix.
 - User-facing backend features are named for concrete backend families, such as
   `cuda` and `rocm`. Public extension crates should not expose a vague `gpu`

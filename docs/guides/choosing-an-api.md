@@ -87,7 +87,8 @@ operations.
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
 | Everyday tensor ops | `TensorOpsExt` / `TypedTensorOpsExt` backend-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
-| Einsum | Internal to `tenferro-einsum` runtime execution | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
+| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
+| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | Not exposed today | `x.fft(...)` via `TracedTensorFftExt` plus `register_runtime` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` on tracked scalar losses | `grad`, `vjp`, `jvp`, HVP via composition |

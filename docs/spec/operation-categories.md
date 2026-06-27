@@ -145,10 +145,13 @@ and traced surfaces (subject to the same parity rule within each family):
   `triangular_solve`, `cholesky`, `lu`, `full_piv_lu` through
   `TracedTensorLinalgExt` / `EagerTensorLinalgExt`.
 - **Einsum** (`tenferro-einsum`): `einsum` + contraction planning.
-  Traced graph construction uses `GraphCompilerEinsumExt`; eager inputs use
-  `EagerEinsumExt`; `tensordot` sugar uses tensor extension traits.
-- **FFT** (`tenferro-fft`): `fft`, `rfft`, `irfft` through
-  `TracedTensorFftExt`.
+  Concrete inputs use `TensorEinsumExt`, `TypedTensorEinsumExt`,
+  `TensorReadEinsumExt`, and `ConcreteEinsumPlan`; traced graph construction
+  uses `GraphCompilerEinsumExt`; autodiff eager inputs use `EagerEinsumExt`;
+  `tensordot` sugar uses tensor extension traits.
+- **FFT** (`tenferro-fft`): `fft`, `ifft`, `rfft`, and `irfft`.
+  Concrete inputs use `TensorFftExt` and `TensorReadFftExt`; traced graph
+  construction uses `TracedTensorFftExt`.
 
 ## 9. AD transforms
 
