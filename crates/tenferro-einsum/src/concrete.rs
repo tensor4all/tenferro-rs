@@ -370,7 +370,7 @@ impl ConcreteEinsumPlan {
             });
         }
 
-        for (index, (expected, actual)) in self.inputs.iter().zip(actual.iter()).enumerate() {
+        for (expected, actual) in self.inputs.iter().zip(actual.iter()) {
             if expected.dtype != actual.dtype {
                 return Err(Error::DTypeMismatch {
                     op,
@@ -385,19 +385,13 @@ impl ConcreteEinsumPlan {
                     rhs: actual.shape.clone(),
                 });
             }
-            if expected.shape.len() != actual.shape.len() {
-                return Err(Error::InvalidConfig {
-                    op,
-                    message: format!("input {index} rank changed during prepared einsum execution"),
-                });
-            }
         }
 
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct ConcreteEinsumInputSpec {
     dtype: DType,
     shape: Vec<usize>,
@@ -451,7 +445,10 @@ fn typed_einsum_subscripts<T: TensorScalar>(
     into_typed_result(result, op)
 }
 
-fn into_typed_result<T: TensorScalar>(result: Tensor, op: &'static str) -> Result<TypedTensor<T>> {
+pub(crate) fn into_typed_result<T: TensorScalar>(
+    result: Tensor,
+    op: &'static str,
+) -> Result<TypedTensor<T>> {
     let actual = result.dtype();
     T::into_typed(result).map_err(|_| Error::DTypeMismatch {
         op,

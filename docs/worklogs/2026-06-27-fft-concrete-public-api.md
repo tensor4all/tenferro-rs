@@ -46,6 +46,11 @@ Implemented #1239 by adding concrete non-AD FFT wrappers for `Tensor` and
 - `cargo test -p tenferro-einsum -p tenferro-fft`
 - `cargo test -p tenferro-einsum -p tenferro-fft --features tenferro-einsum/autodiff,tenferro-fft/autodiff`
 - `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`
+- `cargo test --workspace --release`
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+- `python3 scripts/check-coverage.py coverage.json`
 - `python3 scripts/check-doc-snippets.py --check`
 - `python3 scripts/check-guide-dependency-snippets.py`
 - `python3 scripts/check-api-consistency.py --fail-on-findings`
