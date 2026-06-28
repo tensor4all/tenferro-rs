@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tenferro_tensor::{
     BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRank, TensorRead,
-    TensorView, TypedTensorView,
+    TensorView, TensorWrite, TypedTensorView,
 };
 
 use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
@@ -812,6 +812,41 @@ pub(crate) fn eager_einsum_exec_read(
         })
         .collect();
     eager_einsum_exec_values(exec, values, tree)
+}
+
+pub(crate) fn eager_einsum_exec_read_into(
+    exec: &mut dyn BackendSession,
+    inputs: &[TensorRead<'_>],
+    tree: &ContractionTree,
+    mut out: TensorWrite<'_>,
+) -> Result<()> {
+    record_eager_einsum_profile("exec_read_into.enter", Duration::ZERO);
+    let subscripts = &tree.subscripts;
+    if inputs.len() == 2
+        && subscripts.inputs.len() == 2
+        && inputs[0].shape().len() == subscripts.inputs[0].len()
+        && inputs[1].shape().len() == subscripts.inputs[1].len()
+    {
+        if let Some(plan) = try_build_binary_dot_plan(
+            &subscripts.inputs[0],
+            &subscripts.inputs[1],
+            &subscripts.output,
+        ) {
+            if plan.result_labels == plan.target_labels {
+                return profile_eager_einsum_section("binary.fast_dot_general_into", || {
+                    exec.dot_general_read_into(
+                        inputs[0].clone(),
+                        inputs[1].clone(),
+                        &plan.config,
+                        out,
+                    )
+                });
+            }
+        }
+    }
+
+    let result = eager_einsum_exec_read(exec, inputs, tree)?;
+    out.copy_from_tensor(&result)
 }
 
 fn tensor_value_from_read(input: TensorRead<'_>) -> TensorValue<'_> {

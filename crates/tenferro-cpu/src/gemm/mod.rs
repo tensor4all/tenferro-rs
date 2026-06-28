@@ -13,9 +13,11 @@ use crate::ConjElem;
 use crate::{Error, Result};
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
-    col_major_strides, Buffer, TensorRead, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, Buffer, TensorRead, TensorView, TensorWrite, TypedTensor, TypedTensorView,
 };
 use tenferro_tensor::{CacheStats, RuntimeCacheControl};
+#[cfg(feature = "cpu-faer")]
+use tenferro_tensor::{TensorViewMut, TypedTensorViewMut};
 
 #[cfg(feature = "cpu-blas")]
 mod blas_gemm;
@@ -977,6 +979,117 @@ pub(crate) fn dot_general_faer_read_cached(
 }
 
 #[cfg(feature = "cpu-faer")]
+pub(crate) fn dot_general_faer_read_into_cached(
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            match (&lhs, &rhs, &mut *out) {
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                    TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                ) => {
+                    let mut c = c.as_view_mut();
+                    dot_general_faer_into_typed(a, b, config, &mut c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                    TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                ) => {
+                    let mut c = c.as_view_mut();
+                    dot_general_faer_into_typed(a, b, config, &mut c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                    TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                ) => {
+                    let mut c = c.as_view_mut();
+                    dot_general_faer_into_typed(a, b, config, &mut c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                    TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                ) => {
+                    let mut c = c.as_view_mut();
+                    dot_general_faer_into_typed(a, b, config, &mut c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                    TensorWrite::View(TensorViewMut::$view(c)),
+                ) => {
+                    dot_general_faer_into_typed(a, b, config, c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                    TensorWrite::View(TensorViewMut::$view(c)),
+                ) => {
+                    dot_general_faer_into_typed(a, b, config, c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                    TensorWrite::View(TensorViewMut::$view(c)),
+                ) => {
+                    dot_general_faer_into_typed(a, b, config, c)?;
+                    return Ok(true);
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                    TensorWrite::View(TensorViewMut::$view(c)),
+                ) => {
+                    dot_general_faer_into_typed(a, b, config, c)?;
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(false)
+}
+
+#[cfg(feature = "cpu-faer")]
+fn dot_general_faer_into_typed<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<()>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: PoolScalar + Copy + Clone + Zero + One + PartialEq + strided_einsum2::ScalarBase + 'static,
+    strided_einsum2::backend::FaerBackend: strided_einsum2::Backend<T>,
+{
+    strided_dot::dot_general_strided_with_backend_into::<
+        _,
+        _,
+        _,
+        strided_einsum2::backend::FaerBackend,
+    >(lhs, rhs, config, out)
+}
+
+#[cfg(feature = "cpu-faer")]
 // Internal GEMM fast path needs cache metadata, backend context, operands, and conjugation flags together.
 #[allow(clippy::too_many_arguments)]
 fn typed_faer_gemm<L, R, T>(
@@ -1294,6 +1407,19 @@ pub(crate) fn dot_general_blas_read_cached(
             rhs: rhs.dtype(),
         })
     }
+}
+
+#[cfg(feature = "cpu-blas")]
+pub(crate) fn dot_general_blas_read_into_cached(
+    _buffers: &mut BufferPool,
+    _cache: &mut GemmAnalysisCache,
+    _cache_slot: Option<usize>,
+    _lhs: TensorRead<'_>,
+    _rhs: TensorRead<'_>,
+    _config: &DotGeneralConfig,
+    _out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    Ok(false)
 }
 
 #[cfg(feature = "cpu-blas")]

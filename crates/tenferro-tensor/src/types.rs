@@ -700,6 +700,84 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         checked_view_offset(self.shape(), self.strides(), self.offset(), indices)
     }
 
+    /// Compute the physical element offset for a logical index, returning a typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorView;
+    ///
+    /// let data = [1_i32, 2, 3];
+    /// let view = TypedTensorView::from_slice([3], [-1], 2, &data)?;
+    /// assert_eq!(view.layout_linear_offset(&[2])?, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        checked_view_offset_result(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            indices,
+            "TypedTensorView::layout_linear_offset",
+        )
+    }
+
+    /// Return whether this view is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorView;
+    ///
+    /// let data = [1_i32, 2];
+    /// let view = TypedTensorView::from_slice([2], [1], 0, &data)?;
+    /// assert!(view.is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        self.layout
+            .is_compact_col_major()
+            .map_err(|err| tensor_layout_error("TypedTensorView::is_col_major_contiguous", err))
+    }
+
+    /// Return a compact string summary of this view's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorView;
+    ///
+    /// let data = [1_i32, 2];
+    /// let view = TypedTensorView::from_slice([2], [1], 0, &data)?;
+    /// assert!(view.layout_summary().contains("shape=[2]"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_summary(&self) -> String {
+        layout_summary(self.shape(), self.strides(), self.offset())
+    }
+
+    /// Assert this view is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorView;
+    ///
+    /// let data = [1_i32, 2];
+    /// let view = TypedTensorView::from_slice([2], [1], 0, &data)?;
+    /// view.assert_col_major_contiguous()?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            "TypedTensorView::assert_col_major_contiguous",
+        )
+    }
+
     /// Borrow one host element by logical index.
     ///
     /// Returns `None` for out-of-bounds indices and backend buffers.
@@ -1211,6 +1289,84 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> Option<usize> {
         checked_view_offset(self.shape(), self.strides(), self.offset(), indices)
+    }
+
+    /// Compute the physical element offset for a logical index, returning a typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [1_i32, 2, 3];
+    /// let view = TypedTensorViewMut::from_slice([3], [-1], 2, &mut data)?;
+    /// assert_eq!(view.layout_linear_offset(&[2])?, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        checked_view_offset_result(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            indices,
+            "TypedTensorViewMut::layout_linear_offset",
+        )
+    }
+
+    /// Return whether this mutable view is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut data)?;
+    /// assert!(view.is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        self.layout
+            .is_compact_col_major()
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::is_col_major_contiguous", err))
+    }
+
+    /// Return a compact string summary of this mutable view's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut data)?;
+    /// assert!(view.layout_summary().contains("shape=[2]"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_summary(&self) -> String {
+        layout_summary(self.shape(), self.strides(), self.offset())
+    }
+
+    /// Assert this mutable view is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut data)?;
+    /// view.assert_col_major_contiguous()?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            "TypedTensorViewMut::assert_col_major_contiguous",
+        )
     }
 
     /// Borrow one host element by logical index.
@@ -1742,6 +1898,36 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_>;
 
+    /// Wrap a typed borrowed view as a dtype-erased [`TensorView`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar, TypedTensorView};
+    ///
+    /// let data = [1.0_f64];
+    /// let view = TypedTensorView::from_col_major(&[1], &data)?;
+    /// assert_eq!(f64::tensor_view(view).dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a>;
+
+    /// Mutably borrow a typed tensor as a dtype-erased [`TensorWrite`] view.
+    ///
+    /// This keeps the typed output borrowed instead of wrapping it in a
+    /// temporary dynamic tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar, TypedTensor};
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![0.0]).unwrap();
+    /// let write = f64::tensor_write(&mut tensor);
+    /// assert_eq!(write.dtype(), DType::F64);
+    /// ```
+    fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_>;
+
     /// Borrow the host data from a [`Tensor`].
     fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]>;
 
@@ -1803,6 +1989,14 @@ macro_rules! impl_tensor_scalar {
 
             fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
                 TensorRead::from_view(TensorView::$variant(tensor.as_view()))
+            }
+
+            fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a> {
+                TensorView::$variant(view)
+            }
+
+            fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_> {
+                TensorWrite::from_view(TensorViewMut::$variant(tensor.as_view_mut()))
             }
 
             fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]> {
@@ -1910,6 +2104,34 @@ pub enum TensorView<'a> {
     C64(TypedTensorView<'a, Complex<f64>>),
 }
 
+/// Dynamic mutable borrowed tensor view.
+///
+/// `TensorViewMut` is the mutable counterpart to [`TensorView`]. It keeps the
+/// dtype erased while preserving the typed mutable view's shape, strides, and
+/// offset metadata.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, TensorViewMut, TypedTensorViewMut};
+///
+/// let mut data = [1.0_f64, 2.0];
+/// let view = TensorViewMut::F64(TypedTensorViewMut::from_slice([2], [1], 0, &mut data)?);
+/// assert_eq!(view.dtype(), DType::F64);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum TensorViewMut<'a> {
+    F32(TypedTensorViewMut<'a, f32>),
+    F64(TypedTensorViewMut<'a, f64>),
+    I32(TypedTensorViewMut<'a, i32>),
+    I64(TypedTensorViewMut<'a, i64>),
+    Bool(TypedTensorViewMut<'a, bool>),
+    C32(TypedTensorViewMut<'a, Complex<f32>>),
+    C64(TypedTensorViewMut<'a, Complex<f64>>),
+}
+
 /// Read-only tensor input accepted by synchronous eager kernels.
 ///
 /// `TensorRead` lets kernels accept either an owned tensor reference or a
@@ -1939,6 +2161,29 @@ pub enum TensorView<'a> {
 pub enum TensorRead<'a> {
     Tensor(&'a Tensor),
     View(TensorView<'a>),
+}
+
+/// Mutable tensor output accepted by synchronous eager kernels.
+///
+/// `TensorWrite` mirrors [`TensorRead`] for output dispatch: it can target an
+/// owned compact [`Tensor`] or a borrowed mutable [`TensorViewMut`]. The target
+/// is never resized.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Tensor, TensorWrite};
+///
+/// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+/// let write = TensorWrite::from_tensor(&mut tensor);
+/// assert_eq!(write.shape(), &[1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum TensorWrite<'a> {
+    Tensor(&'a mut Tensor),
+    View(TensorViewMut<'a>),
 }
 
 /// Owned lazy tensor view over a shared base tensor.
@@ -2557,6 +2802,74 @@ impl<'a> TensorView<'a> {
         }
     }
 
+    /// Return strides in element units.
+    pub fn strides(&self) -> &[isize] {
+        match self {
+            Self::F32(t) => t.strides(),
+            Self::F64(t) => t.strides(),
+            Self::I32(t) => t.strides(),
+            Self::I64(t) => t.strides(),
+            Self::Bool(t) => t.strides(),
+            Self::C32(t) => t.strides(),
+            Self::C64(t) => t.strides(),
+        }
+    }
+
+    /// Return the physical element offset.
+    pub fn offset(&self) -> isize {
+        match self {
+            Self::F32(t) => t.offset(),
+            Self::F64(t) => t.offset(),
+            Self::I32(t) => t.offset(),
+            Self::I64(t) => t.offset(),
+            Self::Bool(t) => t.offset(),
+            Self::C32(t) => t.offset(),
+            Self::C64(t) => t.offset(),
+        }
+    }
+
+    /// Compute the physical element offset for a logical index.
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        match self {
+            Self::F32(t) => t.layout_linear_offset(indices),
+            Self::F64(t) => t.layout_linear_offset(indices),
+            Self::I32(t) => t.layout_linear_offset(indices),
+            Self::I64(t) => t.layout_linear_offset(indices),
+            Self::Bool(t) => t.layout_linear_offset(indices),
+            Self::C32(t) => t.layout_linear_offset(indices),
+            Self::C64(t) => t.layout_linear_offset(indices),
+        }
+    }
+
+    /// Return whether this view is compact column-major.
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        match self {
+            Self::F32(t) => t.is_col_major_contiguous(),
+            Self::F64(t) => t.is_col_major_contiguous(),
+            Self::I32(t) => t.is_col_major_contiguous(),
+            Self::I64(t) => t.is_col_major_contiguous(),
+            Self::Bool(t) => t.is_col_major_contiguous(),
+            Self::C32(t) => t.is_col_major_contiguous(),
+            Self::C64(t) => t.is_col_major_contiguous(),
+        }
+    }
+
+    /// Return a compact string summary of this view's layout metadata.
+    pub fn layout_summary(&self) -> String {
+        layout_summary(self.shape(), self.strides(), self.offset())
+    }
+
+    /// Assert this view is compact column-major.
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            "TensorView::assert_col_major_contiguous",
+        )
+    }
+
     /// Materialize this host view into an owned tensor.
     ///
     /// This method has no backend context and does not download backend
@@ -2602,6 +2915,115 @@ impl<'a> TensorView<'a> {
     }
 }
 
+impl<'a> TensorViewMut<'a> {
+    /// Create a dynamic `f64` mutable view over compact column-major host data.
+    pub fn f64(shape: &'a [usize], data: &'a mut [f64]) -> crate::Result<Self> {
+        Ok(Self::F64(TypedTensorViewMut::from_col_major(shape, data)?))
+    }
+
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
+            Self::I64(_) => DType::I64,
+            Self::Bool(_) => DType::Bool,
+            Self::C32(_) => DType::C32,
+            Self::C64(_) => DType::C64,
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::F32(t) => t.shape(),
+            Self::F64(t) => t.shape(),
+            Self::I32(t) => t.shape(),
+            Self::I64(t) => t.shape(),
+            Self::Bool(t) => t.shape(),
+            Self::C32(t) => t.shape(),
+            Self::C64(t) => t.shape(),
+        }
+    }
+
+    pub fn strides(&self) -> &[isize] {
+        match self {
+            Self::F32(t) => t.strides(),
+            Self::F64(t) => t.strides(),
+            Self::I32(t) => t.strides(),
+            Self::I64(t) => t.strides(),
+            Self::Bool(t) => t.strides(),
+            Self::C32(t) => t.strides(),
+            Self::C64(t) => t.strides(),
+        }
+    }
+
+    pub fn offset(&self) -> isize {
+        match self {
+            Self::F32(t) => t.offset(),
+            Self::F64(t) => t.offset(),
+            Self::I32(t) => t.offset(),
+            Self::I64(t) => t.offset(),
+            Self::Bool(t) => t.offset(),
+            Self::C32(t) => t.offset(),
+            Self::C64(t) => t.offset(),
+        }
+    }
+
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        match self {
+            Self::F32(t) => t.layout_linear_offset(indices),
+            Self::F64(t) => t.layout_linear_offset(indices),
+            Self::I32(t) => t.layout_linear_offset(indices),
+            Self::I64(t) => t.layout_linear_offset(indices),
+            Self::Bool(t) => t.layout_linear_offset(indices),
+            Self::C32(t) => t.layout_linear_offset(indices),
+            Self::C64(t) => t.layout_linear_offset(indices),
+        }
+    }
+
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        match self {
+            Self::F32(t) => t.is_col_major_contiguous(),
+            Self::F64(t) => t.is_col_major_contiguous(),
+            Self::I32(t) => t.is_col_major_contiguous(),
+            Self::I64(t) => t.is_col_major_contiguous(),
+            Self::Bool(t) => t.is_col_major_contiguous(),
+            Self::C32(t) => t.is_col_major_contiguous(),
+            Self::C64(t) => t.is_col_major_contiguous(),
+        }
+    }
+
+    pub fn layout_summary(&self) -> String {
+        layout_summary(self.shape(), self.strides(), self.offset())
+    }
+
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            "TensorViewMut::assert_col_major_contiguous",
+        )
+    }
+
+    pub fn as_read_only(&self) -> TensorView<'_> {
+        match self {
+            Self::F32(t) => TensorView::F32(t.as_read_only()),
+            Self::F64(t) => TensorView::F64(t.as_read_only()),
+            Self::I32(t) => TensorView::I32(t.as_read_only()),
+            Self::I64(t) => TensorView::I64(t.as_read_only()),
+            Self::Bool(t) => TensorView::Bool(t.as_read_only()),
+            Self::C32(t) => TensorView::C32(t.as_read_only()),
+            Self::C64(t) => TensorView::C64(t.as_read_only()),
+        }
+    }
+
+    pub fn copy_from_tensor(&mut self, src: &Tensor) -> crate::Result<()> {
+        copy_tensor_to_view_mut(self, src, "TensorViewMut::copy_from_tensor")
+    }
+}
+
 impl<'a> TensorRead<'a> {
     pub fn from_tensor(tensor: &'a Tensor) -> Self {
         Self::Tensor(tensor)
@@ -2623,6 +3045,53 @@ impl<'a> TensorRead<'a> {
             Self::Tensor(tensor) => tensor.shape(),
             Self::View(view) => view.shape(),
         }
+    }
+
+    pub fn strides(&self) -> crate::Result<Vec<isize>> {
+        match self {
+            Self::Tensor(tensor) => col_major_strides(tensor.shape()),
+            Self::View(view) => Ok(view.strides().to_vec()),
+        }
+    }
+
+    pub fn offset(&self) -> isize {
+        match self {
+            Self::Tensor(_) => 0,
+            Self::View(view) => view.offset(),
+        }
+    }
+
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        match self {
+            Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
+            Self::View(view) => view.layout_linear_offset(indices),
+        }
+    }
+
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        match self {
+            Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
+            Self::View(view) => view.is_col_major_contiguous(),
+        }
+    }
+
+    pub fn layout_summary(&self) -> String {
+        let strides = match self.strides() {
+            Ok(strides) => strides,
+            Err(err) => return format!("layout unavailable: {err}"),
+        };
+        layout_summary(self.shape(), &strides, self.offset())
+    }
+
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        let strides = self.strides()?;
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            &strides,
+            self.offset(),
+            "TensorRead::assert_col_major_contiguous",
+        )
     }
 
     pub fn as_tensor(&self) -> Option<&'a Tensor> {
@@ -2654,6 +3123,84 @@ impl<'a> TensorRead<'a> {
         match self {
             Self::Tensor(tensor) => Ok((*tensor).clone()),
             Self::View(view) => view.to_tensor(),
+        }
+    }
+}
+
+impl<'a> TensorWrite<'a> {
+    pub fn from_tensor(tensor: &'a mut Tensor) -> Self {
+        Self::Tensor(tensor)
+    }
+
+    pub fn from_view(view: TensorViewMut<'a>) -> Self {
+        Self::View(view)
+    }
+
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::Tensor(tensor) => tensor.dtype(),
+            Self::View(view) => view.dtype(),
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.shape(),
+            Self::View(view) => view.shape(),
+        }
+    }
+
+    pub fn strides(&self) -> crate::Result<Vec<isize>> {
+        match self {
+            Self::Tensor(tensor) => col_major_strides(tensor.shape()),
+            Self::View(view) => Ok(view.strides().to_vec()),
+        }
+    }
+
+    pub fn offset(&self) -> isize {
+        match self {
+            Self::Tensor(_) => 0,
+            Self::View(view) => view.offset(),
+        }
+    }
+
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        match self {
+            Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
+            Self::View(view) => view.layout_linear_offset(indices),
+        }
+    }
+
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        match self {
+            Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
+            Self::View(view) => view.is_col_major_contiguous(),
+        }
+    }
+
+    pub fn layout_summary(&self) -> String {
+        let strides = match self.strides() {
+            Ok(strides) => strides,
+            Err(err) => return format!("layout unavailable: {err}"),
+        };
+        layout_summary(self.shape(), &strides, self.offset())
+    }
+
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        let strides = self.strides()?;
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            &strides,
+            self.offset(),
+            "TensorWrite::assert_col_major_contiguous",
+        )
+    }
+
+    pub fn copy_from_tensor(&mut self, src: &Tensor) -> crate::Result<()> {
+        match self {
+            Self::Tensor(dst) => copy_tensor_to_tensor(dst, src, "TensorWrite::copy_from_tensor"),
+            Self::View(view) => copy_tensor_to_view_mut(view, src, "TensorWrite::copy_from_tensor"),
         }
     }
 }
@@ -2728,6 +3275,136 @@ fn try_linear_offset_for_shape(
             })?;
     }
     Ok(offset)
+}
+
+fn checked_view_offset_result(
+    shape: &[usize],
+    strides: &[isize],
+    base_offset: isize,
+    indices: &[usize],
+    op: &'static str,
+) -> crate::Result<usize> {
+    if indices.len() != shape.len() {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: shape.len(),
+            actual: indices.len(),
+        });
+    }
+    for (axis, (&index, &extent)) in indices.iter().zip(shape).enumerate() {
+        if index >= extent {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!("index {index} out of bounds for axis {axis} extent {extent}"),
+            });
+        }
+    }
+    checked_view_offset(shape, strides, base_offset, indices).ok_or_else(|| {
+        crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "layout offset overflow for shape={shape:?} strides={strides:?} offset={base_offset} indices={indices:?}"
+            ),
+        }
+    })
+}
+
+fn layout_summary(shape: &[usize], strides: &[isize], offset: isize) -> String {
+    format!("shape={shape:?} strides={strides:?} offset={offset}")
+}
+
+fn assert_layout_col_major_contiguous(
+    is_contiguous: bool,
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    op: &'static str,
+) -> crate::Result<()> {
+    if is_contiguous {
+        Ok(())
+    } else {
+        Err(crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "expected compact column-major layout, got {}",
+                layout_summary(shape, strides, offset)
+            ),
+        })
+    }
+}
+
+fn validate_tensor_copy_target(
+    dst_dtype: DType,
+    dst_shape: &[usize],
+    src: &Tensor,
+    op: &'static str,
+) -> crate::Result<()> {
+    if dst_dtype != src.dtype() {
+        return Err(crate::Error::DTypeMismatch {
+            op,
+            lhs: dst_dtype,
+            rhs: src.dtype(),
+        });
+    }
+    if dst_shape != src.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: dst_shape.to_vec(),
+            rhs: src.shape().to_vec(),
+        });
+    }
+    Ok(())
+}
+
+fn copy_tensor_to_tensor(dst: &mut Tensor, src: &Tensor, op: &'static str) -> crate::Result<()> {
+    validate_tensor_copy_target(dst.dtype(), dst.shape(), src, op)?;
+    macro_rules! copy_variant {
+        ($variant:ident) => {
+            if let (Tensor::$variant(dst), Tensor::$variant(src)) = (&mut *dst, src) {
+                dst.host_data_mut()?.clone_from_slice(src.host_data()?);
+                return Ok(());
+            }
+        };
+    }
+    copy_variant!(F32);
+    copy_variant!(F64);
+    copy_variant!(I32);
+    copy_variant!(I64);
+    copy_variant!(Bool);
+    copy_variant!(C32);
+    copy_variant!(C64);
+    Err(crate::Error::DTypeMismatch {
+        op,
+        lhs: dst.dtype(),
+        rhs: src.dtype(),
+    })
+}
+
+fn copy_tensor_to_view_mut(
+    dst: &mut TensorViewMut<'_>,
+    src: &Tensor,
+    op: &'static str,
+) -> crate::Result<()> {
+    validate_tensor_copy_target(dst.dtype(), dst.shape(), src, op)?;
+    macro_rules! copy_variant {
+        ($variant:ident) => {
+            if let (TensorViewMut::$variant(dst), Tensor::$variant(src)) = (&mut *dst, src) {
+                return dst.copy_from_contiguous(src);
+            }
+        };
+    }
+    copy_variant!(F32);
+    copy_variant!(F64);
+    copy_variant!(I32);
+    copy_variant!(I64);
+    copy_variant!(Bool);
+    copy_variant!(C32);
+    copy_variant!(C64);
+    Err(crate::Error::DTypeMismatch {
+        op,
+        lhs: dst.dtype(),
+        rhs: src.dtype(),
+    })
 }
 
 fn try_shape_product(shape: &[usize], op: &'static str) -> crate::Result<usize> {
@@ -3776,6 +4453,74 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
         try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
     }
 
+    /// Compute the physical element offset for a logical index.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
+    /// assert_eq!(t.layout_linear_offset(&[1, 2])?, 5);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::layout_linear_offset")
+    }
+
+    /// Return whether this owned tensor is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2]).unwrap();
+    /// assert!(t.is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        self.layout
+            .is_compact_col_major()
+            .map_err(|err| tensor_layout_error("TypedTensor::is_col_major_contiguous", err))
+    }
+
+    /// Return a compact string summary of this tensor's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2]).unwrap();
+    /// assert!(t.layout_summary().contains("shape=[2]"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_summary(&self) -> String {
+        layout_summary(self.shape(), self.layout.strides(), self.layout.offset())
+    }
+
+    /// Assert this tensor is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2]).unwrap();
+    /// t.assert_col_major_contiguous()?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            self.shape(),
+            self.layout.strides(),
+            self.layout.offset(),
+            "TypedTensor::assert_col_major_contiguous",
+        )
+    }
+
     /// Borrow a single element by multi-index.
     ///
     /// # Examples
@@ -3928,6 +4673,90 @@ impl Tensor {
             Tensor::C32(t) => t.buffer().is_backend(),
             Tensor::C64(t) => t.buffer().is_backend(),
         }
+    }
+
+    /// Compute the physical element offset for a logical index.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(t.layout_linear_offset(&[1])?, 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        match self {
+            Tensor::F32(t) => t.layout_linear_offset(indices),
+            Tensor::F64(t) => t.layout_linear_offset(indices),
+            Tensor::I32(t) => t.layout_linear_offset(indices),
+            Tensor::I64(t) => t.layout_linear_offset(indices),
+            Tensor::Bool(t) => t.layout_linear_offset(indices),
+            Tensor::C32(t) => t.layout_linear_offset(indices),
+            Tensor::C64(t) => t.layout_linear_offset(indices),
+        }
+    }
+
+    /// Return whether this tensor is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(t.is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
+        match self {
+            Tensor::F32(t) => t.is_col_major_contiguous(),
+            Tensor::F64(t) => t.is_col_major_contiguous(),
+            Tensor::I32(t) => t.is_col_major_contiguous(),
+            Tensor::I64(t) => t.is_col_major_contiguous(),
+            Tensor::Bool(t) => t.is_col_major_contiguous(),
+            Tensor::C32(t) => t.is_col_major_contiguous(),
+            Tensor::C64(t) => t.is_col_major_contiguous(),
+        }
+    }
+
+    /// Return a compact string summary of this tensor's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(t.layout_summary().contains("shape=[2]"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn layout_summary(&self) -> String {
+        let layout = tensor_layout(self);
+        layout_summary(layout.shape(), layout.strides(), layout.offset())
+    }
+
+    /// Assert this tensor is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// t.assert_col_major_contiguous()?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        let layout = tensor_layout(self);
+        assert_layout_col_major_contiguous(
+            self.is_col_major_contiguous()?,
+            layout.shape(),
+            layout.strides(),
+            layout.offset(),
+            "Tensor::assert_col_major_contiguous",
+        )
     }
 
     /// Try to borrow the host data as a typed slice.

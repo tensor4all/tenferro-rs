@@ -1,7 +1,9 @@
 use num_traits::{One, Zero};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tenferro_tensor::{Buffer, DotGeneralConfig as TensorDotGeneralConfig, TypedTensor};
+use tenferro_tensor::{
+    Buffer, DotGeneralConfig as TensorDotGeneralConfig, TypedTensor, TypedTensorViewMut,
+};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{default_placement, Error};
@@ -95,4 +97,55 @@ where
     .map_err(map_strided_error)?;
 
     TypedTensor::from_buffer_col_major(out_shape, Buffer::Host(out_data), default_placement())
+}
+
+pub(crate) fn dot_general_strided_with_backend_into<L, R, T, B>(
+    lhs: &L,
+    rhs: &R,
+    config: &TensorDotGeneralConfig,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<()>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: Copy + Clone + Zero + One + PartialEq + strided_einsum2::ScalarBase + 'static,
+    B: strided_einsum2::Backend<T>,
+{
+    #[cfg(test)]
+    DISPATCH_COUNT.fetch_add(1, Ordering::SeqCst);
+
+    super::validate_dot_general(lhs, rhs, config)?;
+
+    let lhs_view = as_strided_view(lhs)?;
+    let rhs_view = as_strided_view(rhs)?;
+
+    let strided_config = to_strided_config(config);
+    let out_shape = strided_config
+        .expected_output_shape(lhs.shape(), rhs.shape())
+        .map_err(map_strided_error)?;
+    if out.shape() != out_shape.as_slice() {
+        return Err(Error::ShapeMismatch {
+            op: "dot_general",
+            lhs: out.shape().to_vec(),
+            rhs: out_shape,
+        });
+    }
+
+    let out_shape = out.shape().to_vec();
+    let out_strides = out.strides().to_vec();
+    let out_offset = out.offset();
+    let out_data = out.host_storage_mut()?;
+    let out_view =
+        strided_einsum2::StridedViewMut::new(out_data, &out_shape, &out_strides, out_offset)
+            .map_err(map_strided_error)?;
+
+    strided_einsum2::dot_general_with_backend_into::<T, B>(
+        out_view,
+        &lhs_view,
+        &rhs_view,
+        &strided_config,
+        T::one(),
+        T::zero(),
+    )
+    .map_err(map_strided_error)
 }

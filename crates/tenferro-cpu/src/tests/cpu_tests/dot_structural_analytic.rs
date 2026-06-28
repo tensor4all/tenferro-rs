@@ -144,6 +144,106 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
 }
 
+#[test]
+fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs_shape = [3usize, 2];
+    let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut backend = CpuBackend::new();
+
+    let mut compact = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
+    backend
+        .dot_general_read_into(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+            &config,
+            TensorWrite::from_tensor(&mut compact),
+        )
+        .unwrap();
+    assert_eq!(
+        compact.as_slice::<f64>().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
+
+    let mut strided_data = [-1.0_f64; 8];
+    {
+        let out_view = TensorViewMut::F64(
+            TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
+        );
+        backend
+            .with_backend_session(|exec| {
+                exec.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+                    &config,
+                    TensorWrite::from_view(out_view),
+                )
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        strided_data,
+        [-1.0, 22.0, 28.0, -1.0, 49.0, 64.0, -1.0, -1.0]
+    );
+}
+
+#[test]
+fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut backend = CpuBackend::new();
+
+    let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
+    let shape_err = backend
+        .dot_general_read_into(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            TensorWrite::from_tensor(&mut wrong_shape),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        shape_err,
+        Error::ShapeMismatch {
+            op: "dot_general",
+            ..
+        }
+    ));
+
+    let mut wrong_dtype = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
+    let dtype_err = backend
+        .dot_general_read_into(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            TensorWrite::from_tensor(&mut wrong_dtype),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        dtype_err,
+        Error::DTypeMismatch {
+            op: "dot_general",
+            lhs: DType::F32,
+            rhs: DType::F64,
+        }
+    ));
+}
+
 #[cfg(feature = "cpu-blas")]
 #[test]
 fn test_dot_general_read_blas_negative_stride_view_falls_back() {

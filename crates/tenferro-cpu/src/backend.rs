@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
+use tenferro_tensor::backend::validate_dot_general_read_into;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic,
     TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
@@ -1062,6 +1063,60 @@ impl TensorDot for CpuBackend {
         let lhs = materialize_tensor_read("dot_general", lhs)?;
         let rhs = materialize_tensor_read("dot_general", rhs)?;
         BackendCachedDot::dot_general_cached(self, &mut cache, None, &lhs, &rhs, config)
+    }
+
+    fn dot_general_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        validate_dot_general_read_into(&lhs, &rhs, config, &out, "dot_general")?;
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    gemm::dot_general_faer_read_into_cached(
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "dot_general"));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    let mut cache = gemm::GemmAnalysisCache::default();
+                    self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+                        gemm::dot_general_blas_read_into_cached(
+                            buffers,
+                            cache,
+                            None,
+                            lhs.clone(),
+                            rhs.clone(),
+                            config,
+                            &mut out,
+                        )
+                    })?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "dot_general"));
+                }
+            }
+        };
+        if direct {
+            return Ok(());
+        }
+
+        let result = self.dot_general_read(lhs, rhs, config)?;
+        out.copy_from_tensor(&result)
     }
 
     fn dot_general_with_conj(
