@@ -3,7 +3,8 @@
 Einsum is a standard extension crate, not part of a root facade.
 The public user-facing paths live under `tenferro_einsum` as crate-root
 extension traits: `TensorEinsumExt`, `TypedTensorEinsumExt`, and
-`TensorReadEinsumExt` for concrete backend-explicit execution,
+`TensorReadEinsumExt` for concrete backend-explicit execution, their
+`*IntoExt` counterparts for preallocated output execution,
 `GraphCompilerEinsumExt` for traced graph construction, `EagerEinsumExt` for
 autodiff eager execution, and tensor extension traits for `tensordot`
 contraction sugar. `ConcreteEinsumPlan` owns repeated concrete executions with
@@ -75,11 +76,18 @@ assert_eq!(c.shape(), &[2, 2]);
 ```
 
 `TensorEinsumExt` is the unsuffixed API for compact `Tensor` references.
-`TypedTensorEinsumExt` preserves a statically known scalar type.
+`TypedTensorEinsumExt` preserves a statically known scalar type and also
+accepts borrowed typed strided views.
 `TensorReadEinsumExt::einsum_read` accepts `TensorRead` values and therefore
-uses the repository-wide `_read` suffix convention. `ConcreteEinsumPlan`
-precomputes the contraction tree for fixed input metadata and validates later
-executions against the prepared input count, dtypes, and shapes.
+uses the repository-wide `_read` suffix convention. `TensorEinsumIntoExt`,
+`TypedTensorEinsumIntoExt`, and `TensorReadEinsumIntoExt` write into caller
+provided `TensorWrite` or typed tensor outputs; they validate output dtype and
+shape before any writes and never resize the destination.
+
+`ConcreteEinsumPlan` precomputes the contraction tree for fixed input metadata
+and validates later executions against the prepared input count, dtypes, and
+shapes. Plan execution exposes both owned-output methods and `execute_into`,
+`execute_typed_into`, and `execute_read_into`.
 
 `einsum_with` accepts an explicit `EinsumOptimize` strategy:
 
@@ -200,6 +208,15 @@ general path of diagonalization, reductions, broadcast/outer product, and
 Column-major ordering matters. For GEMM-like steps, compute dimensions stay on
 the left and batch dimensions stay on the right so each batch slice remains a
 contiguous block for the underlying tensor backend.
+
+For a whole-expression binary GEMM-compatible contraction such as
+`ij,jk->ik`, `einsum_into` and `ConcreteEinsumPlan::execute_into` dispatch to
+the backend `dot_general_read_into` hook before the owned-output fallback. The
+CPU faer path writes directly into caller-provided output storage through
+`strided_einsum2` and does not allocate the final output tensor. General
+multi-step einsums may still allocate intermediates; their `*_into` contract is
+that the final result is copied into the preallocated destination after output
+validation.
 
 ## GPU Interaction
 

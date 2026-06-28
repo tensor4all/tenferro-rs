@@ -1,5 +1,6 @@
 use crate::buffer_pool::BufferPool;
-use crate::{Tensor, TensorRead, TensorValue};
+use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
+use tenferro_tensor::backend::validate_dot_general_read_into;
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -233,6 +234,63 @@ impl TensorDot for CpuExecSession<'_> {
         let lhs = materialize_tensor_read("dot_general", lhs)?;
         let rhs = materialize_tensor_read("dot_general", rhs)?;
         self.dot_general_cached(None, &lhs, &rhs, config)
+    }
+
+    fn dot_general_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        validate_dot_general_read_into(&lhs, &rhs, config, &out, "dot_general")?;
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    gemm::dot_general_faer_read_into_cached(
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    gemm::dot_general_blas_read_into_cached(
+                        self.buffers,
+                        self.gemm_analysis_cache,
+                        None,
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+        };
+        if direct {
+            return Ok(());
+        }
+
+        let result = self.dot_general_read(lhs, rhs, config)?;
+        out.copy_from_tensor(&result)
     }
 
     fn dot_general_with_conj(

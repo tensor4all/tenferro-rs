@@ -14,7 +14,7 @@ use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
-    typed_array_uninit_from_pool, CpuBackend, CpuContext,
+    typed_array_uninit_from_pool, CpuBackend, CpuContext, Error,
 };
 #[cfg(feature = "cpu-blas")]
 use tenferro_tensor::StridedSliceSpec;
@@ -26,7 +26,10 @@ use tenferro_tensor::{
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::{DType, Tensor, TensorRead, TensorView, TypedTensor};
+use tenferro_tensor::{
+    DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorViewMut,
+};
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {

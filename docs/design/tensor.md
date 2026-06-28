@@ -22,6 +22,9 @@ buffers, CUDA, BLAS/LAPACK providers, execution traits, runtime caches, or AD.
 - dtype-erased dynamic-rank `Tensor`,
 - `TypedTensorView<'a, T, R>` and `TypedTensorViewMut<'a, T, R>` for borrowed
   strided views,
+- `TensorView<'a>` and `TensorViewMut<'a>` for dtype-erased borrowed views,
+- `TensorRead<'a>` and `TensorWrite<'a>` for read/write kernel dispatch over
+  either owned tensors or borrowed views,
 - placement metadata, backend buffer handles, `TensorBackend`, and backend
   session traits.
 
@@ -39,6 +42,12 @@ Arbitrary strides, non-zero offsets, transposes, slices, and reverse layouts
 belong to views or `TensorLayout` metadata. Metadata-only transformations use
 the `_view` suffix, such as `transpose_view` and `slice_view`.
 
+Owned tensors and views expose layout inspection helpers for migration and
+assertion code: compact column-major checks, logical-index to physical-offset
+calculation, and layout summaries that include shape, strides, and offset.
+Mutable views validate that distinct logical elements do not alias the same
+physical element at construction.
+
 When a compact-only operation receives a view, it may canonicalize that view
 inside the same placement. Host views can copy to host compact tensors; CUDA
 views can copy to CUDA compact tensors. Canonicalization is not a CPU/GPU
@@ -49,6 +58,10 @@ transfer mechanism.
 Unsuffixed operation names take owned compact tensor inputs. APIs that accept
 borrowed view inputs or `TensorRead` inputs use a `_read` suffix. Examples
 include `add_read`, `reduce_sum_read`, and `dot_general_read`.
+
+Preallocated-output APIs use `TensorWrite` when the output may be either an
+owned tensor or a mutable view. These APIs validate output dtype and shape
+before writing and do not resize the destination.
 
 Metadata-only APIs that produce views use `_view`. APIs that allocate,
 execute kernels, canonicalize buffers, or move data must not use `_view`.

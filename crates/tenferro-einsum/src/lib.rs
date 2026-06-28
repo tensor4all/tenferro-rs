@@ -81,7 +81,8 @@ pub(crate) mod util;
 
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
 pub use concrete::{
-    ConcreteEinsumPlan, TensorEinsumExt, TensorReadEinsumExt, TypedTensorEinsumExt,
+    ConcreteEinsumPlan, TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt,
+    TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
 };
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};

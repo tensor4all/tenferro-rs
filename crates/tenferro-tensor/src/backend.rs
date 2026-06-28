@@ -3,7 +3,7 @@ use crate::config::{
 };
 use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use crate::validate::validate_convert_dtype;
-use crate::{RuntimeCacheControl, Tensor, TensorRead, TensorValue};
+use crate::{RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
     crate::Error::backend_failure(
@@ -14,6 +14,169 @@ fn read_boundary_error(op: &'static str) -> crate::Error {
 
 fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a Tensor> {
     input.as_tensor().ok_or_else(|| read_boundary_error(op))
+}
+
+fn validate_axis_list(
+    op: &'static str,
+    role: &'static str,
+    axes: &[usize],
+    rank: usize,
+) -> crate::Result<()> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+        }
+        if seen[axis] {
+            return Err(crate::Error::DuplicateAxis { op, axis, role });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+fn validate_role_disjoint(
+    op: &'static str,
+    first_role: &'static str,
+    first_axes: &[usize],
+    second_role: &'static str,
+    second_axes: &[usize],
+) -> crate::Result<()> {
+    for &axis in first_axes {
+        if second_axes.contains(&axis) {
+            return Err(crate::Error::AxisRoleConflict {
+                op,
+                axis,
+                first_role,
+                second_role,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Infer the output shape for a validated dot-general operation.
+#[doc(hidden)]
+pub fn dot_general_output_shape(
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    config: &DotGeneralConfig,
+    op: &'static str,
+) -> crate::Result<Vec<usize>> {
+    if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: "lhs/rhs contracting dim counts differ".into(),
+        });
+    }
+    if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: "lhs/rhs batch dim counts differ".into(),
+        });
+    }
+
+    let lhs_rank = lhs_shape.len();
+    let rhs_rank = rhs_shape.len();
+    validate_axis_list(
+        op,
+        "lhs_contracting",
+        &config.lhs_contracting_dims,
+        lhs_rank,
+    )?;
+    validate_axis_list(
+        op,
+        "rhs_contracting",
+        &config.rhs_contracting_dims,
+        rhs_rank,
+    )?;
+    validate_axis_list(op, "lhs_batch", &config.lhs_batch_dims, lhs_rank)?;
+    validate_axis_list(op, "rhs_batch", &config.rhs_batch_dims, rhs_rank)?;
+    validate_role_disjoint(
+        op,
+        "lhs_contracting",
+        &config.lhs_contracting_dims,
+        "lhs_batch",
+        &config.lhs_batch_dims,
+    )?;
+    validate_role_disjoint(
+        op,
+        "rhs_contracting",
+        &config.rhs_contracting_dims,
+        "rhs_batch",
+        &config.rhs_batch_dims,
+    )?;
+
+    for (&lhs_axis, &rhs_axis) in config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&config.rhs_contracting_dims)
+    {
+        if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
+            return Err(crate::Error::ShapeMismatch {
+                op,
+                lhs: lhs_shape.to_vec(),
+                rhs: rhs_shape.to_vec(),
+            });
+        }
+    }
+    for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
+        if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
+            return Err(crate::Error::ShapeMismatch {
+                op,
+                lhs: lhs_shape.to_vec(),
+                rhs: rhs_shape.to_vec(),
+            });
+        }
+    }
+
+    let lhs_free = (0..lhs_rank)
+        .filter(|axis| {
+            !config.lhs_contracting_dims.contains(axis) && !config.lhs_batch_dims.contains(axis)
+        })
+        .map(|axis| lhs_shape[axis]);
+    let rhs_free = (0..rhs_rank)
+        .filter(|axis| {
+            !config.rhs_contracting_dims.contains(axis) && !config.rhs_batch_dims.contains(axis)
+        })
+        .map(|axis| rhs_shape[axis]);
+    let batch = config.lhs_batch_dims.iter().map(|&axis| lhs_shape[axis]);
+
+    Ok(lhs_free.chain(rhs_free).chain(batch).collect())
+}
+
+/// Validate output dtype and shape for dot-general read-into dispatch.
+#[doc(hidden)]
+pub fn validate_dot_general_read_into(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &DotGeneralConfig,
+    out: &TensorWrite<'_>,
+    op: &'static str,
+) -> crate::Result<Vec<usize>> {
+    if lhs.dtype() != rhs.dtype() {
+        return Err(crate::Error::DTypeMismatch {
+            op,
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        });
+    }
+    if out.dtype() != lhs.dtype() {
+        return Err(crate::Error::DTypeMismatch {
+            op,
+            lhs: out.dtype(),
+            rhs: lhs.dtype(),
+        });
+    }
+    let expected = dot_general_output_shape(lhs.shape(), rhs.shape(), config, op)?;
+    if out.shape() != expected.as_slice() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: out.shape().to_vec(),
+            rhs: expected.clone(),
+        });
+    }
+    Ok(expected)
 }
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
@@ -604,6 +767,19 @@ pub trait TensorDot: TensorElementwise {
                 self.dot_general(&lhs, &rhs, config)
             }
         }
+    }
+
+    #[doc(hidden)]
+    fn dot_general_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        validate_dot_general_read_into(&lhs, &rhs, config, &out, "dot_general")?;
+        let result = self.dot_general_read(lhs, rhs, config)?;
+        out.copy_from_tensor(&result)
     }
 
     #[doc(hidden)]

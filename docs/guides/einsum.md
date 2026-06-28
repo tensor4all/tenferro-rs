@@ -3,7 +3,9 @@
 `einsum` is a standard extension, not part of `tenferro` core. Add the
 `tenferro-einsum` crate and import its extension traits. Concrete tensor
 execution uses `TensorEinsumExt`, `TypedTensorEinsumExt`, and
-`TensorReadEinsumExt`; repeated-shape concrete workloads can use
+`TensorReadEinsumExt`; preallocated-output execution uses the matching
+`TensorEinsumIntoExt`, `TypedTensorEinsumIntoExt`, and
+`TensorReadEinsumIntoExt` traits; repeated-shape concrete workloads can use
 `ConcreteEinsumPlan`. Traced graph construction uses `GraphCompilerEinsumExt`;
 autodiff eager execution uses `EagerEinsumExt`; `tensordot` contraction sugar
 uses tensor extension traits. Compiled traced execution also requires explicit
@@ -62,8 +64,11 @@ receiver type is the fixed-size array of borrowed tensor references.
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::{TensorEinsumExt, TypedTensorEinsumExt};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_einsum::{
+    TensorEinsumExt, TensorEinsumIntoExt, TypedTensorEinsumExt,
+    TypedTensorEinsumIntoExt,
+};
+use tenferro_tensor::{Tensor, TensorWrite, TypedTensor, TypedTensorView};
 
 let lhs = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -76,6 +81,14 @@ let rhs = Tensor::from_vec_col_major(
 let mut backend = CpuBackend::new();
 let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
+
+let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
+[&lhs, &rhs].einsum_into(
+    "ij,jk->ik",
+    &mut backend,
+    TensorWrite::from_tensor(&mut product_out),
+)?;
+assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
     vec![2, 2],
@@ -95,6 +108,18 @@ assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
 );
+
+let borrowed = TypedTensorView::from_slice([2, 2], [1, 2], 0, complex_lhs.as_slice()?)?;
+let borrowed_rhs = complex_rhs.as_view();
+let mut borrowed_out = TypedTensor::<Complex64>::from_vec_col_major(
+    vec![2, 1],
+    vec![Complex64::new(0.0, 0.0); 2],
+)?;
+[borrowed, borrowed_rhs].einsum_into("ij,jk->ik", &mut backend, &mut borrowed_out)?;
+assert_eq!(
+    borrowed_out.as_slice()?,
+    &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
+);
 # Ok::<(), tenferro_tensor::Error>(())
 ```
 
@@ -111,8 +136,8 @@ running the stored tree.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt};
-use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
 
 let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
@@ -129,6 +154,18 @@ assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
 let planned = plan.execute_read(inputs, &mut backend)?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
+
+let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
+let inputs = [
+    TensorRead::from_view(TensorView::F64(matrix)),
+    TensorRead::from_tensor(&vector),
+];
+plan.execute_read_into(
+    inputs,
+    &mut backend,
+    TensorWrite::from_tensor(&mut planned_out),
+)?;
+assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 # Ok::<(), tenferro_tensor::Error>(())
 ```
 

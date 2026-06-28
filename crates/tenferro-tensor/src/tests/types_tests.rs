@@ -6,8 +6,8 @@ use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
     DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec,
     Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
-    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 use crate::{Error, SliceConfig};
 
@@ -1713,6 +1713,236 @@ fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
         read_view.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[5.0, 6.0]
     );
+}
+
+#[test]
+fn tensor_write_wraps_owned_tensor_or_borrowed_mutable_view() {
+    let mut tensor = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    {
+        let mut write_tensor = TensorWrite::from_tensor(&mut tensor);
+
+        assert_eq!(write_tensor.dtype(), DType::F64);
+        assert_eq!(write_tensor.shape(), &[2]);
+        assert_eq!(write_tensor.strides().unwrap().as_slice(), &[1]);
+        assert_eq!(write_tensor.offset(), 0);
+        assert!(write_tensor.is_col_major_contiguous().unwrap());
+
+        write_tensor
+            .copy_from_tensor(&Tensor::from_vec_col_major(vec![2], vec![7.0_f64, 8.0]).unwrap())
+            .unwrap();
+    }
+    assert_eq!(tensor.as_slice::<f64>().unwrap(), &[7.0, 8.0]);
+
+    let mut data = [0.0_f64, 10.0, 0.0, 20.0, 0.0];
+    {
+        let view =
+            TensorViewMut::F64(TypedTensorViewMut::from_slice([2], [2], 1, &mut data).unwrap());
+        let mut write_view = TensorWrite::from_view(view);
+
+        assert_eq!(write_view.dtype(), DType::F64);
+        assert_eq!(write_view.shape(), &[2]);
+        assert_eq!(write_view.strides().unwrap().as_slice(), &[2]);
+        assert_eq!(write_view.offset(), 1);
+        assert!(!write_view.is_col_major_contiguous().unwrap());
+
+        write_view
+            .copy_from_tensor(&Tensor::from_vec_col_major(vec![2], vec![30.0_f64, 40.0]).unwrap())
+            .unwrap();
+    }
+    assert_eq!(data, [0.0, 30.0, 0.0, 40.0, 0.0]);
+}
+
+#[test]
+fn layout_helpers_report_shape_strides_and_offset() {
+    let mut data = [1_i32, 2, 3, 4, 5];
+    let view = TypedTensorViewMut::from_slice([2], [2], 1, &mut data).unwrap();
+
+    assert_eq!(view.layout_linear_offset(&[1]).unwrap(), 3);
+    assert!(!view.is_col_major_contiguous().unwrap());
+
+    let summary = view.layout_summary();
+    assert!(summary.contains("shape=[2]"));
+    assert!(summary.contains("strides=[2]"));
+    assert!(summary.contains("offset=1"));
+
+    let err = view.assert_col_major_contiguous().unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("shape=[2]"));
+    assert!(message.contains("strides=[2]"));
+    assert!(message.contains("offset=1"));
+}
+
+#[test]
+fn tensor_view_layout_helpers_cover_all_dtype_variants() {
+    macro_rules! assert_view {
+        ($view:expr, $dtype:expr) => {{
+            let view = $view;
+            assert_eq!(view.dtype(), $dtype);
+            assert_eq!(view.shape(), &[2]);
+            assert_eq!(view.strides(), &[1]);
+            assert_eq!(view.offset(), 0);
+            assert_eq!(view.layout_linear_offset(&[1]).unwrap(), 1);
+            assert!(view.is_col_major_contiguous().unwrap());
+            assert!(view.layout_summary().contains("shape=[2]"));
+            view.assert_col_major_contiguous().unwrap();
+            assert_eq!(view.to_tensor().unwrap().dtype(), $dtype);
+        }};
+    }
+
+    let f32_data = [1.0_f32, 2.0];
+    assert_view!(TensorView::f32(&[2], &f32_data).unwrap(), DType::F32);
+
+    let f64_data = [1.0_f64, 2.0];
+    assert_view!(TensorView::f64(&[2], &f64_data).unwrap(), DType::F64);
+
+    let i32_data = [1_i32, 2];
+    assert_view!(TensorView::i32(&[2], &i32_data).unwrap(), DType::I32);
+
+    let i64_data = [1_i64, 2];
+    assert_view!(TensorView::i64(&[2], &i64_data).unwrap(), DType::I64);
+
+    let bool_data = [true, false];
+    assert_view!(TensorView::bool(&[2], &bool_data).unwrap(), DType::Bool);
+
+    let c32_data = [Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)];
+    assert_view!(TensorView::c32(&[2], &c32_data).unwrap(), DType::C32);
+
+    let c64_data = [Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)];
+    assert_view!(TensorView::c64(&[2], &c64_data).unwrap(), DType::C64);
+}
+
+#[test]
+fn tensor_view_mut_layout_and_copy_cover_all_dtype_variants() {
+    macro_rules! assert_view_mut {
+        ($variant:ident, $ty:ty, $dtype:expr, $initial:expr, $replacement:expr) => {{
+            let mut data: [$ty; 2] = $initial;
+            {
+                let typed = TypedTensorViewMut::from_slice([2], [1], 0, &mut data).unwrap();
+                let mut view = TensorViewMut::$variant(typed);
+                assert_eq!(view.dtype(), $dtype);
+                assert_eq!(view.shape(), &[2]);
+                assert_eq!(view.strides(), &[1]);
+                assert_eq!(view.offset(), 0);
+                assert_eq!(view.layout_linear_offset(&[1]).unwrap(), 1);
+                assert!(view.is_col_major_contiguous().unwrap());
+                assert!(view.layout_summary().contains("shape=[2]"));
+                view.assert_col_major_contiguous().unwrap();
+
+                let read = view.as_read_only();
+                assert_eq!(read.dtype(), $dtype);
+                assert_eq!(read.shape(), &[2]);
+
+                let src =
+                    Tensor::from_vec_col_major(vec![2], Vec::<$ty>::from($replacement)).unwrap();
+                view.copy_from_tensor(&src).unwrap();
+            }
+            assert_eq!(data, $replacement);
+        }};
+    }
+
+    assert_view_mut!(F32, f32, DType::F32, [1.0, 2.0], [3.0, 4.0]);
+    assert_view_mut!(F64, f64, DType::F64, [1.0, 2.0], [3.0, 4.0]);
+    assert_view_mut!(I32, i32, DType::I32, [1, 2], [3, 4]);
+    assert_view_mut!(I64, i64, DType::I64, [1, 2], [3, 4]);
+    assert_view_mut!(Bool, bool, DType::Bool, [true, false], [false, true]);
+    assert_view_mut!(
+        C32,
+        Complex32,
+        DType::C32,
+        [Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
+        [Complex32::new(5.0, 6.0), Complex32::new(7.0, 8.0)]
+    );
+    assert_view_mut!(
+        C64,
+        Complex64,
+        DType::C64,
+        [Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+        [Complex64::new(5.0, 6.0), Complex64::new(7.0, 8.0)]
+    );
+}
+
+#[test]
+fn tensor_read_and_write_layout_helpers_cover_tensor_and_view_paths() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let read_tensor = TensorRead::from_tensor(&tensor);
+    assert_eq!(read_tensor.strides().unwrap(), vec![1]);
+    assert_eq!(read_tensor.offset(), 0);
+    assert_eq!(read_tensor.layout_linear_offset(&[1]).unwrap(), 1);
+    assert!(read_tensor.is_col_major_contiguous().unwrap());
+    assert!(read_tensor.layout_summary().contains("offset=0"));
+    read_tensor.assert_col_major_contiguous().unwrap();
+
+    let view_data = [10.0_f64, 20.0, 30.0];
+    let read_view = TensorRead::from_view(TensorView::F64(
+        TypedTensorView::from_slice([2], [2], 0, &view_data).unwrap(),
+    ));
+    assert_eq!(read_view.strides().unwrap(), vec![2]);
+    assert_eq!(read_view.offset(), 0);
+    assert_eq!(read_view.layout_linear_offset(&[1]).unwrap(), 2);
+    assert!(!read_view.is_col_major_contiguous().unwrap());
+    assert!(read_view.assert_col_major_contiguous().is_err());
+
+    let mut write_tensor_dst = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    {
+        let mut write_tensor = TensorWrite::from_tensor(&mut write_tensor_dst);
+        assert_eq!(write_tensor.strides().unwrap(), vec![1]);
+        assert_eq!(write_tensor.offset(), 0);
+        assert_eq!(write_tensor.layout_linear_offset(&[1]).unwrap(), 1);
+        assert!(write_tensor.is_col_major_contiguous().unwrap());
+        assert!(write_tensor.layout_summary().contains("shape=[2]"));
+        write_tensor.assert_col_major_contiguous().unwrap();
+        write_tensor.copy_from_tensor(&tensor).unwrap();
+    }
+    assert_eq!(write_tensor_dst.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let mut write_view_data = [0.0_f64, 10.0, 0.0, 20.0];
+    {
+        let mut write_view = TensorWrite::from_view(TensorViewMut::F64(
+            TypedTensorViewMut::from_slice([2], [2], 1, &mut write_view_data).unwrap(),
+        ));
+        assert_eq!(write_view.strides().unwrap(), vec![2]);
+        assert_eq!(write_view.offset(), 1);
+        assert_eq!(write_view.layout_linear_offset(&[1]).unwrap(), 3);
+        assert!(!write_view.is_col_major_contiguous().unwrap());
+        assert!(write_view.assert_col_major_contiguous().is_err());
+        write_view.copy_from_tensor(&tensor).unwrap();
+    }
+    assert_eq!(write_view_data, [0.0, 1.0, 0.0, 2.0]);
+}
+
+#[test]
+fn tensor_write_copy_rejects_dtype_and_shape_mismatch() {
+    let src_f64 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let src_i32 = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let src_short = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+
+    let mut dst = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    {
+        let mut write = TensorWrite::from_tensor(&mut dst);
+        assert!(matches!(
+            write.copy_from_tensor(&src_i32),
+            Err(Error::DTypeMismatch { .. })
+        ));
+        assert!(matches!(
+            write.copy_from_tensor(&src_short),
+            Err(Error::ShapeMismatch { .. })
+        ));
+    }
+
+    let mut data = [0.0_f64, 0.0];
+    {
+        let mut write = TensorViewMut::f64(&[2], &mut data).unwrap();
+        assert!(matches!(
+            write.copy_from_tensor(&src_i32),
+            Err(Error::DTypeMismatch { .. })
+        ));
+        assert!(matches!(
+            write.copy_from_tensor(&src_short),
+            Err(Error::ShapeMismatch { .. })
+        ));
+        write.copy_from_tensor(&src_f64).unwrap();
+    }
+    assert_eq!(data, [1.0, 2.0]);
 }
 
 tensor_scalar_roundtrip_test!(
