@@ -49,7 +49,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "77527ecb647fecd4918ea2d06d0065ddce4e5b1c", version = "0.1.0" }
+tidu = "0.2.0"
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "71bdd913158a87437e51f4f9b69cba4cac6f5082", version = "0.1.0", features = ["parallel"] }
@@ -78,4 +78,4 @@ cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4
 cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "7d9e38294d0d71406d6e19c421ab463af9efc66e", version = "=0.2.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
+computegraph = "0.1.0"
