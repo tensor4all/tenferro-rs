@@ -24,7 +24,7 @@ blas-openblas = [
     "dep:strided-einsum2",
     "blas-src/openblas",
     "lapack-src/openblas",
-    "strided-einsum2/blas-openblas",
+    "strided-einsum2/blas",
     "strided-einsum2/parallel",
 ]
 blas-accelerate = [
@@ -32,7 +32,7 @@ blas-accelerate = [
     "dep:strided-einsum2",
     "blas-src/accelerate",
     "lapack-src/accelerate",
-    "strided-einsum2/blas-accelerate",
+    "strided-einsum2/blas",
     "strided-einsum2/parallel",
 ]
 blas-mkl = [
@@ -40,7 +40,7 @@ blas-mkl = [
     "dep:strided-einsum2",
     "blas-src/intel-mkl-dynamic-parallel",
     "lapack-src/intel-mkl-dynamic-parallel",
-    "strided-einsum2/blas-mkl",
+    "strided-einsum2/blas",
     "strided-einsum2/parallel",
 ]
 
