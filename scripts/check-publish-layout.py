@@ -8,6 +8,7 @@ registry version Cargo needs for packaging.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,14 @@ def section(text: str, heading: str) -> str:
     return rest
 
 
+def workspace_version(root_text: str) -> str:
+    package_section = section(root_text, "workspace.package")
+    match = re.search(r'(?m)^version = "([^"]+)"$', package_section)
+    if match is None:
+        raise ValueError("workspace.package missing version")
+    return match.group(1)
+
+
 def markdown_section(text: str, heading: str) -> str:
     marker = f"## {heading}"
     start = text.find(marker)
@@ -142,7 +151,7 @@ def check_workspace_dependencies(root_text: str, errors: list[str]) -> None:
             )
 
 
-def check_package_metadata(errors: list[str]) -> None:
+def check_package_metadata(workspace_version_value: str, errors: list[str]) -> None:
     for crate in TENFERRO_CRATES:
         manifest_path = ROOT / "crates" / crate / "Cargo.toml"
         if not manifest_path.exists():
@@ -165,10 +174,11 @@ def check_package_metadata(errors: list[str]) -> None:
                     f"{rel(manifest_path)} package.{key} must inherit workspace metadata"
                 )
         for line_no, line in enumerate(manifest_text.splitlines(), start=1):
-            if 'path = "../tenferro-' in line and 'version = "0.1.0"' not in line:
+            expected = f'version = "{workspace_version_value}"'
+            if 'path = "../tenferro-' in line and expected not in line:
                 errors.append(
                     f"{rel(manifest_path)}:{line_no}: tenferro path dependency "
-                    'must include version = "0.1.0" for crates.io packaging'
+                    f"must include {expected} for crates.io packaging"
                 )
 
     tutorial_manifest = ROOT / "docs" / "tutorial-code" / "Cargo.toml"
@@ -221,11 +231,12 @@ def check_readme(errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     root_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    workspace_version_value = workspace_version(root_text)
     metadata = cargo_metadata()
     check_workspace_members(metadata, root_text, errors)
     check_workspace_metadata(root_text, errors)
     check_workspace_dependencies(root_text, errors)
-    check_package_metadata(errors)
+    check_package_metadata(workspace_version_value, errors)
     check_readme(errors)
 
     if errors:
