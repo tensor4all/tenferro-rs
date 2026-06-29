@@ -242,6 +242,30 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
+        .qr_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "qr",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let err = backend
+        .eigh_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "eigh",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let err = backend
         .eigh_values(&Tensor::F64(input.clone()))
         .unwrap_err();
     assert!(matches!(

@@ -294,6 +294,40 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
 }
 
 #[test]
+fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let qr_read_source = source_section(&source, "fn qr_read", "fn eigh");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.qr(&input)",
+    ] {
+        assert!(
+            qr_read_source.contains(needle),
+            "CubeCL qr_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let eigh_read_source = source_section(&source, "fn eigh_read", "fn eigh_values");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.eigh(&input)",
+    ] {
+        assert!(
+            eigh_read_source.contains(needle),
+            "CubeCL eigh_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
 fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
     let source = linalg_source();
 

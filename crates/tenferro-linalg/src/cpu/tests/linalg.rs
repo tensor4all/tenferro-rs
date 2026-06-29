@@ -25,6 +25,289 @@ fn svd_canonicalizes_transposed_host_view_before_lapack() {
 }
 
 #[test]
+fn qr_read_canonicalizes_transposed_host_view_before_lapack() {
+    let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().qr_read(TensorView::F64(view)).unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let q = matrix_f64_from_tensor(&outputs[0], 3, 2);
+    let r = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let recon = matmul_f64(&q, &r, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3);
+
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn qr_read_canonicalizes_transposed_complex_host_view_before_lapack() {
+    let data = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(-2.0, 1.0),
+        Complex64::new(3.0, -0.25),
+        Complex64::new(0.5, -1.0),
+        Complex64::new(-1.0, 0.75),
+        Complex64::new(4.0, 1.5),
+    ];
+    let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().qr_read(TensorView::C64(view)).unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let q = matrix_c64_from_tensor(&outputs[0], 3, 2);
+    let r = matrix_c64_from_tensor(&outputs[1], 2, 2);
+    let recon = matmul_c64(&q, &r, 3, 2, 2);
+    let expected = transpose_c64(&data, 2, 3);
+
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_c64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn eigh_read_canonicalizes_transposed_host_view_before_lapack() {
+    let data = vec![4.0, 1.0, 1.0, 3.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().eigh_read(TensorView::F64(view)).unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let values = match &outputs[0] {
+        Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
+        _ => panic!("expected f64 eigenvalues"),
+    };
+    let vectors = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let recon = matmul_f64(
+        &matmul_f64(&vectors, &diag_f64(&values), 2, 2, 2),
+        &transpose_f64(&vectors, 2, 2),
+        2,
+        2,
+        2,
+    );
+    let expected = transpose_f64(&data, 2, 2);
+
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+#[test]
+fn eigh_read_canonicalizes_transposed_complex_host_view_before_lapack() {
+    let data = vec![
+        Complex64::new(4.0, 0.0),
+        Complex64::new(1.0, -0.5),
+        Complex64::new(1.0, 0.5),
+        Complex64::new(3.0, 0.0),
+    ];
+    let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().eigh_read(TensorView::C64(view)).unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].dtype(), DType::F64);
+    assert_eq!(outputs[1].dtype(), DType::C64);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let values = vector_f64_from_tensor(&outputs[0], 2);
+    let vectors = matrix_c64_from_tensor(&outputs[1], 2, 2);
+    let recon = matmul_c64(
+        &matmul_c64(&vectors, &diag_c64_from_real(&values), 2, 2, 2),
+        &conjugate_transpose_c64(&vectors, 2, 2),
+        2,
+        2,
+        2,
+    );
+    let expected = transpose_c64(&data, 2, 2);
+
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_c64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+#[test]
+fn qr_read_accepts_all_supported_linalg_view_dtypes() {
+    let f32_input =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0, -2.0, 0.5, 4.0]).unwrap();
+    let f64_input =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, -2.0, 0.5, 4.0]).unwrap();
+    let c32_input = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(1.0, 0.5),
+            Complex32::new(-2.0, 1.0),
+            Complex32::new(0.5, -0.25),
+            Complex32::new(4.0, 1.5),
+        ],
+    )
+    .unwrap();
+    let c64_input = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(-2.0, 1.0),
+            Complex64::new(0.5, -0.25),
+            Complex64::new(4.0, 1.5),
+        ],
+    )
+    .unwrap();
+
+    let mut backend = CpuBackend::new();
+    for (view, dtype) in [
+        (
+            TensorView::F32(f32_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F32,
+        ),
+        (
+            TensorView::F64(f64_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F64,
+        ),
+        (
+            TensorView::C32(c32_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::C32,
+        ),
+        (
+            TensorView::C64(c64_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::C64,
+        ),
+    ] {
+        let outputs = backend.qr_read(view).unwrap();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].dtype(), dtype);
+        assert_eq!(outputs[1].dtype(), dtype);
+        assert_eq!(outputs[0].shape(), &[2, 2]);
+        assert_eq!(outputs[1].shape(), &[2, 2]);
+    }
+}
+
+#[test]
+fn eigh_read_accepts_all_supported_linalg_view_dtypes() {
+    let f32_input =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]).unwrap();
+    let f64_input =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]).unwrap();
+    let c32_input = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(4.0, 0.0),
+            Complex32::new(1.0, -0.5),
+            Complex32::new(1.0, 0.5),
+            Complex32::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let c64_input = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(4.0, 0.0),
+            Complex64::new(1.0, -0.5),
+            Complex64::new(1.0, 0.5),
+            Complex64::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let mut backend = CpuBackend::new();
+    for (view, value_dtype, vector_dtype) in [
+        (
+            TensorView::F32(f32_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F32,
+            DType::F32,
+        ),
+        (
+            TensorView::F64(f64_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F64,
+            DType::F64,
+        ),
+        (
+            TensorView::C32(c32_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F32,
+            DType::C32,
+        ),
+        (
+            TensorView::C64(c64_input.as_view().transpose_view([1, 0]).unwrap()),
+            DType::F64,
+            DType::C64,
+        ),
+    ] {
+        let outputs = backend.eigh_read(view).unwrap();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].dtype(), value_dtype);
+        assert_eq!(outputs[1].dtype(), vector_dtype);
+        assert_eq!(outputs[0].shape(), &[2]);
+        assert_eq!(outputs[1].shape(), &[2, 2]);
+    }
+}
+
+#[test]
+fn linalg_read_rejects_non_float_view_dtypes() {
+    fn assert_unsupported_dtype(
+        result: tenferro_tensor::Result<Vec<Tensor>>,
+        expected_op: &'static str,
+    ) {
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            tenferro_tensor::Error::BackendFailure {
+                op,
+                ref message,
+            } if op == expected_op && message.contains("unsupported dtype")
+        ));
+    }
+
+    let i32_input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 1]).unwrap();
+    let i64_input =
+        TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap();
+    let bool_input =
+        TypedTensor::<bool>::from_vec_col_major(vec![2, 2], vec![true, false, false, true])
+            .unwrap();
+
+    let mut backend = CpuBackend::new();
+    assert_unsupported_dtype(
+        backend.svd_read(TensorView::I32(i32_input.as_view())),
+        "svd",
+    );
+    assert_unsupported_dtype(
+        backend.svd_read(TensorView::I64(i64_input.as_view())),
+        "svd",
+    );
+    assert_unsupported_dtype(
+        backend.svd_read(TensorView::Bool(bool_input.as_view())),
+        "svd",
+    );
+    assert_unsupported_dtype(backend.qr_read(TensorView::I32(i32_input.as_view())), "qr");
+    assert_unsupported_dtype(backend.qr_read(TensorView::I64(i64_input.as_view())), "qr");
+    assert_unsupported_dtype(
+        backend.qr_read(TensorView::Bool(bool_input.as_view())),
+        "qr",
+    );
+    assert_unsupported_dtype(
+        backend.eigh_read(TensorView::I32(i32_input.as_view())),
+        "eigh",
+    );
+    assert_unsupported_dtype(
+        backend.eigh_read(TensorView::I64(i64_input.as_view())),
+        "eigh",
+    );
+    assert_unsupported_dtype(
+        backend.eigh_read(TensorView::Bool(bool_input.as_view())),
+        "eigh",
+    );
+}
+
+#[test]
 fn test_batched_cholesky() {
     let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
