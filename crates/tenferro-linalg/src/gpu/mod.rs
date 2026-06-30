@@ -3,9 +3,9 @@ mod kernels;
 mod linalg;
 
 use tenferro_gpu::CudaBackend;
-use tenferro_tensor::{DType, Error, Tensor, TensorView, TensorViewCanonicalization};
+use tenferro_tensor::{Tensor, TensorView, TensorViewCanonicalization};
 
-use crate::backend::LinalgBackend;
+use crate::backend::{unsupported_dtype, LinalgBackend};
 
 impl LinalgBackend for CudaBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -75,9 +75,9 @@ impl LinalgBackend for CudaBackend {
                 let input = Tensor::C64(compact);
                 self.svd(&input)
             }
-            TensorView::I32(_) => Err(unsupported_view_dtype("svd", DType::I32)),
-            TensorView::I64(_) => Err(unsupported_view_dtype("svd", DType::I64)),
-            TensorView::Bool(_) => Err(unsupported_view_dtype("svd", DType::Bool)),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("svd", input.dtype()))
+            }
         }
     }
 
@@ -107,9 +107,9 @@ impl LinalgBackend for CudaBackend {
                 let input = Tensor::C64(compact);
                 self.qr(&input)
             }
-            TensorView::I32(_) => Err(unsupported_view_dtype("qr", DType::I32)),
-            TensorView::I64(_) => Err(unsupported_view_dtype("qr", DType::I64)),
-            TensorView::Bool(_) => Err(unsupported_view_dtype("qr", DType::Bool)),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("qr", input.dtype()))
+            }
         }
     }
 
@@ -139,9 +139,9 @@ impl LinalgBackend for CudaBackend {
                 let input = Tensor::C64(compact);
                 self.eigh(&input)
             }
-            TensorView::I32(_) => Err(unsupported_view_dtype("eigh", DType::I32)),
-            TensorView::I64(_) => Err(unsupported_view_dtype("eigh", DType::I64)),
-            TensorView::Bool(_) => Err(unsupported_view_dtype("eigh", DType::Bool)),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("eigh", input.dtype()))
+            }
         }
     }
 
@@ -168,8 +168,4 @@ impl LinalgBackend for CudaBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         linalg::lu_solve_prepared(self, a, packed_lu, pivots, b, transpose_a, conjugate_a)
     }
-}
-
-fn unsupported_view_dtype(op: &'static str, dtype: DType) -> Error {
-    Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
 }

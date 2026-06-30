@@ -1,4 +1,4 @@
-use crate::backend::LinalgBackend;
+use crate::backend::{unsupported_dtype, LinalgBackend};
 
 use super::linalg;
 
@@ -1423,8 +1423,4 @@ fn unsupported_pair(
     } else {
         Err(unsupported_dtype(op, lhs.dtype()))
     }
-}
-
-fn unsupported_dtype(op: &'static str, dtype: DType) -> Error {
-    Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
 }

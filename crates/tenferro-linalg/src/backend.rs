@@ -1,5 +1,18 @@
 use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 
+/// Build the shared "unsupported dtype" backend-failure error used by the
+/// linalg backends.
+///
+/// Both the CPU and GPU linalg backends reject integer and boolean dtypes for
+/// floating-point decompositions with an identical message; this helper keeps
+/// that error construction in one place.
+pub(crate) fn unsupported_dtype(
+    op: &'static str,
+    dtype: tenferro_tensor::DType,
+) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
+}
+
 /// Backend surface required by the linalg extension runtime.
 ///
 /// # Examples
