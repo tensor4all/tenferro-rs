@@ -81,6 +81,22 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, eigh_read(input))
     }
 
+    fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+        dispatch_linalg!(self, cholesky_read(input))
+    }
+
+    fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, lu_read(input))
+    }
+
+    fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, full_piv_lu_read(input))
+    }
+
+    fn eig_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, eig_read(input))
+    }
+
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         dispatch_linalg!(self, eigh_values(input))
     }

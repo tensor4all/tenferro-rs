@@ -305,6 +305,370 @@ fn linalg_read_rejects_non_float_view_dtypes() {
         backend.eigh_read(TensorView::Bool(bool_input.as_view())),
         "eigh",
     );
+
+    fn assert_unsupported_dtype_single(
+        result: tenferro_tensor::Result<Tensor>,
+        expected_op: &'static str,
+    ) {
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            tenferro_tensor::Error::BackendFailure {
+                op,
+                ref message,
+            } if op == expected_op && message.contains("unsupported dtype")
+        ));
+    }
+
+    assert_unsupported_dtype_single(
+        backend.cholesky_read(TensorView::I32(i32_input.as_view())),
+        "cholesky",
+    );
+    assert_unsupported_dtype_single(
+        backend.cholesky_read(TensorView::I64(i64_input.as_view())),
+        "cholesky",
+    );
+    assert_unsupported_dtype_single(
+        backend.cholesky_read(TensorView::Bool(bool_input.as_view())),
+        "cholesky",
+    );
+    assert_unsupported_dtype(backend.lu_read(TensorView::I32(i32_input.as_view())), "lu");
+    assert_unsupported_dtype(backend.lu_read(TensorView::I64(i64_input.as_view())), "lu");
+    assert_unsupported_dtype(
+        backend.lu_read(TensorView::Bool(bool_input.as_view())),
+        "lu",
+    );
+    assert_unsupported_dtype(
+        backend.full_piv_lu_read(TensorView::I32(i32_input.as_view())),
+        "full_piv_lu",
+    );
+    assert_unsupported_dtype(
+        backend.full_piv_lu_read(TensorView::I64(i64_input.as_view())),
+        "full_piv_lu",
+    );
+    assert_unsupported_dtype(
+        backend.full_piv_lu_read(TensorView::Bool(bool_input.as_view())),
+        "full_piv_lu",
+    );
+    assert_unsupported_dtype(
+        backend.eig_read(TensorView::I32(i32_input.as_view())),
+        "eig",
+    );
+    assert_unsupported_dtype(
+        backend.eig_read(TensorView::I64(i64_input.as_view())),
+        "eig",
+    );
+    assert_unsupported_dtype(
+        backend.eig_read(TensorView::Bool(bool_input.as_view())),
+        "eig",
+    );
+}
+
+#[test]
+fn cholesky_read_canonicalizes_transposed_host_view_before_factorization() {
+    // A = L * L^T where L = [[2, 0], [1, 3]] => A = [[4, 2], [2, 10]]
+    // column-major storage: [4, 2, 2, 10]
+    let data = vec![4.0_f64, 2.0, 2.0, 10.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    // Transposed view of a symmetric matrix is still the same matrix, so cholesky should succeed.
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let output = CpuBackend::new()
+        .cholesky_read(TensorView::F64(view))
+        .unwrap();
+    assert_eq!(output.shape(), &[2, 2]);
+    // Verify L * L^T ≈ A
+    let l = matrix_f64_from_tensor(&output, 2, 2);
+    let recon = matmul_f64(&l, &transpose_f64(&l, 2, 2), 2, 2, 2);
+    for (actual, expected) in recon.iter().zip(data.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn lu_read_canonicalizes_transposed_host_view_before_factorization() {
+    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]; the transposed view is
+    // [[1, 2], [3, 4]] (col-major [1, 3, 2, 4]), which is what the fast path must factor.
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().lu_read(TensorView::F64(view)).unwrap();
+    assert_eq!(outputs.len(), 4);
+    // P has shape [2, 2], L has shape [2, 2], U has shape [2, 2], parity is scalar []
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+    assert_eq!(outputs[2].shape(), &[2, 2]);
+    assert_eq!(outputs[3].shape(), &[] as &[usize]);
+
+    // Reconstruct P * A_view == L * U (the canonical LU convention).
+    let a_view = vec![1.0_f64, 3.0, 2.0, 4.0];
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let pa = matmul_f64(&p, &a_view, 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in lu.iter().zip(pa.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn full_piv_lu_read_canonicalizes_transposed_host_view_before_factorization() {
+    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]; transposed view is col-major [1, 3, 2, 4].
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new()
+        .full_piv_lu_read(TensorView::F64(view))
+        .unwrap();
+    assert_eq!(outputs.len(), 5);
+    // P_row, L, U, P_col, parity
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+    assert_eq!(outputs[2].shape(), &[2, 2]);
+    assert_eq!(outputs[3].shape(), &[2, 2]);
+    assert_eq!(outputs[4].shape(), &[] as &[usize]);
+
+    // Reconstruct P * A_view * Q^T == L * U (the complete-pivot convention).
+    let a_view = vec![1.0_f64, 3.0, 2.0, 4.0];
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let q = matrix_f64_from_tensor(&outputs[3], 2, 2);
+    let pa = matmul_f64(&p, &a_view, 2, 2, 2);
+    let paqt = matmul_f64(&pa, &transpose_f64(&q, 2, 2), 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in lu.iter().zip(paqt.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn eig_read_returns_correct_outputs_for_diagonal_matrix() {
+    // diagonal matrix [[2, 0], [0, 3]] col-major: [2, 0, 0, 3]
+    let data = vec![2.0_f64, 0.0, 0.0, 3.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
+    let outputs = CpuBackend::new()
+        .eig_read(TensorView::F64(a.as_view()))
+        .unwrap();
+    assert_eq!(outputs.len(), 2);
+    // eig on real returns complex outputs
+    assert!(matches!(outputs[0], Tensor::C64(_)));
+    assert!(matches!(outputs[1], Tensor::C64(_)));
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+}
+
+#[test]
+fn cholesky_read_accepts_all_supported_linalg_view_dtypes() {
+    let mut backend = CpuBackend::new();
+    let spd_f32 =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![4.0_f32, 2.0, 2.0, 3.0]).unwrap();
+    let spd_f64 =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
+    let spd_c32 = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(4.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let spd_c64 = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(4.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let out = backend
+        .cholesky_read(TensorView::F32(spd_f32.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::F32(_)));
+    assert_eq!(out.shape(), &[2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::F64(spd_f64.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::F64(_)));
+    assert_eq!(out.shape(), &[2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::C32(spd_c32.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::C32(_)));
+    assert_eq!(out.shape(), &[2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::C64(spd_c64.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::C64(_)));
+    assert_eq!(out.shape(), &[2, 2]);
+}
+
+#[test]
+fn lu_read_accepts_all_supported_linalg_view_dtypes() {
+    let mut backend = CpuBackend::new();
+    let mat_f32 =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    let mat_f64 =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let mat_c32 = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(3.0, 0.0),
+            Complex32::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let mat_c64 = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let outs = backend.lu_read(TensorView::F32(mat_f32.as_view())).unwrap();
+    assert_eq!(outs.len(), 4);
+    assert!(matches!(outs[0], Tensor::F32(_)));
+
+    let outs = backend.lu_read(TensorView::F64(mat_f64.as_view())).unwrap();
+    assert_eq!(outs.len(), 4);
+    assert!(matches!(outs[0], Tensor::F64(_)));
+
+    let outs = backend.lu_read(TensorView::C32(mat_c32.as_view())).unwrap();
+    assert_eq!(outs.len(), 4);
+    assert!(matches!(outs[0], Tensor::C32(_)));
+
+    let outs = backend.lu_read(TensorView::C64(mat_c64.as_view())).unwrap();
+    assert_eq!(outs.len(), 4);
+    assert!(matches!(outs[0], Tensor::C64(_)));
+}
+
+#[test]
+fn full_piv_lu_read_accepts_all_supported_linalg_view_dtypes() {
+    let mut backend = CpuBackend::new();
+    let mat_f32 =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    let mat_f64 =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let mat_c32 = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(3.0, 0.0),
+            Complex32::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let mat_c64 = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let outs = backend
+        .full_piv_lu_read(TensorView::F32(mat_f32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 5);
+    assert!(matches!(outs[0], Tensor::F32(_)));
+
+    let outs = backend
+        .full_piv_lu_read(TensorView::F64(mat_f64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 5);
+    assert!(matches!(outs[0], Tensor::F64(_)));
+
+    let outs = backend
+        .full_piv_lu_read(TensorView::C32(mat_c32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 5);
+    assert!(matches!(outs[0], Tensor::C32(_)));
+
+    let outs = backend
+        .full_piv_lu_read(TensorView::C64(mat_c64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 5);
+    assert!(matches!(outs[0], Tensor::C64(_)));
+}
+
+#[test]
+fn eig_read_accepts_all_supported_linalg_view_dtypes() {
+    let mut backend = CpuBackend::new();
+    // Use diagonal matrices so eig is well-conditioned
+    let mat_f32 =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![2.0_f32, 0.0, 0.0, 3.0]).unwrap();
+    let mat_f64 =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+    let mat_c32 = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(2.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let mat_c64 = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    // f32 -> C32 outputs
+    let outs = backend
+        .eig_read(TensorView::F32(mat_f32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert!(matches!(outs[0], Tensor::C32(_)));
+    assert!(matches!(outs[1], Tensor::C32(_)));
+
+    // f64 -> C64 outputs
+    let outs = backend
+        .eig_read(TensorView::F64(mat_f64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert!(matches!(outs[0], Tensor::C64(_)));
+    assert!(matches!(outs[1], Tensor::C64(_)));
+
+    // C32 -> C32 outputs
+    let outs = backend
+        .eig_read(TensorView::C32(mat_c32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert!(matches!(outs[0], Tensor::C32(_)));
+    assert!(matches!(outs[1], Tensor::C32(_)));
+
+    // C64 -> C64 outputs
+    let outs = backend
+        .eig_read(TensorView::C64(mat_c64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert!(matches!(outs[0], Tensor::C64(_)));
+    assert!(matches!(outs[1], Tensor::C64(_)));
 }
 
 #[test]
@@ -975,4 +1339,470 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
         err,
         tenferro_tensor::Error::BackendFailure { op: "solve", .. }
     ));
+}
+
+#[test]
+fn svd_read_faer_strided_view_matches_contiguous() {
+    // 2x3 matrix stored col-major, then transposed to give a 3x2 strided view.
+    let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0]; // 2x3 col-major
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().svd_read(TensorView::F64(view)).unwrap();
+    // For 3x2 input (m=3, n=2), thin SVD gives U:[3,2], S:[2], Vt:[2,2].
+    assert_eq!(out[0].shape(), &[3, 2]);
+    assert_eq!(out[1].shape(), &[2]);
+    assert_eq!(out[2].shape(), &[2, 2]);
+
+    let u = matrix_f64_from_tensor(&out[0], 3, 2);
+    let s = (0..2).map(|i| get_f64(&out[1], &[i])).collect::<Vec<_>>();
+    let vt = matrix_f64_from_tensor(&out[2], 2, 2);
+    let recon = matmul_f64(&matmul_f64(&u, &diag_f64(&s), 3, 2, 2), &vt, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3); // A^T is 3x2 col-major
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn svd_read_faer_strided_c64_view() {
+    let data = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(-2.0, 1.0),
+        Complex64::new(3.0, -0.25),
+        Complex64::new(0.5, -1.0),
+        Complex64::new(-1.0, 0.75),
+        Complex64::new(4.0, 1.5),
+    ];
+    let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().svd_read(TensorView::C64(view)).unwrap();
+    assert_eq!(out[0].shape(), &[3, 2]); // U (thin, complex)
+    assert_eq!(out[1].shape(), &[2]); // S (real singular values)
+    assert_eq!(out[2].shape(), &[2, 2]); // Vt (thin, complex)
+
+    // Singular values are returned as a real tensor, mirroring the materialized path.
+    let s_vals = match &out[1] {
+        Tensor::F64(t) => t.host_data().unwrap().to_vec(),
+        Tensor::C64(t) => t.host_data().unwrap().iter().map(|c| c.re).collect(),
+        _ => panic!("unexpected type for singular values"),
+    };
+    assert!(s_vals.iter().all(|&v| v.is_finite() && v >= 0.0));
+    assert!(s_vals[0] >= s_vals[1]); // singular values descending
+}
+
+#[test]
+fn qr_read_faer_strided_view_matches_contiguous() {
+    let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().qr_read(TensorView::F64(view)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].shape(), &[3, 2]);
+    assert_eq!(out[1].shape(), &[2, 2]);
+
+    let q = matrix_f64_from_tensor(&out[0], 3, 2);
+    let r = matrix_f64_from_tensor(&out[1], 2, 2);
+    let recon = matmul_f64(&q, &r, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3);
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn eigh_read_faer_strided_view_matches_contiguous() {
+    // Symmetric 2x2 stored col-major, then transposed to a strided view (still symmetric).
+    let data = vec![4.0_f64, 1.0, 1.0, 3.0]; // 2x2 symmetric
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 2x2 strided (still symmetric)
+    let out = CpuBackend::new().eigh_read(TensorView::F64(view)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].shape(), &[2]); // eigenvalues
+    assert_eq!(out[1].shape(), &[2, 2]); // eigenvectors
+
+    let eigenvalues = (0..2).map(|i| get_f64(&out[0], &[i])).collect::<Vec<_>>();
+    assert!(eigenvalues[0].is_finite());
+    assert!(eigenvalues[1].is_finite());
+
+    // Reconstruct A = V diag(lambda) V^T and compare against the (symmetric) input view.
+    let vectors = matrix_f64_from_tensor(&out[1], 2, 2);
+    let recon = matmul_f64(
+        &matmul_f64(&vectors, &diag_f64(&eigenvalues), 2, 2, 2),
+        &transpose_f64(&vectors, 2, 2),
+        2,
+        2,
+        2,
+    );
+    let expected = transpose_f64(&data, 2, 2);
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fallback-path tests: rank-3 views force `faer_strided_ok` to return false
+// (rank != 2), so each `*_read` method takes the `to_contiguous` fallback
+// branch for every supported dtype (F32, F64, C32, C64).
+// ---------------------------------------------------------------------------
+
+/// Shared column-major data for a batch of two 2x2 matrices.
+/// Layout: [2, 2, 2] with the batch dimension last, column-major for the
+/// matrix core. Each matrix is independently well-conditioned.
+///
+/// batch 0: [[1, 2], [3, 4]]   (col-major: [1, 3, 2, 4])
+/// batch 1: [[2, 0], [0, 3]]   (col-major: [2, 0, 0, 3])
+fn rank3_batched_2x2_f32() -> TypedTensor<f32> {
+    TypedTensor::<f32>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f32, 3.0, 2.0, 4.0, 2.0, 0.0, 0.0, 3.0],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_2x2_f64() -> TypedTensor<f64> {
+    TypedTensor::<f64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f64, 3.0, 2.0, 4.0, 2.0, 0.0, 0.0, 3.0],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_2x2_c32() -> TypedTensor<Complex32> {
+    // batch 0: [[1+0i, 2+0i], [3+0i, 4+0i]]  col-major: [(1,0),(3,0),(2,0),(4,0)]
+    // batch 1: [[2+0i, 0+0i], [0+0i, 3+0i]]  col-major: [(2,0),(0,0),(0,0),(3,0)]
+    TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(3.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(4.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(3.0, 0.0),
+        ],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_2x2_c64() -> TypedTensor<Complex64> {
+    TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(4.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+    )
+    .unwrap()
+}
+
+/// SPD 2x2 matrices packed into a rank-3 [2, 2, 2] tensor for cholesky tests.
+/// batch 0: A = L*L^T where L = [[2, 0], [1, 3]]  => A = [[4, 2], [2, 10]]
+/// batch 1: A = L*L^T where L = [[1, 0], [0, 2]]  => A = [[1, 0], [0, 4]]
+fn rank3_batched_spd_2x2_f32() -> TypedTensor<f32> {
+    // col-major batch 0: [4, 2, 2, 10]
+    // col-major batch 1: [1, 0, 0, 4]
+    TypedTensor::<f32>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![4.0_f32, 2.0, 2.0, 10.0, 1.0, 0.0, 0.0, 4.0],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_spd_2x2_f64() -> TypedTensor<f64> {
+    TypedTensor::<f64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![4.0_f64, 2.0, 2.0, 10.0, 1.0, 0.0, 0.0, 4.0],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_spd_2x2_c32() -> TypedTensor<Complex32> {
+    TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex32::new(4.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(10.0, 0.0),
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(4.0, 0.0),
+        ],
+    )
+    .unwrap()
+}
+
+fn rank3_batched_spd_2x2_c64() -> TypedTensor<Complex64> {
+    TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex64::new(4.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(10.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap()
+}
+
+/// `svd_read` fallback: rank-3 view forces `to_contiguous` path for all dtypes.
+#[test]
+fn svd_read_to_contiguous_fallback_rank3_all_dtypes() {
+    let f32_t = rank3_batched_2x2_f32();
+    let f64_t = rank3_batched_2x2_f64();
+    let c32_t = rank3_batched_2x2_c32();
+    let c64_t = rank3_batched_2x2_c64();
+
+    let mut backend = CpuBackend::new();
+    // F32: view is rank-3 so faer_strided_ok returns false; fallback is taken.
+    let outs = backend.svd_read(TensorView::F32(f32_t.as_view())).unwrap();
+    assert_eq!(outs.len(), 3);
+    assert_eq!(outs[0].dtype(), DType::F32);
+    assert_eq!(outs[0].shape(), &[2, 2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2]);
+    assert_eq!(outs[2].shape(), &[2, 2, 2]);
+
+    // F64
+    let outs = backend.svd_read(TensorView::F64(f64_t.as_view())).unwrap();
+    assert_eq!(outs.len(), 3);
+    assert_eq!(outs[0].dtype(), DType::F64);
+    assert_eq!(outs[0].shape(), &[2, 2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2]);
+    assert_eq!(outs[2].shape(), &[2, 2, 2]);
+
+    // C32: SVD of complex inputs returns U (C32), S (F32), Vt (C32).
+    let outs = backend.svd_read(TensorView::C32(c32_t.as_view())).unwrap();
+    assert_eq!(outs.len(), 3);
+    assert_eq!(outs[0].dtype(), DType::C32);
+    assert_eq!(outs[0].shape(), &[2, 2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2]);
+    assert_eq!(outs[2].shape(), &[2, 2, 2]);
+
+    // C64: SVD of complex inputs returns U (C64), S (F64), Vt (C64).
+    let outs = backend.svd_read(TensorView::C64(c64_t.as_view())).unwrap();
+    assert_eq!(outs.len(), 3);
+    assert_eq!(outs[0].dtype(), DType::C64);
+    assert_eq!(outs[0].shape(), &[2, 2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2]);
+    assert_eq!(outs[2].shape(), &[2, 2, 2]);
+}
+
+/// `qr_read` fallback: rank-3 view forces `to_contiguous` path for all dtypes.
+#[test]
+fn qr_read_to_contiguous_fallback_rank3_all_dtypes() {
+    let f32_t = rank3_batched_2x2_f32();
+    let f64_t = rank3_batched_2x2_f64();
+    let c32_t = rank3_batched_2x2_c32();
+    let c64_t = rank3_batched_2x2_c64();
+
+    let mut backend = CpuBackend::new();
+    for (view, dtype) in [
+        (TensorView::F32(f32_t.as_view()), DType::F32),
+        (TensorView::F64(f64_t.as_view()), DType::F64),
+        (TensorView::C32(c32_t.as_view()), DType::C32),
+        (TensorView::C64(c64_t.as_view()), DType::C64),
+    ] {
+        let outs = backend.qr_read(view).unwrap();
+        assert_eq!(
+            outs.len(),
+            2,
+            "qr_read expected 2 outputs for dtype {dtype:?}"
+        );
+        assert_eq!(outs[0].dtype(), dtype);
+        assert_eq!(outs[0].shape(), &[2, 2, 2]);
+        assert_eq!(outs[1].shape(), &[2, 2, 2]);
+    }
+}
+
+/// `eigh_read` fallback: rank-3 view forces `to_contiguous` path for all dtypes.
+#[test]
+fn eigh_read_to_contiguous_fallback_rank3_all_dtypes() {
+    // Use symmetric/Hermitian rank-3 inputs (batch of symmetric 2x2 matrices).
+    let sym_f32 = TypedTensor::<f32>::from_vec_col_major(
+        vec![2, 2, 2],
+        // batch 0: [[4,1],[1,3]] col-major: [4,1,1,3]
+        // batch 1: [[2,0],[0,5]] col-major: [2,0,0,5]
+        vec![4.0_f32, 1.0, 1.0, 3.0, 2.0, 0.0, 0.0, 5.0],
+    )
+    .unwrap();
+    let sym_f64 = TypedTensor::<f64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![4.0_f64, 1.0, 1.0, 3.0, 2.0, 0.0, 0.0, 5.0],
+    )
+    .unwrap();
+    let sym_c32 = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex32::new(4.0, 0.0),
+            Complex32::new(1.0, 0.0),
+            Complex32::new(1.0, 0.0),
+            Complex32::new(3.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(5.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let sym_c64 = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![
+            Complex64::new(4.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let mut backend = CpuBackend::new();
+
+    // Real dtypes: eigenvalues are same dtype, eigenvectors same dtype.
+    let outs = backend
+        .eigh_read(TensorView::F32(sym_f32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0].dtype(), DType::F32);
+    assert_eq!(outs[1].dtype(), DType::F32);
+    assert_eq!(outs[0].shape(), &[2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2, 2]);
+
+    let outs = backend
+        .eigh_read(TensorView::F64(sym_f64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0].dtype(), DType::F64);
+    assert_eq!(outs[1].dtype(), DType::F64);
+    assert_eq!(outs[0].shape(), &[2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2, 2]);
+
+    // Complex dtypes: eigenvalues are real, eigenvectors are complex.
+    let outs = backend
+        .eigh_read(TensorView::C32(sym_c32.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0].dtype(), DType::F32);
+    assert_eq!(outs[1].dtype(), DType::C32);
+    assert_eq!(outs[0].shape(), &[2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2, 2]);
+
+    let outs = backend
+        .eigh_read(TensorView::C64(sym_c64.as_view()))
+        .unwrap();
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0].dtype(), DType::F64);
+    assert_eq!(outs[1].dtype(), DType::C64);
+    assert_eq!(outs[0].shape(), &[2, 2]);
+    assert_eq!(outs[1].shape(), &[2, 2, 2]);
+}
+
+/// `cholesky_read` fallback: rank-3 SPD view forces `to_contiguous` path for all dtypes.
+#[test]
+fn cholesky_read_to_contiguous_fallback_rank3_all_dtypes() {
+    let f32_t = rank3_batched_spd_2x2_f32();
+    let f64_t = rank3_batched_spd_2x2_f64();
+    let c32_t = rank3_batched_spd_2x2_c32();
+    let c64_t = rank3_batched_spd_2x2_c64();
+
+    let mut backend = CpuBackend::new();
+    let out = backend
+        .cholesky_read(TensorView::F32(f32_t.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::F32(_)));
+    assert_eq!(out.shape(), &[2, 2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::F64(f64_t.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::F64(_)));
+    assert_eq!(out.shape(), &[2, 2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::C32(c32_t.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::C32(_)));
+    assert_eq!(out.shape(), &[2, 2, 2]);
+
+    let out = backend
+        .cholesky_read(TensorView::C64(c64_t.as_view()))
+        .unwrap();
+    assert!(matches!(out, Tensor::C64(_)));
+    assert_eq!(out.shape(), &[2, 2, 2]);
+}
+
+/// `lu_read` fallback: rank-3 view forces `to_contiguous` path for all dtypes.
+#[test]
+fn lu_read_to_contiguous_fallback_rank3_all_dtypes() {
+    let f32_t = rank3_batched_2x2_f32();
+    let f64_t = rank3_batched_2x2_f64();
+    let c32_t = rank3_batched_2x2_c32();
+    let c64_t = rank3_batched_2x2_c64();
+
+    let mut backend = CpuBackend::new();
+    for (view, dtype) in [
+        (TensorView::F32(f32_t.as_view()), DType::F32),
+        (TensorView::F64(f64_t.as_view()), DType::F64),
+        (TensorView::C32(c32_t.as_view()), DType::C32),
+        (TensorView::C64(c64_t.as_view()), DType::C64),
+    ] {
+        let outs = backend.lu_read(view).unwrap();
+        assert_eq!(
+            outs.len(),
+            4,
+            "lu_read expected 4 outputs for dtype {dtype:?}"
+        );
+        assert_eq!(outs[0].dtype(), dtype);
+        // P, L, U have shape [2, 2, 2]; parity is [2] (one scalar per batch element).
+        assert_eq!(outs[0].shape(), &[2, 2, 2]);
+        assert_eq!(outs[1].shape(), &[2, 2, 2]);
+        assert_eq!(outs[2].shape(), &[2, 2, 2]);
+        assert_eq!(outs[3].shape(), &[2]);
+    }
+}
+
+/// `full_piv_lu_read` fallback: rank-3 view forces `to_contiguous` path for all dtypes.
+#[test]
+fn full_piv_lu_read_to_contiguous_fallback_rank3_all_dtypes() {
+    let f32_t = rank3_batched_2x2_f32();
+    let f64_t = rank3_batched_2x2_f64();
+    let c32_t = rank3_batched_2x2_c32();
+    let c64_t = rank3_batched_2x2_c64();
+
+    let mut backend = CpuBackend::new();
+    for (view, dtype) in [
+        (TensorView::F32(f32_t.as_view()), DType::F32),
+        (TensorView::F64(f64_t.as_view()), DType::F64),
+        (TensorView::C32(c32_t.as_view()), DType::C32),
+        (TensorView::C64(c64_t.as_view()), DType::C64),
+    ] {
+        let outs = backend.full_piv_lu_read(view).unwrap();
+        assert_eq!(
+            outs.len(),
+            5,
+            "full_piv_lu_read expected 5 outputs for dtype {dtype:?}"
+        );
+        // P_row, L, U, P_col each [2, 2, 2]; parity is [2].
+        assert_eq!(outs[0].shape(), &[2, 2, 2]);
+        assert_eq!(outs[1].shape(), &[2, 2, 2]);
+        assert_eq!(outs[2].shape(), &[2, 2, 2]);
+        assert_eq!(outs[3].shape(), &[2, 2, 2]);
+        assert_eq!(outs[4].shape(), &[2]);
+    }
 }

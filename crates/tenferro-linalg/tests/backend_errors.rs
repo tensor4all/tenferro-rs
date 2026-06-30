@@ -282,7 +282,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             &Tensor::F64(input.clone()),
             &Tensor::F64(input.clone()),
             &pivots,
-            &Tensor::F64(input),
+            &Tensor::F64(input.clone()),
             false,
             false,
         )
@@ -293,6 +293,50 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             op: "lu_solve_prepared",
             ref message,
         } if message.contains("does not implement")
+    ));
+
+    let err = backend
+        .cholesky_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "cholesky",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let err = backend
+        .lu_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "lu",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let err = backend
+        .full_piv_lu_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "full_piv_lu",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let err = backend
+        .eig_read(TensorView::F64(input.as_view()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "eig",
+            ref message,
+        } if message.contains("borrowed tensor views")
     ));
 }
 

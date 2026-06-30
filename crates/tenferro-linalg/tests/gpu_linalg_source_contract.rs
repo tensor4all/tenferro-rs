@@ -748,3 +748,71 @@ fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
         );
     }
 }
+
+#[test]
+fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let cholesky_read_source = source_section(&source, "fn cholesky_read", "fn lu_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.cholesky(&input)",
+    ] {
+        assert!(
+            cholesky_read_source.contains(needle),
+            "CubeCL cholesky_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let lu_read_source = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.lu(&input)",
+    ] {
+        assert!(
+            lu_read_source.contains(needle),
+            "CubeCL lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let full_piv_lu_read_source = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.full_piv_lu(&input)",
+    ] {
+        assert!(
+            full_piv_lu_read_source.contains(needle),
+            "CubeCL full_piv_lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let eig_read_source = source_section(&source, "fn eig_read", "fn eigh_values");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.eig(&input)",
+    ] {
+        assert!(
+            eig_read_source.contains(needle),
+            "CubeCL eig_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
