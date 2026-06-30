@@ -22,8 +22,24 @@ pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
 }
 
+fn gesdd_iwork_len(k: usize) -> usize {
+    8 * k.max(1)
+}
+
+fn complex_gesdd_rwork_len(jobz: u8, m: usize, n: usize) -> usize {
+    let mn = m.min(n);
+    let mx = m.max(n);
+    if jobz == b'N' {
+        return 5 * mn.max(1);
+    }
+    if mx > 10 * mn {
+        return 5 * mn * mn + 5 * mn;
+    }
+    (5 * mn * mn + 5 * mn).max(2 * mx * mn + 2 * mn * mn + mn)
+}
+
 macro_rules! impl_real_svd {
-    ($scalar:ty, $gesvd:path, $routine:literal) => {
+    ($scalar:ty, $gesdd:path, $routine:literal) => {
         impl LapackSvd for $scalar {
             type Real = $scalar;
 
@@ -42,13 +58,14 @@ macro_rules! impl_real_svd {
                 let mut u = vec![0.0 as $scalar; m * k];
                 let mut vt = vec![0.0 as $scalar; k * n];
                 let mut query = vec![0.0 as $scalar; 1];
+                let mut iwork = vec![0; gesdd_iwork_len(k)];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
                 // dimensions, and `lwork = -1` makes `query` the workspace output.
                 unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut query, -1, &mut info,
+                    $gesdd(
+                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
+                        &mut query, -1, &mut iwork, &mut info,
                     );
                 }
                 check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
@@ -57,9 +74,9 @@ macro_rules! impl_real_svd {
                 // SAFETY: buffers and leading dimensions match the validated
                 // SVD problem, and `work` uses the queried workspace length.
                 unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut work, lwork, &mut info,
+                    $gesdd(
+                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
+                        &mut work, lwork, &mut iwork, &mut info,
                     );
                 }
                 check_lapack_info("svd", $routine, info)?;
@@ -83,12 +100,12 @@ macro_rules! impl_real_svd {
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
+                let mut iwork = vec![0; gesdd_iwork_len(k)];
                 let mut info = 0;
                 // SAFETY: `a` and `s` match the validated SVD dimensions;
                 // no-vector mode ignores the dummy U/VT buffers, and `lwork = -1` queries workspace.
                 unsafe {
-                    $gesvd(
-                        b'N',
+                    $gesdd(
                         b'N',
                         m_i32,
                         n_i32,
@@ -101,6 +118,7 @@ macro_rules! impl_real_svd {
                         1,
                         &mut query,
                         -1,
+                        &mut iwork,
                         &mut info,
                     );
                 }
@@ -110,8 +128,7 @@ macro_rules! impl_real_svd {
                 // SAFETY: `a`, `s`, dummy no-vector buffers, and `work`
                 // satisfy the validated SVD dimensions and queried workspace length.
                 unsafe {
-                    $gesvd(
-                        b'N',
+                    $gesdd(
                         b'N',
                         m_i32,
                         n_i32,
@@ -124,6 +141,7 @@ macro_rules! impl_real_svd {
                         1,
                         &mut work,
                         lwork,
+                        &mut iwork,
                         &mut info,
                     );
                 }
@@ -136,7 +154,7 @@ macro_rules! impl_real_svd {
 }
 
 macro_rules! impl_complex_svd {
-    ($complex:ty, $real:ty, $gesvd:path, $routine:literal) => {
+    ($complex:ty, $real:ty, $gesdd:path, $routine:literal) => {
         impl LapackSvd for $complex {
             type Real = $real;
 
@@ -155,14 +173,15 @@ macro_rules! impl_complex_svd {
                 let mut u = vec![<$complex>::new(0.0, 0.0); m * k];
                 let mut vt = vec![<$complex>::new(0.0, 0.0); k * n];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
+                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'S', m, n)];
+                let mut iwork = vec![0; gesdd_iwork_len(k)];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
                 // validated complex SVD dimensions; `lwork = -1` queries workspace.
                 unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut query, -1, &mut rwork, &mut info,
+                    $gesdd(
+                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
+                        &mut query, -1, &mut rwork, &mut iwork, &mut info,
                     );
                 }
                 check_lapack_info("svd", concat!($routine, "(work query)"), info)?;
@@ -171,9 +190,9 @@ macro_rules! impl_complex_svd {
                 // SAFETY: buffers, real workspace, and leading dimensions
                 // match the validated complex SVD problem and queried workspace length.
                 unsafe {
-                    $gesvd(
-                        b'S', b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt,
-                        k_i32, &mut work, lwork, &mut rwork, &mut info,
+                    $gesdd(
+                        b'S', m_i32, n_i32, &mut a, m_i32, &mut s, &mut u, m_i32, &mut vt, k_i32,
+                        &mut work, lwork, &mut rwork, &mut iwork, &mut info,
                     );
                 }
                 check_lapack_info("svd", $routine, info)?;
@@ -203,13 +222,13 @@ macro_rules! impl_complex_svd {
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
+                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'N', m, n)];
+                let mut iwork = vec![0; gesdd_iwork_len(k)];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, and `rwork` match the validated complex
                 // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
                 unsafe {
-                    $gesvd(
-                        b'N',
+                    $gesdd(
                         b'N',
                         m_i32,
                         n_i32,
@@ -223,6 +242,7 @@ macro_rules! impl_complex_svd {
                         &mut query,
                         -1,
                         &mut rwork,
+                        &mut iwork,
                         &mut info,
                     );
                 }
@@ -232,8 +252,7 @@ macro_rules! impl_complex_svd {
                 // SAFETY: `a`, `s`, dummy no-vector buffers, `work`, and
                 // `rwork` satisfy the validated complex SVD dimensions and queried workspace length.
                 unsafe {
-                    $gesvd(
-                        b'N',
+                    $gesdd(
                         b'N',
                         m_i32,
                         n_i32,
@@ -247,6 +266,7 @@ macro_rules! impl_complex_svd {
                         &mut work,
                         lwork,
                         &mut rwork,
+                        &mut iwork,
                         &mut info,
                     );
                 }
@@ -258,10 +278,10 @@ macro_rules! impl_complex_svd {
     };
 }
 
-impl_real_svd!(f32, lapack::sgesvd, "sgesvd");
-impl_real_svd!(f64, lapack::dgesvd, "dgesvd");
-impl_complex_svd!(Complex32, f32, lapack::cgesvd, "cgesvd");
-impl_complex_svd!(Complex64, f64, lapack::zgesvd, "zgesvd");
+impl_real_svd!(f32, lapack::sgesdd, "sgesdd");
+impl_real_svd!(f64, lapack::dgesdd, "dgesdd");
+impl_complex_svd!(Complex32, f32, lapack::cgesdd, "cgesdd");
+impl_complex_svd!(Complex64, f64, lapack::zgesdd, "zgesdd");
 
 fn svd_2d<T: LapackSvd>(
     buffers: &mut BufferPool,
