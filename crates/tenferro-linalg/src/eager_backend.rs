@@ -69,8 +69,16 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, qr(input))
     }
 
+    fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, qr_read(input))
+    }
+
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, eigh(input))
+    }
+
+    fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, eigh_read(input))
     }
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {

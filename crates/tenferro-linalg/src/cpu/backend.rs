@@ -620,6 +620,34 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.qr(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.qr(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.qr(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.qr(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("qr", input.dtype()))
+            }
+        }
+    }
+
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eigh", input)?;
         match self.kind() {
@@ -663,6 +691,34 @@ impl LinalgBackend for CpuBackend {
                 {
                     Err(unsupported_provider("eigh", self.kind()))
                 }
+            }
+        }
+    }
+
+    fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.eigh(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.eigh(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.eigh(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.eigh(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("eigh", input.dtype()))
             }
         }
     }

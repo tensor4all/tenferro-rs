@@ -109,11 +109,67 @@ pub trait LinalgBackend: TensorBackend {
     /// `R` has shape `min(m, n) x n`.
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
+    /// Compute public QR outputs `(Q, R)` from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![1.0, 0.0, 0.0, 2.0],
+    /// )?;
+    /// let outputs = CpuBackend::new().qr_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(outputs[0].shape(), &[2, 2]);
+    /// assert_eq!(outputs[1].shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn qr_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "qr",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
+
     /// Compute public Hermitian eigendecomposition outputs `(values, vectors)`.
     ///
     /// The returned vector order is `[values, vectors]`, where `values` has
     /// shape `[n]` and `vectors` has shape `[n, n]`.
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
+
+    /// Compute public Hermitian eigendecomposition outputs from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![1.0, 0.0, 0.0, 2.0],
+    /// )?;
+    /// let outputs = CpuBackend::new().eigh_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(outputs[0].shape(), &[2]);
+    /// assert_eq!(outputs[1].shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigh_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "eigh",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
 
     #[doc(hidden)]
     fn eigh_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
