@@ -386,7 +386,8 @@ fn cholesky_read_canonicalizes_transposed_host_view_before_factorization() {
 
 #[test]
 fn lu_read_canonicalizes_transposed_host_view_before_factorization() {
-    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]
+    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]; the transposed view is
+    // [[1, 2], [3, 4]] (col-major [1, 3, 2, 4]), which is what the fast path must factor.
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
@@ -397,11 +398,22 @@ fn lu_read_canonicalizes_transposed_host_view_before_factorization() {
     assert_eq!(outputs[1].shape(), &[2, 2]);
     assert_eq!(outputs[2].shape(), &[2, 2]);
     assert_eq!(outputs[3].shape(), &[] as &[usize]);
+
+    // Reconstruct P * A_view == L * U (the canonical LU convention).
+    let a_view = vec![1.0_f64, 3.0, 2.0, 4.0];
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let pa = matmul_f64(&p, &a_view, 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in lu.iter().zip(pa.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
 }
 
 #[test]
 fn full_piv_lu_read_canonicalizes_transposed_host_view_before_factorization() {
-    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]
+    // col-major [1, 2, 3, 4] => matrix [[1, 3], [2, 4]]; transposed view is col-major [1, 3, 2, 4].
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
@@ -415,6 +427,19 @@ fn full_piv_lu_read_canonicalizes_transposed_host_view_before_factorization() {
     assert_eq!(outputs[2].shape(), &[2, 2]);
     assert_eq!(outputs[3].shape(), &[2, 2]);
     assert_eq!(outputs[4].shape(), &[] as &[usize]);
+
+    // Reconstruct P * A_view * Q^T == L * U (the complete-pivot convention).
+    let a_view = vec![1.0_f64, 3.0, 2.0, 4.0];
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let q = matrix_f64_from_tensor(&outputs[3], 2, 2);
+    let pa = matmul_f64(&p, &a_view, 2, 2, 2);
+    let paqt = matmul_f64(&pa, &transpose_f64(&q, 2, 2), 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in lu.iter().zip(paqt.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
 }
 
 #[test]
