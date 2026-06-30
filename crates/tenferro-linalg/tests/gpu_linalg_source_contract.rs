@@ -750,57 +750,69 @@ fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
 }
 
 #[test]
-fn gpu_mod_implements_cholesky_read_with_to_contiguous_fallback() {
+fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    assert!(
-        source.contains("fn cholesky_read"),
-        "gpu mod should implement cholesky_read"
-    );
-    let section = source_section(&source, "fn cholesky_read", "fn lu_read");
-    assert!(
-        section.contains("to_contiguous"),
-        "gpu cholesky_read should fall through to to_contiguous"
-    );
+    let cholesky_read_source = source_section(&source, "fn cholesky_read", "fn lu_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.cholesky(&input)",
+    ] {
+        assert!(
+            cholesky_read_source.contains(needle),
+            "CubeCL cholesky_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
 }
 
 #[test]
-fn gpu_mod_implements_lu_read_with_to_contiguous_fallback() {
+fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    assert!(
-        source.contains("fn lu_read"),
-        "gpu mod should implement lu_read"
-    );
-    let section = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
-    assert!(
-        section.contains("to_contiguous"),
-        "gpu lu_read should fall through to to_contiguous"
-    );
+    let lu_read_source = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.lu(&input)",
+    ] {
+        assert!(
+            lu_read_source.contains(needle),
+            "CubeCL lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
 }
 
 #[test]
-fn gpu_mod_implements_full_piv_lu_read_with_to_contiguous_fallback() {
+fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    assert!(
-        source.contains("fn full_piv_lu_read"),
-        "gpu mod should implement full_piv_lu_read"
-    );
-    let section = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
-    assert!(
-        section.contains("to_contiguous"),
-        "gpu full_piv_lu_read should fall through to to_contiguous"
-    );
+    let full_piv_lu_read_source = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.full_piv_lu(&input)",
+    ] {
+        assert!(
+            full_piv_lu_read_source.contains(needle),
+            "CubeCL full_piv_lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
 }
 
 #[test]
-fn gpu_mod_implements_eig_read_with_to_contiguous_fallback() {
+fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
-    assert!(
-        source.contains("fn eig_read"),
-        "gpu mod should implement eig_read"
-    );
-    let section = source_section(&source, "fn eig_read", "fn eigh_values");
-    assert!(
-        section.contains("to_contiguous"),
-        "gpu eig_read should fall through to to_contiguous"
-    );
+    let eig_read_source = source_section(&source, "fn eig_read", "fn eigh_values");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.eig(&input)",
+    ] {
+        assert!(
+            eig_read_source.contains(needle),
+            "CubeCL eig_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
 }
