@@ -38,6 +38,7 @@ pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub mod extension;
+mod primal_transpose;
 mod shape_packing;
 pub mod traced;
 

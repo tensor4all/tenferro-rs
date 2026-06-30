@@ -177,6 +177,12 @@ impl ExtensionAdRule for LinalgAdRule {
                 transpose_a,
                 ctx,
             ),
+            LinalgOp::Eigh { eps } => {
+                rules::transpose_eigh(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+            }
+            LinalgOp::EighVals { eps } => {
+                rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+            }
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
@@ -184,8 +190,6 @@ impl ExtensionAdRule for LinalgAdRule {
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
             | LinalgOp::Qr
-            | LinalgOp::Eigh { .. }
-            | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
             | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
         }
