@@ -32,10 +32,12 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
+mod decomposition_transpose;
 mod eigh;
 mod solve;
 mod support;
 
+pub(crate) use decomposition_transpose::{transpose_lu, transpose_qr};
 pub(crate) use eigh::{transpose_eigh, transpose_eigh_values};
 pub(crate) use solve::{
     linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_triangular_solve,

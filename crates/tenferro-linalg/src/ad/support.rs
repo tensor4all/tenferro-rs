@@ -239,7 +239,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     LinalgAdSupport {
         kind: LinalgAdOpKind::Lu,
         linearize: LinalgAdRuleSupport::PartiallySupported,
-        transpose: LinalgAdRuleSupport::Unsupported,
+        transpose: LinalgAdRuleSupport::Supported,
         outputs: &LU_OUTPUTS,
     },
     LinalgAdSupport {
@@ -281,7 +281,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     LinalgAdSupport {
         kind: LinalgAdOpKind::Qr,
         linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
+        transpose: LinalgAdRuleSupport::Supported,
         outputs: &QR_OUTPUTS,
     },
     LinalgAdSupport {

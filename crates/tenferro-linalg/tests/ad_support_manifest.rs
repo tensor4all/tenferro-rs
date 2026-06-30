@@ -50,6 +50,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
 fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
     let lu = linalg_ad_support(LinalgAdOpKind::Lu);
     assert_eq!(lu.linearize, LinalgAdRuleSupport::PartiallySupported);
+    assert_eq!(lu.transpose, LinalgAdRuleSupport::Supported);
     assert_output_status(lu, "p", LinalgAdRuleSupport::NonDifferentiable);
     assert_output_status(lu, "l", LinalgAdRuleSupport::SupportedViaLinearize);
     assert_output_status(lu, "u", LinalgAdRuleSupport::SupportedViaLinearize);
@@ -73,6 +74,12 @@ fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
 
 #[test]
 fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
+    let qr = linalg_ad_support(LinalgAdOpKind::Qr);
+    assert_eq!(qr.linearize, LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_eq!(qr.transpose, LinalgAdRuleSupport::Supported);
+    assert_output_status(qr, "q", LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_output_status(qr, "r", LinalgAdRuleSupport::SupportedViaLinearize);
+
     let svd = linalg_ad_support(LinalgAdOpKind::Svd);
     assert_eq!(svd.linearize, LinalgAdRuleSupport::SupportedViaLinearize);
     assert_output_status(svd, "u", LinalgAdRuleSupport::SupportedViaLinearize);
@@ -144,6 +151,8 @@ fn linalg_values_only_finite_diff_support_is_documented_next_to_oracle_snapshot(
     .expect("oracle support docs should be readable");
 
     for needle in [
+        "| Lu | finite-difference | `grad(sum(l) + sum(u))` |",
+        "| Qr | finite-difference | `grad(sum(q) + sum(r))` |",
         "| SvdVals | finite-difference | `norm(..., ord=2)` |",
         "| EighVals | finite-difference | `eigvalsh` |",
         "| EigVals | finite-difference | `eigvals` |",
