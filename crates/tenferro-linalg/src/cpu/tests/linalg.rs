@@ -976,3 +976,101 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
         tenferro_tensor::Error::BackendFailure { op: "solve", .. }
     ));
 }
+
+#[test]
+fn svd_read_faer_strided_view_matches_contiguous() {
+    // 2x3 matrix stored col-major, then transposed to give a 3x2 strided view.
+    let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0]; // 2x3 col-major
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().svd_read(TensorView::F64(view)).unwrap();
+    // For 3x2 input (m=3, n=2), thin SVD gives U:[3,2], S:[2], Vt:[2,2].
+    assert_eq!(out[0].shape(), &[3, 2]);
+    assert_eq!(out[1].shape(), &[2]);
+    assert_eq!(out[2].shape(), &[2, 2]);
+
+    let u = matrix_f64_from_tensor(&out[0], 3, 2);
+    let s = (0..2).map(|i| get_f64(&out[1], &[i])).collect::<Vec<_>>();
+    let vt = matrix_f64_from_tensor(&out[2], 2, 2);
+    let recon = matmul_f64(&matmul_f64(&u, &diag_f64(&s), 3, 2, 2), &vt, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3); // A^T is 3x2 col-major
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn svd_read_faer_strided_c64_view() {
+    let data = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(-2.0, 1.0),
+        Complex64::new(3.0, -0.25),
+        Complex64::new(0.5, -1.0),
+        Complex64::new(-1.0, 0.75),
+        Complex64::new(4.0, 1.5),
+    ];
+    let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().svd_read(TensorView::C64(view)).unwrap();
+    assert_eq!(out[0].shape(), &[3, 2]); // U (thin, complex)
+    assert_eq!(out[1].shape(), &[2]); // S (real singular values)
+    assert_eq!(out[2].shape(), &[2, 2]); // Vt (thin, complex)
+
+    // Singular values are returned as a real tensor, mirroring the materialized path.
+    let s_vals = match &out[1] {
+        Tensor::F64(t) => t.host_data().unwrap().to_vec(),
+        Tensor::C64(t) => t.host_data().unwrap().iter().map(|c| c.re).collect(),
+        _ => panic!("unexpected type for singular values"),
+    };
+    assert!(s_vals.iter().all(|&v| v.is_finite() && v >= 0.0));
+    assert!(s_vals[0] >= s_vals[1]); // singular values descending
+}
+
+#[test]
+fn qr_read_faer_strided_view_matches_contiguous() {
+    let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
+    let out = CpuBackend::new().qr_read(TensorView::F64(view)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].shape(), &[3, 2]);
+    assert_eq!(out[1].shape(), &[2, 2]);
+
+    let q = matrix_f64_from_tensor(&out[0], 3, 2);
+    let r = matrix_f64_from_tensor(&out[1], 2, 2);
+    let recon = matmul_f64(&q, &r, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3);
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
+fn eigh_read_faer_strided_view_matches_contiguous() {
+    // Symmetric 2x2 stored col-major, then transposed to a strided view (still symmetric).
+    let data = vec![4.0_f64, 1.0, 1.0, 3.0]; // 2x2 symmetric
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let view = a.as_view().transpose_view([1, 0]).unwrap(); // 2x2 strided (still symmetric)
+    let out = CpuBackend::new().eigh_read(TensorView::F64(view)).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].shape(), &[2]); // eigenvalues
+    assert_eq!(out[1].shape(), &[2, 2]); // eigenvectors
+
+    let eigenvalues = (0..2).map(|i| get_f64(&out[0], &[i])).collect::<Vec<_>>();
+    assert!(eigenvalues[0].is_finite());
+    assert!(eigenvalues[1].is_finite());
+
+    // Reconstruct A = V diag(lambda) V^T and compare against the (symmetric) input view.
+    let vectors = matrix_f64_from_tensor(&out[1], 2, 2);
+    let recon = matmul_f64(
+        &matmul_f64(&vectors, &diag_f64(&eigenvalues), 2, 2, 2),
+        &transpose_f64(&vectors, 2, 2),
+        2,
+        2,
+        2,
+    );
+    let expected = transpose_f64(&data, 2, 2);
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}

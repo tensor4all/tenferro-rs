@@ -546,6 +546,34 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        #[cfg(feature = "cpu-faer")]
+        if matches!(self.kind(), CpuBackendKind::Faer) {
+            // Fast-path: if the view is already host-resident and 2D with non-negative strides,
+            // feed it directly to faer without materializing a contiguous copy.
+            let can_skip_materialize = match &input {
+                TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C64(view) => linalg::faer::faer_strided_ok(view),
+                _ => false,
+            };
+            if can_skip_materialize {
+                let ctx = self.linalg_context();
+                return self.with_linalg_pool(|buffers| match input {
+                    TensorView::F32(view) => linalg::faer::svd_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+                    TensorView::F64(view) => linalg::faer::svd_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                    TensorView::C32(view) => linalg::faer::svd_view(ctx.as_ref(), buffers, view)
+                        .and_then(svd_c32_outputs_to_public_tensors),
+                    TensorView::C64(view) => linalg::faer::svd_view(ctx.as_ref(), buffers, view)
+                        .and_then(svd_c64_outputs_to_public_tensors),
+                    _ => unreachable!("can_skip_materialize only true for supported dtypes"),
+                });
+            }
+        }
+        // Fall through: materialize the view first (handles non-faer backends, GPU tensors,
+        // negative strides, rank != 2, etc.).
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -621,6 +649,33 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        #[cfg(feature = "cpu-faer")]
+        if matches!(self.kind(), CpuBackendKind::Faer) {
+            // Fast-path: feed an already host-resident 2D non-negative-strided view directly to faer.
+            let can_skip_materialize = match &input {
+                TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C64(view) => linalg::faer::faer_strided_ok(view),
+                _ => false,
+            };
+            if can_skip_materialize {
+                let ctx = self.linalg_context();
+                return self.with_linalg_pool(|buffers| match input {
+                    TensorView::F32(view) => linalg::faer::qr_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+                    TensorView::F64(view) => linalg::faer::qr_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                    TensorView::C32(view) => linalg::faer::qr_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+                    TensorView::C64(view) => linalg::faer::qr_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                    _ => unreachable!("can_skip_materialize only true for supported dtypes"),
+                });
+            }
+        }
+        // Fall through: materialize the view first (non-faer backends, GPU tensors,
+        // negative strides, rank != 2, etc.).
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -696,6 +751,35 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        #[cfg(feature = "cpu-faer")]
+        if matches!(self.kind(), CpuBackendKind::Faer) {
+            // Fast-path: feed an already host-resident 2D non-negative-strided view directly to faer.
+            // Complex eigenvalues are real; mirror the materialized `eigh` path by converting the
+            // complex outputs (real eigenvalues, complex eigenvectors) to public tensors.
+            let can_skip_materialize = match &input {
+                TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C32(view) => linalg::faer::faer_strided_ok(view),
+                TensorView::C64(view) => linalg::faer::faer_strided_ok(view),
+                _ => false,
+            };
+            if can_skip_materialize {
+                let ctx = self.linalg_context();
+                return self.with_linalg_pool(|buffers| match input {
+                    TensorView::F32(view) => linalg::faer::eigh_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+                    TensorView::F64(view) => linalg::faer::eigh_view(ctx.as_ref(), buffers, view)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                    TensorView::C32(view) => linalg::faer::eigh_view(ctx.as_ref(), buffers, view)
+                        .and_then(eigh_c32_outputs_to_public_tensors),
+                    TensorView::C64(view) => linalg::faer::eigh_view(ctx.as_ref(), buffers, view)
+                        .and_then(eigh_c64_outputs_to_public_tensors),
+                    _ => unreachable!("can_skip_materialize only true for supported dtypes"),
+                });
+            }
+        }
+        // Fall through: materialize the view first (non-faer backends, GPU tensors,
+        // negative strides, rank != 2, etc.).
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;

@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuContext;
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     type Real: Copy + Clone + PoolScalar;
@@ -3088,6 +3088,91 @@ pub(crate) fn eigh_values<T: FaerLinalg>(
             T::eigh_values_2d(ctx, buffers, batch).map(|values| vec![values])
         })?;
     Ok(outputs.remove(0))
+}
+
+/// Predicate: can this view be fed to faer as a strided MatRef?
+pub(crate) fn faer_strided_ok<T: 'static>(view: &TypedTensorView<'_, T>) -> bool {
+    view.backend_buffer().is_none()
+        && view.shape().len() == 2
+        && view.strides().iter().all(|&s| s >= 0)
+}
+
+/// Get the host base pointer at the view's offset.
+fn host_base_ptr<T: 'static>(view: &TypedTensorView<'_, T>) -> tenferro_tensor::Result<*const T> {
+    let storage = view.host_storage()?;
+    let offset = view.offset();
+    if offset < 0 {
+        return Err(tenferro_tensor::Error::backend_failure(
+            "faer_view",
+            "view offset is negative",
+        ));
+    }
+    let offset_usize = offset as usize;
+    if !storage.is_empty() && offset_usize >= storage.len() {
+        return Err(tenferro_tensor::Error::backend_failure(
+            "faer_view",
+            "view offset is outside host buffer",
+        ));
+    }
+    // SAFETY: offset is validated above.
+    Ok(unsafe { storage.as_ptr().offset(offset) })
+}
+
+fn matrix_dims_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, usize)> {
+    if view.shape().len() != 2 {
+        return Err(tenferro_tensor::Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: view.shape().len(),
+        });
+    }
+    Ok((view.shape()[0], view.shape()[1]))
+}
+
+pub(crate) fn svd_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "svd")?;
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::svd_core(ctx, buffers, mat, m, n, &placement)
+}
+
+pub(crate) fn qr_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "qr")?;
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::qr_core(ctx, buffers, mat, m, n, &placement)
+}
+
+pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "eigh")?;
+    if m != n {
+        return Err(tenferro_tensor::Error::ShapeMismatch {
+            op: "eigh",
+            lhs: vec![m],
+            rhs: vec![n],
+        });
+    }
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::eigh_core(ctx, buffers, mat, m, &placement)
 }
 
 macro_rules! impl_eig_real_2d {
