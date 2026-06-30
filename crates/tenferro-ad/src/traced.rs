@@ -22,7 +22,10 @@ use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor
 use tenferro_tensor::TensorBackend;
 use tidu::{linear_transpose, linearize};
 
-use crate::primal_transpose::{try_primal_transpose, PrimalTransposeGraph};
+#[path = "traced/primal_transpose.rs"]
+mod primal_transpose;
+
+use primal_transpose::{try_primal_transpose, PrimalTransposeGraph};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -433,11 +436,8 @@ fn jvp_optional_impl(
     let mut roots = tensor_resolve_roots(output);
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
-    let active_values = Arc::from(linearize_active_value_keys(
-        &view,
-        std::slice::from_ref(&output_key),
-        &aliases,
-    ));
+    let active_values =
+        linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
     let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
     let linear = linearize(
         &view,
@@ -576,11 +576,8 @@ fn vjp_optional_impl(
             (VjpTransposeGraph::Primal(transposed), None, None)
         }
         _ => {
-            let active_values = Arc::from(linearize_active_value_keys(
-                &view,
-                std::slice::from_ref(&output_key),
-                &aliases,
-            ));
+            let active_values =
+                linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
             let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
             let linear = linearize(
                 &view,

@@ -346,7 +346,7 @@ impl ShapeGuardContext {
     pub fn is_value_active_in_linearize(&self, key: &ValueKey<StdTensorOp>) -> bool {
         self.active_value_keys
             .as_ref()
-            .map_or(true, |set| set.contains(key))
+            .is_none_or(|set| set.contains(key))
     }
 
     /// Primal output keys for the operation currently being transposed.

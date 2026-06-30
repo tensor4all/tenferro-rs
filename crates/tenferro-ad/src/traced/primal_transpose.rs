@@ -12,26 +12,26 @@ use tenferro_ops::ShapeGuardContext;
 use tidu::{ADKey, ADRuleError, ADRuleKind, ADRuleResult, PrimitiveValue};
 
 /// Reverse-mode graph built from primary transpose rules on the forward graph.
-pub(crate) struct PrimalTransposeGraph {
+pub(super) struct PrimalTransposeGraph {
     graph: computegraph::graph::Graph<StdTensorOp>,
     cotangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
     cotangent_outputs: Vec<Option<LocalValueId>>,
 }
 
 impl PrimalTransposeGraph {
-    pub(crate) fn as_graph(&self) -> &computegraph::graph::Graph<StdTensorOp> {
+    pub(super) fn as_graph(&self) -> &computegraph::graph::Graph<StdTensorOp> {
         &self.graph
     }
 
-    pub(crate) fn into_graph(self) -> computegraph::graph::Graph<StdTensorOp> {
+    pub(super) fn into_graph(self) -> computegraph::graph::Graph<StdTensorOp> {
         self.graph
     }
 
-    pub(crate) fn tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
+    pub(super) fn tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
         &self.cotangent_inputs
     }
 
-    pub(crate) fn tangent_outputs(&self) -> &[Option<LocalValueId>] {
+    pub(super) fn tangent_outputs(&self) -> &[Option<LocalValueId>] {
         &self.cotangent_outputs
     }
 }
@@ -100,13 +100,36 @@ fn forward_operation_order(
     op_order
 }
 
-fn cotangent_seed_key(wrt_keys: &[TensorInputKey], index: usize, pass_id: u64) -> TensorInputKey {
-    assert!(
-        !wrt_keys.is_empty(),
-        "primal transpose requires at least one wrt key to derive cotangent seed keys"
-    );
-    let base_slot = index.min(wrt_keys.len() - 1);
-    wrt_keys[base_slot].tangent_of(pass_id.wrapping_add(index as u64))
+fn cotangent_seed_key(
+    wrt_keys: &[TensorInputKey],
+    index: usize,
+    pass_id: u64,
+) -> ADRuleResult<TensorInputKey> {
+    let base = wrt_keys.get(index).ok_or_else(|| {
+        ADRuleError::invalid_input(
+            "tenferro-ad.primal_transpose",
+            ADRuleKind::Transpose,
+            format!(
+                "cannot derive cotangent seed {index} from {} wrt inputs",
+                wrt_keys.len()
+            ),
+        )
+    })?;
+    let index = u64::try_from(index).map_err(|_| {
+        ADRuleError::invalid_input(
+            "tenferro-ad.primal_transpose",
+            ADRuleKind::Transpose,
+            "cotangent seed index does not fit in a diff pass id",
+        )
+    })?;
+    let seed_pass = pass_id.checked_add(index).ok_or_else(|| {
+        ADRuleError::invalid_input(
+            "tenferro-ad.primal_transpose",
+            ADRuleKind::Transpose,
+            "cotangent seed diff pass id overflowed",
+        )
+    })?;
+    Ok(base.tangent_of(seed_pass))
 }
 
 fn value_depends_on_wrt(
@@ -174,7 +197,7 @@ fn unsupported_primal_transpose(op: &StdTensorOp) -> ADRuleError {
 /// Unlike [`tidu::try_linear_transpose`], this walks the forward graph and
 /// applies each operation's primary transpose rule, allowing extension rules
 /// such as `Eigh` to reuse forward eigenvectors.
-pub(crate) fn try_primal_transpose(
+pub(super) fn try_primal_transpose(
     view: &ResolvedView<StdTensorOp>,
     output_keys: &[ValueKey<StdTensorOp>],
     wrt_keys: &[TensorInputKey],
@@ -192,7 +215,7 @@ pub(crate) fn try_primal_transpose(
     let mut dependency_memo = HashMap::new();
 
     for (index, output_key) in output_keys.iter().enumerate() {
-        let seed_key = cotangent_seed_key(wrt_keys, index, pass_id);
+        let seed_key = cotangent_seed_key(wrt_keys, index, pass_id)?;
         let seed_id = builder.add_input(seed_key.clone());
         cotangent_env.insert(output_key.clone(), seed_id);
         cotangent_seed_inputs.push((seed_key, seed_id));

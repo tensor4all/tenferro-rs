@@ -48,17 +48,29 @@ fn emit_eigenvalue_cotangent_to_input(
     Ok(self_adjoint_from_lower_linear(builder, da, rank, dtype))
 }
 
-fn emit_full_eigh_cotangent_to_input(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    g_l: Option<LocalValueId>,
-    g_v: LocalValueId,
+struct EighTransposeContext {
     w: ValueRef<StdTensorOp>,
     v: ValueRef<StdTensorOp>,
     eps: f64,
     rank: usize,
     dtype: DType,
     w_dtype: DType,
+}
+
+fn emit_full_eigh_cotangent_to_input(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    g_l: Option<LocalValueId>,
+    g_v: LocalValueId,
+    ctx: EighTransposeContext,
 ) -> ADRuleResult<LocalValueId> {
+    let EighTransposeContext {
+        w,
+        v,
+        eps,
+        rank,
+        dtype,
+        w_dtype,
+    } = ctx;
     let vh = adjoint_matrix_fixed(builder, v.clone(), rank, dtype);
     let vhgv = matmul_linear(
         builder,
@@ -177,19 +189,31 @@ pub(crate) fn transpose_eigh(
         (Some(g_l), None) => {
             emit_eigenvalue_cotangent_to_input(builder, g_l, v, rank, dtype, w_dtype)?
         }
-        (None, Some(g_v)) => {
-            emit_full_eigh_cotangent_to_input(builder, None, g_v, w, v, eps, rank, dtype, w_dtype)?
-        }
+        (None, Some(g_v)) => emit_full_eigh_cotangent_to_input(
+            builder,
+            None,
+            g_v,
+            EighTransposeContext {
+                w,
+                v,
+                eps,
+                rank,
+                dtype,
+                w_dtype,
+            },
+        )?,
         (Some(g_l), Some(g_v)) => emit_full_eigh_cotangent_to_input(
             builder,
             Some(g_l),
             g_v,
-            w,
-            v,
-            eps,
-            rank,
-            dtype,
-            w_dtype,
+            EighTransposeContext {
+                w,
+                v,
+                eps,
+                rank,
+                dtype,
+                w_dtype,
+            },
         )?,
         (None, None) => return Ok(vec![None]),
     };

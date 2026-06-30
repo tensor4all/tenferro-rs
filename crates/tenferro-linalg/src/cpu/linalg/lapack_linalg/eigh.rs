@@ -32,6 +32,33 @@ fn iwork_len(query: i32, op: &'static str, routine: &'static str) -> tenferro_te
     Ok(query)
 }
 
+fn queried_iwork_len(
+    query: &[i32],
+    op: &'static str,
+    routine: &'static str,
+) -> tenferro_tensor::Result<i32> {
+    let query = query.first().copied().ok_or_else(|| {
+        tenferro_tensor::Error::backend_failure(
+            op,
+            format!("LAPACK {routine} did not return an integer workspace size"),
+        )
+    })?;
+    iwork_len(query, op, routine)
+}
+
+fn iwork_capacity(
+    len: i32,
+    op: &'static str,
+    routine: &'static str,
+) -> tenferro_tensor::Result<usize> {
+    usize::try_from(len).map_err(|_| {
+        tenferro_tensor::Error::backend_failure(
+            op,
+            format!("LAPACK {routine} integer workspace size {len} does not fit usize"),
+        )
+    })
+}
+
 macro_rules! impl_real_eigh {
     ($scalar:ty, $syevd:path, $routine:literal) => {
         impl LapackEigh for $scalar {
@@ -68,9 +95,10 @@ macro_rules! impl_real_eigh {
                 }
                 check_lapack_info("eigh", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh", $routine)?;
-                let liwork = iwork_len(iquery[0], "eigh", $routine)?;
+                let liwork = queried_iwork_len(&iquery, "eigh", $routine)?;
+                let liwork_capacity = iwork_capacity(liwork, "eigh", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
-                let mut iwork = vec![0; liwork as usize];
+                let mut iwork = vec![0; liwork_capacity];
                 // SAFETY: dimensions and workspace lengths come from validated
                 // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
@@ -127,9 +155,10 @@ macro_rules! impl_real_eigh {
                 }
                 check_lapack_info("eigh_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh_values", $routine)?;
-                let liwork = iwork_len(iquery[0], "eigh_values", $routine)?;
+                let liwork = queried_iwork_len(&iquery, "eigh_values", $routine)?;
+                let liwork_capacity = iwork_capacity(liwork, "eigh_values", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
-                let mut iwork = vec![0; liwork as usize];
+                let mut iwork = vec![0; liwork_capacity];
                 // SAFETY: dimensions and workspace lengths come from validated
                 // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
