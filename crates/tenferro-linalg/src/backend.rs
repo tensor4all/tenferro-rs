@@ -184,6 +184,114 @@ pub trait LinalgBackend: TensorBackend {
         ))
     }
 
+    /// Compute Cholesky factorization from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![4.0, 2.0, 2.0, 3.0],
+    /// )?;
+    /// let output = CpuBackend::new().cholesky_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(output.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn cholesky_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "cholesky",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
+
+    /// Compute public LU outputs from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![1.0, 3.0, 2.0, 4.0],
+    /// )?;
+    /// let outputs = CpuBackend::new().lu_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(outputs.len(), 4);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "lu",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
+
+    /// Compute public full-pivoting LU outputs from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![1.0, 3.0, 2.0, 4.0],
+    /// )?;
+    /// let outputs = CpuBackend::new().full_piv_lu_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(outputs.len(), 5);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn full_piv_lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "full_piv_lu",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
+
+    /// Compute general eigendecomposition outputs from a borrowed tensor view.
+    ///
+    /// Backends may canonicalize the view inside the same placement family, but
+    /// must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(
+    ///     vec![2, 2],
+    ///     vec![2.0, 0.0, 0.0, 3.0],
+    /// )?;
+    /// let outputs = CpuBackend::new().eig_read(TensorView::F64(input.as_view()))?;
+    /// assert_eq!(outputs.len(), 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eig_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "eig",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
+    }
+
     #[doc(hidden)]
     fn eigh_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         Err(tenferro_tensor::Error::backend_failure(

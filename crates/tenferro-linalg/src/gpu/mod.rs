@@ -145,6 +145,118 @@ impl LinalgBackend for CudaBackend {
         }
     }
 
+    fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.cholesky(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.cholesky(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.cholesky(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.cholesky(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("cholesky", input.dtype()))
+            }
+        }
+    }
+
+    fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.lu(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.lu(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.lu(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.lu(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("lu", input.dtype()))
+            }
+        }
+    }
+
+    fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.full_piv_lu(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.full_piv_lu(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.full_piv_lu(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.full_piv_lu(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("full_piv_lu", input.dtype()))
+            }
+        }
+    }
+
+    fn eig_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.eig(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.eig(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.eig(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.eig(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("eig", input.dtype()))
+            }
+        }
+    }
+
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::eigh_values(self, input)
     }

@@ -748,3 +748,59 @@ fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
         );
     }
 }
+
+#[test]
+fn gpu_mod_implements_cholesky_read_with_to_contiguous_fallback() {
+    let source = gpu_mod_source();
+    assert!(
+        source.contains("fn cholesky_read"),
+        "gpu mod should implement cholesky_read"
+    );
+    let section = source_section(&source, "fn cholesky_read", "fn lu_read");
+    assert!(
+        section.contains("to_contiguous"),
+        "gpu cholesky_read should fall through to to_contiguous"
+    );
+}
+
+#[test]
+fn gpu_mod_implements_lu_read_with_to_contiguous_fallback() {
+    let source = gpu_mod_source();
+    assert!(
+        source.contains("fn lu_read"),
+        "gpu mod should implement lu_read"
+    );
+    let section = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
+    assert!(
+        section.contains("to_contiguous"),
+        "gpu lu_read should fall through to to_contiguous"
+    );
+}
+
+#[test]
+fn gpu_mod_implements_full_piv_lu_read_with_to_contiguous_fallback() {
+    let source = gpu_mod_source();
+    assert!(
+        source.contains("fn full_piv_lu_read"),
+        "gpu mod should implement full_piv_lu_read"
+    );
+    let section = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
+    assert!(
+        section.contains("to_contiguous"),
+        "gpu full_piv_lu_read should fall through to to_contiguous"
+    );
+}
+
+#[test]
+fn gpu_mod_implements_eig_read_with_to_contiguous_fallback() {
+    let source = gpu_mod_source();
+    assert!(
+        source.contains("fn eig_read"),
+        "gpu mod should implement eig_read"
+    );
+    let section = source_section(&source, "fn eig_read", "fn eigh_values");
+    assert!(
+        section.contains("to_contiguous"),
+        "gpu eig_read should fall through to to_contiguous"
+    );
+}

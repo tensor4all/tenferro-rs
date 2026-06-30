@@ -122,6 +122,28 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn cholesky_core(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>>;
+    fn lu_core(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn full_piv_lu_core(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
 }
 
 fn matrix_dims<T>(
@@ -980,12 +1002,23 @@ macro_rules! impl_faer_linalg_for_real {
 
     fn cholesky_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
+        Self::cholesky_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn cholesky_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let mut l = Mat::zeros(n, n);
-        l.copy_from(MatRef::from_column_major_slice(input.host_data()?, n, n));
+        l.copy_from(mat);
         let mut mem = MemBuffer::new(
             faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<Self>(
                 n,
@@ -1005,19 +1038,31 @@ macro_rules! impl_faer_linalg_for_real {
         Ok(tensor_from_vec_with_template(
             vec![n, n],
             lower_triangle_vec_from_mat(l.as_ref()),
-            input.placement(),
+            placement,
         ))
     }
 
     fn lu_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "lu")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
+        Self::lu_core(ctx, buffers, mat, m, n, input.placement())
+    }
+
+    fn lu_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, m, n));
+        lu.copy_from(mat);
         let mut perm = vec![0usize; m];
         let mut perm_inv = vec![0usize; m];
         let mut mem = MemBuffer::new(
@@ -1056,10 +1101,10 @@ macro_rules! impl_faer_linalg_for_real {
         let u_data = upper_triangle_vec_from_mat(lu.as_ref().get(..k, ..));
 
         Ok(vec![
-            tensor_from_vec_with_template(vec![m, m], p_data, input.placement()),
-            tensor_from_vec_with_template(vec![m, k], l_data, input.placement()),
-            tensor_from_vec_with_template(vec![k, n], u_data, input.placement()),
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement()),
+            tensor_from_vec_with_template(vec![m, m], p_data, placement),
+            tensor_from_vec_with_template(vec![m, k], l_data, placement),
+            tensor_from_vec_with_template(vec![k, n], u_data, placement),
+            tensor_from_vec_with_template(vec![], vec![parity], placement),
         ])
     }
 
@@ -1108,12 +1153,23 @@ macro_rules! impl_faer_linalg_for_real {
 
     fn full_piv_lu_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "full_piv_lu")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
+        Self::full_piv_lu_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn full_piv_lu_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(input.host_data()?, n, n));
+        lu.copy_from(mat);
         let mut row_perm = vec![0usize; n];
         let mut row_perm_inv = vec![0usize; n];
         let mut col_perm = vec![0usize; n];
@@ -1151,11 +1207,11 @@ macro_rules! impl_faer_linalg_for_real {
         };
 
         Ok(vec![
-            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, 1.0), input.placement()),
-            tensor_from_vec_with_template(vec![n, n], l_data, input.placement()),
-            tensor_from_vec_with_template(vec![n, n], u_data, input.placement()),
-            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, 1.0), input.placement()),
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement()),
+            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, 1.0), placement),
+            tensor_from_vec_with_template(vec![n, n], l_data, placement),
+            tensor_from_vec_with_template(vec![n, n], u_data, placement),
+            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, 1.0), placement),
+            tensor_from_vec_with_template(vec![], vec![parity], placement),
         ])
     }
 
@@ -1781,16 +1837,34 @@ macro_rules! impl_faer_linalg_for_complex {
 
     fn cholesky_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
+        Self::cholesky_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn cholesky_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
+        // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
+        // SAFETY: layout identity guaranteed by impl_complex_faer_casts const asserts.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr() as *const $faer_complex,
+                n,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
         let mut l = Mat::zeros(n, n);
-        l.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()?),
-            n,
-            n,
-        ));
+        l.copy_from(mat);
         let mut mem = MemBuffer::new(
             faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<$faer_complex>(
                 n,
@@ -1810,23 +1884,42 @@ macro_rules! impl_faer_linalg_for_complex {
         Ok(tensor_from_vec_with_template(
             vec![n, n],
             $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col),
-            input.placement(),
+            placement,
         ))
     }
 
     fn lu_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "lu")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
+        Self::lu_core(ctx, buffers, mat, m, n, input.placement())
+    }
+
+    fn lu_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+        // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
+        // SAFETY: layout identity guaranteed by impl_complex_faer_casts const asserts.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr() as *const $faer_complex,
+                m,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
-        lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()?),
-            m,
-            n,
-        ));
+        lu.copy_from(mat);
         let mut perm = vec![0usize; m];
         let mut perm_inv = vec![0usize; m];
         let mut mem = MemBuffer::new(
@@ -1864,10 +1957,10 @@ macro_rules! impl_faer_linalg_for_complex {
         let u_data = $matrix_from_predicate(lu.as_ref(), k, n, |row, col| row <= col);
 
         Ok(vec![
-            tensor_from_vec_with_template(vec![m, m], p_data, input.placement()),
-            tensor_from_vec_with_template(vec![m, k], l_data, input.placement()),
-            tensor_from_vec_with_template(vec![k, n], u_data, input.placement()),
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement()),
+            tensor_from_vec_with_template(vec![m, m], p_data, placement),
+            tensor_from_vec_with_template(vec![m, k], l_data, placement),
+            tensor_from_vec_with_template(vec![k, n], u_data, placement),
+            tensor_from_vec_with_template(vec![], vec![parity], placement),
         ])
     }
 
@@ -1920,16 +2013,34 @@ macro_rules! impl_faer_linalg_for_complex {
 
     fn full_piv_lu_2d(
         ctx: &CpuContext,
-        _buffers: &mut BufferPool,
+        buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "full_piv_lu")?;
+        let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
+        Self::full_piv_lu_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn full_piv_lu_core(
+        ctx: &CpuContext,
+        _buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
+        // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
+        // SAFETY: layout identity guaranteed by impl_complex_faer_casts const asserts.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr() as *const $faer_complex,
+                n,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
         let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(input.host_data()?),
-            n,
-            n,
-        ));
+        lu.copy_from(mat);
         let mut row_perm = vec![0usize; n];
         let mut row_perm_inv = vec![0usize; n];
         let mut col_perm = vec![0usize; n];
@@ -1968,11 +2079,11 @@ macro_rules! impl_faer_linalg_for_complex {
         };
 
         Ok(vec![
-            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, one), input.placement()),
-            tensor_from_vec_with_template(vec![n, n], l_data, input.placement()),
-            tensor_from_vec_with_template(vec![n, n], u_data, input.placement()),
-            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, one), input.placement()),
-            tensor_from_vec_with_template(vec![], vec![parity], input.placement()),
+            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, one), placement),
+            tensor_from_vec_with_template(vec![n, n], l_data, placement),
+            tensor_from_vec_with_template(vec![n, n], u_data, placement),
+            tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, one), placement),
+            tensor_from_vec_with_template(vec![], vec![parity], placement),
         ])
     }
 
@@ -3171,8 +3282,62 @@ pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
+    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::eigh_core(ctx, buffers, mat, m, &placement)
+}
+
+pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let (m, n) = matrix_dims_view(&view, "cholesky")?;
+    if m != n {
+        return Err(tenferro_tensor::Error::ShapeMismatch {
+            op: "cholesky",
+            lhs: vec![m],
+            rhs: vec![n],
+        });
+    }
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::cholesky_core(ctx, buffers, mat, m, &placement)
+}
+
+pub(crate) fn lu_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "lu")?;
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::lu_core(ctx, buffers, mat, m, n, &placement)
+}
+
+pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims_view(&view, "full_piv_lu")?;
+    if m != n {
+        return Err(tenferro_tensor::Error::ShapeMismatch {
+            op: "full_piv_lu",
+            lhs: vec![m],
+            rhs: vec![n],
+        });
+    }
+    let placement = view.placement().clone();
+    let base = host_base_ptr(&view)?;
+    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::full_piv_lu_core(ctx, buffers, mat, m, &placement)
 }
 
 macro_rules! impl_eig_real_2d {
