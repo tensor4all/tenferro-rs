@@ -8,7 +8,7 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
@@ -19,6 +19,7 @@ static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRF_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRS_CALLS: AtomicUsize = AtomicUsize::new(0);
+static DGESVD_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 fn register_test_ptrs_once() {
     REGISTER_ONCE.call_once(|| unsafe {
@@ -37,6 +38,7 @@ fn register_test_ptrs_once() {
                 dgesc2: Some(test_dgesc2 as *const c_void),
                 dgetrf: Some(test_dgetrf as *const c_void),
                 dgetrs: Some(test_dgetrs as *const c_void),
+                dgesvd: Some(test_dgesvd as *const c_void),
                 ..LapackProviderPtrSet::new()
             },
         )
@@ -164,6 +166,63 @@ unsafe extern "C" fn test_dgetrs(
     info: *mut lapack_inject::lapackint,
 ) {
     DGETRS_CALLS.fetch_add(1, Ordering::SeqCst);
+    unsafe {
+        *info = 0;
+    }
+}
+
+unsafe extern "C" fn test_dgesvd(
+    _jobu: *const c_char,
+    _jobvt: *const c_char,
+    m: *const lapack_inject::lapackint,
+    n: *const lapack_inject::lapackint,
+    _a: *mut f64,
+    _lda: *const lapack_inject::lapackint,
+    s: *mut f64,
+    u: *mut f64,
+    ldu: *const lapack_inject::lapackint,
+    vt: *mut f64,
+    ldvt: *const lapack_inject::lapackint,
+    work: *mut f64,
+    lwork: *const lapack_inject::lapackint,
+    info: *mut lapack_inject::lapackint,
+) {
+    DGESVD_CALLS.fetch_add(1, Ordering::SeqCst);
+    if unsafe { *lwork } == -1 {
+        unsafe {
+            *work = 16.0;
+            *info = 0;
+        }
+        return;
+    }
+
+    let m = unsafe { *m as usize };
+    let n = unsafe { *n as usize };
+    let k = m.min(n);
+    for index in 0..k {
+        unsafe {
+            *s.add(index) = if index == 0 { 3.0 } else { 2.0 };
+        }
+    }
+
+    let ldu = unsafe { *ldu as usize };
+    for col in 0..k {
+        for row in 0..m {
+            unsafe {
+                *u.add(row + col * ldu) = if row == col { 1.0 } else { 0.0 };
+            }
+        }
+    }
+
+    let ldvt = unsafe { *ldvt as usize };
+    for col in 0..n {
+        for row in 0..k {
+            unsafe {
+                *vt.add(row + col * ldvt) = if row == col { 1.0 } else { 0.0 };
+            }
+        }
+    }
+
     unsafe {
         *info = 0;
     }
@@ -308,5 +367,27 @@ fn provider_inject_solve_uses_registered_lapack_getrf_getrs() {
     match x {
         Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data().unwrap(), &[4.0, 8.0]),
         _ => panic!("expected f64 tensor"),
+    }
+}
+
+#[test]
+fn provider_inject_svd_uses_registered_lapack_gesvd() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
+    register_test_ptrs_once();
+    DGESVD_CALLS.store(0, Ordering::SeqCst);
+
+    let a =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0]).unwrap());
+
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    let outputs = backend.svd(&a).expect("provider-inject SVD should run");
+
+    assert_eq!(DGESVD_CALLS.load(Ordering::SeqCst), 2);
+    assert_eq!(outputs.len(), 3);
+    match &outputs[1] {
+        Tensor::F64(inner) => assert_eq!(inner.host_data().unwrap(), &[3.0, 2.0]),
+        _ => panic!("expected f64 singular values"),
     }
 }
