@@ -22,8 +22,45 @@ pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
 }
 
+fn iwork_len(query: i32, op: &'static str, routine: &'static str) -> tenferro_tensor::Result<i32> {
+    if query < 1 {
+        return Err(tenferro_tensor::Error::backend_failure(
+            op,
+            format!("LAPACK {routine} returned invalid integer workspace size {query}"),
+        ));
+    }
+    Ok(query)
+}
+
+fn queried_iwork_len(
+    query: &[i32],
+    op: &'static str,
+    routine: &'static str,
+) -> tenferro_tensor::Result<i32> {
+    let query = query.first().copied().ok_or_else(|| {
+        tenferro_tensor::Error::backend_failure(
+            op,
+            format!("LAPACK {routine} did not return an integer workspace size"),
+        )
+    })?;
+    iwork_len(query, op, routine)
+}
+
+fn iwork_capacity(
+    len: i32,
+    op: &'static str,
+    routine: &'static str,
+) -> tenferro_tensor::Result<usize> {
+    usize::try_from(len).map_err(|_| {
+        tenferro_tensor::Error::backend_failure(
+            op,
+            format!("LAPACK {routine} integer workspace size {len} does not fit usize"),
+        )
+    })
+}
+
 macro_rules! impl_real_eigh {
-    ($scalar:ty, $syev:path, $routine:literal) => {
+    ($scalar:ty, $syevd:path, $routine:literal) => {
         impl LapackEigh for $scalar {
             type Real = $scalar;
 
@@ -36,11 +73,13 @@ macro_rules! impl_real_eigh {
                 let mut vectors = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
+                let mut iquery = vec![0; 1];
                 let mut info = 0;
                 // SAFETY: `vectors` is a mutable column-major `n x n` buffer,
-                // `values` has `n` entries, and `lwork = -1` writes only the query slot.
+                // `values` has `n` entries, and workspace queries write only
+                // the first `work` and `iwork` slots.
                 unsafe {
-                    $syev(
+                    $syevd(
                         b'V',
                         b'L',
                         n_i32,
@@ -49,16 +88,21 @@ macro_rules! impl_real_eigh {
                         &mut values,
                         &mut query,
                         -1,
+                        &mut iquery,
+                        -1,
                         &mut info,
                     );
                 }
                 check_lapack_info("eigh", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh", $routine)?;
+                let liwork = queried_iwork_len(&iquery, "eigh", $routine)?;
+                let liwork_capacity = iwork_capacity(liwork, "eigh", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
-                // SAFETY: dimensions and `lwork` come from validated shape
-                // metadata plus the LAPACK query; all mutable buffers are live.
+                let mut iwork = vec![0; liwork_capacity];
+                // SAFETY: dimensions and workspace lengths come from validated
+                // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
-                    $syev(
+                    $syevd(
                         b'V',
                         b'L',
                         n_i32,
@@ -67,6 +111,8 @@ macro_rules! impl_real_eigh {
                         &mut values,
                         &mut work,
                         lwork,
+                        &mut iwork,
+                        liwork,
                         &mut info,
                     );
                 }
@@ -87,11 +133,13 @@ macro_rules! impl_real_eigh {
                 let mut work_matrix = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $scalar; n];
                 let mut query = vec![0.0 as $scalar; 1];
+                let mut iquery = vec![0; 1];
                 let mut info = 0;
                 // SAFETY: `work_matrix` is a mutable column-major `n x n`
-                // buffer, `values` has `n` entries, and `lwork = -1` queries workspace.
+                // buffer, `values` has `n` entries, and workspace queries write
+                // only the first `work` and `iwork` slots.
                 unsafe {
-                    $syev(
+                    $syevd(
                         b'N',
                         b'L',
                         n_i32,
@@ -100,16 +148,21 @@ macro_rules! impl_real_eigh {
                         &mut values,
                         &mut query,
                         -1,
+                        &mut iquery,
+                        -1,
                         &mut info,
                     );
                 }
                 check_lapack_info("eigh_values", concat!($routine, "(work query)"), info)?;
                 let lwork = work_len(query[0] as f64, "eigh_values", $routine)?;
+                let liwork = queried_iwork_len(&iquery, "eigh_values", $routine)?;
+                let liwork_capacity = iwork_capacity(liwork, "eigh_values", $routine)?;
                 let mut work = vec![0.0 as $scalar; lwork as usize];
-                // SAFETY: dimensions and `lwork` come from validated shape
-                // metadata plus the LAPACK query; all mutable buffers are live.
+                let mut iwork = vec![0; liwork_capacity];
+                // SAFETY: dimensions and workspace lengths come from validated
+                // shape metadata plus the LAPACK query; all mutable buffers are live.
                 unsafe {
-                    $syev(
+                    $syevd(
                         b'N',
                         b'L',
                         n_i32,
@@ -118,6 +171,8 @@ macro_rules! impl_real_eigh {
                         &mut values,
                         &mut work,
                         lwork,
+                        &mut iwork,
+                        liwork,
                         &mut info,
                     );
                 }
@@ -249,8 +304,8 @@ macro_rules! impl_complex_eigh {
     };
 }
 
-impl_real_eigh!(f32, lapack::ssyev, "ssyev");
-impl_real_eigh!(f64, lapack::dsyev, "dsyev");
+impl_real_eigh!(f32, lapack::ssyevd, "ssyevd");
+impl_real_eigh!(f64, lapack::dsyevd, "dsyevd");
 impl_complex_eigh!(Complex32, f32, lapack::cheev, "cheev");
 impl_complex_eigh!(Complex64, f64, lapack::zheev, "zheev");
 

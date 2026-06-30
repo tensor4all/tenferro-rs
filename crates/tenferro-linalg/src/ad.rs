@@ -177,6 +177,12 @@ impl ExtensionAdRule for LinalgAdRule {
                 transpose_a,
                 ctx,
             ),
+            LinalgOp::Eigh { eps } => {
+                rules::transpose_eigh(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+            }
+            LinalgOp::EighVals { eps } => {
+                rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+            }
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
@@ -184,8 +190,6 @@ impl ExtensionAdRule for LinalgAdRule {
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
             | LinalgOp::Qr
-            | LinalgOp::Eigh { .. }
-            | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
             | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
         }
@@ -234,6 +238,33 @@ mod tests {
                 shape.iter().copied().map(SymDim::from).collect(),
             ),
         );
+    }
+
+    fn insert_typed_meta(
+        ctx: &mut ShapeGuardContext,
+        key: ValueKey<StdTensorOp>,
+        dtype: DType,
+        shape: &[usize],
+    ) {
+        ctx.insert_metadata(
+            key,
+            TensorMeta::exact(dtype, shape.iter().copied().map(SymDim::from).collect()),
+        );
+    }
+
+    fn eigh_context() -> (
+        ShapeGuardContext,
+        ValueKey<StdTensorOp>,
+        Vec<ValueKey<StdTensorOp>>,
+    ) {
+        let mut ctx = ShapeGuardContext::default();
+        let a = input_key(1);
+        let w = input_key(2);
+        let v = input_key(3);
+        insert_typed_meta(&mut ctx, a.clone(), DType::F64, &[2, 2]);
+        insert_typed_meta(&mut ctx, w.clone(), DType::F64, &[2]);
+        insert_typed_meta(&mut ctx, v.clone(), DType::F64, &[2, 2]);
+        (ctx, a, vec![w, v])
     }
 
     #[test]
@@ -407,6 +438,138 @@ mod tests {
         assert_eq!(graph.operations().len(), 1);
         assert_eq!(graph.operations()[0].inputs[0], ValueRef::External(lhs));
         assert_eq!(graph.operations()[0].inputs[1], ValueRef::Local(cotangent));
+    }
+
+    #[test]
+    fn eigh_transpose_returns_inactive_without_active_input_or_cotangent() {
+        let (mut ctx, a, primal_outputs) = eigh_context();
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(TensorInputKey::User { id: 60 });
+        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+        ctx.set_transpose_primal_outputs(Some(primal_outputs));
+
+        let inactive = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent), None],
+                &[ValueRef::External(a.clone())],
+                &OperationRole::Linearized {
+                    active_mask: vec![false],
+                },
+                &mut ctx,
+            )
+            .unwrap();
+        assert_eq!(inactive, vec![None]);
+
+        let zero_seed = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[None, None],
+                &[ValueRef::External(a)],
+                &OperationRole::Primary,
+                &mut ctx,
+            )
+            .unwrap();
+        assert_eq!(zero_seed, vec![None]);
+    }
+
+    #[test]
+    fn eigh_transpose_rejects_malformed_inputs_without_panicking() {
+        let mut ctx = ShapeGuardContext::default();
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(TensorInputKey::User { id: 70 });
+        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+
+        let err = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent), None],
+                &[],
+                &OperationRole::Primary,
+                &mut ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.rule(), ADRuleKind::Transpose);
+
+        let vector = input_key(71);
+        insert_meta(&mut ctx, vector.clone(), &[2]);
+        let inactive = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent), None],
+                &[ValueRef::External(vector)],
+                &OperationRole::Primary,
+                &mut ctx,
+            )
+            .unwrap();
+        assert_eq!(inactive, vec![None]);
+    }
+
+    #[test]
+    fn eigh_transpose_requires_both_primal_outputs_when_reusing_forward_values() {
+        let (mut ctx, a, primal_outputs) = eigh_context();
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(TensorInputKey::User { id: 80 });
+        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+        ctx.set_transpose_primal_outputs(Some(vec![primal_outputs[0].clone()]));
+
+        let err = LinalgAdRule
+            .transpose_rule(
+                &op,
+                &mut builder,
+                &[Some(cotangent), None],
+                &[ValueRef::External(a)],
+                &OperationRole::Primary,
+                &mut ctx,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("expected two primal outputs"));
+    }
+
+    #[test]
+    fn eigh_transpose_reuses_primal_outputs_for_value_and_vector_cotangents() {
+        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+        for (case, cotangents) in [
+            ("values", (true, false)),
+            ("vectors", (false, true)),
+            ("both", (true, true)),
+        ] {
+            let (mut ctx, a, primal_outputs) = eigh_context();
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let g_l = cotangents
+                .0
+                .then(|| builder.add_input(TensorInputKey::User { id: 90 }));
+            let g_v = cotangents
+                .1
+                .then(|| builder.add_input(TensorInputKey::User { id: 91 }));
+            ctx.set_transpose_primal_outputs(Some(primal_outputs));
+
+            let result = LinalgAdRule
+                .transpose_rule(
+                    &op,
+                    &mut builder,
+                    &[g_l, g_v],
+                    &[ValueRef::External(a)],
+                    &OperationRole::Primary,
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert!(result[0].is_some(), "{case}");
+            assert!(!builder.build().operations().is_empty(), "{case}");
+        }
     }
 
     #[test]

@@ -271,6 +271,12 @@ pub struct ShapeGuardContext {
     local_keys: Option<Vec<ValueKey<StdTensorOp>>>,
     #[cfg(feature = "autodiff")]
     extension_rules: Option<ExtensionRuleSet>,
+    #[cfg(feature = "autodiff")]
+    active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
+    #[cfg(feature = "autodiff")]
+    transpose_primal_outputs: Option<Vec<ValueKey<StdTensorOp>>>,
+    #[cfg(feature = "autodiff")]
+    transpose_primal_outputs_used: bool,
 }
 
 impl ShapeGuardContext {
@@ -321,6 +327,50 @@ impl ShapeGuardContext {
     pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
         self.extension_rules = Some(rules);
         self
+    }
+
+    #[cfg(feature = "autodiff")]
+    pub fn with_linearize_active_values(
+        mut self,
+        keys: std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>,
+    ) -> Self {
+        self.active_value_keys = Some(keys);
+        self
+    }
+
+    /// Whether a primal value lies on a path from the current linearize targets.
+    ///
+    /// When no active set was attached, every value is treated as active so
+    /// existing callers keep the conservative full JVP graphs.
+    #[cfg(feature = "autodiff")]
+    pub fn is_value_active_in_linearize(&self, key: &ValueKey<StdTensorOp>) -> bool {
+        self.active_value_keys
+            .as_ref()
+            .is_none_or(|set| set.contains(key))
+    }
+
+    /// Primal output keys for the operation currently being transposed.
+    ///
+    /// Primary-mode extension transpose rules such as `Eigh` use these to reuse
+    /// forward eigenvectors instead of recomputing a decomposition.
+    #[cfg(feature = "autodiff")]
+    pub fn set_transpose_primal_outputs(&mut self, keys: Option<Vec<ValueKey<StdTensorOp>>>) {
+        self.transpose_primal_outputs = keys;
+        self.transpose_primal_outputs_used = false;
+    }
+
+    /// Return the current primal outputs and mark them as consumed by this rule.
+    #[cfg(feature = "autodiff")]
+    pub fn transpose_primal_outputs(&mut self) -> Option<&[ValueKey<StdTensorOp>]> {
+        if self.transpose_primal_outputs.is_some() {
+            self.transpose_primal_outputs_used = true;
+        }
+        self.transpose_primal_outputs.as_deref()
+    }
+
+    #[cfg(feature = "autodiff")]
+    pub fn transpose_primal_outputs_were_used(&self) -> bool {
+        self.transpose_primal_outputs_used
     }
 
     /// Look up an extension AD rule using this context's ownership policy.

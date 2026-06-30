@@ -32,9 +32,11 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
+mod eigh;
 mod solve;
 mod support;
 
+pub(crate) use eigh::{transpose_eigh, transpose_eigh_values};
 pub(crate) use solve::{
     linearize_full_piv_lu_solve, linearize_lu_solve_prepared, linearize_triangular_solve,
     transpose_full_piv_lu_solve, transpose_lu_solve_prepared, transpose_triangular_solve,
@@ -657,6 +659,10 @@ pub(crate) fn linearize_eigh(
     );
     let dw = extract_diag_linear(builder, projected);
     let dw = convert_linear_to_dtype(builder, dw, dtype, w_dtype);
+
+    if !ctx.is_value_active_in_linearize(&primal_out[1]) {
+        return Ok(vec![Some(dw), None]);
+    }
 
     let diag_w = embed_diag_fixed(builder, w.clone());
     let ones_mat = one_like_fixed(builder, ValueRef::Local(diag_w));
