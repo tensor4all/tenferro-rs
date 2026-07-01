@@ -45,6 +45,12 @@ jobs:
         run: cargo nextest run --workspace --release --no-fail-fast
       - name: Run doc tests
         run: cargo test --doc --workspace --release
+      - name: Compile-check KdV PINN sample
+        run: cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
+      - name: Run tropical extension tutorial tests
+        run: cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
+      - name: Run sparse extension tutorial tests
+        run: cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
 
   # PRs from the same repository: normally run heavy CI on self-hosted runner.
   # Temporarily use GitHub-hosted runners while the self-hosted pool is down.
@@ -90,6 +96,12 @@ jobs:
         run: cargo nextest run --workspace --release ${{ matrix.feature_args }} --no-fail-fast
       - name: Run doc tests
         run: cargo test --doc --workspace --release ${{ matrix.feature_args }}
+      - name: Compile-check KdV PINN sample
+        run: cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
+      - name: Run tropical extension tutorial tests
+        run: cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
+      - name: Run sparse extension tutorial tests
+        run: cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
 
   # Single check for branch protection: passes when the one runnable path
   # (fork = ci-fork, same-repo = ci-maintainer) succeeds; the other is skipped.

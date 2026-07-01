@@ -41,6 +41,8 @@ website:
           - tutorials/einsum-subscripts-to-gradients.md
           - tutorials/xla-einsum-backend.md
           - tutorials/dynamic-shape-truncated-svd.md
+          - tutorials/tropical-extension.md
+          - tutorials/sparse-extension.md
           - tutorials/kdv-pinn.md
       - section: "Guides"
         contents:

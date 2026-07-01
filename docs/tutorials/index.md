@@ -5,9 +5,11 @@ workflows. They complement the guides: tutorials show one complete path, while
 guides describe the broader APIs and tradeoffs.
 
 Short tutorial programs in this section are sourced from `docs/tutorial-code`
-and are run by the workspace test workflow. Longer application samples, such
-as the KdV PINN tutorial, point at their workspace package and provide a
-separate package-level test command.
+and are run by the workspace test workflow. Extension tutorials live in
+standalone nested crates under `ext/` and are tested through their manifest
+paths. Longer application samples, such as the KdV PINN tutorial, point at
+standalone sample packages and may use compile-only CI coverage when execution
+would be too slow for every pull request.
 
 ## Suggested Order
 
@@ -19,6 +21,8 @@ separate package-level test command.
 | [Einsum: subscripts to gradients](einsum-subscripts-to-gradients.md) | You contract more than two tensors and want planned contraction order plus AD. |
 | [XLA backend: einsum to StableHLO](xla-einsum-backend.md) | You want to lower a fixed-shape N-ary einsum path through the experimental XLA executor. |
 | [Dynamic shapes: truncated SVD](dynamic-shape-truncated-svd.md) | Output ranks depend on runtime values such as singular-value thresholds. |
+| [Tropical extension](tropical-extension.md) | You want a complete extension crate for non-standard arithmetic, runtime registration, and AD rules. |
+| [Sparse tensor extension](sparse-extension.md) | You want a fixed-pattern sparse COO extension with sparse-sparse contraction and value AD. |
 | [KdV PINN sample](kdv-pinn.md) | You want a full traced-graph PINN training loop with PDE residuals and scalar loss gradients. |
 
 ## Running The Tutorial Code
@@ -33,8 +37,15 @@ The CI workflow runs this package through the existing workspace test command,
 so tutorial execution does not add a second tenferro compilation step after
 unit tests.
 
-The KdV PINN sample is tested separately:
+The tropical and sparse extension tutorials are tested as standalone crates:
 
 ```bash
-cargo test -p kdv_pinn
+cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
+cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
+```
+
+The KdV PINN sample is compile-checked separately:
+
+```bash
+cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
 ```
