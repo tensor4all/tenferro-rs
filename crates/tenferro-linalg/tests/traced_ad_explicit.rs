@@ -811,6 +811,88 @@ fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
     }
 }
 
+fn lu_sum_loss(input: &TracedTensor) -> TracedTensor {
+    let (_p, l, u, _parity) = input.lu().unwrap();
+    (&reduce_all(&l) + &reduce_all(&u)).unwrap()
+}
+
+fn qr_sum_loss(input: &TracedTensor) -> TracedTensor {
+    let (q, r) = input.qr().unwrap();
+    (&reduce_all(&q) + &reduce_all(&r)).unwrap()
+}
+
+fn assert_gradient_matches_finite_difference(
+    name: &str,
+    shape: Vec<usize>,
+    data: Vec<f64>,
+    loss: fn(&TracedTensor) -> TracedTensor,
+) {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(shape.clone(), data.clone())).unwrap();
+    let grad = ad.grad(&loss(&matrix), &matrix).unwrap();
+    let result = eval(&grad);
+    let actual = get_f64_data(&result);
+
+    assert_eq!(result.shape(), shape.as_slice(), "{name} gradient shape");
+    assert_eq!(actual.len(), data.len(), "{name} gradient length");
+    for (idx, actual_value) in actual.iter().enumerate() {
+        let expected = finite_diff_scalar(
+            |xs| {
+                let input = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+                    shape.clone(),
+                    xs.to_vec(),
+                ))
+                .unwrap();
+                get_f64_data(&eval(&loss(&input)))[0]
+            },
+            &data,
+            idx,
+            1.0e-6,
+        );
+        let diff = (*actual_value - expected).abs();
+        assert!(
+            diff <= 1.0e-4,
+            "{name} idx {idx}: expected {expected}, got {}, diff {diff}",
+            actual_value
+        );
+    }
+}
+
+#[test]
+fn lu_qr_sum_grads_match_finite_diff_using_direct_transpose_rules() {
+    assert_gradient_matches_finite_difference(
+        "lu square sum gradient",
+        vec![2, 2],
+        vec![2.0, 0.5, 0.25, 3.0],
+        lu_sum_loss,
+    );
+    assert_gradient_matches_finite_difference(
+        "lu wide sum gradient",
+        vec![2, 3],
+        vec![2.0, 0.5, 0.25, 3.0, 1.0, -0.4],
+        lu_sum_loss,
+    );
+    assert_gradient_matches_finite_difference(
+        "lu tall sum gradient",
+        vec![3, 2],
+        vec![2.0, 0.5, 0.1, 0.25, 3.0, -0.4],
+        lu_sum_loss,
+    );
+    assert_gradient_matches_finite_difference(
+        "qr full-rank sum gradient",
+        vec![3, 2],
+        vec![2.0, 0.5, 0.1, 0.25, 3.0, -0.4],
+        qr_sum_loss,
+    );
+    assert_gradient_matches_finite_difference(
+        "qr wide sum gradient",
+        vec![2, 3],
+        vec![2.0, 0.5, 0.25, 3.0, 1.0, -0.4],
+        qr_sum_loss,
+    );
+}
+
 #[test]
 fn complex_eigh_values_grad_executes_with_complex_input_dtype() {
     let ad = ad_context();

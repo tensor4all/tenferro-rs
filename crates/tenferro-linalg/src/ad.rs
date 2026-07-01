@@ -183,13 +183,13 @@ impl ExtensionAdRule for LinalgAdRule {
             LinalgOp::EighVals { eps } => {
                 rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, mode, eps, ctx)
             }
+            LinalgOp::Lu => rules::transpose_lu(&mut builder, cotangent_out, inputs, mode, ctx),
+            LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, mode, ctx),
             LinalgOp::Cholesky
-            | LinalgOp::Lu
             | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
-            | LinalgOp::Qr
             | LinalgOp::Eig { .. }
             | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
         }
@@ -265,6 +265,46 @@ mod tests {
         insert_typed_meta(&mut ctx, w.clone(), DType::F64, &[2]);
         insert_typed_meta(&mut ctx, v.clone(), DType::F64, &[2, 2]);
         (ctx, a, vec![w, v])
+    }
+
+    fn lu_context(
+        shape: &[usize],
+    ) -> (
+        ShapeGuardContext,
+        ValueKey<StdTensorOp>,
+        Vec<ValueKey<StdTensorOp>>,
+    ) {
+        let mut ctx = ShapeGuardContext::default();
+        let a = input_key(4);
+        let p = input_key(5);
+        let l = input_key(6);
+        let u = input_key(7);
+        let parity = input_key(8);
+        let k = shape[0].min(shape[1]);
+        insert_typed_meta(&mut ctx, a.clone(), DType::F64, shape);
+        insert_typed_meta(&mut ctx, p.clone(), DType::F64, &[shape[0], shape[0]]);
+        insert_typed_meta(&mut ctx, l.clone(), DType::F64, &[shape[0], k]);
+        insert_typed_meta(&mut ctx, u.clone(), DType::F64, &[k, shape[1]]);
+        insert_typed_meta(&mut ctx, parity.clone(), DType::F64, &[]);
+        (ctx, a, vec![p, l, u, parity])
+    }
+
+    fn qr_context(
+        shape: &[usize],
+    ) -> (
+        ShapeGuardContext,
+        ValueKey<StdTensorOp>,
+        Vec<ValueKey<StdTensorOp>>,
+    ) {
+        let mut ctx = ShapeGuardContext::default();
+        let a = input_key(9);
+        let q = input_key(10);
+        let r = input_key(11);
+        let k = shape[0].min(shape[1]);
+        insert_typed_meta(&mut ctx, a.clone(), DType::F64, shape);
+        insert_typed_meta(&mut ctx, q.clone(), DType::F64, &[shape[0], k]);
+        insert_typed_meta(&mut ctx, r.clone(), DType::F64, &[k, shape[1]]);
+        (ctx, a, vec![q, r])
     }
 
     #[test]
@@ -569,6 +609,67 @@ mod tests {
 
             assert!(result[0].is_some(), "{case}");
             assert!(!builder.build().operations().is_empty(), "{case}");
+        }
+    }
+
+    #[test]
+    fn lu_qr_transpose_reuses_primal_outputs_for_factor_cotangents() {
+        for shape in [&[2, 2][..], &[2, 3][..], &[3, 2][..]] {
+            let (mut ctx, a, primal_outputs) = lu_context(shape);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let g_l = builder.add_input(TensorInputKey::User { id: 100 });
+            let g_u = builder.add_input(TensorInputKey::User { id: 101 });
+            ctx.set_transpose_primal_outputs(Some(primal_outputs));
+
+            let result = LinalgAdRule
+                .transpose_rule(
+                    &LinalgExtensionOp::new(LinalgOp::Lu),
+                    &mut builder,
+                    &[None, Some(g_l), Some(g_u), None],
+                    &[ValueRef::External(a)],
+                    &OperationRole::Primary,
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert!(result[0].is_some(), "lu shape {shape:?}");
+            assert!(
+                ctx.transpose_primal_outputs_were_used(),
+                "lu shape {shape:?}"
+            );
+            assert!(
+                !builder.build().operations().is_empty(),
+                "lu shape {shape:?}"
+            );
+        }
+
+        for shape in [&[3, 2][..], &[2, 3][..]] {
+            let (mut ctx, a, primal_outputs) = qr_context(shape);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let g_q = builder.add_input(TensorInputKey::User { id: 102 });
+            let g_r = builder.add_input(TensorInputKey::User { id: 103 });
+            ctx.set_transpose_primal_outputs(Some(primal_outputs));
+
+            let result = LinalgAdRule
+                .transpose_rule(
+                    &LinalgExtensionOp::new(LinalgOp::Qr),
+                    &mut builder,
+                    &[Some(g_q), Some(g_r)],
+                    &[ValueRef::External(a)],
+                    &OperationRole::Primary,
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert!(result[0].is_some(), "qr shape {shape:?}");
+            assert!(
+                ctx.transpose_primal_outputs_were_used(),
+                "qr shape {shape:?}"
+            );
+            assert!(
+                !builder.build().operations().is_empty(),
+                "qr shape {shape:?}"
+            );
         }
     }
 
