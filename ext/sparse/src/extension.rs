@@ -1,0 +1,763 @@
+use std::any::Any;
+use std::collections::HashMap;
+use std::hash::Hasher;
+use std::sync::Arc;
+
+#[cfg(feature = "autodiff")]
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+#[cfg(feature = "autodiff")]
+use tenferro_ad::extension::{ExtensionAdRule, ExtensionRegistryError, ExtensionRuleSet};
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ext_op::ExtensionOp;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::std_tensor_op::StdTensorOp;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::SymDim;
+use tenferro_runtime::extension::{
+    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime,
+    ExtensionRuntimeRegistryError,
+};
+use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
+use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend, TensorRead};
+#[cfg(feature = "autodiff")]
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+
+use crate::sparse::{
+    coordinates_tensor, validate_traced_values, validate_value_tensor, SparseCooTracedTensor,
+};
+
+const FAMILY_ID: &str = "tenferro-ext-sparse.matmul.v1";
+#[cfg(feature = "autodiff")]
+const JVP_FAMILY_ID: &str = "tenferro-ext-sparse.matmul_jvp.v1";
+#[cfg(feature = "autodiff")]
+const VJP_FAMILY_ID: &str = "tenferro-ext-sparse.matmul_vjp.v1";
+const OP: &str = "tenferro-ext-sparse";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Contribution {
+    out: usize,
+    left: usize,
+    right: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SparseMatmulPlan {
+    left_shape: Vec<usize>,
+    right_shape: Vec<usize>,
+    left_nnz: usize,
+    right_nnz: usize,
+    pub(crate) output_shape: Vec<usize>,
+    pub(crate) output_coords: Vec<[usize; 2]>,
+    contributions: Vec<Contribution>,
+}
+
+impl SparseMatmulPlan {
+    pub(crate) fn new(
+        left_shape: &[usize],
+        left_entries: &[[usize; 2]],
+        right_shape: &[usize],
+        right_entries: &[[usize; 2]],
+    ) -> Result<Self> {
+        if left_shape.len() != 2 || right_shape.len() != 2 {
+            return Err(invalid("sparse matmul requires rank-2 operands"));
+        }
+        if left_shape[1] != right_shape[0] {
+            return Err(invalid(format!(
+                "shape mismatch for sparse matmul: lhs {left_shape:?}, rhs {right_shape:?}"
+            )));
+        }
+
+        let mut raw = Vec::new();
+        let mut output_coords = Vec::<[usize; 2]>::new();
+        for (left_idx, &[row, contract_left]) in left_entries.iter().enumerate() {
+            for (right_idx, &[contract_right, col]) in right_entries.iter().enumerate() {
+                if contract_left != contract_right {
+                    continue;
+                }
+                let coord = [row, col];
+                raw.push((coord, left_idx, right_idx));
+                if !output_coords.contains(&coord) {
+                    output_coords.push(coord);
+                }
+            }
+        }
+        output_coords.sort_by_key(|&[row, col]| (col, row));
+        let output_index: HashMap<[usize; 2], usize> = output_coords
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, coord)| (coord, idx))
+            .collect();
+        let contributions = raw
+            .into_iter()
+            .map(|(coord, left, right)| Contribution {
+                out: output_index[&coord],
+                left,
+                right,
+            })
+            .collect();
+
+        Ok(Self {
+            left_shape: left_shape.to_vec(),
+            right_shape: right_shape.to_vec(),
+            left_nnz: left_entries.len(),
+            right_nnz: right_entries.len(),
+            output_shape: vec![left_shape[0], right_shape[1]],
+            output_coords,
+            contributions,
+        })
+    }
+
+    fn output_nnz(&self) -> usize {
+        self.output_coords.len()
+    }
+
+    fn left_nnz(&self) -> usize {
+        self.left_nnz
+    }
+
+    fn right_nnz(&self) -> usize {
+        self.right_nnz
+    }
+}
+
+/// Register sparse extension runtimes on a graph or eager executor.
+///
+/// # Errors
+///
+/// Returns an error if runtime registration fails.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::GraphExecutor;
+///
+/// let mut executor = GraphExecutor::new(CpuBackend::new());
+/// executor.register_extension(tenferro_ext_sparse::register_runtime).unwrap();
+/// assert!(executor
+///     .extension_executor()
+///     .registry()
+///     .contains("tenferro-ext-sparse.matmul.v1"));
+/// ```
+pub fn register_runtime<B: TensorBackend + 'static>(
+    executor: &mut ExtensionExecutor<B>,
+) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
+    executor.registry_mut().register(Arc::new(SparseRuntime {
+        family_id: FAMILY_ID,
+    }))?;
+    #[cfg(feature = "autodiff")]
+    {
+        executor.registry_mut().register(Arc::new(SparseRuntime {
+            family_id: JVP_FAMILY_ID,
+        }))?;
+        executor.registry_mut().register(Arc::new(SparseRuntime {
+            family_id: VJP_FAMILY_ID,
+        }))?;
+    }
+    Ok(())
+}
+
+/// Multiply two traced sparse COO matrices with a fixed sparse pattern.
+///
+/// # Errors
+///
+/// Returns an error when sparse shapes are incompatible or extension graph
+/// construction fails.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ext_sparse::{sparse_matmul, SparseCooTracedTensor};
+/// use tenferro_runtime::TracedTensor;
+/// use tenferro_tensor::Tensor;
+///
+/// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
+/// let a = SparseCooTracedTensor::from_parts(
+///     vec![1, 1],
+///     coords.clone(),
+///     TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
+/// )?;
+/// let b = SparseCooTracedTensor::from_parts(
+///     vec![1, 1],
+///     coords,
+///     TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
+/// )?;
+/// let out = sparse_matmul(&a, &b)?;
+/// assert_eq!(out.shape(), &[1, 1]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn sparse_matmul(
+    lhs: &SparseCooTracedTensor,
+    rhs: &SparseCooTracedTensor,
+) -> RuntimeResult<SparseCooTracedTensor> {
+    let plan = SparseMatmulPlan::new(lhs.shape(), lhs.entries(), rhs.shape(), rhs.entries())
+        .map_err(RuntimeError::from)?;
+    validate_traced_values(lhs.values(), plan.left_nnz())?;
+    validate_traced_values(rhs.values(), plan.right_nnz())?;
+    let outputs = apply(
+        Arc::new(SparseMatmulOp { plan: plan.clone() }),
+        &[lhs.values(), rhs.values()],
+    )?;
+    let [values] = outputs
+        .try_into()
+        .map_err(|_| RuntimeError::Internal("sparse matmul returned wrong output count".into()))?;
+    SparseCooTracedTensor::from_parts(
+        plan.output_shape.clone(),
+        coordinates_tensor(&plan.output_coords).map_err(RuntimeError::from)?,
+        values,
+    )
+}
+
+#[derive(Debug)]
+struct SparseRuntime {
+    family_id: &'static str,
+}
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for SparseRuntime {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> Result<Vec<Tensor>> {
+        op.eager_execute(inputs)
+    }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SparseMatmulOp {
+    plan: SparseMatmulPlan,
+}
+
+impl ExtensionOp for SparseMatmulOp {
+    fn family_id(&self) -> &'static str {
+        FAMILY_ID
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hash_plan(&self.plan, hasher);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Result<Vec<(DType, Vec<SymDim>)>> {
+        validate_primal_meta(&self.plan, input_dtypes, input_shapes)?;
+        Ok(vec![(
+            input_dtypes[0],
+            vec![SymDim::from(self.plan.output_nnz())],
+        )])
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+        validate_primal_inputs(&self.plan, inputs)?;
+        apply_sparse_matmul(&self.plan, inputs[0], inputs[1]).map(|tensor| vec![tensor])
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SparseMatmulJvpOp {
+    plan: SparseMatmulPlan,
+    active_inputs: Vec<usize>,
+}
+
+#[cfg(feature = "autodiff")]
+impl ExtensionOp for SparseMatmulJvpOp {
+    fn family_id(&self) -> &'static str {
+        JVP_FAMILY_ID
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hash_plan(&self.plan, hasher);
+        for &active in &self.active_inputs {
+            hasher.write_usize(active);
+        }
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2 + self.active_inputs.len()
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Result<Vec<(DType, Vec<SymDim>)>> {
+        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
+            return Err(invalid(format!(
+                "expected {} JVP metadata entries, got dtypes={} shapes={}",
+                self.input_count(),
+                input_dtypes.len(),
+                input_shapes.len()
+            )));
+        }
+        validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
+        for (active_pos, &active) in self.active_inputs.iter().enumerate() {
+            if active >= 2 {
+                return Err(invalid(format!("invalid active sparse input {active}")));
+            }
+            let tangent_idx = 2 + active_pos;
+            if input_dtypes[tangent_idx] != input_dtypes[active]
+                || !is_rank1_shape(input_shapes[tangent_idx])
+                || !metadata_lengths_compatible(input_shapes[tangent_idx], input_shapes[active])
+            {
+                return Err(invalid(
+                    "sparse tangent metadata must match active input metadata",
+                ));
+            }
+        }
+        Ok(vec![(
+            input_dtypes[0],
+            vec![SymDim::from(self.plan.output_nnz())],
+        )])
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+        validate_primal_inputs(&self.plan, &inputs[..2])?;
+        execute_jvp(&self.plan, inputs, &self.active_inputs).map(|tensor| vec![tensor])
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SparseMatmulVjpOp {
+    plan: SparseMatmulPlan,
+    active_input: usize,
+}
+
+#[cfg(feature = "autodiff")]
+impl ExtensionOp for SparseMatmulVjpOp {
+    fn family_id(&self) -> &'static str {
+        VJP_FAMILY_ID
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hash_plan(&self.plan, hasher);
+        hasher.write_usize(self.active_input);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        3
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Result<Vec<(DType, Vec<SymDim>)>> {
+        if input_dtypes.len() != 3 || input_shapes.len() != 3 || self.active_input >= 2 {
+            return Err(invalid("invalid sparse VJP metadata"));
+        }
+        validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
+        if input_dtypes[2] != input_dtypes[self.active_input]
+            || !is_rank1_shape(input_shapes[2])
+            || !matches_const_len(input_shapes[2], self.plan.output_nnz())
+        {
+            return Err(invalid(
+                "sparse VJP cotangent metadata does not match output metadata",
+            ));
+        }
+        Ok(vec![(
+            input_dtypes[self.active_input],
+            input_shapes[self.active_input].to_vec(),
+        )])
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+        validate_primal_inputs(&self.plan, &inputs[..2])?;
+        validate_value_tensor(inputs[2], self.plan.output_nnz())?;
+        execute_vjp(&self.plan, inputs, self.active_input).map(|tensor| vec![tensor])
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Debug)]
+struct SparseMatmulAdRule;
+
+#[cfg(feature = "autodiff")]
+impl ExtensionAdRule for SparseMatmulAdRule {
+    fn family_id(&self) -> &'static str {
+        FAMILY_ID
+    }
+
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let op = downcast_matmul_op(op, ADRuleKind::Jvp)?;
+        let active_inputs: Vec<usize> = tangent_in
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tangent)| tangent.is_some().then_some(idx))
+            .collect();
+        if active_inputs.is_empty() {
+            return Ok(vec![None]);
+        }
+        let mut inputs = vec![
+            ValueRef::External(primal_in[0].clone()),
+            ValueRef::External(primal_in[1].clone()),
+        ];
+        for &active in &active_inputs {
+            let Some(tangent) = tangent_in.get(active).copied().flatten() else {
+                return Ok(vec![None]);
+            };
+            inputs.push(ValueRef::Local(tangent));
+        }
+        let active_mask = std::iter::repeat_n(false, 2)
+            .chain(std::iter::repeat_n(true, active_inputs.len()))
+            .collect();
+        let out = builder.add_operation(
+            StdTensorOp::Extension(Arc::new(SparseMatmulJvpOp {
+                plan: op.plan.clone(),
+                active_inputs,
+            })),
+            inputs,
+            OperationRole::Linearized { active_mask },
+        );
+        Ok(vec![Some(out[0])])
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Err(ADRuleError::unsupported(
+            "sparse matmul transpose is supported through its JVP op",
+            ADRuleKind::Transpose,
+        ))
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Debug)]
+struct SparseMatmulJvpAdRule;
+
+#[cfg(feature = "autodiff")]
+impl ExtensionAdRule for SparseMatmulJvpAdRule {
+    fn family_id(&self) -> &'static str {
+        JVP_FAMILY_ID
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        _tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Err(ADRuleError::unsupported(JVP_FAMILY_ID, ADRuleKind::Jvp))
+    }
+
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        mode: &OperationRole,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
+        let Some(ct) = cotangent_out.first().copied().flatten() else {
+            return Ok(vec![None; op.input_count()]);
+        };
+        let active_mask = match mode {
+            OperationRole::Linearized { active_mask } => active_mask,
+            OperationRole::Primary => return Ok(vec![None; op.input_count()]),
+        };
+        let mut result = vec![None; op.input_count()];
+        for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
+            let tangent_input_idx = 2 + active_pos;
+            if !active_mask.get(tangent_input_idx).copied().unwrap_or(false) {
+                continue;
+            }
+            let out = builder.add_operation(
+                StdTensorOp::Extension(Arc::new(SparseMatmulVjpOp {
+                    plan: op.plan.clone(),
+                    active_input,
+                })),
+                vec![inputs[0].clone(), inputs[1].clone(), ValueRef::Local(ct)],
+                OperationRole::Linearized {
+                    active_mask: vec![false, false, true],
+                },
+            );
+            result[tangent_input_idx] = Some(out[0]);
+        }
+        Ok(result)
+    }
+}
+
+/// Build sparse extension AD rules.
+///
+/// # Errors
+///
+/// Returns an error if rule registration fails.
+///
+/// # Examples
+///
+/// ```
+/// let rules = tenferro_ext_sparse::sparse_ad_rules().unwrap();
+/// assert!(rules.is_rule_registered("tenferro-ext-sparse.matmul.v1"));
+/// assert!(rules.is_rule_registered("tenferro-ext-sparse.matmul_jvp.v1"));
+/// ```
+#[cfg(feature = "autodiff")]
+pub fn sparse_ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
+    let mut rules = ExtensionRuleSet::new();
+    rules.register_rule(Arc::new(SparseMatmulAdRule))?;
+    rules.register_rule(Arc::new(SparseMatmulJvpAdRule))?;
+    Ok(rules)
+}
+
+pub(crate) fn apply_sparse_matmul(
+    plan: &SparseMatmulPlan,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> Result<Tensor> {
+    validate_primal_inputs(plan, &[lhs, rhs])?;
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    let mut output = vec![0.0_f64; plan.output_nnz()];
+    for contribution in &plan.contributions {
+        output[contribution.out] += lhs[contribution.left] * rhs[contribution.right];
+    }
+    Tensor::from_vec_col_major(vec![plan.output_nnz()], output)
+}
+
+#[cfg(feature = "autodiff")]
+fn execute_jvp(
+    plan: &SparseMatmulPlan,
+    inputs: &[&Tensor],
+    active_inputs: &[usize],
+) -> Result<Tensor> {
+    let lhs = inputs[0].as_slice::<f64>()?;
+    let rhs = inputs[1].as_slice::<f64>()?;
+    let mut output = vec![0.0_f64; plan.output_nnz()];
+    for (active_pos, &active) in active_inputs.iter().enumerate() {
+        let tangent = inputs[2 + active_pos].as_slice::<f64>()?;
+        for contribution in &plan.contributions {
+            output[contribution.out] += match active {
+                0 => tangent[contribution.left] * rhs[contribution.right],
+                1 => lhs[contribution.left] * tangent[contribution.right],
+                _ => return Err(invalid(format!("invalid active sparse input {active}"))),
+            };
+        }
+    }
+    Tensor::from_vec_col_major(vec![plan.output_nnz()], output)
+}
+
+#[cfg(feature = "autodiff")]
+fn execute_vjp(plan: &SparseMatmulPlan, inputs: &[&Tensor], active_input: usize) -> Result<Tensor> {
+    let lhs = inputs[0].as_slice::<f64>()?;
+    let rhs = inputs[1].as_slice::<f64>()?;
+    let cotangent = inputs[2].as_slice::<f64>()?;
+    let mut output = match active_input {
+        0 => vec![0.0_f64; plan.left_nnz()],
+        1 => vec![0.0_f64; plan.right_nnz()],
+        _ => {
+            return Err(invalid(format!(
+                "invalid active sparse input {active_input}"
+            )))
+        }
+    };
+    for contribution in &plan.contributions {
+        match active_input {
+            0 => output[contribution.left] += cotangent[contribution.out] * rhs[contribution.right],
+            1 => output[contribution.right] += lhs[contribution.left] * cotangent[contribution.out],
+            _ => unreachable!(),
+        }
+    }
+    Tensor::from_vec_col_major(vec![output.len()], output)
+}
+
+fn validate_primal_meta(
+    plan: &SparseMatmulPlan,
+    input_dtypes: &[DType],
+    input_shapes: &[&[SymDim]],
+) -> Result<()> {
+    if input_dtypes.len() != 2 || input_shapes.len() != 2 {
+        return Err(invalid(format!(
+            "sparse matmul expected 2 inputs, got dtypes={} shapes={}",
+            input_dtypes.len(),
+            input_shapes.len()
+        )));
+    }
+    if input_dtypes[0] != DType::F64 || input_dtypes[1] != DType::F64 {
+        return Err(invalid(format!(
+            "sparse matmul supports F64 values, got {:?} and {:?}",
+            input_dtypes[0], input_dtypes[1]
+        )));
+    }
+    if !is_rank1_shape(input_shapes[0]) || !is_rank1_shape(input_shapes[1]) {
+        return Err(invalid("sparse matmul inputs must be rank-1 value tensors"));
+    }
+    if !matches_const_len(input_shapes[0], plan.left_nnz())
+        || !matches_const_len(input_shapes[1], plan.right_nnz())
+    {
+        return Err(invalid(
+            "sparse matmul constant input lengths do not match payload nnz",
+        ));
+    }
+    Ok(())
+}
+
+fn is_rank1_shape(shape: &[SymDim]) -> bool {
+    shape.len() == 1
+}
+
+fn matches_const_len(shape: &[SymDim], len: usize) -> bool {
+    shape[0].constant_value().is_none_or(|dim| dim == len)
+}
+
+fn metadata_lengths_compatible(lhs: &[SymDim], rhs: &[SymDim]) -> bool {
+    match (lhs[0].constant_value(), rhs[0].constant_value()) {
+        (Some(lhs), Some(rhs)) => lhs == rhs,
+        _ => true,
+    }
+}
+
+fn validate_primal_inputs(plan: &SparseMatmulPlan, inputs: &[&Tensor]) -> Result<()> {
+    if inputs.len() != 2 {
+        return Err(invalid(format!(
+            "sparse matmul expected 2 inputs, got {}",
+            inputs.len()
+        )));
+    }
+    validate_value_tensor(inputs[0], plan.left_nnz())?;
+    validate_value_tensor(inputs[1], plan.right_nnz())?;
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn downcast_matmul_op<'a>(
+    op: &'a dyn ExtensionOp,
+    rule: ADRuleKind,
+) -> ADRuleResult<&'a SparseMatmulOp> {
+    op.as_any()
+        .downcast_ref::<SparseMatmulOp>()
+        .ok_or_else(|| ADRuleError::unsupported(FAMILY_ID, rule))
+}
+
+#[cfg(feature = "autodiff")]
+fn downcast_jvp_op<'a>(
+    op: &'a dyn ExtensionOp,
+    rule: ADRuleKind,
+) -> ADRuleResult<&'a SparseMatmulJvpOp> {
+    op.as_any()
+        .downcast_ref::<SparseMatmulJvpOp>()
+        .ok_or_else(|| ADRuleError::unsupported(JVP_FAMILY_ID, rule))
+}
+
+fn hash_plan(plan: &SparseMatmulPlan, hasher: &mut dyn Hasher) {
+    for &dim in &plan.left_shape {
+        hasher.write_usize(dim);
+    }
+    hasher.write_u8(0xff);
+    for &dim in &plan.right_shape {
+        hasher.write_usize(dim);
+    }
+    hasher.write_u8(0xfe);
+    for &[row, col] in &plan.output_coords {
+        hasher.write_usize(row);
+        hasher.write_usize(col);
+    }
+    hasher.write_u8(0xfd);
+    for contribution in &plan.contributions {
+        hasher.write_usize(contribution.out);
+        hasher.write_usize(contribution.left);
+        hasher.write_usize(contribution.right);
+    }
+}
+
+fn invalid(message: impl Into<String>) -> Error {
+    Error::InvalidConfig {
+        op: OP,
+        message: message.into(),
+    }
+}
