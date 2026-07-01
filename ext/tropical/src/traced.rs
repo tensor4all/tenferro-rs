@@ -10,8 +10,8 @@
 //! use tenferro_ext_tropical::traced::tropical_reduce_sum;
 //! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //!
-//! let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]);
-//! let y = tropical_reduce_sum(&x, &[0]);
+//! let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]).unwrap();
+//! let y = tropical_reduce_sum(&x, &[0]).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
 //! let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -92,8 +92,8 @@ fn checked_tropical_dot_general_impl(
 /// use tenferro_ext_tropical::traced::tropical_dot_general;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 /// let c = tropical_dot_general(&a, &b).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&c).unwrap();
@@ -122,8 +122,8 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 /// use tenferro_ext_tropical::traced::min_plus_dot_general;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 /// let c = min_plus_dot_general(&a, &b).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&c).unwrap();
@@ -152,8 +152,8 @@ pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 /// use tenferro_ext_tropical::{traced::tropical_einsum, TropicalKind};
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]).unwrap();
 /// let out = tropical_einsum(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
@@ -192,8 +192,8 @@ pub fn tropical_einsum(
 /// use tenferro_ext_tropical::{traced::tropical_einsum_subscripts, TropicalKind};
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]).unwrap();
 /// let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
 /// let out = tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&a, &b], &subscripts).unwrap();
 ///
@@ -237,8 +237,8 @@ pub fn tropical_einsum_subscripts(
 /// use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 /// let out = tropical_dot_general_fused(&a, &b).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
@@ -269,8 +269,8 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<
 /// use tenferro_ext_tropical::traced::min_plus_dot_general_fused;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 /// let out = min_plus_dot_general_fused(&a, &b).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
@@ -404,8 +404,8 @@ fn validate_tropical_einsum_inputs(
 /// use tenferro_ext_tropical::traced::tropical_reduce_sum;
 /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]);
-/// let y = tropical_reduce_sum(&x, &[0]);
+/// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]).unwrap();
+/// let y = tropical_reduce_sum(&x, &[0]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
 /// let mut executor = GraphExecutor::new(CpuBackend::new());

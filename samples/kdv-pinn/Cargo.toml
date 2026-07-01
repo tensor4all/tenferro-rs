@@ -1,0 +1,22 @@
+[package]
+name = "kdv_pinn"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+tenferro-ad = { path = "../../crates/tenferro-ad" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu" }
+tenferro-runtime = { path = "../../crates/tenferro-runtime" }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "bitmap_encoder",
+    "bitmap_gif",
+    "line_series",
+] }
+rand = "0.8"

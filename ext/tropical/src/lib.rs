@@ -28,8 +28,8 @@
 //! use tenferro_ext_tropical::traced::tropical_dot_general;
 //! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //!
-//! let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-//! let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
+//! let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 //! let out = tropical_dot_general(&a, &b).unwrap();
 //!
 //! let mut compiler = GraphCompiler::new();

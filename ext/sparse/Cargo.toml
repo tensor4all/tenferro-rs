@@ -1,0 +1,33 @@
+[package]
+name = "tenferro-ext-sparse"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Sparse tensor extension tutorial crate for tenferro."
+
+[workspace]
+resolver = "2"
+
+[lib]
+name = "tenferro_ext_sparse"
+path = "src/lib.rs"
+
+[features]
+default = []
+autodiff = [
+    "dep:tenferro-ad",
+    "tenferro-internal-ops/autodiff",
+]
+
+[dependencies]
+tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops", default-features = false }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, optional = true }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "77527ecb647fecd4918ea2d06d0065ddce4e5b1c" }
+
+[dev-dependencies]
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }

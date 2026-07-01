@@ -121,4 +121,13 @@ The nested `ext/tropical` crate is a worked numeric-extension example for
 non-standard arithmetic. It exposes scalar tropical newtypes, traced
 composition helpers, fused binary tropical einsum extension ops, optional
 `tropical-gemm` CPU dispatch for matmul-shaped contractions, and optional
-traced AD rules for unique-winner tropical einsum paths.
+traced AD rules for unique-winner tropical einsum paths. See the
+[tropical extension tutorial](../tutorials/tropical-extension.md) for the
+walkthrough.
+
+The nested `ext/sparse` crate is a worked sparse-representation example. It
+stores COO metadata and nonzero values with dense tenferro tensors, emits a
+sparse-sparse matmul extension op for traced execution, and registers JVP/VJP
+rules for differentiation with respect to the nonzero values. See the
+[sparse tensor extension tutorial](../tutorials/sparse-extension.md) for the
+walkthrough.

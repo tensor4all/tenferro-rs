@@ -98,8 +98,7 @@ fn batched_maxplus_matmul_supports_natural_batch_first_subscripts() {
     .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "bij,bjk->bik")
-            .unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "bij,bjk->bik").unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2, 2]);
     assert_eq!(
@@ -125,8 +124,7 @@ fn target_order_batched_maxplus_matmul_applies_requested_output_permutation() {
     .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ijb,jkb->bik")
-            .unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ijb,jkb->bik").unwrap();
 
     assert_eq!(result.output.shape(), &[2, 2, 2]);
     assert_eq!(
@@ -175,16 +173,9 @@ fn fallback_matches_reference_for_multi_contracted_permuted_labels() {
     .unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "kji,ljk->il")
-            .unwrap();
-    let expected = reference_tropical_einsum_f64(
-        TropicalKind::MaxPlus,
-        &lhs,
-        b"kji",
-        &rhs,
-        b"ljk",
-        b"il",
-    );
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "kji,ljk->il").unwrap();
+    let expected =
+        reference_tropical_einsum_f64(TropicalKind::MaxPlus, &lhs, b"kji", &rhs, b"ljk", b"il");
 
     assert_eq!(result.output.shape(), expected.shape);
     assert_eq!(result.output.as_slice::<f64>().unwrap(), expected.values);
@@ -204,8 +195,7 @@ fn fallback_matches_reference_for_minplus_output_permutation() {
         Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64, 4.0, 1.0, 5.0, 0.0, 3.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalKind::MinPlus, &[&lhs, &rhs], "ji,jk->ki")
-            .unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MinPlus, &[&lhs, &rhs], "ji,jk->ki").unwrap();
     let expected =
         reference_tropical_einsum_f64(TropicalKind::MinPlus, &lhs, b"ji", &rhs, b"jk", b"ki");
 
@@ -221,8 +211,7 @@ fn fallback_matches_reference_for_nan_and_all_nan_cells() {
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 0.0, f64::NAN, 2.0]).unwrap();
 
     let result =
-        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "ji,jk->ik")
-            .unwrap();
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&lhs, &rhs], "ji,jk->ik").unwrap();
     let expected =
         reference_tropical_einsum_f64(TropicalKind::MaxPlus, &lhs, b"ji", &rhs, b"jk", b"ik");
 
@@ -291,8 +280,8 @@ fn unsupported_cases_return_invalid_config() {
     ];
 
     for (case, inputs, notation) in unsupported {
-        let err = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &inputs, notation)
-            .unwrap_err();
+        let err =
+            tropical_einsum_with_argmax(TropicalKind::MaxPlus, &inputs, notation).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -322,12 +311,9 @@ fn unsupported_cases_return_invalid_config() {
 
     let zero_lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap();
     let zero_rhs = Tensor::from_vec_col_major(vec![0, 4], Vec::<f64>::new()).unwrap();
-    let err = tropical_einsum_with_argmax(
-        TropicalKind::MaxPlus,
-        &[&zero_lhs, &zero_rhs],
-        "ij,jk->ik",
-    )
-    .unwrap_err();
+    let err =
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&zero_lhs, &zero_rhs], "ij,jk->ik")
+            .unwrap_err();
     assert!(matches!(
         err,
         Error::InvalidConfig {

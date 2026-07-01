@@ -11,8 +11,8 @@
 //! use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 //! use tenferro_tensor::Tensor;
 //!
-//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
-//! let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0])?;
+//! let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0])?;
 //! let result = tropical_einsum_with_argmax(
 //!     TropicalKind::MaxPlus,
 //!     &[&a, &b],
@@ -43,8 +43,8 @@ const OP: &str = "tropical_einsum_with_argmax";
 /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+/// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
 /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ///
 /// assert_eq!(result.argmax[0].indices(), &[0]);
@@ -84,8 +84,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].indices(), &[0]);
@@ -104,8 +104,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].output_shape(), &[1, 1]);
@@ -124,8 +124,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].output_subscripts(), &[b'i' as u32, b'k' as u32]);
@@ -144,8 +144,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].contracted_subscripts(), &[b'j' as u32]);
@@ -166,8 +166,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].contracted_shape(), &[2]);
@@ -189,8 +189,8 @@ impl TropicalArgmaxStep {
     /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
     /// use tenferro_tensor::Tensor;
     ///
-    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
     /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
     ///
     /// assert_eq!(result.argmax[0].winner_coordinates(0).unwrap(), vec![0]);
@@ -211,8 +211,8 @@ impl TropicalArgmaxStep {
 /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]);
-/// let b = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f32]);
+/// let a = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32])?;
+/// let b = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f32])?;
 /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ///
 /// assert_eq!(result.output.as_slice::<f32>().unwrap(), &[5.0]);
@@ -245,8 +245,8 @@ pub struct TropicalEinsumResult {
 /// use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0]);
-/// let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0]);
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 0.0, 1.0, 5.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 10.0, 0.0, 1.0])?;
 /// let result = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ki")?;
 ///
 /// assert_eq!(result.output.as_slice::<f64>().unwrap(), &[11.0, 10.0, 15.0, 6.0]);
@@ -277,13 +277,11 @@ pub fn tropical_einsum_with_argmax(
 ///
 /// ```
 /// use tenferro_einsum::Subscripts;
-/// use tenferro_ext_tropical::einsum::{
-///     tropical_einsum_subscripts_with_argmax, TropicalKind,
-/// };
+/// use tenferro_ext_tropical::{einsum::tropical_einsum_subscripts_with_argmax, TropicalKind};
 /// use tenferro_tensor::Tensor;
 ///
-/// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
-/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+/// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0])?;
 /// let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
 /// let result =
 ///     tropical_einsum_subscripts_with_argmax(TropicalKind::MaxPlus, &[&a, &b], &subscripts)?;

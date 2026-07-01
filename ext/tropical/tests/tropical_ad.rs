@@ -2,9 +2,9 @@
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
-use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::tropical_ad_rules;
+use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn run_traced(output: &TracedTensor) -> Tensor {
@@ -204,12 +204,9 @@ fn traced_fused_forward_matches_eager_max_plus_einsum() {
 
     let eager_a = Tensor::from_vec_col_major(vec![2, 2], a_data).unwrap();
     let eager_b = Tensor::from_vec_col_major(vec![2, 2], b_data).unwrap();
-    let eager = tropical_einsum_with_argmax(
-        TropicalKind::MaxPlus,
-        &[&eager_a, &eager_b],
-        "ij,jk->ik",
-    )
-    .expect("eager tropical einsum");
+    let eager =
+        tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&eager_a, &eager_b], "ij,jk->ik")
+            .expect("eager tropical einsum");
 
     assert_f64_data(
         &run_traced(&fused),

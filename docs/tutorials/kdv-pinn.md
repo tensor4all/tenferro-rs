@@ -4,7 +4,7 @@ This tutorial is about a concrete question: can we train a neural network
 \(u_\theta(x,t)\) to behave like the solution of a partial differential
 equation, without giving the network a dense table of solution values?
 
-The `kdv_pinn` workspace package answers that question for the
+The `samples/kdv-pinn` package answers that question for the
 Korteweg-de Vries (KdV) equation. It builds a neural approximation to a known
 single-soliton solution, constructs the PDE residual with tenferro traced
 autodiff, differentiates one scalar objective with respect to the network
@@ -159,7 +159,7 @@ evaluate the loss; they are not learned.
 From the repository root:
 
 ```bash
-cargo run -p kdv_pinn --release
+cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release
 ```
 
 The run prints training loss every 50 epochs, then reports the final loss and
@@ -170,16 +170,17 @@ epochs on CPU, so it is intentionally a longer-running sample than the small
 Optional plot outputs are available:
 
 ```bash
-cargo run -p kdv_pinn --release -- --gif kdv_pinn.gif --loss-png loss.png
+cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release -- --gif kdv_pinn.gif --loss-png loss.png
 ```
 
 `--loss-png` writes a log-scale training-loss plot. `--gif` writes an animated
 comparison between the analytic solution and the trained model prediction.
 
-For a fast correctness check without training the full model:
+CI compile-checks the sample, but does not run full training. For the same
+compile-only check locally:
 
 ```bash
-cargo test -p kdv_pinn
+cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
 ```
 
 ## How It Is Structured
@@ -188,12 +189,12 @@ The sample keeps each PINN concern in a small module:
 
 | File | Role |
 | --- | --- |
-| `kdv_pinn/src/network.rs` | Builds the MLP from `TracedTensor` parameter placeholders. |
-| `kdv_pinn/src/pde.rs` | Builds the KdV residual with chained `jvp` calls for `u_t`, `u_x`, `u_xx`, and `u_xxx`. |
-| `kdv_pinn/src/loss.rs` | Combines PDE, initial-condition, and boundary losses with scalar weights. |
-| `kdv_pinn/src/sampler.rs` | Samples collocation, initial-condition, and boundary points. |
-| `kdv_pinn/src/optimizer.rs` | Applies Adam updates to the concrete parameter tensors. |
-| `kdv_pinn/src/plot.rs` | Writes optional loss-curve PNG and solution-comparison GIF outputs. |
+| `samples/kdv-pinn/src/network.rs` | Builds the MLP from `TracedTensor` parameter placeholders. |
+| `samples/kdv-pinn/src/pde.rs` | Builds the KdV residual with chained `jvp` calls for `u_t`, `u_x`, `u_xx`, and `u_xxx`. |
+| `samples/kdv-pinn/src/loss.rs` | Combines PDE, initial-condition, and boundary losses with scalar weights. |
+| `samples/kdv-pinn/src/sampler.rs` | Samples collocation, initial-condition, and boundary points. |
+| `samples/kdv-pinn/src/optimizer.rs` | Applies Adam updates to the concrete parameter tensors. |
+| `samples/kdv-pinn/src/plot.rs` | Writes optional loss-curve PNG and solution-comparison GIF outputs. |
 
 The graph-building phase creates placeholders for network parameters and
 training batches, then compiles a scalar loss program plus one gradient program

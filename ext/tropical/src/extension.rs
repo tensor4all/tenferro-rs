@@ -8,9 +8,9 @@ use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_einsum::Subscripts;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
-use tenferro_ops::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::ExtensionAdRule;
+use tenferro_ops::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -175,10 +175,8 @@ impl ExtensionOp for TropicalEinsumOp {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        let meta =
-            infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes).ok_or_else(
-                || invalid_config("tropical_einsum", "invalid tropical einsum metadata"),
-            )?;
+        let meta = infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes)
+            .ok_or_else(|| invalid_config("tropical_einsum", "invalid tropical einsum metadata"))?;
         Ok(vec![meta])
     }
 
@@ -905,12 +903,4 @@ fn decode_col_major_index(mut flat: usize, shape: &[usize]) -> Option<Vec<usize>
         flat /= extent;
     }
     Some(coordinates)
-}
-
-#[cfg(feature = "autodiff")]
-fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op,
-        message: message.into(),
-    }
 }
