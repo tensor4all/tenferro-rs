@@ -132,6 +132,28 @@ rules from `tensor4all-agent-rules`.
   have previously regressed, including raw `shape.iter().product`, unchecked
   rank-minus-one, shape inference indexing before config validation, and
   allocation helpers that bypass shared checked shape-product functions.
+
+## Invariant Markers
+
+- Use one canonical marker, `// INVARIANT: <why this is valid, bounded, or
+  intentional>`, for source comments that record a non-obvious invariant kept
+  for performance or by design: rank-bounded quadratic loops,
+  checked-by-construction arithmetic, ownership-required copies, semantic
+  zero-fill, constant-bounded scans, and similar audit false-positive
+  hotspots. Keep `// SAFETY:` for unsafe-block justifications.
+- The marker must state the invariant concretely enough that a later reader
+  can re-verify it — name the validation site, the bound, or the owning
+  contract — not just assert intent.
+- `#[allow(...)]` suppressions for repository-mandated lints must carry an
+  adjacent `// INVARIANT:` line. Allowlist and ratchet-baseline entries in
+  audit tooling must carry a rationale string; an entry without a reason is a
+  defect.
+- Audit tooling and audit prompts, human or AI, must not flag a site governed
+  by an `// INVARIANT:` marker as a violation. They must instead check whether
+  the stated invariant still holds and report only when it does not.
+- Rejecting an audit finding as a false positive is complete only when the
+  marker (or a source-contract test) has landed at the site, per the
+  false-positive ledger rule in Work Logs And Design Records.
 - Parallel operation surfaces must keep validation and promotion semantics in
   parity across owned/read, eager/traced, CPU/GPU, and extension wrapper paths.
   A bug in one surface should trigger an audit of the corresponding surfaces
@@ -180,7 +202,8 @@ rules from `tensor4all-agent-rules`.
   and review should continue to follow.
 - When a bug report or audit finding is a false positive because of an
   intentional invariant, record the evidence in the issue or PR ledger and add
-  a nearby source comment, rustdoc note, or source-contract test when that
+  a nearby `// INVARIANT:` source comment (see Invariant Markers), rustdoc
+  note, or source-contract test when that
   invariant is not obvious from the code. Do not just skip the finding; leave
   enough context that later humans and AI agents do not rediscover the same
   non-bug as suspicious.
@@ -411,7 +434,8 @@ Tests follow implementation ownership.
   such as raw scratch-buffer acquisition, unchecked indexing after validation,
   raw pointer arithmetic, or backend-native view construction, must carry a
   nearby one-line comment explaining the invariant that makes the operation
-  valid. This is required even when the operation is technically correct, so
+  valid, using the `// INVARIANT:` marker (see Invariant Markers). This is
+  required even when the operation is technically correct, so
   later agents and reviewers do not "fix" a false positive by adding hidden
   copies, repeated checks, or unconditional initialization to a hot path.
 - Buffer-pool and scratch-buffer APIs must distinguish full-overwrite callers
@@ -426,7 +450,8 @@ Tests follow implementation ownership.
 - Do not introduce accidental `O(n^2)` behavior in graph construction,
   metadata propagation, key hashing/equality, compilation, or execution
   scheduling. If a quadratic algorithm is intentional, document why the input
-  size is bounded or why the tradeoff is acceptable.
+  size is bounded or why the tradeoff is acceptable with an `// INVARIANT:`
+  marker (see Invariant Markers).
 - Avoid repeatedly cloning, hashing, formatting, or scanning whole graph
   histories, metadata scope lists, tensor input maps, or structural keys inside
   per-node/per-op loops. Prefer stable IDs, interning, cached fingerprints with
