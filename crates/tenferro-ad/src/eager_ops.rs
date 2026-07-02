@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use computegraph::GraphOperation;
 use tenferro_ops::broadcast::{
     broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
 };
@@ -913,6 +914,10 @@ impl EagerTensor {
         let Some(first) = tensors.first() else {
             return Err(empty_nary_input_error(&op));
         };
+        let expected = op.input_count();
+        if tensors.len() != expected {
+            return Err(wrong_nary_input_count_error(&op, expected, tensors.len()));
+        }
 
         let ctx = Arc::clone(&first.ctx);
         profile_eager_op_section("nary_op.context_check", || -> Result<()> {
@@ -1017,6 +1022,13 @@ fn empty_nary_input_error(op: &StdTensorOp) -> Error {
     Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
         op: eager_validation_op_name(op),
         message: "operation requires at least one input tensor".to_string(),
+    })
+}
+
+fn wrong_nary_input_count_error(op: &StdTensorOp, expected: usize, actual: usize) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        op: eager_validation_op_name(op),
+        message: format!("operation expects {expected} inputs, got {actual}"),
     })
 }
 

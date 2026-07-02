@@ -46,6 +46,23 @@ fn apply_eager_rejects_wrong_input_count() {
 }
 
 #[test]
+fn apply_standard_op_rejects_wrong_input_count() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+
+    let err = match tenferro_ad::extension::apply_standard_op(StdTensorOp::Add, &[&x]) {
+        Ok(_) => panic!("wrong standard op input count unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("expects 2 inputs, got 1"));
+}
+
+#[test]
 fn apply_eager_rejects_cross_context_inputs() {
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
