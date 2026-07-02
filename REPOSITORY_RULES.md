@@ -495,8 +495,10 @@ Tests follow implementation ownership.
   backend boundary. The diagnostic should say to download the tensor to host
   before CPU execution.
 - Direct host-inspection APIs such as `TypedTensor::host_data()` and
-  `TypedTensor::host_data_mut()` may panic with a diagnostic on backend
-  buffers because their signatures return slices, not `Result`.
+  `TypedTensor::host_data_mut()` return `Result` and must report backend
+  buffers as typed backend failures. Any infallible host-inspection API that
+  returns a borrowed slice instead of `Result` must document an explicit panic
+  boundary before it is exposed.
 - Execution pipeline internals may handle placement for documented cases:
   `Constant` ops may auto-upload through `upload_host_tensor()`, and
   host-dependent ops such as `ShapeOf` or `DynamicTruncate` may read metadata
