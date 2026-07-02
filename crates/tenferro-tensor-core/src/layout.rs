@@ -147,7 +147,14 @@ fn normalize_slice(slice: SliceSpec, axis_len: usize) -> Result<(isize, usize)> 
     } else {
         slice.start
     };
-    let end = slice.end;
+    let end = if slice.end < -1 {
+        slice
+            .end
+            .checked_add(axis_len)
+            .ok_or(Error::IntegerOverflow)?
+    } else {
+        slice.end
+    };
     if start < 0 || start >= axis_len || end < -1 || end >= axis_len {
         return Err(Error::InvalidSliceBounds {
             start: slice.start,
