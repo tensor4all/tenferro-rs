@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor_core::{
     col_major_strides, DType, DynRank, Error, HostTensor, HostTensorView, Rank, SliceSpec, Tensor,
-    TensorLayout, TensorRank, TensorRef,
+    TensorLayout, TensorRank, TensorRef, TensorScalar,
 };
 
 #[test]
@@ -120,6 +120,25 @@ fn slice_view_supports_negative_step() {
 }
 
 #[test]
+fn slice_view_normalizes_negative_end_for_negative_step() {
+    let layout = TensorLayout::<Rank<1>>::compact([5]).unwrap();
+    let sliced = layout
+        .slice_view(
+            [SliceSpec {
+                start: 3,
+                end: -3,
+                step: -1,
+            }],
+            5,
+        )
+        .unwrap();
+
+    assert_eq!(sliced.shape(), &[1]);
+    assert_eq!(sliced.strides(), &[-1]);
+    assert_eq!(sliced.offset(), 3);
+}
+
+#[test]
 fn reshape_view_as_requires_compact_layout() {
     let layout = TensorLayout::<Rank<2>>::compact([2, 3]).unwrap();
     let reshaped = layout.reshape_view_as::<Rank<1>>([6], 6).unwrap();
@@ -154,7 +173,7 @@ fn slice_view_rejects_invalid_normalized_bounds_with_exact_error() {
         .slice_view(
             [SliceSpec {
                 start: 3,
-                end: -2,
+                end: -6,
                 step: -1,
             }],
             4,
@@ -164,7 +183,7 @@ fn slice_view_rejects_invalid_normalized_bounds_with_exact_error() {
         err,
         Error::InvalidSliceBounds {
             start: 3,
-            end: -2,
+            end: -6,
             axis_len: 4
         }
     ));
@@ -573,6 +592,19 @@ fn dynamic_tensor_and_view_report_dtype_mismatch() {
         tensor.as_view().reshape_view(vec![1, 2]).unwrap().shape(),
         &[1, 2]
     );
+}
+
+#[test]
+fn tensor_scalar_into_tensor_rejects_shape_data_length_mismatch() {
+    let err = <f64 as TensorScalar>::into_tensor(vec![2, 3].into(), vec![1.0, 2.0]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::ShapeDataLengthMismatch {
+            expected: 6,
+            actual: 2
+        }
+    ));
 }
 
 #[test]

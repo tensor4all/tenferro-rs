@@ -234,7 +234,7 @@ fn grad_broadcast_add_singleton_lhs() {
 fn grad_reshape() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
         .unwrap();
-    let y = x.reshape(&[2, 2]);
+    let y = x.reshape(&[2, 2]).unwrap();
     let loss = y.reduce_sum(&[0, 1]).unwrap();
     let grad = loss.grad(&x).unwrap();
 

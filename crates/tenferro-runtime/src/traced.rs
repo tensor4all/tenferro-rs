@@ -118,7 +118,7 @@ pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> Res
     let source = if plan.source_shape == tensor_shape {
         tensor.clone()
     } else {
-        tensor.reshape(&plan.source_shape)
+        tensor.reshape(&plan.source_shape)?
     };
     source.broadcast_in_dim(target_shape, &plan.dims)
 }
@@ -174,6 +174,22 @@ fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
     )
 }
 
+fn dtype_inference_error(op: &StdTensorOp, context: &'static str, err: String) -> Error {
+    Error::InvalidGraphBuild {
+        op: context,
+        message: format!("built-in traced dtype inference failed for {op:?}: {err}"),
+    }
+}
+
+fn try_inferred_output_dtype(
+    op: &StdTensorOp,
+    inputs: &[DType],
+    context: &'static str,
+) -> Result<DType> {
+    crate::shape_infer::infer_output_dtype(op, inputs)
+        .map_err(|err| dtype_inference_error(op, context, err.to_string()))
+}
+
 fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static str) -> DType {
     match crate::shape_infer::infer_output_dtype(op, inputs) {
         Ok(dtype) => dtype,
@@ -181,6 +197,36 @@ fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static s
             panic!("{context}: built-in traced dtype inference failed for {op:?}: {err}");
         }
     }
+}
+
+fn checked_shape_product_for_graph_build(
+    shape: &[usize],
+    context: &'static str,
+    role: &'static str,
+) -> Result<usize> {
+    shape.iter().copied().try_fold(1usize, |acc, dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| Error::InvalidGraphBuild {
+                op: context,
+                message: format!("{role} shape element count overflows usize"),
+            })
+    })
+}
+
+fn validate_concrete_reshape_shape(input: &TracedTensor, shape: &[usize]) -> Result<()> {
+    let to = checked_shape_product_for_graph_build(shape, "TracedTensor::reshape", "target")?;
+    let Some(input_shape) = try_concrete_shape(input) else {
+        return Ok(());
+    };
+    let from =
+        checked_shape_product_for_graph_build(&input_shape, "TracedTensor::reshape", "input")?;
+    if from != to {
+        return Err(Error::InvalidGraphBuild {
+            op: "TracedTensor::reshape",
+            message: format!("reshape element-count mismatch: from {from} to {to}"),
+        });
+    }
+    Ok(())
 }
 
 fn traced_input_shape_exprs(input_idx: usize, tensor: &TracedTensor) -> Vec<DimExpr> {
@@ -876,14 +922,7 @@ impl TracedTensor {
 
     /// Elementwise comparison with NumPy-style broadcasting.
     pub fn compare(&self, other: &TracedTensor, dir: CompareDir) -> Result<TracedTensor> {
-        let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
-            StdTensorOp::Compare(dir),
-            &lhs,
-            &rhs,
-            lhs.rank,
-            lhs.shape_hint.clone(),
-        ))
+        apply_broadcast_binary_op(StdTensorOp::Compare(dir), self, other)
     }
 
     /// Elementwise maximum with NumPy-style broadcasting.
@@ -1393,14 +1432,15 @@ impl TracedTensor {
     pub fn reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_max")?;
-        Ok(apply_unary(
+        try_apply_unary(
             StdTensorOp::ReduceMax {
                 axes: axes.to_vec(),
             },
             self,
             out_rank,
             out_shape_hint,
-        ))
+            "TracedTensor::reduce_max",
+        )
     }
 
     /// Reduce by taking the minimum along the given axes.
@@ -1423,14 +1463,15 @@ impl TracedTensor {
     pub fn reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_min")?;
-        Ok(apply_unary(
+        try_apply_unary(
             StdTensorOp::ReduceMin {
                 axes: axes.to_vec(),
             },
             self,
             out_rank,
             out_shape_hint,
-        ))
+            "TracedTensor::reduce_min",
+        )
     }
 
     /// Reduce by taking the product along the given axes.
@@ -1467,17 +1508,26 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
-    /// let y = x.reshape(&[2, 2]);
+    /// let y = x.reshape(&[2, 2])?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
-        apply_unary(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input has a concrete shape and the target
+    /// shape has a different element count, or when the target shape product
+    /// overflows `usize`.
+    pub fn reshape(&self, shape: &[usize]) -> Result<TracedTensor> {
+        validate_concrete_reshape_shape(self, shape)?;
+        Ok(apply_unary_with_dtype(
             StdTensorOp::Reshape {
                 to_shape: DimExpr::from_concrete(shape),
             },
             self,
             shape.len(),
             Some(shape.iter().copied().map(SymDim::from).collect()),
-        )
+            self.dtype,
+        ))
     }
 
     /// Return a symbolic expression for the size of one axis, suitable as
@@ -2071,6 +2121,23 @@ pub(crate) fn apply_unary(
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
+fn try_apply_unary(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    context: &'static str,
+) -> Result<TracedTensor> {
+    let out_dtype = try_inferred_output_dtype(&op, &[input.dtype], context)?;
+    Ok(apply_unary_with_dtype(
+        op,
+        input,
+        out_rank,
+        out_shape_hint,
+        out_dtype,
+    ))
+}
+
 pub(crate) fn apply_unary_with_dtype(
     op: StdTensorOp,
     input: &TracedTensor,
@@ -2231,6 +2298,38 @@ pub(crate) fn apply_binary(
     apply_binary_with_output_dtype(op, &lhs, &rhs, out_rank, out_shape_hint, out_dtype)
 }
 
+fn try_apply_binary(
+    op: StdTensorOp,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    context: &'static str,
+) -> Result<TracedTensor> {
+    let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
+    let out_dtype = try_inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], context)?;
+
+    let lhs = if lhs.dtype != input_dtype {
+        lhs.cast(input_dtype)
+    } else {
+        lhs.clone()
+    };
+    let rhs = if rhs.dtype != input_dtype {
+        rhs.cast(input_dtype)
+    } else {
+        rhs.clone()
+    };
+
+    Ok(apply_binary_with_output_dtype(
+        op,
+        &lhs,
+        &rhs,
+        out_rank,
+        out_shape_hint,
+        out_dtype,
+    ))
+}
+
 pub(crate) fn apply_binary_preserve_input_dtypes(
     op: StdTensorOp,
     lhs: &TracedTensor,
@@ -2248,13 +2347,14 @@ pub(crate) fn apply_broadcast_binary_op(
     rhs: &TracedTensor,
 ) -> Result<TracedTensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs)?;
-    Ok(apply_binary(
+    try_apply_binary(
         op,
         &lhs,
         &rhs,
         lhs.rank,
         lhs.shape_hint.clone(),
-    ))
+        "broadcast_binary",
+    )
 }
 
 pub(crate) fn apply_broadcast_ternary_op(
@@ -2264,29 +2364,28 @@ pub(crate) fn apply_broadcast_ternary_op(
     third: &TracedTensor,
 ) -> Result<TracedTensor> {
     let (first, second, third) = broadcast_ternary(first, second, third)?;
-    Ok(apply_ternary(
+    try_apply_ternary(
         op,
         &first,
         &second,
         &third,
         first.rank,
         first.shape_hint.clone(),
-    ))
+        "broadcast_ternary",
+    )
 }
 
-pub(crate) fn apply_ternary(
+fn try_apply_ternary(
     op: StdTensorOp,
     first: &TracedTensor,
     second: &TracedTensor,
     third: &TracedTensor,
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
-) -> TracedTensor {
-    let out_dtype = inferred_output_dtype(
-        &op,
-        &[first.dtype, second.dtype, third.dtype],
-        "apply_ternary",
-    );
+    context: &'static str,
+) -> Result<TracedTensor> {
+    let out_dtype =
+        try_inferred_output_dtype(&op, &[first.dtype, second.dtype, third.dtype], context)?;
     let (first, second, third) = match op {
         StdTensorOp::Select => {
             let value_dtype = crate::shape_infer::promote_dtype(second.dtype, third.dtype);
@@ -2323,7 +2422,7 @@ pub(crate) fn apply_ternary(
             (first, second, third)
         }
     };
-    apply_ternary_with_output_dtype(
+    Ok(apply_ternary_with_output_dtype(
         op,
         &first,
         &second,
@@ -2331,7 +2430,7 @@ pub(crate) fn apply_ternary(
         out_rank,
         out_shape_hint,
         out_dtype,
-    )
+    ))
 }
 
 fn apply_binary_with_output_dtype(

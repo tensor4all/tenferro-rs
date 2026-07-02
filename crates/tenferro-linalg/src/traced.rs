@@ -650,7 +650,7 @@ pub fn norm(
             }
         }
     };
-    Ok(restore_keepdim(out, &shape, &axes, keepdim))
+    restore_keepdim(out, &shape, &axes, keepdim)
 }
 
 fn unexpected_output_count(name: &str, expected: usize) -> Error {
@@ -951,7 +951,7 @@ fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<T
     scale_shape.extend_from_slice(&matrix_shape[2..]);
     let dims: Vec<usize> = (0..matrix_shape.len()).collect();
     let scale = scale
-        .reshape(&scale_shape)
+        .reshape(&scale_shape)?
         .broadcast_in_dim(&matrix_shape, &dims)?;
     matrix * &scale
 }
@@ -1004,9 +1004,9 @@ fn restore_keepdim(
     original_shape: &[usize],
     axes: &[usize],
     keepdim: bool,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     if !keepdim {
-        return reduced;
+        return Ok(reduced);
     }
     let mut kept_shape = original_shape.to_vec();
     for &axis in axes {

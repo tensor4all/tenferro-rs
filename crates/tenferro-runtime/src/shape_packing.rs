@@ -234,7 +234,7 @@ impl TracedTensor {
         let expanded = tensors
             .iter()
             .map(|tensor| tensor.reshape(&expanded_shape))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let refs = expanded.iter().collect::<Vec<_>>();
         Ok(apply_nary_concatenate(
             &refs,

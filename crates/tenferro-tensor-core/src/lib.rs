@@ -165,7 +165,18 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     fn dtype() -> DType;
 
-    fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Tensor;
+    /// Build a dynamic tensor from validated column-major data.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{DType, ShapeVec, TensorScalar};
+    ///
+    /// let tensor = <f64 as TensorScalar>::into_tensor(ShapeVec::from_slice(&[1]), vec![2.0])?;
+    /// assert_eq!(tensor.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Result<Tensor>;
     fn tensor_slice(tensor: &Tensor) -> Option<&[Self]>;
     fn tensor_mut_slice(tensor: &mut Tensor) -> Option<&mut [Self]>;
     fn into_typed(tensor: Tensor) -> Option<HostTensor<Self>>;
@@ -192,8 +203,8 @@ macro_rules! impl_scalar {
                 $dtype
             }
 
-            fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Tensor {
-                Tensor::$variant(HostTensor { data, shape })
+            fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Result<Tensor> {
+                HostTensor::from_vec_col_major(shape, data).map(Tensor::$variant)
             }
 
             fn tensor_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -932,9 +943,7 @@ impl Tensor {
         shape: impl Into<ShapeVec>,
         data: Vec<T>,
     ) -> Result<Self> {
-        let shape = shape.into();
-        checked_shape_len(&shape, data.len())?;
-        Ok(T::into_tensor(shape, data))
+        T::into_tensor(shape.into(), data)
     }
 
     /// Return the tensor dtype tag.

@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
 use crate::cubecl::{download_tensor, upload_tensor, CudaBackend};
-use crate::{Tensor, TypedTensor};
+use crate::{Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 
 mod elementwise_tests;
@@ -56,6 +56,78 @@ fn tensor_c32(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
 
 fn tensor_c64(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
+}
+
+#[test]
+fn gather_launch_meta_rejects_offset_dim_outside_output_rank() {
+    let err = super::gather_launch_meta(
+        &[2, 3],
+        &[],
+        &GatherConfig {
+            offset_dims: vec![1],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 0,
+            slice_sizes: vec![1, 3],
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::AxisOutOfBounds {
+            op: "gather",
+            axis: 1,
+            rank: 1
+        }
+    ));
+}
+
+#[test]
+fn gather_launch_meta_rejects_collapsed_non_unit_slice_sizes() {
+    let err = super::gather_launch_meta(
+        &[3],
+        &[],
+        &GatherConfig {
+            offset_dims: vec![],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 0,
+            slice_sizes: vec![2],
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, Error::InvalidConfig { op: "gather", .. }),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("slice_size == 1"), "{err}");
+}
+
+#[test]
+fn scatter_launch_meta_rejects_mismatched_update_batch_extents() {
+    let err = super::scatter_launch_meta(
+        &[4],
+        &[2, 1],
+        &[3],
+        &ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, Error::InvalidConfig { op: "scatter", .. }),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("updates batch dim 0 extent 3"),
+        "{err}"
+    );
 }
 
 fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {

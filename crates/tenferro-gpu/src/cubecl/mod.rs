@@ -3023,6 +3023,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
         .collect()
 }
 
+#[derive(Debug)]
 struct GatherLaunchMeta {
     output_shape: Vec<usize>,
     window_dims: Vec<usize>,
@@ -3055,12 +3056,17 @@ fn gather_launch_meta(
         &config.collapsed_slice_dims,
         operand_shape.len(),
     )?;
-    ensure_axes_unique(
-        "gather",
-        "offset_dims",
-        &config.offset_dims,
-        operand_shape.len(),
-    )?;
+    for &dim in &config.collapsed_slice_dims {
+        if config.slice_sizes[dim] != 1 {
+            return Err(crate::Error::InvalidConfig {
+                op: "gather",
+                message: format!(
+                    "collapsed slice dimension {dim} must have slice_size == 1, got {}",
+                    config.slice_sizes[dim]
+                ),
+            });
+        }
+    }
     ensure_axes_unique(
         "gather",
         "start_index_map",
@@ -3076,6 +3082,7 @@ fn gather_launch_meta(
     }
     let batch_shape = index_batch_shape(start_indices_shape, config.index_vector_dim);
     let out_rank = batch_shape.len() + config.offset_dims.len();
+    ensure_axes_unique("gather", "offset_dims", &config.offset_dims, out_rank)?;
     let mut output_shape = vec![0usize; out_rank];
     let mut out_axis_to_operand_dim = vec![None; out_rank];
     for (offset_axis, &out_axis) in config.offset_dims.iter().enumerate() {
@@ -3096,6 +3103,7 @@ fn gather_launch_meta(
     })
 }
 
+#[derive(Debug)]
 struct ScatterLaunchMeta {
     batch_shape: Vec<usize>,
     window_dims: Vec<usize>,
@@ -3153,6 +3161,27 @@ fn scatter_launch_meta(
             op: "scatter",
             message: "updates batch rank mismatch".into(),
         });
+    }
+    let mut is_update_window_dim = vec![false; updates_shape.len()];
+    for &axis in &config.update_window_dims {
+        is_update_window_dim[axis] = true;
+    }
+    let mut batch_axis = 0usize;
+    for (axis, &actual) in updates_shape.iter().enumerate() {
+        if is_update_window_dim[axis] {
+            continue;
+        }
+        let expected = batch_shape[batch_axis];
+        if actual != expected {
+            return Err(crate::Error::InvalidConfig {
+                op: "scatter",
+                message: format!(
+                    "updates batch dim {batch_axis} extent {actual} does not match \
+                     scatter batch extent {expected}"
+                ),
+            });
+        }
+        batch_axis += 1;
     }
     let window_shape_updates = config
         .update_window_dims
