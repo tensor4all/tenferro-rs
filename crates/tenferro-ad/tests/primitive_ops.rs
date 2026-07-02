@@ -209,7 +209,7 @@ fn test_transpose() {
 fn test_reshape() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
-    let tb = ta.reshape(&[6]);
+    let tb = ta.reshape(&[6]).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tb.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);

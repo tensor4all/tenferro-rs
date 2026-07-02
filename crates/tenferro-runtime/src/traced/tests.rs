@@ -1,4 +1,6 @@
-use crate::{DType, DotGeneralConfig, TracedTensor};
+use num_complex::Complex64;
+
+use crate::{DType, DotGeneralConfig, Error, TracedTensor};
 
 #[test]
 fn dot_general_returns_error_for_invalid_config() {
@@ -148,4 +150,61 @@ fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
     let valid = x.broadcast_in_dim(&[2, 3, 4], &[0, 1]).unwrap();
     assert_eq!(valid.rank, 3);
     assert_eq!(valid.try_concrete_shape().unwrap(), &[2, 3, 4]);
+}
+
+#[test]
+fn reshape_rejects_concrete_element_count_mismatch_at_graph_build() {
+    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+
+    let err = x.reshape(&[3]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidGraphBuild {
+            op: "TracedTensor::reshape",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("element-count mismatch"), "{err}");
+}
+
+#[test]
+fn reshape_allows_symbolic_input_when_element_count_cannot_be_proven() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+
+    let y = x.reshape(&[3]).unwrap();
+
+    assert_eq!(y.rank, 1);
+    assert_eq!(y.try_concrete_shape(), Some(vec![3]));
+}
+
+#[test]
+fn ordered_binary_ops_reject_complex_dtype_without_panicking() {
+    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+
+    let err = lhs.maximum(&rhs).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("complex numbers have no total order"),
+        "{err}"
+    );
+}
+
+#[test]
+fn ordered_reductions_reject_complex_dtype_without_panicking() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    )
+    .unwrap();
+
+    let err = x.reduce_max(&[0]).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("complex numbers have no total order"),
+        "{err}"
+    );
 }

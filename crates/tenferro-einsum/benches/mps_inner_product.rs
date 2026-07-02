@@ -70,6 +70,7 @@ fn build_inner_product_graph(
             .expect("MPS inner-product contraction should build");
     }
     env.reshape(&[])
+        .expect("final MPS inner-product scalar reshape should preserve element count")
 }
 
 fn compile_mps_inner_product(fixture: &MpsFixture) -> GraphProgram {

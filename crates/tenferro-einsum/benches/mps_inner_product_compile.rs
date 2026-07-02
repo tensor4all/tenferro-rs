@@ -38,6 +38,7 @@ fn build_inner_product_graph(
             .expect("MPS inner-product contraction should build");
     }
     env.reshape(&[])
+        .expect("final MPS inner-product scalar reshape should preserve element count")
 }
 
 fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
