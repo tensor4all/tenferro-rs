@@ -37,7 +37,7 @@ impl Linear {
             self.bias
                 .try_concrete_shape()
                 .expect("placeholder shape is concrete")[0],
-        ]);
+        ])?;
         y.add(&bias_broadcast)
     }
 }
