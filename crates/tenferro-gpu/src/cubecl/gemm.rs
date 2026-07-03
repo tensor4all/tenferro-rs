@@ -390,6 +390,9 @@ where
             rhs: layout.output_shape.clone(),
         });
     }
+    ensure_resident_on_runtime(backend.runtime(), lhs, OP)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, OP)?;
+    ensure_resident_on_runtime(backend.runtime(), out, OP)?;
     if out.n_elements() == 0 {
         return Ok(());
     }

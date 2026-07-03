@@ -2353,13 +2353,13 @@ impl TensorDot for CudaBackend {
         let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) else {
             return Err(crate::Error::backend_failure(
                 "dot_general",
-                "CUDA dot-general accumulation requires compact owned operand tensors;                  borrowed views are not yet supported",
+                "CUDA dot-general accumulation requires compact owned operand tensors; borrowed views are not yet supported",
             ));
         };
         let TensorWrite::Tensor(out) = &mut out else {
             return Err(crate::Error::backend_failure(
                 "dot_general",
-                "CUDA dot-general accumulation requires a compact owned output tensor;                  borrowed views are not yet supported",
+                "CUDA dot-general accumulation requires a compact owned output tensor; borrowed views are not yet supported",
             ));
         };
         gemm::dot_general_with_conj_into_accum(self, lhs, rhs, config, accumulation, out)

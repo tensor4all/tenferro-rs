@@ -193,3 +193,44 @@ fn test_accum_view_output_is_explicit_error() {
     );
     assert!(result.is_err(), "view output must be an explicit error");
 }
+
+#[test]
+#[ignore]
+fn test_accum_zero_contraction_rejects_cpu_tensors() {
+    // Even when k = 0 and beta = 1 makes the mathematical update a no-op,
+    // the CUDA backend contract still requires GPU-resident owned tensors.
+    let mut gpu = gpu_backend();
+    let lhs = tensor_f64(vec![2, 0], vec![]);
+    let rhs = tensor_f64(vec![0, 2], vec![]);
+    let mut gpu_out = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let result = gpu.dot_general_read_into_accum(
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &matmul_config(),
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(1.0),
+            beta: ContractionScalar::F64(1.0),
+        },
+        TensorWrite::from_tensor(&mut gpu_out),
+    );
+    assert!(result.is_err(), "CPU operands must be rejected");
+
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+    let mut cpu_out = tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let result = gpu.dot_general_read_into_accum(
+        TensorRead::from_tensor(&gpu_lhs),
+        TensorRead::from_tensor(&gpu_rhs),
+        &matmul_config(),
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(1.0),
+            beta: ContractionScalar::F64(1.0),
+        },
+        TensorWrite::from_tensor(&mut cpu_out),
+    );
+    assert!(result.is_err(), "CPU output must be rejected");
+}
