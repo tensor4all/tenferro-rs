@@ -63,6 +63,13 @@ Preallocated-output APIs use `TensorWrite` when the output may be either an
 owned tensor or a mutable view. These APIs validate output dtype and shape
 before writing and do not resize the destination.
 
+Dot-general accumulation keeps contraction axes and output-update semantics in
+separate contracts. `DotGeneralConfig` describes only dimension roles. Output
+updates such as `out = alpha * op(lhs) * op(rhs) + beta * out` use
+`DotGeneralAccumulation`, including conjugation flags and the floating/complex
+`ContractionScalar` coefficients. Cache ownership stays on `SessionCachedDot`
+and `BackendCachedDot`; non-cached `TensorDot` methods do not take cache slots.
+
 Metadata-only APIs that produce views use `_view`. APIs that allocate,
 execute kernels, canonicalize buffers, or move data must not use `_view`.
 

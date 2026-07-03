@@ -2002,6 +2002,30 @@ fn tensor_as_slice_returns_none_for_dtype_mismatch() {
 }
 
 #[test]
+fn tensor_write_as_read_borrows_tensor_and_view_outputs() {
+    let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let write = TensorWrite::from_tensor(&mut tensor);
+    let read = write.as_read();
+    assert_eq!(read.dtype(), DType::F64);
+    assert_eq!(read.shape(), &[2]);
+    assert_eq!(
+        read.as_tensor().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0, 2.0]
+    );
+
+    let mut data = [0.0_f64, 3.0, 4.0, 0.0];
+    let view = TensorViewMut::F64(TypedTensorViewMut::from_slice([2], [1], 1, &mut data).unwrap());
+    let write = TensorWrite::from_view(view);
+    let read = write.as_read();
+    assert_eq!(read.dtype(), DType::F64);
+    assert_eq!(read.shape(), &[2]);
+    assert_eq!(
+        read.to_tensor().unwrap().as_slice::<f64>().unwrap(),
+        &[3.0, 4.0]
+    );
+}
+
+#[test]
 fn memory_kind_variants_are_constructible() {
     let kinds = [
         MemoryKind::Device,

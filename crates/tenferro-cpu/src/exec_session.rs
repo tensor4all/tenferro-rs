@@ -1,12 +1,12 @@
 use crate::buffer_pool::BufferPool;
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
-use tenferro_tensor::backend::validate_dot_general_read_into;
+use tenferro_tensor::backend::{dot_general_accum_via_temp, validate_dot_general_accumulation};
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::{
-    SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
 use super::backend::reclaim_typed;
@@ -241,56 +241,29 @@ impl TensorDot for CpuExecSession<'_> {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_dot_general_read_into(&lhs, &rhs, config, &out, "dot_general")?;
-        let direct = match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    gemm::dot_general_faer_read_into_cached(
-                        lhs.clone(),
-                        rhs.clone(),
-                        config,
-                        &mut out,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    gemm::dot_general_blas_read_into_cached(
-                        self.buffers,
-                        self.gemm_analysis_cache,
-                        None,
-                        lhs.clone(),
-                        rhs.clone(),
-                        config,
-                        &mut out,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-        };
-        if direct {
-            return Ok(());
-        }
+        let accumulation = DotGeneralAccumulation::overwrite(lhs.dtype())?;
+        self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
+    }
 
-        let result = self.dot_general_read(lhs, rhs, config)?;
-        out.copy_from_tensor(&result)
+    fn dot_general_read_into_accum(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        SessionCachedDot::dot_general_read_into_accum_cached(
+            self,
+            None,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            out,
+        )
     }
 
     fn dot_general_with_conj(
@@ -588,6 +561,69 @@ impl SessionCachedDot for CpuExecSession<'_> {
                 }
             }
         }
+    }
+
+    fn dot_general_read_into_accum_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    gemm::dot_general_faer_read_into_accum_cached(
+                        self.gemm_analysis_cache,
+                        cache_slot,
+                        self.ctx,
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        accumulation,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    gemm::dot_general_blas_read_into_accum_cached(
+                        self.buffers,
+                        self.gemm_analysis_cache,
+                        cache_slot,
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        accumulation,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+        };
+        if direct {
+            return Ok(());
+        }
+
+        dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)
     }
 }
 

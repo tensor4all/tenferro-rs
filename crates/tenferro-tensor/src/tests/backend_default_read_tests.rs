@@ -1,13 +1,16 @@
 use crate::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorView, TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, ContractionScalar,
+    DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
+    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
+use num_complex::{Complex32, Complex64};
 
 #[derive(Default)]
 struct DefaultReadBackend {
     calls: Vec<&'static str>,
+    dot_result: Option<Tensor>,
     gather_indices: Option<Tensor>,
     gather_config: Option<GatherConfig>,
     reshape_shapes: Vec<Vec<usize>>,
@@ -296,7 +299,7 @@ impl TensorDot for DefaultReadBackend {
         _config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         self.calls.push("dot_general");
-        Ok(marker())
+        Ok(self.dot_result.clone().unwrap_or_else(marker))
     }
 }
 
@@ -461,6 +464,208 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
 
     assert!(backend.calls.contains(&"add"));
     assert!(backend.calls.contains(&"dot_general"));
+}
+
+#[test]
+fn contraction_scalar_helpers_cover_supported_and_rejected_dtypes() {
+    assert_eq!(ContractionScalar::F32(1.0).dtype(), DType::F32);
+    assert_eq!(ContractionScalar::F64(1.0).dtype(), DType::F64);
+    assert_eq!(
+        ContractionScalar::C32(Complex32::new(1.0, 0.0)).dtype(),
+        DType::C32
+    );
+    assert_eq!(
+        ContractionScalar::C64(Complex64::new(1.0, 0.0)).dtype(),
+        DType::C64
+    );
+
+    assert_eq!(
+        ContractionScalar::one(DType::C32).unwrap(),
+        ContractionScalar::C32(Complex32::new(1.0, 0.0))
+    );
+    assert_eq!(
+        ContractionScalar::zero(DType::C64).unwrap(),
+        ContractionScalar::C64(Complex64::new(0.0, 0.0))
+    );
+    assert!(ContractionScalar::one(DType::I64).is_err());
+    assert!(ContractionScalar::zero(DType::Bool).is_err());
+
+    let overwrite = DotGeneralAccumulation::overwrite(DType::F32).unwrap();
+    assert_eq!(overwrite.alpha, ContractionScalar::F32(1.0));
+    assert_eq!(overwrite.beta, ContractionScalar::F32(0.0));
+    assert!(DotGeneralAccumulation::overwrite(DType::I32).is_err());
+}
+
+fn vector_contract_config() -> DotGeneralConfig {
+    DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    }
+}
+
+#[test]
+fn dot_general_accum_default_fallback_updates_tensor_and_view_outputs() {
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let config = vector_contract_config();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![], vec![42.0_f64]).unwrap()),
+        ..Default::default()
+    };
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj: true,
+        rhs_conj: false,
+        alpha: ContractionScalar::F64(2.0),
+        beta: ContractionScalar::F64(0.5),
+    };
+    let mut out = Tensor::from_vec_col_major(vec![], vec![10.0_f64]).unwrap();
+
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[89.0]);
+    assert!(backend.calls.contains(&"conj"));
+    assert!(backend.calls.contains(&"dot_general"));
+
+    let mut cache = ();
+    let mut out_view = TypedTensor::<f64>::from_vec_col_major(vec![], vec![1.0]).unwrap();
+    BackendCachedDot::dot_general_read_into_accum_cached(
+        &mut backend,
+        &mut cache,
+        Some(7),
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(1.0),
+            beta: ContractionScalar::F64(1.0),
+        },
+        TensorWrite::from_view(TensorViewMut::F64(out_view.as_view_mut())),
+    )
+    .unwrap();
+
+    assert_eq!(out_view.as_slice().unwrap(), &[43.0]);
+}
+
+#[test]
+fn dot_general_accum_default_fallback_covers_supported_scalar_dtypes() {
+    let config = vector_contract_config();
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f32]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![], vec![10.0_f32]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![], vec![4.0_f32]).unwrap()),
+        ..Default::default()
+    };
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F32(2.0),
+                beta: ContractionScalar::F32(0.5),
+            },
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+    assert_eq!(out.as_slice::<f32>().unwrap(), &[13.0]);
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(2.0, 0.0)]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![], vec![Complex32::new(3.0, -1.0)]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(
+            Tensor::from_vec_col_major(vec![], vec![Complex32::new(1.0, 2.0)]).unwrap(),
+        ),
+        ..Default::default()
+    };
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
+                beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
+            },
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+    assert_eq!(
+        out.as_slice::<Complex32>().unwrap(),
+        &[Complex32::new(3.0, 7.0)]
+    );
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(2.0, 0.0)]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![], vec![Complex64::new(5.0, 0.0)]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(
+            Tensor::from_vec_col_major(vec![], vec![Complex64::new(4.0, -2.0)]).unwrap(),
+        ),
+        ..Default::default()
+    };
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+                beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
+            },
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(4.0, -2.0)]
+    );
+}
+
+#[test]
+fn dot_general_accum_default_fallback_rejects_scalar_dtype_mismatch() {
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
+    let config = vector_contract_config();
+    let mut backend = DefaultReadBackend::default();
+
+    let err = backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F32(1.0),
+                beta: ContractionScalar::F64(0.0),
+            },
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap_err();
+
+    assert!(err.to_string().contains("dtype mismatch"));
 }
 
 #[test]

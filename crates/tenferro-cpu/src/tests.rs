@@ -19,9 +19,10 @@ use crate::{
 #[cfg(feature = "cpu-blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, SessionCachedDot, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, ContractionScalar,
+    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural,
 };
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
