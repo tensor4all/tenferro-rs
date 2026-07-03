@@ -7,17 +7,19 @@ use num_traits::{One, Zero};
 
 use super::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, dtype_mismatch,
-    ensure_resident_on_runtime, launch_nullary_into,
+    ensure_resident_on_runtime, launch_nullary_into, typed_tensor_array_arg,
 };
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::interop::cuda_device_ptr_from_addr;
+use super::memory::upload_tensor;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, Error, Tensor, TypedTensor};
+use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation};
 
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -27,6 +29,20 @@ trait CutensorScalar: CubeElement + CubePrimitive + Clone + One + Zero {
     const IS_COMPLEX: bool;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor;
+
+    /// Wrap/unwrap between the typed tensor and the dtype-erased [`Tensor`],
+    /// used to materialize scalar device constants.
+    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor;
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>>;
+
+    /// Launch the in-place scale kernel for this scalar type.
+    fn launch_scale_in_place(
+        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        count: cubecl::prelude::CubeCount,
+        dim: cubecl::prelude::CubeDim,
+        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+    );
 }
 
 impl CutensorScalar for f32 {
@@ -35,6 +51,31 @@ impl CutensorScalar for f32 {
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
+    }
+    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
+        Tensor::F32(tensor)
+    }
+
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
+        match tensor {
+            Tensor::F32(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+
+    fn launch_scale_in_place(
+        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        count: cubecl::prelude::CubeCount,
+        dim: cubecl::prelude::CubeDim,
+        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+    ) {
+        // SAFETY: caller validated residency, lengths, and launch domain.
+        unsafe {
+            structural::scale_in_place_float_kernel::launch_unchecked::<f32, CubeclCudaRuntime>(
+                client, count, dim, out, factor,
+            );
+        }
     }
 }
 
@@ -45,6 +86,31 @@ impl CutensorScalar for f64 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
     }
+    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
+        Tensor::F64(tensor)
+    }
+
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
+        match tensor {
+            Tensor::F64(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+
+    fn launch_scale_in_place(
+        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        count: cubecl::prelude::CubeCount,
+        dim: cubecl::prelude::CubeDim,
+        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+    ) {
+        // SAFETY: caller validated residency, lengths, and launch domain.
+        unsafe {
+            structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+                client, count, dim, out, factor,
+            );
+        }
+    }
 }
 
 impl CutensorScalar for Complex32 {
@@ -54,6 +120,32 @@ impl CutensorScalar for Complex32 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
     }
+    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
+        Tensor::C32(tensor)
+    }
+
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
+        match tensor {
+            Tensor::C32(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+
+    fn launch_scale_in_place(
+        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        count: cubecl::prelude::CubeCount,
+        dim: cubecl::prelude::CubeDim,
+        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+    ) {
+        // SAFETY: caller validated residency, lengths, and launch domain.
+        unsafe {
+            structural::scale_in_place_complex_kernel::launch_unchecked::<
+                Complex32,
+                CubeclCudaRuntime,
+            >(client, count, dim, out, factor);
+        }
+    }
 }
 
 impl CutensorScalar for Complex64 {
@@ -62,6 +154,32 @@ impl CutensorScalar for Complex64 {
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
+    }
+    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
+        Tensor::C64(tensor)
+    }
+
+    fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
+        match tensor {
+            Tensor::C64(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+
+    fn launch_scale_in_place(
+        client: &cubecl::prelude::ComputeClient<CubeclCudaRuntime>,
+        count: cubecl::prelude::CubeCount,
+        dim: cubecl::prelude::CubeDim,
+        out: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+        factor: cubecl::prelude::ArrayArg<CubeclCudaRuntime>,
+    ) {
+        // SAFETY: caller validated residency, lengths, and launch domain.
+        unsafe {
+            structural::scale_in_place_complex_kernel::launch_unchecked::<
+                Complex64,
+                CubeclCudaRuntime,
+            >(client, count, dim, out, factor);
+        }
     }
 }
 
@@ -145,6 +263,256 @@ pub(super) fn dot_general_with_conj(
         }
         _ => Err(dtype_mismatch(OP, lhs, rhs)),
     }
+}
+
+/// Local extraction of typed accumulation coefficients; dtype mismatches
+/// between the coefficient and the operand dtype are explicit errors.
+trait FromContractionScalar: Sized {
+    fn from_contraction_scalar(value: ContractionScalar) -> crate::Result<Self>;
+}
+
+macro_rules! impl_from_contraction_scalar {
+    ($ty:ty, $variant:ident) => {
+        impl FromContractionScalar for $ty {
+            fn from_contraction_scalar(value: ContractionScalar) -> crate::Result<Self> {
+                match value {
+                    ContractionScalar::$variant(value) => Ok(value),
+                    other => Err(Error::DTypeMismatch {
+                        op: OP,
+                        lhs: <$ty as tenferro_tensor::TensorScalar>::dtype(),
+                        rhs: other.dtype(),
+                    }),
+                }
+            }
+        }
+    };
+}
+
+impl_from_contraction_scalar!(f32, F32);
+impl_from_contraction_scalar!(f64, F64);
+impl_from_contraction_scalar!(Complex32, C32);
+impl_from_contraction_scalar!(Complex64, C64);
+
+/// CUDA-native accumulate-form contraction:
+/// `out = alpha * op(lhs) * op(rhs) + beta * out` executed by a single
+/// cuTENSOR contraction with `C = D = out` (no temporary result tensor).
+///
+/// Stage-1 scope (tensor4all/tenferro-rs#1287): compact GPU-resident owned
+/// tensors on all three slots; anything else is an explicit error — no hidden
+/// host transfer and no silent fallback.
+pub(super) fn dot_general_with_conj_into_accum(
+    backend: &CudaBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    out: &mut Tensor,
+) -> crate::Result<()> {
+    match (lhs, rhs, out) {
+        (Tensor::F32(lhs), Tensor::F32(rhs), Tensor::F32(out)) => dot_general_typed_into_accum(
+            backend,
+            lhs,
+            rhs,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+            f32::from_contraction_scalar(accumulation.alpha)?,
+            f32::from_contraction_scalar(accumulation.beta)?,
+            out,
+        ),
+        (Tensor::F64(lhs), Tensor::F64(rhs), Tensor::F64(out)) => dot_general_typed_into_accum(
+            backend,
+            lhs,
+            rhs,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+            f64::from_contraction_scalar(accumulation.alpha)?,
+            f64::from_contraction_scalar(accumulation.beta)?,
+            out,
+        ),
+        (Tensor::C32(lhs), Tensor::C32(rhs), Tensor::C32(out)) => dot_general_typed_into_accum(
+            backend,
+            lhs,
+            rhs,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+            Complex32::from_contraction_scalar(accumulation.alpha)?,
+            Complex32::from_contraction_scalar(accumulation.beta)?,
+            out,
+        ),
+        (Tensor::C64(lhs), Tensor::C64(rhs), Tensor::C64(out)) => dot_general_typed_into_accum(
+            backend,
+            lhs,
+            rhs,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+            Complex64::from_contraction_scalar(accumulation.alpha)?,
+            Complex64::from_contraction_scalar(accumulation.beta)?,
+            out,
+        ),
+        (lhs, rhs, out) => {
+            if lhs.dtype() != rhs.dtype() || lhs.dtype() != out.dtype() {
+                return Err(dtype_mismatch(OP, lhs, rhs));
+            }
+            Err(Error::backend_failure(
+                OP,
+                "CUDA dot-general accumulation supports f32/f64/c32/c64 operands",
+            ))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dot_general_typed_into_accum<T>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensor<T>,
+) -> crate::Result<()>
+where
+    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar,
+{
+    backend.runtime().set_current_cuda_context(OP)?;
+    validate_dot_general(lhs, rhs, config)?;
+    let layout = build_layout(lhs, rhs, config)?;
+    if out.shape() != layout.output_shape.as_slice() {
+        return Err(Error::ShapeMismatch {
+            op: OP,
+            lhs: out.shape().to_vec(),
+            rhs: layout.output_shape.clone(),
+        });
+    }
+    if out.n_elements() == 0 {
+        return Ok(());
+    }
+    if layout.contracting_elements == 0 {
+        // The contraction sum is empty: out = beta * out.
+        return scale_in_place(backend.runtime(), out, beta);
+    }
+
+    let cutensor = backend.cutensor_handle()?;
+    let desc_a = TensorDescriptor::new(
+        cutensor,
+        &layout.lhs_extents,
+        &layout.lhs_strides,
+        T::DATA_TYPE,
+        CUDA_ALLOCATION_ALIGNMENT,
+        OP,
+    )?;
+    let desc_b = TensorDescriptor::new(
+        cutensor,
+        &layout.rhs_extents,
+        &layout.rhs_strides,
+        T::DATA_TYPE,
+        CUDA_ALLOCATION_ALIGNMENT,
+        OP,
+    )?;
+    let desc_out = TensorDescriptor::new(
+        cutensor,
+        &layout.output_extents,
+        &layout.output_strides,
+        T::DATA_TYPE,
+        CUDA_ALLOCATION_ALIGNMENT,
+        OP,
+    )?;
+    let op_desc = OperationDescriptor::new_contraction_with_ops(
+        cutensor,
+        &desc_a,
+        &layout.lhs_modes,
+        cutensor_conj_op::<T>(lhs_conj),
+        &desc_b,
+        &layout.rhs_modes,
+        cutensor_conj_op::<T>(rhs_conj),
+        &desc_out,
+        &layout.output_modes,
+        &desc_out,
+        &layout.output_modes,
+        T::compute_descriptor(cutensor),
+        OP,
+    )?;
+    let pref = PlanPreference::new_default(cutensor, OP)?;
+    let workspace_size = cutensor.estimate_workspace_size(
+        &op_desc,
+        &pref,
+        CutensorWorksizePreference::Default,
+        OP,
+    )?;
+    let plan = Plan::new(cutensor, &op_desc, &pref, workspace_size, OP)?;
+    let workspace = alloc_workspace(backend.runtime(), workspace_size)?;
+
+    let lhs_ptr = typed_device_ptr(backend.runtime(), lhs)?;
+    let rhs_ptr = typed_device_ptr(backend.runtime(), rhs)?;
+    let out_ptr = typed_device_ptr(backend.runtime(), out)?;
+
+    let stream = raw_stream(backend.runtime())?;
+    // C = D = out: cuTENSOR reads the destination as the accumulator (skipped
+    // by cuTENSOR itself when beta == 0) and writes the result in place.
+    unsafe {
+        cutensor.contract(
+            &plan,
+            &alpha as *const T as *const c_void,
+            lhs_ptr as *const c_void,
+            rhs_ptr as *const c_void,
+            &beta as *const T as *const c_void,
+            out_ptr as *const c_void,
+            out_ptr,
+            workspace.ptr,
+            workspace.size,
+            stream,
+            OP,
+        )?;
+    }
+    Ok(())
+}
+
+/// Device-side `out *= beta` for the degenerate zero-contraction case. The
+/// factor is materialized as an explicit one-element device constant; user
+/// operand tensors are never transferred.
+fn scale_in_place<T>(rt: &CudaRuntime, out: &mut TypedTensor<T>, beta: T) -> crate::Result<()>
+where
+    T: CutensorScalar + PartialEq + tenferro_tensor::TensorScalar,
+{
+    if beta == T::one() {
+        return Ok(());
+    }
+    if beta == T::zero() {
+        return launch_nullary_into(
+            rt,
+            out,
+            OP,
+            cube_count_for_len(out.n_elements())?,
+            cube_dim_1d(),
+            |client, count, dim, out| unsafe {
+                structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client, count, dim, out,
+                );
+            },
+        );
+    }
+    let factor_host = T::wrap_tensor(TypedTensor::from_vec_col_major(vec![1], vec![beta])?);
+    let factor_device = upload_tensor(rt, &factor_host)?;
+    let factor_typed = T::unwrap_tensor(&factor_device)
+        .ok_or_else(|| Error::backend_failure(OP, "scale factor upload changed dtype"))?;
+    ensure_resident_on_runtime(rt, out, OP)?;
+    ensure_resident_on_runtime(rt, factor_typed, OP)?;
+    let out_arg = typed_tensor_array_arg(out, OP)?;
+    let factor_arg = typed_tensor_array_arg(factor_typed, OP)?;
+    T::launch_scale_in_place(
+        rt.client(),
+        cube_count_for_len(out.n_elements())?,
+        cube_dim_1d(),
+        out_arg,
+        factor_arg,
+    );
+    Ok(())
 }
 
 fn dot_general_typed<T>(

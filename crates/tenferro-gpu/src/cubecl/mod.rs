@@ -96,6 +96,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::CacheStats;
+use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, TensorAnalytic, TensorBackend,
@@ -2326,6 +2327,42 @@ impl TensorDot for CudaBackend {
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
         gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
+    // CUDA-native accumulation (tensor4all/tenferro-rs#1287): one cuTENSOR
+    // contraction with C = D = out; no temporary result tensor, no host
+    // transfer. Stage 1 accepts compact owned tensors on all three slots;
+    // views are an explicit backend limitation until cuTENSOR
+    // extent/stride/offset view mapping lands.
+    fn dot_general_read_into_accum(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        tenferro_tensor::backend::validate_dot_general_accumulation(
+            &lhs,
+            &rhs,
+            config,
+            accumulation,
+            &out,
+            "dot_general",
+        )?;
+        let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) else {
+            return Err(crate::Error::backend_failure(
+                "dot_general",
+                "CUDA dot-general accumulation requires compact owned operand tensors;                  borrowed views are not yet supported",
+            ));
+        };
+        let TensorWrite::Tensor(out) = &mut out else {
+            return Err(crate::Error::backend_failure(
+                "dot_general",
+                "CUDA dot-general accumulation requires a compact owned output tensor;                  borrowed views are not yet supported",
+            ));
+        };
+        gemm::dot_general_with_conj_into_accum(self, lhs, rhs, config, accumulation, out)
     }
 }
 
