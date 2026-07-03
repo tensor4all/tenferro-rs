@@ -16,7 +16,7 @@ use tenferro_runtime::ad_support::{
     linear_input_key, metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new,
     ones_tensor, push_metadata_scope, register_scoped_graph_metadata, registered_meta,
     resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
-    tensor_meta_from_tensor, TracedTensorParts,
+    tensor_meta_from_tensor, GlobalMetadataScope, TracedTensorParts,
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
@@ -504,6 +504,12 @@ enum VjpTransposeGraph {
     Linear(tidu::LinearizedGraph<StdTensorOp>),
 }
 
+struct ActiveLinearVjp {
+    linear: tidu::LinearizedGraph<StdTensorOp>,
+    transposed: tidu::LinearizedGraph<StdTensorOp>,
+    metadata_scope: GlobalMetadataScope,
+}
+
 impl VjpTransposeGraph {
     fn as_graph(&self) -> &computegraph::graph::Graph<StdTensorOp> {
         match self {
@@ -555,59 +561,73 @@ fn vjp_optional_impl(
     let mut roots = tensor_resolve_roots(output);
     roots.extend(checkpoint_graphs.iter().cloned());
     let view = resolve(roots);
-    let mut ad_ctx = shape_guard_context(extension_rules, None);
-    ad_ctx.refresh_global_metadata();
 
-    let (transposed, linear_metadata_scope, linear_graph) = match try_primal_transpose(
+    let active_values =
+        linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
+    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+    let linear_attempt = match linearize(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&wrt_input_key),
-        &aliases,
-        &mut ad_ctx,
         next_pass_id(),
+        &mut linear_ad_ctx,
+        &aliases,
     ) {
-        Ok(transposed)
-            if transposed
-                .tangent_outputs()
-                .first()
-                .and_then(|slot| *slot)
-                .is_some() =>
-        {
-            (VjpTransposeGraph::Primal(transposed), None, None)
+        Ok(linear) => {
+            if linear.tangent_outputs()[0].is_none() {
+                Ok(None)
+            } else {
+                let linear_seed_key =
+                    linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
+                let linear_metadata_scope = register_scoped_graph_metadata(
+                    linear.as_graph(),
+                    vec![(
+                        ValueKey::Input(linear_seed_key),
+                        registered_meta(&wrt.graph().values()[wrt.val].key)?,
+                    )],
+                )?;
+                linear_ad_ctx.refresh_global_metadata();
+                linear_transpose(&linear, &mut linear_ad_ctx).map(|transposed| {
+                    Some(ActiveLinearVjp {
+                        linear,
+                        transposed,
+                        metadata_scope: linear_metadata_scope,
+                    })
+                })
+            }
         }
-        _ => {
-            let active_values =
-                linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
-            let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
-            let linear = linearize(
+        Err(err) => Err(err),
+    };
+
+    let (transposed, linear_metadata_scope, linear_graph) = match linear_attempt {
+        Ok(None) => return Ok(None),
+        Ok(Some(active)) => (
+            VjpTransposeGraph::Linear(active.transposed),
+            Some(active.metadata_scope),
+            Some(Arc::new(active.linear.into_graph())),
+        ),
+        Err(linear_err) => {
+            let mut primal_ad_ctx = shape_guard_context(extension_rules, None);
+            primal_ad_ctx.refresh_global_metadata();
+            match try_primal_transpose(
                 &view,
                 std::slice::from_ref(&output_key),
                 std::slice::from_ref(&wrt_input_key),
-                next_pass_id(),
-                &mut ad_ctx,
                 &aliases,
-            )
-            .map_err(|err| ad_rule_error(transform, err))?;
-            if linear.tangent_outputs()[0].is_none() {
-                return Ok(None);
+                &mut primal_ad_ctx,
+                next_pass_id(),
+            ) {
+                Ok(transposed)
+                    if transposed
+                        .tangent_outputs()
+                        .first()
+                        .and_then(|slot| *slot)
+                        .is_some() =>
+                {
+                    (VjpTransposeGraph::Primal(transposed), None, None)
+                }
+                _ => return Err(ad_rule_error(transform, linear_err)),
             }
-            let linear_seed_key =
-                linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
-            let linear_metadata_scope = Some(register_scoped_graph_metadata(
-                linear.as_graph(),
-                vec![(
-                    ValueKey::Input(linear_seed_key),
-                    registered_meta(&wrt.graph().values()[wrt.val].key)?,
-                )],
-            )?);
-            ad_ctx.refresh_global_metadata();
-            let transposed = linear_transpose(&linear, &mut ad_ctx)
-                .map_err(|err| ad_rule_error(transform, err))?;
-            (
-                VjpTransposeGraph::Linear(transposed),
-                linear_metadata_scope,
-                Some(Arc::new(linear.into_graph())),
-            )
         }
     };
 

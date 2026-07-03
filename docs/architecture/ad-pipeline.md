@@ -67,6 +67,36 @@ n-th derivative:
   build -> (resolve -> linearize) x n -> [linear_transpose] -> materialize_merge -> compile -> eval
 ```
 
+Current tenferro traced VJP follows the generic VJP pipeline first:
+
+```text
+build -> resolve -> linearize active outputs -> linear_transpose -> materialize_merge -> compile -> eval
+```
+
+Direct primary-graph transpose is an escape hatch. It is used only when the
+generic `linearize + linear_transpose` path cannot build a usable reverse graph.
+This keeps forward and reverse AD behavior anchored on the same linearization
+rules while preserving support for extension rules that still need primal
+outputs directly.
+
+Before `linearize`, traced AD computes the set of primal `ValueKey`s reachable
+from the requested output. That active-output set is attached to the
+`ShapeGuardContext` so multi-output rules can avoid emitting tangent branches
+for unused outputs. For example, an SVD whose caller only consumes singular
+values can emit just the `dS = diag(U^H dA V)` path and skip the vector
+F-matrix chain before `materialize_merge` ever runs. `materialize_merge` and
+the compiler still perform their own deduplication and backend-oriented
+optimization, but AD rules should not rely on late flattening to remove large,
+known-inactive derivative subgraphs.
+
+AD transform outputs are not cached in a new persistent AD graph cache. The
+caller-owned traced result keeps the transformed graph and any required extra
+roots alive, while compile-time and runtime caches remain owned by the existing
+compiler, executor, and extension runtime contexts. If a future AD optimizer
+cache is introduced, its key must include the resolved output keys, `wrt`
+inputs, extension rule set identity, shape/dtype guard inputs, and optimizer
+configuration version; it must not live inside semantic op payloads.
+
 Four crates, strictly layered:
 
 ```text

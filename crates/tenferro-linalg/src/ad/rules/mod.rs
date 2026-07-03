@@ -108,6 +108,12 @@ pub(crate) fn linearize_lu(
         return Ok(vec![None, None, None, None]);
     };
 
+    let l_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    let u_active = ctx.is_value_active_in_linearize(&primal_out[2]);
+    if !l_active && !u_active {
+        return Ok(vec![None, None, None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None, None]);
     };
@@ -168,42 +174,50 @@ pub(crate) fn linearize_lu(
         },
     )[0];
 
-    let x_lower = linear_unary(builder, StdTensorOp::Tril { k: -1 }, x);
-    let x_upper = linear_unary(builder, StdTensorOp::Triu { k: 0 }, x);
-    let dl_full = matmul_linear(
-        builder,
-        ValueRef::Local(l_square),
-        ValueRef::Local(x_lower),
-        vec![false, true],
-        rank,
-    );
-    let du_full = matmul_linear(
-        builder,
-        ValueRef::Local(x_upper),
-        ValueRef::Local(u_square),
-        vec![true, false],
-        rank,
-    );
-    let dl = if n_size > k_size {
-        take_leading_cols_linear(
+    let dl = if l_active {
+        let x_lower = linear_unary(builder, StdTensorOp::Tril { k: -1 }, x);
+        let dl_full = matmul_linear(
             builder,
-            dl_full,
-            LeadingMatrixSlice::new(k_size, n_size, batch_shape, l.clone(), &l_shape, rank),
-        )
+            ValueRef::Local(l_square),
+            ValueRef::Local(x_lower),
+            vec![false, true],
+            rank,
+        );
+        Some(if n_size > k_size {
+            take_leading_cols_linear(
+                builder,
+                dl_full,
+                LeadingMatrixSlice::new(k_size, n_size, batch_shape, l.clone(), &l_shape, rank),
+            )
+        } else {
+            dl_full
+        })
     } else {
-        dl_full
+        None
     };
-    let du = if m_size > k_size {
-        take_leading_rows_linear(
+    let du = if u_active {
+        let x_upper = linear_unary(builder, StdTensorOp::Triu { k: 0 }, x);
+        let du_full = matmul_linear(
             builder,
-            du_full,
-            LeadingMatrixSlice::new(k_size, m_size, batch_shape, u.clone(), &u_shape, rank),
-        )
+            ValueRef::Local(x_upper),
+            ValueRef::Local(u_square),
+            vec![true, false],
+            rank,
+        );
+        Some(if m_size > k_size {
+            take_leading_rows_linear(
+                builder,
+                du_full,
+                LeadingMatrixSlice::new(k_size, m_size, batch_shape, u.clone(), &u_shape, rank),
+            )
+        } else {
+            du_full
+        })
     } else {
-        du_full
+        None
     };
 
-    Ok(vec![None, Some(dl), Some(du), None])
+    Ok(vec![None, dl, du, None])
 }
 
 pub(crate) fn linearize_full_piv_lu(
@@ -414,6 +428,13 @@ pub(crate) fn linearize_svd(
         return Ok(vec![None, None, None]);
     };
 
+    let u_active = ctx.is_value_active_in_linearize(&primal_out[0]);
+    let s_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    let vt_active = ctx.is_value_active_in_linearize(&primal_out[2]);
+    if !u_active && !s_active && !vt_active {
+        return Ok(vec![None, None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None]);
     };
@@ -444,7 +465,11 @@ pub(crate) fn linearize_svd(
         vec![true, false],
         matrix_rank,
     );
-    let ds = extract_diag_linear(builder, ds_mat);
+    let ds = s_active.then(|| extract_diag_linear(builder, ds_mat));
+
+    if !u_active && !vt_active {
+        return Ok(vec![None, ds, None]);
+    }
 
     let diag_s = embed_diag_fixed(builder, s.clone());
     let ones_mat = one_like_fixed(builder, ValueRef::Local(diag_s));
@@ -468,114 +493,123 @@ pub(crate) fn linearize_svd(
     let safe_gap = fixed_add(builder, ValueRef::Local(s_gap_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(s_gap), ValueRef::Local(safe_gap));
 
-    let s_ones = one_like_fixed(builder, s.clone());
-    let s_sq = fixed_mul(builder, s.clone(), s.clone());
-    let s_eps_sq = fixed_scale(builder, ValueRef::Local(s_ones), eps * eps);
-    let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
-    let s_inv = fixed_div(builder, s.clone(), ValueRef::Local(safe_s_sq));
-    let s_inv_mat = embed_diag_fixed(builder, ValueRef::Local(s_inv));
+    let du = if u_active {
+        let s_ones = one_like_fixed(builder, s.clone());
+        let s_sq = fixed_mul(builder, s.clone(), s.clone());
+        let s_eps_sq = fixed_scale(builder, ValueRef::Local(s_ones), eps * eps);
+        let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
+        let s_inv = fixed_div(builder, s.clone(), ValueRef::Local(safe_s_sq));
+        let s_inv_mat = embed_diag_fixed(builder, ValueRef::Local(s_inv));
 
-    let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank, dtype);
-    let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
-    // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
-    let d_udv_diag = hadamard_fixed_linear(builder, ValueRef::Local(s_inv_mat), anti_hermitian);
-    let d_udv_diag = linear_scale(builder, d_udv_diag, 0.5);
+        let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank, dtype);
+        let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
+        // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
+        let d_udv_diag = hadamard_fixed_linear(builder, ValueRef::Local(s_inv_mat), anti_hermitian);
+        let d_udv_diag = linear_scale(builder, d_udv_diag, 0.5);
 
-    let dss = hadamard_fixed_linear(builder, ValueRef::Local(s_dim), ds_mat);
-    let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
-    let du_inner_sum = linear_add(builder, dss, dss_h);
-    let du_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), du_inner_sum);
-    let du_inner = linear_add(builder, du_inner, d_udv_diag);
-    let mut du = matmul_linear(
-        builder,
-        u.clone(),
-        ValueRef::Local(du_inner),
-        vec![false, true],
-        matrix_rank,
-    );
-
-    let sds = hadamard_fixed_linear(builder, ValueRef::Local(s_dim_t), ds_mat);
-    let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank, dtype);
-    let dv_inner_sum = linear_add(builder, sds, sds_h);
-    let dv_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), dv_inner_sum);
-    let mut dv = matmul_linear(
-        builder,
-        ValueRef::Local(v),
-        ValueRef::Local(dv_inner),
-        vec![false, true],
-        matrix_rank,
-    );
-
-    if m_size > n_size {
-        let d_av = matmul_linear(
-            builder,
-            ValueRef::Local(da),
-            ValueRef::Local(v),
-            vec![true, false],
-            matrix_rank,
-        );
-        let ut_d_av = matmul_linear(
-            builder,
-            ValueRef::Local(uh),
-            ValueRef::Local(d_av),
-            vec![false, true],
-            matrix_rank,
-        );
-        let u_ut_d_av = matmul_linear(
+        let dss = hadamard_fixed_linear(builder, ValueRef::Local(s_dim), ds_mat);
+        let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
+        let du_inner_sum = linear_add(builder, dss, dss_h);
+        let du_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), du_inner_sum);
+        let du_inner = linear_add(builder, du_inner, d_udv_diag);
+        let mut du = matmul_linear(
             builder,
             u.clone(),
-            ValueRef::Local(ut_d_av),
+            ValueRef::Local(du_inner),
             vec![false, true],
             matrix_rank,
         );
-        let proj = linear_sub(builder, d_av, u_ut_d_av);
-        let s_broadcast = broadcast_in_dim_fixed(
-            builder,
-            s.clone(),
-            matrix_shape(m, &k, batch_shape),
-            vector_to_matrix_broadcast_dims(batch_shape.len()),
-        );
-        let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
-        du = linear_add(builder, du, correction);
-    }
 
-    if n_size > m_size {
-        let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
-        let d_ahu = matmul_linear(
-            builder,
-            ValueRef::Local(da_h),
-            u.clone(),
-            vec![true, false],
-            matrix_rank,
-        );
-        let vt_d_ahu = matmul_linear(
-            builder,
-            vt.clone(),
-            ValueRef::Local(d_ahu),
-            vec![false, true],
-            matrix_rank,
-        );
-        let v_vt_d_ahu = matmul_linear(
+        if m_size > n_size {
+            let d_av = matmul_linear(
+                builder,
+                ValueRef::Local(da),
+                ValueRef::Local(v),
+                vec![true, false],
+                matrix_rank,
+            );
+            let ut_d_av = matmul_linear(
+                builder,
+                ValueRef::Local(uh),
+                ValueRef::Local(d_av),
+                vec![false, true],
+                matrix_rank,
+            );
+            let u_ut_d_av = matmul_linear(
+                builder,
+                u.clone(),
+                ValueRef::Local(ut_d_av),
+                vec![false, true],
+                matrix_rank,
+            );
+            let proj = linear_sub(builder, d_av, u_ut_d_av);
+            let s_broadcast = broadcast_in_dim_fixed(
+                builder,
+                s.clone(),
+                matrix_shape(m, &k, batch_shape),
+                vector_to_matrix_broadcast_dims(batch_shape.len()),
+            );
+            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            du = linear_add(builder, du, correction);
+        }
+        Some(du)
+    } else {
+        None
+    };
+
+    let dvt = if vt_active {
+        let sds = hadamard_fixed_linear(builder, ValueRef::Local(s_dim_t), ds_mat);
+        let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank, dtype);
+        let dv_inner_sum = linear_add(builder, sds, sds_h);
+        let dv_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), dv_inner_sum);
+        let mut dv = matmul_linear(
             builder,
             ValueRef::Local(v),
-            ValueRef::Local(vt_d_ahu),
+            ValueRef::Local(dv_inner),
             vec![false, true],
             matrix_rank,
         );
-        let proj = linear_sub(builder, d_ahu, v_vt_d_ahu);
-        let s_broadcast = broadcast_in_dim_fixed(
-            builder,
-            s.clone(),
-            matrix_shape(n, &k, batch_shape),
-            vector_to_matrix_broadcast_dims(batch_shape.len()),
-        );
-        let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
-        dv = linear_add(builder, dv, correction);
-    }
 
-    let dvt = adjoint_matrix_linear(builder, dv, matrix_rank, dtype);
+        if n_size > m_size {
+            let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
+            let d_ahu = matmul_linear(
+                builder,
+                ValueRef::Local(da_h),
+                u.clone(),
+                vec![true, false],
+                matrix_rank,
+            );
+            let vt_d_ahu = matmul_linear(
+                builder,
+                vt.clone(),
+                ValueRef::Local(d_ahu),
+                vec![false, true],
+                matrix_rank,
+            );
+            let v_vt_d_ahu = matmul_linear(
+                builder,
+                ValueRef::Local(v),
+                ValueRef::Local(vt_d_ahu),
+                vec![false, true],
+                matrix_rank,
+            );
+            let proj = linear_sub(builder, d_ahu, v_vt_d_ahu);
+            let s_broadcast = broadcast_in_dim_fixed(
+                builder,
+                s.clone(),
+                matrix_shape(n, &k, batch_shape),
+                vector_to_matrix_broadcast_dims(batch_shape.len()),
+            );
+            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            dv = linear_add(builder, dv, correction);
+        }
 
-    Ok(vec![Some(du), Some(ds), Some(dvt)])
+        Some(adjoint_matrix_linear(builder, dv, matrix_rank, dtype))
+    } else {
+        None
+    };
+
+    Ok(vec![du, ds, dvt])
 }
 
 pub(crate) fn linearize_svd_values(
