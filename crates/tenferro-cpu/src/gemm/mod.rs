@@ -11,13 +11,12 @@ use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
 use crate::{Error, Result};
-use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
-    col_major_strides, Buffer, TensorRead, TensorView, TensorWrite, TypedTensor, TypedTensorView,
+    col_major_strides, Buffer, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{CacheStats, RuntimeCacheControl};
-#[cfg(feature = "cpu-faer")]
-use tenferro_tensor::{TensorViewMut, TypedTensorViewMut};
+use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DotGeneralConfig};
 
 #[cfg(feature = "cpu-blas")]
 mod blas_gemm;
@@ -533,6 +532,91 @@ fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Result
                 "view batch offset overflows isize: base={base} batch={batch} stride={stride}"
             ),
         })
+}
+
+fn output_gemm_strides(
+    out_shape: &[usize],
+    out_strides: &[isize],
+    lhs_rank: usize,
+    rhs_rank: usize,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<(isize, isize, isize)>> {
+    let nm = lhs_rank
+        .checked_sub(config.lhs_contracting_dims.len() + config.lhs_batch_dims.len())
+        .ok_or_else(|| Error::InvalidConfig {
+            op: OP,
+            message: "lhs free rank underflow while analyzing output strides".into(),
+        })?;
+    let nn = rhs_rank
+        .checked_sub(config.rhs_contracting_dims.len() + config.rhs_batch_dims.len())
+        .ok_or_else(|| Error::InvalidConfig {
+            op: OP,
+            message: "rhs free rank underflow while analyzing output strides".into(),
+        })?;
+    let nb = config.lhs_batch_dims.len();
+    if out_shape.len() != nm + nn + nb || out_strides.len() != out_shape.len() {
+        return Ok(None);
+    }
+
+    let out_m_shapes = &out_shape[..nm];
+    let out_m_strides = &out_strides[..nm];
+    let out_n_shapes = &out_shape[nm..nm + nn];
+    let out_n_strides = &out_strides[nm..nm + nn];
+    let out_b_shapes = &out_shape[nm + nn..];
+    let out_b_strides = &out_strides[nm + nn..];
+
+    let Some((_, c_rs)) = try_fuse_dims(out_m_shapes, out_m_strides)? else {
+        return Ok(None);
+    };
+    let Some((_, c_cs)) = try_fuse_dims(out_n_shapes, out_n_strides)? else {
+        return Ok(None);
+    };
+    let Some((_, c_bs)) = try_fuse_dims(out_b_shapes, out_b_strides)? else {
+        return Ok(None);
+    };
+    Ok(Some((c_rs, c_cs, c_bs)))
+}
+
+fn scale_empty_contract_output<T>(out: &mut TypedTensorViewMut<'_, T>, beta: T) -> crate::Result<()>
+where
+    T: Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    let beta_is_zero = beta == T::zero();
+    let shape = out.shape().to_vec();
+    let element_count = checked_product(&shape).ok_or_else(|| {
+        Error::backend_failure(
+            OP,
+            "output element count overflow while scaling empty contraction output",
+        )
+    })?;
+    for linear in 0..element_count {
+        let indices = flat_to_multi_for_shape(&shape, linear);
+        let output = out.get_mut(&indices).ok_or_else(|| Error::InvalidConfig {
+            op: OP,
+            message: format!("output index {indices:?} is outside accumulation target"),
+        })?;
+        // INVARIANT: beta == 0 follows GEMM semantics and overwrites the
+        // destination with zero without reading its previous value.
+        *output = if beta_is_zero {
+            T::zero()
+        } else {
+            beta * *output
+        };
+    }
+    Ok(())
+}
+
+fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> SmallVec<[usize; 8]> {
+    let mut indices = SmallVec::<[usize; 8]>::with_capacity(shape.len());
+    for &dim in shape {
+        if dim == 0 {
+            indices.push(0);
+        } else {
+            indices.push(linear % dim);
+            linear /= dim;
+        }
+    }
+    indices
 }
 
 fn dim_to_isize(dim: usize, context: &'static str) -> Result<isize> {
@@ -1069,6 +1153,195 @@ pub(crate) fn dot_general_faer_read_into_cached(
 }
 
 #[cfg(feature = "cpu-faer")]
+// INVARIANT: this fast path mirrors dot-general read inputs plus cache,
+// context, accumulation, and output-write metadata for one backend dispatch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dot_general_faer_read_into_accum_cached(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    ctx: &crate::CpuContext,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    if !accumulation.lhs_conj
+        && !accumulation.rhs_conj
+        && accumulation.alpha == ContractionScalar::one(lhs.dtype())?
+        && accumulation.beta == ContractionScalar::zero(lhs.dtype())?
+    {
+        return dot_general_faer_read_into_cached(lhs, rhs, config, out);
+    }
+
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (accumulation.alpha, accumulation.beta)
+            {
+                match (&lhs, &rhs, &mut *out) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_faer_accum_typed(
+                            cache,
+                            cache_slot,
+                            ctx,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(false)
+}
+
+#[cfg(feature = "cpu-faer")]
 fn dot_general_faer_into_typed<L, R, T>(
     lhs: &L,
     rhs: &R,
@@ -1087,6 +1360,94 @@ where
         _,
         strided_einsum2::backend::FaerBackend,
     >(lhs, rhs, config, out)
+}
+
+#[cfg(feature = "cpu-faer")]
+// INVARIANT: typed accumulation needs the validated operand views, cache
+// metadata, provider context, scalar coefficients, and output view together.
+#[allow(clippy::too_many_arguments)]
+fn dot_general_faer_accum_typed<L, R, T>(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    ctx: &crate::CpuContext,
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<bool>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: FaerGemm + Copy + Clone + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    let Some(dims) = analyse_gemm_cached(
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        config,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some((c_rs, c_cs, c_bs)) = output_gemm_strides(
+        out.shape(),
+        out.strides(),
+        lhs.shape().len(),
+        rhs.shape().len(),
+        config,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    if dims.k == 0 || dims.m == 0 || dims.n == 0 || dims.batch_total == 0 {
+        scale_empty_contract_output(out, beta)?;
+        return Ok(true);
+    }
+
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    let c_base = out.offset();
+    let c_data = out.host_storage_mut()?.as_mut_ptr();
+
+    for batch in 0..dims.batch_total {
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)?;
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)?;
+        let c_off = checked_view_batch_offset(c_base, batch, c_bs)?;
+        unsafe {
+            T::strided_gemm_with_conj(
+                ctx,
+                alpha,
+                a_data.offset(a_off),
+                dims.m,
+                dims.k,
+                dims.a_rs,
+                dims.a_cs,
+                accumulation.lhs_conj,
+                b_data.offset(b_off),
+                dims.n,
+                dims.b_rs,
+                dims.b_cs,
+                accumulation.rhs_conj,
+                beta,
+                c_data.offset(c_off),
+                c_rs,
+                c_cs,
+            );
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -1410,16 +1771,283 @@ pub(crate) fn dot_general_blas_read_cached(
 }
 
 #[cfg(feature = "cpu-blas")]
-pub(crate) fn dot_general_blas_read_into_cached(
+// INVARIANT: this fast path mirrors dot-general read inputs plus cache,
+// accumulation, and output-write metadata for one BLAS dispatch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dot_general_blas_read_into_accum_cached(
     _buffers: &mut BufferPool,
-    _cache: &mut GemmAnalysisCache,
-    _cache_slot: Option<usize>,
-    _lhs: TensorRead<'_>,
-    _rhs: TensorRead<'_>,
-    _config: &DotGeneralConfig,
-    _out: &mut TensorWrite<'_>,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    out: &mut TensorWrite<'_>,
 ) -> crate::Result<bool> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (accumulation.alpha, accumulation.beta)
+            {
+                match (&lhs, &rhs, &mut *out) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_blas_accum_typed(
+                            cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                            accumulation,
+                            alpha,
+                            beta,
+                            c,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
     Ok(false)
+}
+
+#[cfg(feature = "cpu-blas")]
+// INVARIANT: typed BLAS accumulation needs the validated operand views, cache
+// metadata, scalar coefficients, and output view together.
+#[allow(clippy::too_many_arguments)]
+fn dot_general_blas_accum_typed<L, R, T>(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<bool>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: BlasGemm + Copy + Clone + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    let Some(dims) = analyse_gemm_cached(
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        config,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some((c_rs, c_cs, c_bs)) = output_gemm_strides(
+        out.shape(),
+        out.strides(),
+        lhs.shape().len(),
+        rhs.shape().len(),
+        config,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    if dims.k == 0 || dims.m == 0 || dims.n == 0 || dims.batch_total == 0 {
+        scale_empty_contract_output(out, beta)?;
+        return Ok(true);
+    }
+
+    let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
+    let a_cs = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
+    let b_rs = normalize_singleton_stride(dims.b_rs, dims.k, dims.n);
+    let b_cs = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
+    let c_rs = normalize_singleton_stride(c_rs, dims.m, 1);
+    let c_cs = normalize_singleton_stride(c_cs, dims.n, dims.m);
+
+    if !blas_lhs_layout_supported(dims.m, dims.k, a_rs, a_cs)
+        || !blas_rhs_layout_supported(dims.k, dims.n, b_rs, b_cs)
+        || !blas_output_layout_supported(dims.m, c_rs, c_cs)
+    {
+        return Ok(false);
+    }
+    if (accumulation.lhs_conj && a_rs == 1) || (accumulation.rhs_conj && b_rs == 1) {
+        return Ok(false);
+    }
+
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    let c_base = out.offset();
+    let c_data = out.host_storage_mut()?.as_mut_ptr();
+
+    for batch in 0..dims.batch_total {
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)?;
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)?;
+        let c_off = checked_view_batch_offset(c_base, batch, c_bs)?;
+        let executed = unsafe {
+            T::strided_gemm_with_conj(
+                alpha,
+                a_data.offset(a_off),
+                dims.m,
+                dims.k,
+                a_rs,
+                a_cs,
+                accumulation.lhs_conj,
+                b_data.offset(b_off),
+                dims.n,
+                b_rs,
+                b_cs,
+                accumulation.rhs_conj,
+                beta,
+                c_data.offset(c_off),
+                c_rs,
+                c_cs,
+            )?
+        };
+        if !executed {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 #[cfg(feature = "cpu-blas")]

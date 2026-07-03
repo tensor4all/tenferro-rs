@@ -3136,6 +3136,30 @@ impl<'a> TensorWrite<'a> {
         Self::View(view)
     }
 
+    /// Borrow this writable target as a read-only tensor input.
+    ///
+    /// This is useful for explicit read-modify-write kernels such as
+    /// accumulation updates. The returned view borrows through `&self`, so it
+    /// cannot outlive the current read-only borrow of the writable target.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let write = TensorWrite::from_tensor(&mut tensor);
+    /// let read = write.as_read();
+    /// assert_eq!(read.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn as_read(&self) -> TensorRead<'_> {
+        match self {
+            Self::Tensor(tensor) => TensorRead::from_tensor(tensor),
+            Self::View(view) => TensorRead::from_view(view.as_read_only()),
+        }
+    }
+
     pub fn dtype(&self) -> DType {
         match self {
             Self::Tensor(tensor) => tensor.dtype(),

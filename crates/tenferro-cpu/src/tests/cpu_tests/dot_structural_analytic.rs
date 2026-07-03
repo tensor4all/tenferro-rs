@@ -244,6 +244,258 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
     ));
 }
 
+#[test]
+fn test_dot_general_read_into_accum_updates_existing_output() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let initial = [10.0_f64, 20.0, 30.0, 40.0];
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], initial.to_vec()).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let accum = DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: false,
+        alpha: ContractionScalar::F64(2.0),
+        beta: ContractionScalar::F64(-0.5),
+    };
+    let mut backend = CpuBackend::new();
+
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accum,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+
+    let expected_dot = [22.0, 28.0, 49.0, 64.0];
+    for (actual, expected) in out
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .zip(expected_dot.iter().zip(initial))
+    {
+        let (dot, previous) = expected;
+        assert_f64_close(*actual, 2.0 * *dot - 0.5 * previous);
+    }
+
+    let mut strided_data = [-1.0_f64, 10.0, 20.0, -1.0, 30.0, 40.0, -1.0, -1.0];
+    {
+        let out_view = TensorViewMut::F64(
+            TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
+        );
+        backend
+            .with_backend_session(|exec| {
+                exec.dot_general_read_into_accum_cached(
+                    Some(7),
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    accum,
+                    TensorWrite::from_view(out_view),
+                )
+            })
+            .unwrap();
+    }
+    assert_eq!(strided_data[0], -1.0);
+    assert_eq!(strided_data[3], -1.0);
+    assert_eq!(strided_data[6], -1.0);
+    assert_eq!(strided_data[7], -1.0);
+    for (actual, expected) in [
+        strided_data[1],
+        strided_data[2],
+        strided_data[4],
+        strided_data[5],
+    ]
+    .into_iter()
+    .zip(expected_dot.iter().zip(initial))
+    {
+        let (dot, previous) = expected;
+        assert_f64_close(actual, 2.0 * *dot - 0.5 * previous);
+    }
+}
+
+#[test]
+fn test_dot_general_read_into_accum_applies_complex_conj_and_scalars() {
+    let lhs_data = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(-3.0, 0.5),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(0.25, 4.0),
+    ];
+    let rhs_data = vec![
+        Complex64::new(-2.0, 1.0),
+        Complex64::new(1.5, -0.25),
+        Complex64::new(0.5, 3.0),
+        Complex64::new(-1.0, -2.0),
+    ];
+    let initial = vec![
+        Complex64::new(1.0, -1.0),
+        Complex64::new(2.0, 0.5),
+        Complex64::new(-3.0, 2.0),
+        Complex64::new(0.25, -4.0),
+    ];
+    let lhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], lhs_data.clone()).unwrap());
+    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], rhs_data.clone()).unwrap());
+    let mut out =
+        Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], initial.clone()).unwrap());
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let alpha = Complex64::new(0.5, -1.0);
+    let beta = Complex64::new(-0.25, 0.75);
+    let accum = DotGeneralAccumulation {
+        lhs_conj: true,
+        rhs_conj: true,
+        alpha: ContractionScalar::C64(alpha),
+        beta: ContractionScalar::C64(beta),
+    };
+    let mut backend = CpuBackend::new();
+
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accum,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+
+    let lhs_conj: Vec<Complex64> = lhs_data.iter().map(|value| value.conj()).collect();
+    let rhs_conj: Vec<Complex64> = rhs_data.iter().map(|value| value.conj()).collect();
+    let dot = matmul_c64(&lhs_conj, &rhs_conj, 2, 2, 2);
+    for index in 0..4 {
+        assert_c64_close(
+            out.as_slice::<Complex64>().unwrap()[index],
+            alpha * dot[index] + beta * initial[index],
+        );
+    }
+}
+
+#[test]
+fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let accum = DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: false,
+        alpha: ContractionScalar::F32(1.0),
+        beta: ContractionScalar::F64(0.0),
+    };
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accum,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::DTypeMismatch {
+            op: "dot_general",
+            lhs: DType::F32,
+            rhs: DType::F64,
+        }
+    ));
+}
+
+#[test]
+fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let lhs_f32 = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
+    let rhs_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f32, 6.0]).unwrap();
+    let mut out_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f32, 8.0]).unwrap();
+    CpuBackend::new()
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs_f32),
+            TensorRead::from_tensor(&rhs_f32),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F32(2.0),
+                beta: ContractionScalar::F32(-0.5),
+            },
+            TensorWrite::from_tensor(&mut out_f32),
+        )
+        .unwrap();
+    let out_f32 = out_f32.as_slice::<f32>().unwrap();
+    assert!((out_f32[0] - 42.5).abs() < 1.0e-5);
+    assert!((out_f32[1] - 64.0).abs() < 1.0e-5);
+
+    let lhs_c32 = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![1, 2],
+            vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, -1.0)],
+        )
+        .unwrap(),
+    );
+    let rhs_c32 = Tensor::C32(
+        TypedTensor::from_vec_col_major(
+            vec![2, 1],
+            vec![Complex32::new(0.5, -1.0), Complex32::new(3.0, 0.25)],
+        )
+        .unwrap(),
+    );
+    let mut out_c32 = Tensor::C32(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex32::new(-2.0, 0.5)]).unwrap(),
+    );
+    let alpha = Complex32::new(1.5, -0.25);
+    let beta = Complex32::new(0.25, 0.5);
+    CpuBackend::new()
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs_c32),
+            TensorRead::from_tensor(&rhs_c32),
+            &config,
+            DotGeneralAccumulation {
+                lhs_conj: true,
+                rhs_conj: false,
+                alpha: ContractionScalar::C32(alpha),
+                beta: ContractionScalar::C32(beta),
+            },
+            TensorWrite::from_tensor(&mut out_c32),
+        )
+        .unwrap();
+    let dot = lhs_c32.as_slice::<Complex32>().unwrap()[0].conj()
+        * rhs_c32.as_slice::<Complex32>().unwrap()[0]
+        + lhs_c32.as_slice::<Complex32>().unwrap()[1].conj()
+            * rhs_c32.as_slice::<Complex32>().unwrap()[1];
+    let expected = alpha * dot + beta * Complex32::new(-2.0, 0.5);
+    let actual = out_c32.as_slice::<Complex32>().unwrap()[0];
+    assert!((actual.re - expected.re).abs() < 1.0e-5);
+    assert!((actual.im - expected.im).abs() < 1.0e-5);
+}
+
 #[cfg(feature = "cpu-blas")]
 #[test]
 fn test_dot_general_read_blas_negative_stride_view_falls_back() {

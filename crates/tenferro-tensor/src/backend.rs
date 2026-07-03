@@ -3,7 +3,8 @@ use crate::config::{
 };
 use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use crate::validate::validate_convert_dtype;
-use crate::{RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
+use crate::{DType, RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
+use num_complex::{Complex32, Complex64};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
     crate::Error::backend_failure(
@@ -177,6 +178,266 @@ pub fn validate_dot_general_read_into(
         });
     }
     Ok(expected)
+}
+
+/// Scalar coefficient accepted by contraction accumulation backends.
+///
+/// `ContractionScalar` is intentionally narrower than [`crate::TensorScalar`]:
+/// dot-general accumulation is only defined for floating and complex tensor
+/// dtypes.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{ContractionScalar, DType};
+///
+/// let alpha = ContractionScalar::F64(2.0);
+/// assert_eq!(alpha.dtype(), DType::F64);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ContractionScalar {
+    F32(f32),
+    F64(f64),
+    C32(Complex32),
+    C64(Complex64),
+}
+
+impl ContractionScalar {
+    /// Return this scalar's tensor dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DType};
+    ///
+    /// assert_eq!(ContractionScalar::F32(1.0).dtype(), DType::F32);
+    /// ```
+    pub fn dtype(self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::C32(_) => DType::C32,
+            Self::C64(_) => DType::C64,
+        }
+    }
+
+    /// Return the multiplicative identity for a supported contraction dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DType};
+    ///
+    /// assert_eq!(ContractionScalar::one(DType::F64).unwrap(), ContractionScalar::F64(1.0));
+    /// assert!(ContractionScalar::one(DType::I32).is_err());
+    /// ```
+    pub fn one(dtype: DType) -> crate::Result<Self> {
+        match dtype {
+            DType::F32 => Ok(Self::F32(1.0)),
+            DType::F64 => Ok(Self::F64(1.0)),
+            DType::C32 => Ok(Self::C32(Complex32::new(1.0, 0.0))),
+            DType::C64 => Ok(Self::C64(Complex64::new(1.0, 0.0))),
+            DType::I32 | DType::I64 | DType::Bool => Err(crate::Error::DTypeMismatch {
+                op: "dot_general",
+                lhs: dtype,
+                rhs: DType::F32,
+            }),
+        }
+    }
+
+    /// Return the additive identity for a supported contraction dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DType};
+    ///
+    /// assert_eq!(ContractionScalar::zero(DType::F64).unwrap(), ContractionScalar::F64(0.0));
+    /// ```
+    pub fn zero(dtype: DType) -> crate::Result<Self> {
+        match dtype {
+            DType::F32 => Ok(Self::F32(0.0)),
+            DType::F64 => Ok(Self::F64(0.0)),
+            DType::C32 => Ok(Self::C32(Complex32::new(0.0, 0.0))),
+            DType::C64 => Ok(Self::C64(Complex64::new(0.0, 0.0))),
+            DType::I32 | DType::I64 | DType::Bool => Err(crate::Error::DTypeMismatch {
+                op: "dot_general",
+                lhs: dtype,
+                rhs: DType::F32,
+            }),
+        }
+    }
+}
+
+/// Output-update semantics for dot-general accumulation.
+///
+/// This keeps contraction axes in [`DotGeneralConfig`] and output update
+/// semantics here, so cached and non-cached backend traits can share the same
+/// accumulation contract.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DType};
+///
+/// let accum = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
+/// assert_eq!(accum.alpha, ContractionScalar::F64(1.0));
+/// assert_eq!(accum.beta, ContractionScalar::F64(0.0));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DotGeneralAccumulation {
+    pub lhs_conj: bool,
+    pub rhs_conj: bool,
+    pub alpha: ContractionScalar,
+    pub beta: ContractionScalar,
+}
+
+impl DotGeneralAccumulation {
+    /// Return overwrite semantics, `out = lhs dot rhs`, for `dtype`.
+    pub fn overwrite(dtype: DType) -> crate::Result<Self> {
+        Ok(Self {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::one(dtype)?,
+            beta: ContractionScalar::zero(dtype)?,
+        })
+    }
+
+    fn validate_for_dtype(self, dtype: DType) -> crate::Result<()> {
+        for scalar in [self.alpha, self.beta] {
+            if scalar.dtype() != dtype {
+                return Err(crate::Error::DTypeMismatch {
+                    op: "dot_general",
+                    lhs: scalar.dtype(),
+                    rhs: dtype,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[doc(hidden)]
+pub fn validate_dot_general_accumulation(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    out: &TensorWrite<'_>,
+    op: &'static str,
+) -> crate::Result<Vec<usize>> {
+    let shape = validate_dot_general_read_into(lhs, rhs, config, out, op)?;
+    accumulation.validate_for_dtype(lhs.dtype())?;
+    Ok(shape)
+}
+
+#[doc(hidden)]
+pub fn dot_general_accum_via_temp<B: TensorDot + ?Sized>(
+    backend: &mut B,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    mut out: TensorWrite<'_>,
+) -> crate::Result<()> {
+    validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
+    let dot = backend.dot_general_with_conj_read(
+        lhs,
+        rhs,
+        config,
+        accumulation.lhs_conj,
+        accumulation.rhs_conj,
+    )?;
+    accumulate_dot_result_into(&dot, accumulation, &mut out)
+}
+
+fn accumulate_dot_result_into(
+    dot: &Tensor,
+    accumulation: DotGeneralAccumulation,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<()> {
+    macro_rules! dispatch {
+        ($variant:ident, $ty:ty) => {
+            if let (
+                Tensor::$variant(dot),
+                ContractionScalar::$variant(alpha),
+                ContractionScalar::$variant(beta),
+            ) = (dot, accumulation.alpha, accumulation.beta)
+            {
+                match out {
+                    TensorWrite::Tensor(Tensor::$variant(out)) => {
+                        let mut out = out.as_view_mut();
+                        accumulate_typed(dot.as_slice()?, alpha, beta, &mut out)?;
+                        return Ok(());
+                    }
+                    TensorWrite::View(crate::TensorViewMut::$variant(out)) => {
+                        accumulate_typed(dot.as_slice()?, alpha, beta, out)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, f32);
+    dispatch!(F64, f64);
+    dispatch!(C32, Complex32);
+    dispatch!(C64, Complex64);
+
+    Err(crate::Error::DTypeMismatch {
+        op: "dot_general",
+        lhs: accumulation.alpha.dtype(),
+        rhs: dot.dtype(),
+    })
+}
+
+fn accumulate_typed<T>(
+    dot: &[T],
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<()>
+where
+    T: Copy
+        + PartialEq
+        + std::ops::Add<Output = T>
+        + std::ops::Mul<Output = T>
+        + num_traits::Zero
+        + 'static,
+{
+    let beta_is_zero = beta == T::zero();
+    for (linear, dot_value) in dot.iter().copied().enumerate() {
+        let indices = flat_to_multi_for_shape(out.shape(), linear);
+        let output = out
+            .get_mut(&indices)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "dot_general",
+                message: format!("output index {indices:?} is outside accumulation target"),
+            })?;
+        // INVARIANT: beta == 0 follows BLAS GEMM semantics and does not read
+        // the existing output element; beta != 0 requires an initialized
+        // TensorWrite target and performs a read-modify-write update.
+        *output = if beta_is_zero {
+            alpha * dot_value
+        } else {
+            alpha * dot_value + beta * *output
+        };
+    }
+    Ok(())
+}
+
+fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {
+    let mut indices = Vec::with_capacity(shape.len());
+    for &dim in shape {
+        if dim == 0 {
+            indices.push(0);
+        } else {
+            indices.push(linear % dim);
+            linear /= dim;
+        }
+    }
+    indices
 }
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
@@ -775,11 +1036,10 @@ pub trait TensorDot: TensorElementwise {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_dot_general_read_into(&lhs, &rhs, config, &out, "dot_general")?;
-        let result = self.dot_general_read(lhs, rhs, config)?;
-        out.copy_from_tensor(&result)
+        let accumulation = DotGeneralAccumulation::overwrite(lhs.dtype())?;
+        self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     }
 
     #[doc(hidden)]
@@ -841,6 +1101,18 @@ pub trait TensorDot: TensorElementwise {
             &rhs_tmp
         };
         self.dot_general_with_conj(lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_read_into_accum(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)
     }
 }
 
@@ -929,6 +1201,19 @@ pub trait SessionCachedDot: TensorDot {
             &rhs_tmp
         };
         self.dot_general_with_conj_cached(cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_read_into_accum_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     }
 }
 
@@ -1195,6 +1480,23 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         self.dot_general_with_conj_cached(
             cache, cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj,
         )
+    }
+
+    // INVARIANT: cached backend accumulation must carry cache owner metadata
+    // and the full dot-general output-update contract in one dispatch call.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    fn dot_general_read_into_accum_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     }
 }
 
