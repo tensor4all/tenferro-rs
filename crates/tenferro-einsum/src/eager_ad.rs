@@ -27,7 +27,8 @@ use crate::cache::{
 };
 use crate::extension::{register_runtime, EinsumExtensionOp};
 use crate::optimize::{
-    default_auto_options, hash_einsum_plan_spec, resolve_plan_spec, EinsumPlanSpec,
+    default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
+    EinsumPlanSpec,
 };
 use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes};
 
@@ -327,6 +328,51 @@ struct ExpandedEagerProgram {
     input_slots: Vec<(usize, usize)>,
 }
 
+#[derive(Clone)]
+struct ExpandedEagerProgramCacheKeyData {
+    subscripts: EinsumSubscripts,
+    shapes: Vec<Vec<usize>>,
+    plan_spec: EinsumPlanSpec,
+}
+
+impl ExpandedEagerProgramCacheKeyData {
+    fn new(
+        subscripts: &EinsumSubscripts,
+        shapes: &[Vec<usize>],
+        plan_spec: &EinsumPlanSpec,
+    ) -> Self {
+        Self {
+            subscripts: subscripts.clone(),
+            shapes: shapes.to_vec(),
+            plan_spec: plan_spec.clone(),
+        }
+    }
+
+    fn matches_expanded_eager_program(
+        &self,
+        subscripts: &EinsumSubscripts,
+        shapes: &[Vec<usize>],
+        plan_spec: &EinsumPlanSpec,
+    ) -> bool {
+        self.subscripts == *subscripts
+            && self.shapes.as_slice() == shapes
+            && plan_specs_equal(&self.plan_spec, plan_spec)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        saturating_sum([
+            crate::cache::einsum_subscripts_retained_bytes(&self.subscripts),
+            saturating_sum(self.shapes.iter().map(vec_retained_bytes)),
+            plan_spec_retained_bytes(&self.plan_spec),
+        ])
+    }
+}
+
+struct CachedExpandedEagerProgram {
+    key_data: ExpandedEagerProgramCacheKeyData,
+    program: Arc<ExpandedEagerProgram>,
+}
+
 fn cached_expanded_eager_program(
     runtime: &Arc<EagerRuntime>,
     subscripts: &EinsumSubscripts,
@@ -336,34 +382,69 @@ fn cached_expanded_eager_program(
     shapes: &[Vec<usize>],
 ) -> Result<Arc<ExpandedEagerProgram>> {
     runtime.with_extension_caches_mut(|caches| {
-        let key = expanded_eager_program_cache_key(subscripts, plan_spec, shapes);
-        if let Some(cached) = caches.get::<Arc<ExpandedEagerProgram>>(&key) {
-            return Ok(Arc::clone(cached));
+        let plan_hash = plan_spec_hash(plan_spec);
+        let key = expanded_eager_program_cache_key(subscripts, shapes, plan_hash);
+        if let Some(cached) = caches.get::<CachedExpandedEagerProgram>(&key) {
+            let key_data = &cached.key_data;
+            if key_data.matches_expanded_eager_program(subscripts, shapes, plan_spec) {
+                return Ok(Arc::clone(&cached.program));
+            }
         }
 
         let tree = resolve_plan_spec(plan_spec, subs, shape_refs)
             .map_err(|err| Error::ContractionError(err.to_string()))?;
         let program = Arc::new(build_expanded_eager_program(&tree, shapes)?);
-        let retained_bytes = expanded_eager_program_retained_bytes(&program);
-        caches.put(key, Arc::clone(&program), retained_bytes);
+        let key_data = ExpandedEagerProgramCacheKeyData::new(subscripts, shapes, plan_spec);
+        let retained_bytes = saturating_sum([
+            key_data.retained_bytes(),
+            expanded_eager_program_retained_bytes(&program),
+        ]);
+        caches.put(
+            key,
+            CachedExpandedEagerProgram {
+                key_data,
+                program: Arc::clone(&program),
+            },
+            retained_bytes,
+        );
         Ok(program)
     })?
 }
 
 fn expanded_eager_program_cache_key(
     subscripts: &EinsumSubscripts,
-    plan_spec: &EinsumPlanSpec,
     shapes: &[Vec<usize>],
+    plan_hash: u64,
 ) -> ExtensionCacheKey {
     let mut hasher = DefaultHasher::new();
     subscripts.hash(&mut hasher);
     shapes.hash(&mut hasher);
-    hash_einsum_plan_spec(plan_spec, &mut hasher);
+    plan_hash.hash(&mut hasher);
     ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
         hasher.finish(),
     )
+}
+
+fn plan_spec_hash(plan_spec: &EinsumPlanSpec) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_einsum_plan_spec(plan_spec, &mut hasher);
+    hasher.finish()
+}
+
+fn plan_spec_retained_bytes(plan_spec: &EinsumPlanSpec) -> usize {
+    match plan_spec {
+        EinsumPlanSpec::Auto(options) => saturating_sum([
+            std::mem::size_of::<EinsumPlanSpec>(),
+            vec_retained_bytes(&options.betas),
+        ]),
+        EinsumPlanSpec::LeftToRight => std::mem::size_of::<EinsumPlanSpec>(),
+        EinsumPlanSpec::Path(path) | EinsumPlanSpec::FixedPairs(path) => saturating_sum([
+            std::mem::size_of::<EinsumPlanSpec>(),
+            vec_retained_bytes(path),
+        ]),
+    }
 }
 
 fn build_expanded_eager_program(

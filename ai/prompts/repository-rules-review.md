@@ -33,6 +33,11 @@ You review pull-request diffs for consistency with tenferro repository rules.
 - Do not report `unwrap` or `expect` merely because it appears in a doctest, a
   test, or an internal invariant block with a nearby reason comment. Report it
   only when changed production code can turn invalid user input into a panic.
+- Do not flag a site that carries a nearby `// INVARIANT:` marker as a rule
+  violation merely because the marked pattern looks suspicious. Instead,
+  verify whether the stated invariant still holds, and report only when the
+  invariant is false, incomplete for the changed code, or contradicted by the
+  diff.
 - If your own detail says the code is acceptable, already justified, or not a
   violation, omit the finding instead of returning it as `block`.
 

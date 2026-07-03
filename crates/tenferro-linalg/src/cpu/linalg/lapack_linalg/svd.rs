@@ -4,9 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
-    dim_i32, has_zero_dim, matrix_dims, matrix_with_batch_shape, split_core_and_batch_result,
-    tensor_from_vec_with_template, vector_with_batch_shape, work_len,
+    batched_multi, batched_multi_convert, check_lapack_info, dim_i32, has_zero_dim, matrix_dims,
+    matrix_with_batch_shape, split_core_and_batch_result, tensor_from_vec_with_template,
+    vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
@@ -596,28 +596,15 @@ pub(crate) fn svd_values<T: LapackSvd>(
         );
     }
 
-    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
-    if batch_shape.is_empty() {
-        return svd_values_2d(buffers, input);
+    let mut outputs =
+        batched_multi_convert("svd_values", buffers, input, |buffers, batch_input| {
+            Ok(vec![svd_values_2d(buffers, batch_input)?])
+        })?;
+    match outputs.pop() {
+        Some(values) if outputs.is_empty() => Ok(values),
+        _ => Err(tenferro_tensor::Error::InvalidConfig {
+            op: "svd_values",
+            message: "expected exactly one output from batched singular-value helper".into(),
+        }),
     }
-
-    let slice_size = checked_product("svd_values", "core shape", core_shape)?;
-    let batch_total = batch_element_count("svd_values", batch_shape)?;
-    let k = core_shape[0].min(core_shape[1]);
-    let mut data = Vec::with_capacity(checked_product(
-        "svd_values",
-        "values output",
-        &[k, batch_total],
-    )?);
-    for batch in 0..batch_total {
-        let range = checked_slice_range("svd_values", batch, slice_size)?;
-        let batch_input = tensor_from_vec_with_template(
-            core_shape.to_vec(),
-            input.host_data()?[range].to_vec(),
-            input,
-        )?;
-        let values = svd_values_2d(buffers, &batch_input)?;
-        data.extend_from_slice(values.host_data()?);
-    }
-    tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), data, input)
 }

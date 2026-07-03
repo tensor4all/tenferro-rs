@@ -265,6 +265,10 @@ fn free_axes_of(rank: usize, contracting: &[usize], batch: &[usize]) -> Vec<usiz
 }
 
 fn product_of_input_dims(input_idx: usize, start: usize, end: usize) -> DimExpr {
+    // INVARIANT: callers reach this helper only from `decompose_dot`, whose
+    // gate requires non-empty lhs contracting dims, after
+    // `DotGeneralConfig::validate_dims_with_ranks` proves both sides have the
+    // same contracting count. Outer products skip decomposition entirely.
     assert!(end > start, "product_of_input_dims: empty range");
     let mut result = DimExpr::InputDim {
         input_idx,

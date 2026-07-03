@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
@@ -8,12 +7,12 @@ use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
-use crate::metadata::{metadata_scopes_with_new, register_scoped_value_metadata, tensor_meta};
+use crate::metadata::{register_scoped_value_metadata, tensor_meta, MetadataScopeChain};
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{
-    apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, next_traced_id,
-    try_concrete_shape,
+    apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, merge_traced_inputs_map,
+    next_traced_id, try_concrete_shape,
 };
 use crate::TracedTensor;
 
@@ -325,25 +324,14 @@ fn apply_nary_concatenate(
     )
     .expect("fresh concatenate output metadata registration failed");
 
-    let mut inputs_map = HashMap::new();
+    let inputs_map = merge_traced_inputs_map(tensors.iter());
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
     for tensor in &tensors {
-        inputs_map.extend(
-            tensor
-                .inputs_map
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
         extra_roots.extend(tensor.extra_roots.iter().cloned());
         checkpoint_chain =
             CheckpointNode::merge_chains(checkpoint_chain, tensor.checkpoint_chain.clone());
     }
-    let inherited_scopes = tensors
-        .iter()
-        .map(|tensor| tensor.metadata_scopes.as_slice())
-        .collect::<Vec<_>>();
-
     TracedTensor {
         id: next_traced_id(),
         rank: out_shape.len(),
@@ -352,10 +340,13 @@ fn apply_nary_concatenate(
         val: outputs[0],
         data: None,
         shape_hint: Some(out_shape),
-        inputs_map: Arc::new(inputs_map),
+        inputs_map,
         extra_roots,
         checkpoint_chain,
-        metadata_scopes: metadata_scopes_with_new(metadata_scope, inherited_scopes),
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            tensors.iter().map(|tensor| &tensor.metadata_scopes),
+        ),
     }
 }
 

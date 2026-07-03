@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn lapack_batched_value_factor_paths_reuse_pooled_batch_input() {
+    let lu_source = include_str!("../linalg/lapack_linalg/lu.rs");
+    let lu_factor = source_from(lu_source, "pub(crate) fn lu_factor");
+    assert!(lu_factor.contains("tensor_from_pooled_slice_with_template("));
+    assert!(lu_factor.contains("refill_tensor_from_slice("));
+    assert!(!lu_factor.contains("input.host_data()?[range].to_vec()"));
+
+    let eigh_source = include_str!("../linalg/lapack_linalg/eigh.rs");
+    let eigh_values = source_from(eigh_source, "pub(crate) fn eigh_values");
+    assert!(eigh_values.contains("batched_multi_convert(\"eigh_values\""));
+    assert!(!eigh_values.contains("input.host_data()?[range].to_vec()"));
+
+    let svd_source = include_str!("../linalg/lapack_linalg/svd.rs");
+    let svd_values = source_from(svd_source, "pub(crate) fn svd_values");
+    assert!(svd_values.contains("batched_multi_convert(\"svd_values\""));
+    assert!(!svd_values.contains("input.host_data()?[range].to_vec()"));
+}
+
+#[test]
 fn svd_canonicalizes_transposed_host_view_before_lapack() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
@@ -22,6 +41,13 @@ fn svd_canonicalizes_transposed_host_view_before_lapack() {
     for (actual, expected) in recon.iter().zip(expected.iter()) {
         assert_f64_close_tol(*actual, *expected, 1.0e-9);
     }
+}
+
+fn source_from<'a>(source: &'a str, start: &str) -> &'a str {
+    let start_idx = source
+        .find(start)
+        .unwrap_or_else(|| panic!("missing source start marker: {start}"));
+    &source[start_idx..]
 }
 
 #[test]

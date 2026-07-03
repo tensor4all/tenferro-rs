@@ -19,9 +19,6 @@ pub fn optimize_exec_program(
         super::algebraic_layout_simplifier(program, input_shapes)?;
     }
     super::transpose_folding(program);
-    if config.layout_chain_transpose_folding {
-        super::layout_chain_transpose_folding(program);
-    }
     super::dot_conj_folding(program)?;
     if config.dot_decomposer {
         super::dot_decomposer(program, input_shapes)?;

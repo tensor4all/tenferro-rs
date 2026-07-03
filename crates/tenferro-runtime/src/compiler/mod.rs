@@ -788,11 +788,7 @@ pub(crate) fn algebraic_layout_simplifier(
     program: &mut ExecProgram,
     input_shapes: &[Vec<DimExpr>],
 ) -> Result<()> {
-    loop {
-        if !algebraic_layout_simplifier_one_pass(program, input_shapes)? {
-            break;
-        }
-    }
+    algebraic_layout_simplifier_one_pass(program, input_shapes)?;
     Ok(())
 }
 
@@ -976,18 +972,6 @@ fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
 
 /// Fold Transpose instructions into DotGeneral dimension numbers.
 pub(crate) fn transpose_folding(program: &mut ExecProgram) {
-    loop {
-        let producer_by_slot = producer_indices_by_slot(program);
-        let changed = transpose_fold_one_pass(program, &producer_by_slot);
-        if !changed {
-            break;
-        }
-    }
-}
-
-/// Fold layout chains into DotGeneral where the rewrite is known to preserve
-/// DotGeneral's free/contracting/batch axis order constraints.
-pub(crate) fn layout_chain_transpose_folding(program: &mut ExecProgram) {
     loop {
         let producer_by_slot = producer_indices_by_slot(program);
         let changed = transpose_fold_one_pass(program, &producer_by_slot);

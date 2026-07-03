@@ -1,7 +1,7 @@
 use computegraph::graph::Graph;
 use computegraph::types::{LocalValueId, ValueKey, ValueRef};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
@@ -14,6 +14,90 @@ use tenferro_tensor::Tensor;
 
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
 use crate::{Error, Result};
+
+#[derive(Clone)]
+pub(crate) struct MetadataScopeChain {
+    node: Arc<MetadataScopeChainNode>,
+}
+
+struct MetadataScopeChainNode {
+    scope: Option<Arc<GlobalMetadataScope>>,
+    parents: Vec<MetadataScopeChain>,
+    materialized: OnceLock<Vec<Arc<GlobalMetadataScope>>>,
+}
+
+impl MetadataScopeChain {
+    pub(crate) fn empty() -> Self {
+        Self {
+            node: Arc::new(MetadataScopeChainNode {
+                scope: None,
+                parents: Vec::new(),
+                materialized: OnceLock::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn from_scope(scope: GlobalMetadataScope) -> Self {
+        Self::with_scope(Arc::new(scope), [])
+    }
+
+    pub(crate) fn with_new<'a>(
+        scope: GlobalMetadataScope,
+        inherited: impl IntoIterator<Item = &'a MetadataScopeChain>,
+    ) -> Self {
+        Self::with_scope(Arc::new(scope), inherited)
+    }
+
+    pub(crate) fn with_scope<'a>(
+        scope: Arc<GlobalMetadataScope>,
+        inherited: impl IntoIterator<Item = &'a MetadataScopeChain>,
+    ) -> Self {
+        Self {
+            node: Arc::new(MetadataScopeChainNode {
+                scope: Some(scope),
+                parents: inherited.into_iter().cloned().collect(),
+                materialized: OnceLock::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn from_materialized(scopes: Vec<Arc<GlobalMetadataScope>>) -> Self {
+        let mut chain = Self::empty();
+        for scope in scopes.into_iter().rev() {
+            chain = Self::with_scope(scope, [&chain]);
+        }
+        chain
+    }
+
+    pub(crate) fn materialize(&self) -> Vec<Arc<GlobalMetadataScope>> {
+        self.as_slice().to_vec()
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Arc<GlobalMetadataScope>] {
+        self.node
+            .materialized
+            .get_or_init(|| {
+                let mut scopes = Vec::new();
+                let mut seen = HashSet::new();
+                self.extend_materialized(&mut scopes, &mut seen);
+                scopes
+            })
+            .as_slice()
+    }
+
+    fn extend_materialized(
+        &self,
+        scopes: &mut Vec<Arc<GlobalMetadataScope>>,
+        seen: &mut HashSet<*const GlobalMetadataScope>,
+    ) {
+        if let Some(scope) = &self.node.scope {
+            push_metadata_scope_seen(scopes, seen, Arc::clone(scope));
+        }
+        for parent in &self.node.parents {
+            parent.extend_materialized(scopes, seen);
+        }
+    }
+}
 
 pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
     TensorMeta::exact(dtype, shape)
@@ -177,6 +261,9 @@ fn graph_metadata_registrations(
         let output_metas = infer_output_metas(&op_node.operation, &input_metas)?;
         for (&output_id, meta) in op_node.outputs.iter().zip(output_metas) {
             let key = graph.values()[output_id].key.clone();
+            // INVARIANT: both owners are required: `known` feeds later local
+            // inference in this walk, while `registrations` is returned for
+            // scoped metadata publication after the walk.
             known.insert(key.clone(), meta.clone());
             registrations.push((key, meta));
         }

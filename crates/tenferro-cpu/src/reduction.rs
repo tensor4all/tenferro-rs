@@ -66,6 +66,8 @@ fn reduction_empty_axes_noop(
     axes: &[usize],
 ) -> crate::Result<Option<Tensor>> {
     validate_axes(op, axes, input.shape().len())?;
+    // INVARIANT: empty-axis reduction is semantic identity, but this public
+    // owned-output API must return an independently owned tensor.
     Ok(axes.is_empty().then(|| input.clone()))
 }
 
@@ -82,6 +84,8 @@ fn reduction_read_empty_axes_noop(
     match input.clone() {
         TensorRead::Tensor(input) => {
             ensure_host_tensor(op, input)?;
+            // INVARIANT: empty-axis reduction is semantic identity, but the
+            // `_read` API returns an owned tensor even for borrowed input.
             Ok(Some(input.clone()))
         }
         TensorRead::View(input) => Ok(Some(view_to_contiguous_tensor(input)?)),
@@ -399,6 +403,8 @@ where
 {
     validate_reduced_axes_nonempty(label, input.shape(), axes)?;
     if axes.is_empty() {
+        // INVARIANT: empty-axis typed reductions preserve values exactly while
+        // satisfying the owned-output contract.
         return Ok(input.clone());
     }
 
@@ -413,6 +419,8 @@ where
     let mut sorted_axes = axes.to_vec();
     sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
     let Some((&first_axis, remaining_axes)) = sorted_axes.split_first() else {
+        // INVARIANT: this is the same empty-axis owned identity case handled
+        // above; it remains here to keep split-first control flow total.
         return Ok(input.clone());
     };
 
