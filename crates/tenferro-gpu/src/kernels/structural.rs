@@ -32,6 +32,24 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
     }
 }
 
+/// In-place scale by a device-resident single-element factor:
+/// `out[i] *= factor[0]`. Used by the dot-general accumulation path for the
+/// degenerate `out = beta * out` case (zero-sized contraction).
+#[cube(launch_unchecked)]
+pub fn scale_in_place_float_kernel<F: Float>(out: &mut Array<F>, factor: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
+    }
+}
+
+/// Complex twin of [`scale_in_place_float_kernel`].
+#[cube(launch_unchecked)]
+pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut Array<C>, factor: &Array<C>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = out[ABSOLUTE_POS] * factor[0];
+    }
+}
+
 #[cube(launch_unchecked)]
 pub fn view_to_contiguous_kernel<E: CubePrimitive>(
     out: &mut Tensor<E>,

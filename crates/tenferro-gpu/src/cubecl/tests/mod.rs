@@ -7,6 +7,7 @@ use tenferro_cpu::CpuBackend;
 
 mod elementwise_tests;
 mod fusion_tests;
+mod gemm_accum_tests;
 mod gemm_tests;
 mod indexing_tests;
 mod metadata_tests;
