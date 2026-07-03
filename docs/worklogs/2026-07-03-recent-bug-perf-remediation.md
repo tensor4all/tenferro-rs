@@ -48,6 +48,7 @@ audit false-positive hotspots.
 
 - `cargo fmt --all --check`
 - `git diff --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo check -p tenferro-runtime -p tenferro-ad`
 - `cargo test -p tenferro-runtime --lib`
 - `cargo test -p tenferro-ad --lib`
@@ -56,6 +57,7 @@ audit false-positive hotspots.
 - `cargo test -p tenferro-linalg --lib`
 - `cargo test -p tenferro-fft`
 - `cargo check -p tenferro-einsum -p tenferro-linalg -p tenferro-fft`
+- `python3 scripts/repository-rules-review.py --base origin/main --head HEAD --output-json /tmp/repository-rules-review.json`
 
 ## Skipped Or Blocked Verification
 
@@ -64,8 +66,8 @@ audit false-positive hotspots.
   test binaries with `rust-lld` Bus error. A later attempt also filled the
   filesystem through `target/` growth. The worktree `target/` was cleaned and
   verification was narrowed to the touched crates.
-- Coverage, full docs, and repository-rules LLM review were not run locally for
-  this batch because of the same local disk/linker constraints.
+- Coverage and full docs were not run locally for this batch because of the
+  same local disk/linker constraints.
 
 ## Residual Risks
 

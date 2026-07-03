@@ -973,7 +973,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let key = runtime_exec_program_cache_key(op, inputs, &shapes, plan_hash, optimizer_fingerprint);
     let cache_matches = caches
         .get::<CachedRuntimeExecProgram<B::RuntimeCache>>(&key)
-        .map_or(false, |cached| {
+        .is_some_and(|cached| {
             let key_data = &cached.key_data;
             key_data.matches_runtime_exec_program(op, inputs, &shapes, optimizer_fingerprint)
         });

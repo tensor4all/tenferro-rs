@@ -1499,10 +1499,11 @@ trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
     fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>>;
 }
 
-static F32_FFT_PLAN_CACHE: OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<f32>>>>> =
-    OnceLock::new();
-static F64_FFT_PLAN_CACHE: OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<f64>>>>> =
-    OnceLock::new();
+type FftPlanStore<T> = HashMap<FftPlanKey, Arc<dyn Fft<T>>>;
+type FftPlanCache<T> = OnceLock<Mutex<FftPlanStore<T>>>;
+
+static F32_FFT_PLAN_CACHE: FftPlanCache<f32> = OnceLock::new();
+static F64_FFT_PLAN_CACHE: FftPlanCache<f64> = OnceLock::new();
 
 impl CachedFftPlanScalar for f32 {
     fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>> {
@@ -1521,7 +1522,7 @@ fn cached_fft_plan<T: CachedFftPlanScalar>(len: usize, forward: bool) -> Arc<dyn
 }
 
 fn cached_fft_plan_from_cache<T: FftNum + 'static>(
-    cache: &'static OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<T>>>>>,
+    cache: &'static FftPlanCache<T>,
     len: usize,
     forward: bool,
 ) -> Arc<dyn Fft<T>> {
