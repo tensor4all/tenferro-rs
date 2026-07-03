@@ -204,6 +204,8 @@ define_host_dispatch! {
 
 pub(super) fn backend_dispatch_entry(op: &ExecOp) -> Option<&'static BackendDispatchEntry> {
     let key = op.primitive_kind()?;
+    // INVARIANT: this macro-generated table is fixed at compile time and has
+    // one entry per core primitive family, so the scan is constant-bounded.
     BACKEND_DISPATCH_TABLE.iter().find(|entry| entry.key == key)
 }
 
@@ -211,6 +213,8 @@ pub(super) fn ffi_dispatch_entry<B: TensorBackend + 'static>(
     op: &ExecOp,
 ) -> Option<FfiDispatchEntry<B>> {
     let key = FfiDispatchKey::for_op(op)?;
+    // INVARIANT: the FFI dispatch table is macro-generated and fixed at
+    // compile time, so this lookup is constant-bounded.
     ffi_dispatch_table::<B>()
         .into_iter()
         .find(|entry| entry.key == key)
@@ -233,6 +237,8 @@ pub(super) fn is_exec_session_ffi_op(op: &ExecOp) -> bool {
 
 pub(super) fn host_dispatch_entry<B: TensorBackend>(op: &ExecOp) -> Option<HostDispatchEntry<B>> {
     let key = HostDispatchKey::for_op(op)?;
+    // INVARIANT: the host dispatch table is macro-generated and fixed at
+    // compile time, so this lookup is constant-bounded.
     host_dispatch_table::<B>()
         .into_iter()
         .find(|entry| entry.key == key)

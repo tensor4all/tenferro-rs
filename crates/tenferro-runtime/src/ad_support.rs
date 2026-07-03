@@ -12,6 +12,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 pub use crate::checkpoint::CheckpointNode;
+use crate::metadata::MetadataScopeChain;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
     push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
@@ -65,7 +66,7 @@ pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
         inputs_map: parts.inputs_map,
         extra_roots: parts.extra_roots,
         checkpoint_chain: parts.checkpoint_chain,
-        metadata_scopes: parts.metadata_scopes,
+        metadata_scopes: MetadataScopeChain::from_materialized(parts.metadata_scopes),
     }
 }
 
@@ -86,7 +87,7 @@ pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
 }
 
 pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
-    &tensor.metadata_scopes
+    tensor.metadata_scopes.as_slice()
 }
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
@@ -96,7 +97,7 @@ pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
 pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result<()> {
     let old_graph = tensor.graph.clone();
     let old_output_key = old_graph.values()[tensor.val].key.clone();
-    let old_inputs = (*tensor.inputs_map).clone();
+    let old_inputs = Arc::clone(&tensor.inputs_map);
     let concrete_meta = tensor_meta_from_tensor(data.as_ref());
     let new_key = next_input_key();
     let mut builder = computegraph::graph::GraphBuilder::new();
@@ -122,11 +123,10 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result
     tensor.data = Some(Arc::clone(&data));
     tensor.shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
     tensor.checkpoint_chain = Some(Arc::new(node));
-    push_metadata_scope(&mut tensor.metadata_scopes, Arc::new(new_metadata_scope));
-    push_metadata_scope(
-        &mut tensor.metadata_scopes,
-        Arc::new(old_output_metadata_scope),
-    );
+    let mut metadata_scopes = tensor.metadata_scopes.materialize();
+    push_metadata_scope(&mut metadata_scopes, Arc::new(new_metadata_scope));
+    push_metadata_scope(&mut metadata_scopes, Arc::new(old_output_metadata_scope));
+    tensor.metadata_scopes = MetadataScopeChain::from_materialized(metadata_scopes);
 
     let mut merged = HashMap::new();
     if let Some(chain) = &tensor.checkpoint_chain {

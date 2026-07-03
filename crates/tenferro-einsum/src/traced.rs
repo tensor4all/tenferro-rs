@@ -17,8 +17,8 @@ use crate::cache::{
 };
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{
-    hash_einsum_plan_spec, plan_spec_from_optimize, resolve_einsum_strategy_with_spec,
-    resolve_plan_spec, EinsumPlanSpec,
+    hash_einsum_plan_spec, plan_spec_from_optimize, plan_specs_equal,
+    resolve_einsum_strategy_with_spec, resolve_plan_spec, EinsumPlanSpec,
 };
 use crate::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
@@ -381,6 +381,17 @@ fn optimize_allows_direct_binary_dot(optimize: &EinsumOptimize) -> Result<bool> 
     }
 }
 
+struct ParsedEinsumCacheEntry {
+    notation: String,
+    parsed: Arc<ParsedEinsum>,
+}
+
+impl ParsedEinsumCacheEntry {
+    fn matches_notation(&self, notation: &str) -> bool {
+        self.notation == notation
+    }
+}
+
 fn cached_subscripts(
     caches: &mut ExtensionCacheStore,
     notation: &str,
@@ -388,21 +399,72 @@ fn cached_subscripts(
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_PARSE_CACHE,
-        hash_value(&notation),
+        hash_value(notation),
     );
-    if let Some(cached) = caches.get::<Arc<ParsedEinsum>>(&key) {
-        return Ok(Arc::clone(cached));
+    if let Some(cached) = caches.get::<ParsedEinsumCacheEntry>(&key) {
+        if cached.matches_notation(notation) {
+            return Ok(Arc::clone(&cached.parsed));
+        }
     }
 
     let parsed = Arc::new(ParsedEinsum {
         subscripts: parse_einsum_subscripts(notation).map_err(to_tenferro_error)?,
     });
+    let entry = ParsedEinsumCacheEntry {
+        notation: notation.to_owned(),
+        parsed: Arc::clone(&parsed),
+    };
     let retained_bytes = saturating_sum([
-        notation.len(),
+        entry.notation.len(),
         einsum_subscripts_retained_bytes(&parsed.subscripts),
     ]);
-    caches.put(key, Arc::clone(&parsed), retained_bytes);
+    caches.put(key, entry, retained_bytes);
     Ok(parsed)
+}
+
+#[derive(Clone)]
+struct StaticTreeCacheKeyData {
+    subscripts: EinsumSubscripts,
+    shapes: Vec<Vec<usize>>,
+    plan_spec: EinsumPlanSpec,
+}
+
+impl StaticTreeCacheKeyData {
+    fn new(
+        subscripts: &EinsumSubscripts,
+        shapes: &[Vec<usize>],
+        plan_spec: &EinsumPlanSpec,
+    ) -> Self {
+        Self {
+            subscripts: subscripts.clone(),
+            shapes: shapes.to_vec(),
+            plan_spec: plan_spec.clone(),
+        }
+    }
+
+    fn matches_static_tree(
+        &self,
+        subscripts: &EinsumSubscripts,
+        shapes: &[Vec<usize>],
+        plan_spec: &EinsumPlanSpec,
+    ) -> bool {
+        self.subscripts == *subscripts
+            && self.shapes.as_slice() == shapes
+            && plan_specs_equal(&self.plan_spec, plan_spec)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        saturating_sum([
+            einsum_subscripts_retained_bytes(&self.subscripts),
+            saturating_sum(self.shapes.iter().map(vec_retained_bytes)),
+            plan_spec_retained_bytes(&self.plan_spec),
+        ])
+    }
+}
+
+struct CachedStaticTree {
+    key_data: StaticTreeCacheKeyData,
+    tree: Arc<ContractionTree>,
 }
 
 fn cached_static_tree(
@@ -412,27 +474,66 @@ fn cached_static_tree(
     shapes: &[Vec<usize>],
     build: impl FnOnce() -> EinsumResult<ContractionTree>,
 ) -> Result<Arc<ContractionTree>> {
-    let mut plan_hasher = DefaultHasher::new();
-    hash_einsum_plan_spec(plan_spec, &mut plan_hasher);
-    let key_data = (subscripts.clone(), shapes.to_vec(), plan_hasher.finish());
+    let plan_hash = plan_spec_hash(plan_spec);
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_STATIC_PLANS_CACHE,
-        hash_value(&key_data),
+        static_tree_cache_discriminator(subscripts, shapes, plan_hash),
     );
-    if let Some(cached) = caches.get::<Arc<ContractionTree>>(&key) {
-        return Ok(Arc::clone(cached));
+    if let Some(cached) = caches.get::<CachedStaticTree>(&key) {
+        let key_data = &cached.key_data;
+        if key_data.matches_static_tree(subscripts, shapes, plan_spec) {
+            return Ok(Arc::clone(&cached.tree));
+        }
     }
 
     let tree = Arc::new(build().map_err(to_tenferro_error)?);
+    let key_data = StaticTreeCacheKeyData::new(subscripts, shapes, plan_spec);
     let retained_bytes = saturating_sum([
-        einsum_subscripts_retained_bytes(subscripts),
-        saturating_sum(shapes.iter().map(vec_retained_bytes)),
-        std::mem::size_of::<u64>(),
+        key_data.retained_bytes(),
         tree.retained_bytes_for_cache_stats(),
     ]);
-    caches.put(key, Arc::clone(&tree), retained_bytes);
+    caches.put(
+        key,
+        CachedStaticTree {
+            key_data,
+            tree: Arc::clone(&tree),
+        },
+        retained_bytes,
+    );
     Ok(tree)
+}
+
+fn static_tree_cache_discriminator(
+    subscripts: &EinsumSubscripts,
+    shapes: &[Vec<usize>],
+    plan_hash: u64,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    subscripts.hash(&mut hasher);
+    shapes.hash(&mut hasher);
+    plan_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn plan_spec_hash(plan_spec: &EinsumPlanSpec) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_einsum_plan_spec(plan_spec, &mut hasher);
+    hasher.finish()
+}
+
+fn plan_spec_retained_bytes(plan_spec: &EinsumPlanSpec) -> usize {
+    match plan_spec {
+        EinsumPlanSpec::Auto(options) => saturating_sum([
+            std::mem::size_of::<EinsumPlanSpec>(),
+            vec_retained_bytes(&options.betas),
+        ]),
+        EinsumPlanSpec::LeftToRight => std::mem::size_of::<EinsumPlanSpec>(),
+        EinsumPlanSpec::Path(path) | EinsumPlanSpec::FixedPairs(path) => saturating_sum([
+            std::mem::size_of::<EinsumPlanSpec>(),
+            vec_retained_bytes(path),
+        ]),
+    }
 }
 
 fn concrete_shapes(inputs: &[&TracedTensor]) -> Option<Vec<Vec<usize>>> {

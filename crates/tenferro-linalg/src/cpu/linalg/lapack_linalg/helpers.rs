@@ -42,7 +42,7 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
     Ok(tensor)
 }
 
-fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
+pub(crate) fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
     buffers: &mut BufferPool,
     shape: Vec<usize>,
     data: &[T],
@@ -53,7 +53,7 @@ fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
     tensor_from_vec_with_template(shape, owned, template)
 }
 
-fn refill_tensor_from_slice<T: Copy>(
+pub(crate) fn refill_tensor_from_slice<T: Copy>(
     tensor: &mut TypedTensor<T>,
     data: &[T],
 ) -> tenferro_tensor::Result<()> {

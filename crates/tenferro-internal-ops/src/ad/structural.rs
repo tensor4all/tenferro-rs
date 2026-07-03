@@ -567,6 +567,8 @@ fn broadcast_transpose_restore_perm(
     dims: &[usize],
     reduce_axes: &[usize],
 ) -> Option<Vec<usize>> {
+    // INVARIANT: `reduce_axes` and the loop domain are bounded by tensor rank;
+    // ShapeVec keeps common ranks inline, so linear membership beats hashing here.
     let remaining_output_axes: Vec<_> = (0..output_rank)
         .filter(|axis| !reduce_axes.contains(axis))
         .collect();

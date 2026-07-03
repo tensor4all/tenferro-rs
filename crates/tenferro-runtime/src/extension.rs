@@ -16,7 +16,6 @@
 //! // to lower it into a `TracedTensor`.
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
@@ -27,8 +26,8 @@ use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
-use crate::metadata::{push_metadata_scope, register_scoped_graph_metadata};
-use crate::traced::{next_traced_id, TracedTensor};
+use crate::metadata::{register_scoped_graph_metadata, MetadataScopeChain};
+use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
 
 pub use crate::compiler::CompilerOptions;
 #[doc(hidden)]
@@ -233,21 +232,18 @@ fn traced_outputs_from_graph(
         std::iter::empty(),
     )?);
 
-    let mut merged_map = HashMap::new();
+    let merged_map = merge_traced_inputs_map(inputs.iter().copied());
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
-    let mut metadata_scopes = vec![Arc::clone(&metadata_scope)];
+    let metadata_scopes = MetadataScopeChain::with_scope(
+        Arc::clone(&metadata_scope),
+        inputs.iter().map(|input| &input.metadata_scopes),
+    );
     for input in inputs {
-        merged_map.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
         extra_roots.extend(input.extra_roots.iter().cloned());
         checkpoint_chain =
             CheckpointNode::merge_chains(checkpoint_chain, input.checkpoint_chain.clone());
-        for scope in &input.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
     }
-    let merged_map = Arc::new(merged_map);
-
     let all_inputs_concrete = inputs.iter().all(|t| t.shape_hint.is_some());
     Ok(outputs
         .iter()

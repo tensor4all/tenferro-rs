@@ -105,6 +105,8 @@ impl CudaRuntime {
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
     /// ```
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
+        // INVARIANT: CUDA ordinals are device identifiers, not tensor extents;
+        // an unrepresentable ordinal becomes a CUDA invalid-device error.
         cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
             crate::Error::backend_failure(
                 "cubecl_runtime_init",
@@ -161,6 +163,8 @@ impl CudaRuntime {
 
     #[doc(hidden)]
     pub fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+        // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
+        // reported by CUDA instead of indexing memory in tenferro.
         cudarc::runtime::result::device::set(self.device_ordinal as i32).map_err(|err| {
             crate::Error::backend_failure(op, format!("failed to set CUDA runtime device: {err:?}"))
         })?;

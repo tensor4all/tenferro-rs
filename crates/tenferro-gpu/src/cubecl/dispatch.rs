@@ -126,6 +126,9 @@ pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> crate::Result<(Vec<us
     }
     let strides = crate::types::col_major_strides(shape)?
         .into_iter()
+        // INVARIANT: `col_major_strides` starts from `1isize` and uses
+        // checked multiplication over non-negative extents, so strides cannot
+        // be negative before this CubeCL metadata conversion.
         .map(|stride| stride as usize)
         .collect();
     Ok((shape.to_vec(), strides))

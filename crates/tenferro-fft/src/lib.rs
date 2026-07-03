@@ -49,15 +49,16 @@
 //! ```
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::hash::Hasher;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
-use rustfft::{FftNum, FftPlanner};
+use rustfft::{Fft, FftNum, FftPlanner};
 #[cfg(feature = "autodiff")]
 use tenferro_ad::extension::{ExtensionAdRule, ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_extension_macros::define_extension_runtime;
@@ -1488,6 +1489,61 @@ unsafe fn assume_init_output_vec<T>(mut output: Vec<MaybeUninit<T>>) -> Vec<T> {
     unsafe { Vec::from_raw_parts(ptr, len, capacity) }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FftPlanKey {
+    len: usize,
+    forward: bool,
+}
+
+trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
+    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>>;
+}
+
+static F32_FFT_PLAN_CACHE: OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<f32>>>>> =
+    OnceLock::new();
+static F64_FFT_PLAN_CACHE: OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<f64>>>>> =
+    OnceLock::new();
+
+impl CachedFftPlanScalar for f32 {
+    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>> {
+        cached_fft_plan_from_cache(&F32_FFT_PLAN_CACHE, len, forward)
+    }
+}
+
+impl CachedFftPlanScalar for f64 {
+    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>> {
+        cached_fft_plan_from_cache(&F64_FFT_PLAN_CACHE, len, forward)
+    }
+}
+
+fn cached_fft_plan<T: CachedFftPlanScalar>(len: usize, forward: bool) -> Arc<dyn Fft<T>> {
+    T::cached_fft_plan(len, forward)
+}
+
+fn cached_fft_plan_from_cache<T: FftNum + 'static>(
+    cache: &'static OnceLock<Mutex<HashMap<FftPlanKey, Arc<dyn Fft<T>>>>>,
+    len: usize,
+    forward: bool,
+) -> Arc<dyn Fft<T>> {
+    let key = FftPlanKey { len, forward };
+    let mut guard = cache
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(plan) = guard.get(&key) {
+        return Arc::clone(plan);
+    }
+
+    let mut planner = FftPlanner::<T>::new();
+    let plan = if forward {
+        planner.plan_fft_forward(len)
+    } else {
+        planner.plan_fft_inverse(len)
+    };
+    guard.insert(key, Arc::clone(&plan));
+    plan
+}
+
 fn execute_c2c<T>(
     input: &TypedTensor<Complex<T>>,
     axis: usize,
@@ -1496,7 +1552,7 @@ fn execute_c2c<T>(
     norm: FftNorm,
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: FftNum + Float + FromPrimitive,
+    T: CachedFftPlanScalar,
 {
     let in_shape = input.shape();
     let fft_len = transform_len(in_shape, axis, n)?;
@@ -1505,20 +1561,21 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("fft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let mut planner = FftPlanner::<T>::new();
-    let fft_plan = if forward {
-        planner.plan_fft_forward(fft_len)
-    } else {
-        planner.plan_fft_inverse(fft_len)
-    };
+    let fft_plan = cached_fft_plan::<T>(fft_len, forward);
     let scale: T = scale_for(norm, forward, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
+        // INVARIANT: zero-fill is transform padding semantics when the input
+        // lane is shorter than `fft_len`; it is not redundant initialization.
         lane.fill(Complex::zero());
         let copy_len = lane_ctx.in_axis_len.min(fft_len);
-        for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
-            *slot = input_data[lane_ctx.input_offset(k)?];
+        for (slot, offset) in lane
+            .iter_mut()
+            .take(copy_len)
+            .zip(lane_ctx.input_offsets(copy_len))
+        {
+            *slot = input_data[offset];
         }
         fft_plan.process(&mut lane);
         if scale != T::one() {
@@ -1526,8 +1583,13 @@ where
                 *value = *value * scale;
             }
         }
-        for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)?].write(value);
+        for (value, offset) in lane
+            .iter()
+            .take(out_axis_len)
+            .copied()
+            .zip(lane_ctx.output_offsets(out_axis_len))
+        {
+            output[offset].write(value);
         }
         Ok(())
     })?;
@@ -1545,7 +1607,7 @@ fn execute_r2c<T>(
     norm: FftNorm,
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: FftNum + Float + FromPrimitive,
+    T: CachedFftPlanScalar,
 {
     let in_shape = input.shape();
     let fft_len = transform_len(in_shape, axis, n)?;
@@ -1554,16 +1616,21 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("rfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let mut planner = FftPlanner::<T>::new();
-    let fft_plan = planner.plan_fft_forward(fft_len);
+    let fft_plan = cached_fft_plan::<T>(fft_len, true);
     let scale: T = scale_for(norm, true, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
+        // INVARIANT: zero-fill is rfft padding semantics when the real input
+        // lane is shorter than `fft_len`; later writes cover only `copy_len`.
         lane.fill(Complex::zero());
         let copy_len = lane_ctx.in_axis_len.min(fft_len);
-        for (k, slot) in lane.iter_mut().take(copy_len).enumerate() {
-            *slot = Complex::new(input_data[lane_ctx.input_offset(k)?], T::zero());
+        for (slot, offset) in lane
+            .iter_mut()
+            .take(copy_len)
+            .zip(lane_ctx.input_offsets(copy_len))
+        {
+            *slot = Complex::new(input_data[offset], T::zero());
         }
         fft_plan.process(&mut lane);
         if scale != T::one() {
@@ -1571,8 +1638,13 @@ where
                 *value = *value * scale;
             }
         }
-        for (k, value) in lane.iter().take(out_axis_len).copied().enumerate() {
-            output[lane_ctx.output_offset(k)?].write(value);
+        for (value, offset) in lane
+            .iter()
+            .take(out_axis_len)
+            .copied()
+            .zip(lane_ctx.output_offsets(out_axis_len))
+        {
+            output[offset].write(value);
         }
         Ok(())
     })?;
@@ -1589,7 +1661,7 @@ fn execute_c2r<T>(
     norm: FftNorm,
 ) -> tenferro_tensor::Result<Vec<T>>
 where
-    T: FftNum + Float + FromPrimitive,
+    T: CachedFftPlanScalar,
 {
     let in_shape = input.shape();
     let out_shape = output_shape_c2r(in_shape, axis, n)?;
@@ -1598,15 +1670,20 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let mut planner = FftPlanner::<T>::new();
-    let fft_plan = planner.plan_fft_inverse(out_axis_len);
+    let fft_plan = cached_fft_plan::<T>(out_axis_len, false);
     let scale: T = scale_for(norm, false, out_axis_len)?;
     let mut lane = vec![Complex::zero(); out_axis_len];
 
     for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
+        // INVARIANT: zero-fill clears the inverse lane before writing the
+        // one-sided spectrum and mirrored tail for this lane.
         lane.fill(Complex::zero());
-        for (k, slot) in lane.iter_mut().take(expected_half).enumerate() {
-            *slot = input_data[lane_ctx.input_offset(k)?];
+        for (slot, offset) in lane
+            .iter_mut()
+            .take(expected_half)
+            .zip(lane_ctx.input_offsets(expected_half))
+        {
+            *slot = input_data[offset];
         }
         for k in expected_half..out_axis_len {
             let mirror = out_axis_len - k;
@@ -1615,8 +1692,12 @@ where
             }
         }
         fft_plan.process(&mut lane);
-        for (k, value) in lane.iter().take(out_axis_len).enumerate() {
-            output[lane_ctx.output_offset(k)?].write(value.re * scale);
+        for (value, offset) in lane
+            .iter()
+            .take(out_axis_len)
+            .zip(lane_ctx.output_offsets(out_axis_len))
+        {
+            output[offset].write(value.re * scale);
         }
         Ok(())
     })?;
@@ -1647,23 +1728,26 @@ struct LaneContext {
     output_base: usize,
     axis_stride: usize,
     in_axis_len: usize,
+    out_axis_len: usize,
 }
 
 impl LaneContext {
-    fn input_offset(self, k: usize) -> tenferro_tensor::Result<usize> {
-        let lane_offset = checked_mul("fft", "input lane offset", k, self.axis_stride)?;
-        checked_add("fft", "input element offset", self.input_base, lane_offset)
+    fn input_offsets(self, count: usize) -> impl Iterator<Item = usize> {
+        debug_assert!(count <= self.in_axis_len);
+        lane_offsets(self.input_base, self.axis_stride, count)
     }
 
-    fn output_offset(self, k: usize) -> tenferro_tensor::Result<usize> {
-        let lane_offset = checked_mul("fft", "output lane offset", k, self.axis_stride)?;
-        checked_add(
-            "fft",
-            "output element offset",
-            self.output_base,
-            lane_offset,
-        )
+    fn output_offsets(self, count: usize) -> impl Iterator<Item = usize> {
+        debug_assert!(count <= self.out_axis_len);
+        lane_offsets(self.output_base, self.axis_stride, count)
     }
+}
+
+fn lane_offsets(base: usize, stride: usize, count: usize) -> impl Iterator<Item = usize> {
+    // INVARIANT: `for_axis_lane` checks input/output lane coverage before it
+    // constructs any `LaneContext`, so every `base + k * stride` for
+    // `k < count` stays within the compact column-major buffer.
+    (0..count).map(move |k| base + k * stride)
 }
 
 fn for_axis_lane(
@@ -1680,6 +1764,9 @@ fn for_axis_lane(
     let _input_len = checked_mul("fft", "input lane coverage", outer, in_block)?;
     let _output_len = checked_mul("fft", "output lane coverage", outer, out_block)?;
 
+    // INVARIANT: lanes are processed sequentially so one scratch lane can be
+    // reused while writing into a single `MaybeUninit` output buffer. Parallel
+    // lane execution needs disjoint output splitting plus per-worker scratch.
     for outer_idx in 0..outer {
         let in_outer_base = checked_mul("fft", "input outer base", outer_idx, in_block)?;
         let out_outer_base = checked_mul("fft", "output outer base", outer_idx, out_block)?;
@@ -1691,6 +1778,7 @@ fn for_axis_lane(
                 output_base,
                 axis_stride,
                 in_axis_len,
+                out_axis_len,
             })?;
         }
     }

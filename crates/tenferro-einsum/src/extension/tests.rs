@@ -139,6 +139,31 @@ fn payload_identity_includes_output_shape_hint() {
 }
 
 #[test]
+fn einsum_extension_caches_verify_exact_key_data_after_hash_lookup() {
+    let extension_source = include_str!("../extension.rs");
+    assert!(extension_source.contains("struct RuntimeTreeCacheKeyData"));
+    assert!(extension_source.contains("struct CachedRuntimeTree"));
+    assert!(extension_source.contains("struct RuntimeExecProgramCacheKeyData"));
+    assert!(extension_source.contains("key_data.matches_runtime_tree("));
+    assert!(extension_source.contains("key_data.matches_runtime_exec_program("));
+    assert!(!extension_source.contains("get::<Arc<ContractionTree>>(&key)"));
+
+    let traced_source = include_str!("../traced.rs");
+    assert!(traced_source.contains("struct ParsedEinsumCacheEntry"));
+    assert!(traced_source.contains("struct StaticTreeCacheKeyData"));
+    assert!(traced_source.contains("struct CachedStaticTree"));
+    assert!(traced_source.contains("key_data.matches_static_tree("));
+    assert!(!traced_source.contains("get::<Arc<ParsedEinsum>>(&key)"));
+    assert!(!traced_source.contains("get::<Arc<ContractionTree>>(&key)"));
+
+    let eager_source = include_str!("../eager_ad.rs");
+    assert!(eager_source.contains("struct ExpandedEagerProgramCacheKeyData"));
+    assert!(eager_source.contains("struct CachedExpandedEagerProgram"));
+    assert!(eager_source.contains("key_data.matches_expanded_eager_program("));
+    assert!(!eager_source.contains("get::<Arc<ExpandedEagerProgram>>(&key)"));
+}
+
+#[test]
 fn runtime_input_index_vec_stays_inline_for_common_arity() {
     let mut indices = InputIndexVec::new();
     indices.extend(0..4);

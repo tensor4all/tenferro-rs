@@ -1501,6 +1501,8 @@ impl CudaBackend {
                     );
                 },
             )?;
+            // INVARIANT: `concatenate_output_shape(inputs, axis)?` above checks
+            // the total axis extent, so every partial offset stays bounded.
             offset += input.shape()[axis];
         }
         Ok(output)

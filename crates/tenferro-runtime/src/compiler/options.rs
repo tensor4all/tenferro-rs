@@ -9,12 +9,11 @@ pub struct CompilerOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OptimizerConfig {
     pub algebraic_layout_simplifier: bool,
-    pub layout_chain_transpose_folding: bool,
     pub dot_decomposer: bool,
 }
 
 impl OptimizerConfig {
-    pub const VERSION: u64 = 1;
+    pub const VERSION: u64 = 2;
 
     pub fn fingerprint(self) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -28,7 +27,6 @@ impl Default for OptimizerConfig {
     fn default() -> Self {
         Self {
             algebraic_layout_simplifier: true,
-            layout_chain_transpose_folding: true,
             dot_decomposer: false,
         }
     }

@@ -1,8 +1,8 @@
 use super::{
     algebraic_layout_simplifier, compile_std_to_exec, compile_std_to_exec_with_options,
     conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
-    layout_chain_transpose_folding, populate_last_use, producer_index_by_slot, record_producer,
-    resolve_slot_redirect, slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
+    populate_last_use, producer_index_by_slot, record_producer, resolve_slot_redirect,
+    slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::{Error, GraphExecutor};
@@ -336,7 +336,39 @@ fn algebraic_layout_simplifier_keeps_rank_reducing_reshape() {
 }
 
 #[test]
-fn layout_chain_transpose_folding_ignores_non_identity_reshape_chain() {
+fn algebraic_layout_simplifier_has_no_repeated_whole_program_fixpoint_loop() {
+    let source = include_str!("mod.rs");
+    let (_, after_start) = source
+        .split_once("pub(crate) fn algebraic_layout_simplifier(")
+        .expect("algebraic_layout_simplifier should exist");
+    let (simplifier_body, _) = after_start
+        .split_once("fn algebraic_layout_simplifier_one_pass(")
+        .expect("one-pass helper should follow the public simplifier wrapper");
+
+    assert!(
+        !simplifier_body.contains("loop {"),
+        "algebraic_layout_simplifier must not recompute producer/use/shape tables in a whole-program fixpoint loop"
+    );
+}
+
+#[test]
+fn optimizer_config_has_no_duplicate_layout_chain_transpose_folding_flag() {
+    assert!(
+        !include_str!("options.rs").contains("layout_chain_transpose_folding"),
+        "layout_chain_transpose_folding was a duplicate transpose_folding pass and should not remain configurable"
+    );
+    assert!(
+        !include_str!("optimizer/mod.rs").contains("layout_chain_transpose_folding"),
+        "optimizer pipeline should not run a duplicate layout-chain transpose pass"
+    );
+    assert!(
+        !include_str!("mod.rs").contains("fn layout_chain_transpose_folding"),
+        "compiler should not keep a duplicate layout_chain_transpose_folding implementation"
+    );
+}
+
+#[test]
+fn transpose_folding_ignores_non_identity_reshape_chain() {
     let transpose = make_exec_instr_with_meta(
         ExecOp::Transpose { perm: vec![1, 0] },
         vec![0],
@@ -368,7 +400,7 @@ fn layout_chain_transpose_folding_ignores_non_identity_reshape_chain() {
     );
     let mut program = make_exec_program(vec![transpose, reshape, dot], vec![0, 1], vec![4], 5);
 
-    layout_chain_transpose_folding(&mut program);
+    transpose_folding(&mut program);
 
     assert_eq!(program.instructions[1].input_slots, vec![2]);
     assert_eq!(program.instructions[2].input_slots, vec![3, 1]);

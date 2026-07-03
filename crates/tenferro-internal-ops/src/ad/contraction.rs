@@ -535,6 +535,8 @@ fn compute_free_dims(
 }
 
 fn kept_dims(rank: usize, axes: &[usize]) -> Vec<usize> {
+    // INVARIANT: both sequences are tensor axes, so the scan is rank-bounded;
+    // avoiding a HashSet preserves the small-rank fast path.
     (0..rank).filter(|dim| !axes.contains(dim)).collect()
 }
 

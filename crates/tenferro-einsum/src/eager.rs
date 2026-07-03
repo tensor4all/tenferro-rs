@@ -585,6 +585,8 @@ fn binary_contract<'a>(
             let mut lhs_free_labels = Vec::new();
             let mut rhs_free_labels = Vec::new();
 
+            // INVARIANT: duplicate checks are bounded by operand rank, and
+            // insertion order is load-bearing for the positional dimension maps.
             for &label in &lhs.labels {
                 if rhs_label_set.contains(&label) {
                     if survive_set.contains(&label) {

@@ -63,6 +63,16 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
     }
 }
 
+fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let (_, after_start) = source
+        .split_once(start)
+        .unwrap_or_else(|| panic!("missing source section start {start}"));
+    let (section, _) = after_start
+        .split_once(end)
+        .unwrap_or_else(|| panic!("missing source section end {end}"));
+    section
+}
+
 #[cfg(feature = "autodiff")]
 fn fft_ad_context() -> tenferro_ad::AdContext {
     tenferro_ad::AdContext::builder()
@@ -172,9 +182,33 @@ fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
     );
     assert!(
         source.contains("let mut lane = vec![Complex::zero(); fft_len]")
+            && source.contains("// INVARIANT: zero-fill is transform padding semantics")
             && source.contains("lane.fill(Complex::zero())"),
-        "FFT CPU scratch lanes must stay zero-filled for transform padding"
+        "FFT CPU scratch lanes must stay zero-filled for transform padding and carry an invariant marker"
     );
+}
+
+#[test]
+fn fft_cpu_execution_reuses_cached_rustfft_plans() {
+    let source = include_str!("../src/lib.rs");
+    let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
+    let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
+    let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
+
+    assert!(
+        source.contains("fn cached_fft_plan<T: CachedFftPlanScalar>"),
+        "FFT CPU execution should centralize RustFFT plan reuse in cached_fft_plan"
+    );
+    for (name, section) in [
+        ("execute_c2c", c2c),
+        ("execute_r2c", r2c),
+        ("execute_c2r", c2r),
+    ] {
+        assert!(
+            !section.contains("FftPlanner::<T>::new()"),
+            "{name} must not rebuild a RustFFT planner per call"
+        );
+    }
 }
 
 #[test]

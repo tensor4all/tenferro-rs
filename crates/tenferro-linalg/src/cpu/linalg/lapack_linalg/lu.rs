@@ -6,7 +6,8 @@ use tenferro_tensor::TypedTensor;
 use super::helpers::{
     batch_element_count, batched_multi, check_lapack_info, checked_product, checked_slice_range,
     dim_i32, has_zero_dim, leading_upper_triangle_from_lapack, matrix_core_and_batch_result,
-    matrix_dims, matrix_with_batch_shape, tensor_from_vec_with_template, vector_with_batch_shape,
+    matrix_dims, matrix_with_batch_shape, refill_tensor_from_slice,
+    tensor_from_pooled_slice_with_template, tensor_from_vec_with_template, vector_with_batch_shape,
 };
 
 pub(crate) trait LapackLu: Clone + Copy + Default + PoolScalar {
@@ -218,7 +219,7 @@ pub(crate) fn lu<T: LapackLu>(
 }
 
 pub(crate) fn lu_factor<T: LapackLu>(
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
     if has_zero_dim(input.shape()) {
@@ -256,10 +257,19 @@ pub(crate) fn lu_factor<T: LapackLu>(
     )?);
     let mut parity_data = Vec::with_capacity(batch_total);
 
+    let first_range = checked_slice_range("lu_factor", 0, matrix_len)?;
+    let mut batch_input = tensor_from_pooled_slice_with_template(
+        buffers,
+        vec![m, n],
+        &input.host_data()?[first_range],
+        input,
+    )?;
+
     for batch in 0..batch_total {
-        let range = checked_slice_range("lu_factor", batch, matrix_len)?;
-        let batch_input =
-            tensor_from_vec_with_template(vec![m, n], input.host_data()?[range].to_vec(), input)?;
+        if batch > 0 {
+            let range = checked_slice_range("lu_factor", batch, matrix_len)?;
+            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
+        }
         let (packed, pivots, parity) = lu_factor_2d(&batch_input)?;
         lu_data.extend_from_slice(packed.host_data()?);
         pivot_data.extend_from_slice(pivots.host_data()?);

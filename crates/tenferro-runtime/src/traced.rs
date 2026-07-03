@@ -21,9 +21,8 @@ use super::error::{Error, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
-    concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new, push_metadata_scope,
-    register_scoped_graph_metadata, register_scoped_value_metadata, symbolic_input_meta,
-    tensor_meta,
+    concrete_tensor_meta, register_scoped_graph_metadata, register_scoped_value_metadata,
+    symbolic_input_meta, tensor_meta, MetadataScopeChain,
 };
 use crate::scalar_semantics::{bool_from_real_for_op, round_real_to_i32_for_op, round_real_to_i64};
 
@@ -42,6 +41,8 @@ pub(crate) fn next_traced_id() -> TracedTensorId {
     NEXT_TRACED_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+type TracedInputMap = HashMap<TensorInputKey, Arc<Tensor>>;
+
 #[derive(Clone)]
 pub struct TracedTensor {
     pub id: TracedTensorId,
@@ -51,10 +52,10 @@ pub struct TracedTensor {
     pub val: LocalValueId,
     pub(crate) data: Option<Arc<Tensor>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
-    pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
+    pub(crate) inputs_map: Arc<TracedInputMap>,
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
-    pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    pub(crate) metadata_scopes: MetadataScopeChain,
 }
 
 impl fmt::Debug for TracedTensor {
@@ -68,6 +69,56 @@ impl fmt::Debug for TracedTensor {
             .field("has_data", &self.data.is_some())
             .finish_non_exhaustive()
     }
+}
+
+pub(crate) fn merge_traced_inputs_map<'a>(
+    inputs: impl IntoIterator<Item = &'a TracedTensor>,
+) -> Arc<TracedInputMap> {
+    let maps: Vec<_> = inputs
+        .into_iter()
+        .map(|input| &input.inputs_map)
+        .filter(|map| !map.is_empty())
+        .collect();
+    match maps.as_slice() {
+        [] => return Arc::new(HashMap::new()),
+        [single] => return Arc::clone(*single),
+        _ => {}
+    }
+
+    for &candidate in &maps {
+        if input_map_matches_ordered_merge(candidate.as_ref(), &maps) {
+            return Arc::clone(candidate);
+        }
+    }
+
+    let mut merged = (**maps[0]).clone();
+    for map in maps.iter().skip(1) {
+        merged.extend(
+            map.iter()
+                .map(|(key, tensor)| (key.clone(), tensor.clone())),
+        );
+    }
+    Arc::new(merged)
+}
+
+fn input_map_matches_ordered_merge(
+    candidate: &TracedInputMap,
+    maps: &[&Arc<TracedInputMap>],
+) -> bool {
+    for map in maps {
+        for key in map.keys() {
+            let Some(final_tensor) = maps.iter().rev().find_map(|source| source.get(key)) else {
+                return false;
+            };
+            let Some(candidate_tensor) = candidate.get(key) else {
+                return false;
+            };
+            if !Arc::ptr_eq(candidate_tensor, final_tensor) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
@@ -604,7 +655,7 @@ impl TracedTensor {
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
         })
     }
 
@@ -658,7 +709,7 @@ impl TracedTensor {
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
         })
     }
 
@@ -704,7 +755,7 @@ impl TracedTensor {
             inputs_map: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
         })
     }
 
@@ -748,7 +799,7 @@ impl TracedTensor {
             inputs_map: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
         })
     }
 
@@ -2165,10 +2216,7 @@ pub(crate) fn apply_unary_with_dtype(
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
-        metadata_scopes: metadata_scopes_with_new(
-            metadata_scope,
-            [input.metadata_scopes.as_slice()],
-        ),
+        metadata_scopes: MetadataScopeChain::with_new(metadata_scope, [&input.metadata_scopes]),
     }
 }
 
@@ -2205,10 +2253,8 @@ pub(crate) fn apply_unary_with_shape_refs(
     let metadata_scope =
         register_single_output_metadata(graph.as_ref(), outputs[0], input.dtype, &out_shape_hint);
 
-    let mut merged = (*input.inputs_map).clone();
-    for t in shape_refs {
-        merged.extend(t.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
-    }
+    let inputs_map =
+        merge_traced_inputs_map(std::iter::once(input).chain(shape_refs.iter().copied()));
 
     let mut extra_roots = input.extra_roots.clone();
     for t in shape_refs {
@@ -2229,19 +2275,14 @@ pub(crate) fn apply_unary_with_shape_refs(
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
-        inputs_map: Arc::new(merged),
+        inputs_map,
         extra_roots,
         checkpoint_chain,
-        metadata_scopes: {
-            let mut scopes =
-                metadata_scopes_with_new(metadata_scope, [input.metadata_scopes.as_slice()]);
-            for t in shape_refs {
-                for scope in &t.metadata_scopes {
-                    push_metadata_scope(&mut scopes, Arc::clone(scope));
-                }
-            }
-            scopes
-        },
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            std::iter::once(&input.metadata_scopes)
+                .chain(shape_refs.iter().map(|tensor| &tensor.metadata_scopes)),
+        ),
     }
 }
 
@@ -2269,7 +2310,7 @@ pub(crate) fn apply_nullary(
         inputs_map: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
         checkpoint_chain: None,
-        metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+        metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
     }
 }
 
@@ -2453,8 +2494,6 @@ fn apply_binary_with_output_dtype(
     let metadata_scope =
         register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
-    let mut merged = (*lhs.inputs_map).clone();
-    merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
     let mut extra_roots = lhs.extra_roots.clone();
     extra_roots.extend(rhs.extra_roots.iter().cloned());
 
@@ -2466,18 +2505,15 @@ fn apply_binary_with_output_dtype(
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
-        inputs_map: Arc::new(merged),
+        inputs_map: merge_traced_inputs_map([lhs, rhs]),
         extra_roots,
         checkpoint_chain: CheckpointNode::merge_chains(
             lhs.checkpoint_chain.clone(),
             rhs.checkpoint_chain.clone(),
         ),
-        metadata_scopes: metadata_scopes_with_new(
+        metadata_scopes: MetadataScopeChain::with_new(
             metadata_scope,
-            [
-                lhs.metadata_scopes.as_slice(),
-                rhs.metadata_scopes.as_slice(),
-            ],
+            [&lhs.metadata_scopes, &rhs.metadata_scopes],
         ),
     }
 }
@@ -2509,15 +2545,6 @@ fn apply_ternary_with_output_dtype(
     let metadata_scope =
         register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
-    let mut merged = (*first.inputs_map).clone();
-    merged.extend(
-        second
-            .inputs_map
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone())),
-    );
-    merged.extend(third.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
-
     let mut extra_roots = first.extra_roots.clone();
     extra_roots.extend(second.extra_roots.iter().cloned());
     extra_roots.extend(third.extra_roots.iter().cloned());
@@ -2538,15 +2565,15 @@ fn apply_ternary_with_output_dtype(
         val: outputs[0],
         data: None,
         shape_hint: out_shape_hint,
-        inputs_map: Arc::new(merged),
+        inputs_map: merge_traced_inputs_map([first, second, third]),
         extra_roots,
         checkpoint_chain,
-        metadata_scopes: metadata_scopes_with_new(
+        metadata_scopes: MetadataScopeChain::with_new(
             metadata_scope,
             [
-                first.metadata_scopes.as_slice(),
-                second.metadata_scopes.as_slice(),
-                third.metadata_scopes.as_slice(),
+                &first.metadata_scopes,
+                &second.metadata_scopes,
+                &third.metadata_scopes,
             ],
         ),
     }

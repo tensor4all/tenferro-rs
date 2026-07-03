@@ -1,6 +1,50 @@
 use num_complex::Complex64;
+use std::sync::Arc;
 
 use crate::{DType, DotGeneralConfig, Error, TracedTensor};
+
+#[test]
+fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
+    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+
+    let sum = lhs.add(&rhs).unwrap();
+    let reused = sum.add(&rhs).unwrap();
+
+    assert!(Arc::ptr_eq(&sum.inputs_map, &reused.inputs_map));
+}
+
+#[test]
+fn traced_graph_construction_uses_shared_input_map_merge_helpers() {
+    let traced_source = include_str!("../traced.rs");
+    let metadata_source = include_str!("../metadata.rs");
+    assert!(metadata_source.contains("pub(crate) struct MetadataScopeChain"));
+    assert!(traced_source.contains("MetadataScopeChain::with_new"));
+    assert!(!traced_source.contains("metadata_scopes_with_new("));
+    assert!(!traced_source.contains("metadata_scopes_for_scope("));
+    assert!(traced_source.contains("fn merge_traced_inputs_map"));
+    assert!(traced_source.contains("input_map_matches_ordered_merge"));
+    assert!(!traced_source.contains("let mut merged = (*lhs.inputs_map).clone()"));
+    assert!(!traced_source.contains("let mut merged = (*first.inputs_map).clone()"));
+    assert!(!traced_source.contains("let mut merged = (*input.inputs_map).clone()"));
+    assert!(!traced_source.contains("merged.extend(rhs.inputs_map"));
+    assert!(!traced_source.contains("merged.extend(third.inputs_map"));
+
+    let extension_source = include_str!("../extension.rs");
+    assert!(extension_source.contains("merge_traced_inputs_map(inputs.iter().copied())"));
+    assert!(extension_source.contains("MetadataScopeChain::with_scope"));
+    assert!(!extension_source.contains("merged_map.extend(input.inputs_map"));
+    assert!(!extension_source.contains("for scope in &input.metadata_scopes"));
+
+    let shape_packing_source = include_str!("../shape_packing.rs");
+    assert!(shape_packing_source.contains("merge_traced_inputs_map(tensors.iter())"));
+    assert!(shape_packing_source.contains("MetadataScopeChain::with_new"));
+    assert!(!shape_packing_source.contains("metadata_scopes.as_slice()"));
+
+    let checkpoint_source = include_str!("../checkpoint.rs");
+    assert!(checkpoint_source.contains("pub old_inputs: Arc<HashMap"));
+    assert!(!checkpoint_source.contains("old_inputs: node.old_inputs.clone()"));
+}
 
 #[test]
 fn dot_general_returns_error_for_invalid_config() {

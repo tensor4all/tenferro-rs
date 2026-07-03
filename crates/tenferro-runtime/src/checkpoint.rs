@@ -13,7 +13,7 @@ pub struct CheckpointNode {
     pub graph: Arc<Graph<StdTensorOp>>,
     pub alias_key: TensorInputKey,
     pub alias_target: ValueKey<StdTensorOp>,
-    pub old_inputs: HashMap<TensorInputKey, Arc<Tensor>>,
+    pub old_inputs: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub prev: Option<Arc<CheckpointNode>>,
 }
 
@@ -88,7 +88,7 @@ impl CheckpointNode {
                         graph: node.graph.clone(),
                         alias_key: node.alias_key.clone(),
                         alias_target: node.alias_target.clone(),
-                        old_inputs: node.old_inputs.clone(),
+                        old_inputs: Arc::clone(&node.old_inputs),
                         prev,
                     }));
                 }
