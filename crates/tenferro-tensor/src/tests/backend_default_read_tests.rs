@@ -1017,7 +1017,7 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("overlaps previous range"));
+    assert!(err.to_string().contains("overlaps job"));
 
     let overflow_jobs = [GroupedGemmJob::new(0, 0, 0, usize::MAX, 0, 2)];
     let err = validate_grouped_gemm(

@@ -526,7 +526,11 @@ pub fn validate_grouped_gemm(
     let lhs_len = grouped_checked_product(op, "lhs", lhs.shape())?;
     let rhs_len = grouped_checked_product(op, "rhs", rhs.shape())?;
     let out_len = grouped_checked_product(op, "out", out.shape())?;
-    let mut out_ranges = Vec::<std::ops::Range<usize>>::new();
+    // Grouped GEMM job count is runtime-controlled and can be large. Keep the
+    // validation ranges in a reserved Vec, not SmallVec, so arbitrary batches
+    // avoid inline-capacity tuning and can be sorted for O(n log n) overlap
+    // validation.
+    let mut out_ranges = Vec::<(usize, std::ops::Range<usize>)>::with_capacity(config.jobs.len());
     for (idx, job) in config.jobs.iter().enumerate() {
         validate_grouped_gemm_range(
             op,
@@ -543,18 +547,21 @@ pub fn validate_grouped_gemm(
         let out_range = checked_gemm_span(op, "out", job.out_offset, job.rows, job.cols)?;
         validate_grouped_gemm_range(op, "out", out_len, out_range.clone())?;
         if let Some(out_range) = out_range {
-            for previous in &out_ranges {
-                if previous.start < out_range.end && out_range.start < previous.end {
-                    return Err(crate::Error::InvalidConfig {
-                        op,
-                        message: format!(
-                            "grouped GEMM output range for job {idx} overlaps previous range {}..{}",
-                            previous.start, previous.end
-                        ),
-                    });
-                }
-            }
-            out_ranges.push(out_range);
+            out_ranges.push((idx, out_range));
+        }
+    }
+    out_ranges.sort_unstable_by_key(|(_, range)| range.start);
+    for pair in out_ranges.windows(2) {
+        let (prev_idx, previous) = &pair[0];
+        let (idx, current) = &pair[1];
+        if previous.end > current.start {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!(
+                    "grouped GEMM output range for job {idx} overlaps job {prev_idx} range {}..{}",
+                    previous.start, previous.end
+                ),
+            });
         }
     }
     Ok(())
@@ -598,6 +605,8 @@ fn typed_read_storage<'a, T>(
 }
 
 fn grouped_gemm_default_config() -> DotGeneralConfig {
+    // DotGeneralConfig owns Vec fields, so this rank-2 fallback config follows
+    // that API boundary rather than introducing SmallVec locally.
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -680,6 +689,9 @@ where
         let lhs_rows = dim_stride(op, job.rows, "lhs")?;
         let rhs_rows = dim_stride(op, job.contracted, "rhs")?;
         let out_rows = dim_stride(op, job.rows, "out")?;
+        // TypedTensorView constructors own Vec shape/stride metadata. These
+        // fallback rank-2 views are short-lived, but SmallVec is not usable
+        // without changing the view API.
         let lhs_matrix = TypedTensorView::from_slice(
             vec![job.rows, job.contracted],
             vec![1, lhs_rows],

@@ -1502,6 +1502,9 @@ where
     let a_addr = a_data as usize;
     let b_addr = b_data as usize;
     let c_addr = c_data as usize;
+    // Rayon closures cannot capture raw pointers as Sync. Keep only integer
+    // base addresses outside the closure and reconstruct execution-local
+    // pointers after validate_grouped_gemm has checked each job range.
     let run_job = |job: &tenferro_tensor::backend::GroupedGemmJob| -> crate::Result<()> {
         let a_ptr =
             (a_addr as *const T).wrapping_offset(add_job_offset(a_base, job.lhs_offset(), "lhs")?);
@@ -1514,6 +1517,9 @@ where
         }
         let rows = dim_to_isize(job.rows(), "grouped_gemm rows")?;
         let contracted = dim_to_isize(job.contracted(), "grouped_gemm contracted")?;
+        // SAFETY: validate_grouped_gemm checked input/output ranges and output
+        // disjointness before this provider path; child faer calls run
+        // sequentially to avoid nested Rayon fan-out.
         unsafe {
             T::strided_gemm_with_conj_par(
                 ctx,
@@ -1812,6 +1818,9 @@ where
 }
 
 #[cfg(feature = "cpu-blas")]
+// INVARIANT: BLAS conjugation dispatch needs buffer/cache state, operands,
+// dot_general config, and two conjugation flags at the backend boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_general_blas_with_conj_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -2257,11 +2266,21 @@ where
     let c_base = out.offset();
     let c_data = out.host_storage_mut()?.as_mut_ptr();
 
+    // Raw pointers are execution-local and must not be cached. The job count is
+    // runtime-dependent, so use a reserved Vec rather than a SmallVec threshold
+    // for the contiguous provider descriptor slice.
     let mut batches = Vec::with_capacity(config.jobs().len());
     for job in config.jobs() {
-        let a_ptr = unsafe { a_data.offset(add_job_offset(a_base, job.lhs_offset(), "lhs")?) };
-        let b_ptr = unsafe { b_data.offset(add_job_offset(b_base, job.rhs_offset(), "rhs")?) };
-        let c_ptr = unsafe { c_data.offset(add_job_offset(c_base, job.out_offset(), "out")?) };
+        // SAFETY: validate_grouped_gemm checked each job's range before this
+        // provider path; add_job_offset only combines the checked view base
+        // with the checked element offset.
+        let (a_ptr, b_ptr, c_ptr) = unsafe {
+            (
+                a_data.offset(add_job_offset(a_base, job.lhs_offset(), "lhs")?),
+                b_data.offset(add_job_offset(b_base, job.rhs_offset(), "rhs")?),
+                c_data.offset(add_job_offset(c_base, job.out_offset(), "out")?),
+            )
+        };
         if job.rows() == 0 || job.cols() == 0 || job.contracted() == 0 {
             scale_grouped_empty_output(c_ptr, job.rows(), job.cols(), beta)?;
             continue;
@@ -2283,6 +2302,9 @@ where
             c_cs: rows,
         });
     }
+    // SAFETY: every descriptor uses validated dimensions and output regions are
+    // pairwise-disjoint, so the BLAS provider may run jobs in batch order or as
+    // a native grouped call.
     unsafe {
         T::grouped_gemm(alpha, beta, &batches)?;
     }
@@ -2397,6 +2419,9 @@ where
 }
 
 #[cfg(feature = "cpu-blas")]
+// INVARIANT: typed BLAS conjugation needs the cache slot/kind, validated
+// operand views, dot_general config, and conjugation flags together.
+#[allow(clippy::too_many_arguments)]
 fn typed_blas_gemm_with_conj<L, R, T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
