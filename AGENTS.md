@@ -52,6 +52,9 @@ issues or bug-fix PRs:
 - `ai/contribution-workflows/repository-remediation.md` for batched,
   agent-assisted remediation of repository-rule violations across multiple
   related issues or findings.
+- `ai/contribution-workflows/release-publish.md` for maintainer releases:
+  workspace version bumps, tagging, dependency-order crates.io publication,
+  and post-publish provenance verification.
 
 Do not open a new-feature implementation PR before maintainers accept the
 corresponding issue. If a proposed bug-fix PR needs a new public API, operation

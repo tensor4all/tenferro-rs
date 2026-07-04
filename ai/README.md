@@ -10,7 +10,8 @@ optional sibling checkout fallback documented in `AGENTS.md`.
 ## Contents
 
 - `contribution-workflows/`: reusable repository-local workflows for issue
-  intake and bug-fix pull requests.
+  intake, bug-fix pull requests, batched repository-rule remediation, and
+  maintainer release/publish.
 - `repo-settings.json`: the expected GitHub repository settings and required
   branch protection checks for this repository.
 - `run-codex-solve-bug.sh`, `run-claude-solve-bug.sh`, and

@@ -1,0 +1,30 @@
+---
+name: tenferro-release-publish
+description: Release a new tenferro-rs version. Use for workspace version bumps, tagging, crates.io publication in dependency order, and post-publish provenance verification. Publishing is irreversible and requires maintainer crates.io ownership. Do not use for ordinary feature or bug-fix PRs, and never publish from an unpushed or untagged commit.
+---
+
+# Tenferro Release And Publish
+
+Follow `ai/contribution-workflows/release-publish.md` as the canonical
+workflow. Read it fully before acting.
+
+Hard invariants (abort the release if any would be violated):
+
+1. Publish only from a pushed, tagged, main-lineage commit.
+2. The version bump merges to `main` before anything is published.
+3. No manifest edits at publish time; fix on `main` and re-tag instead.
+4. Git-pinned workspace dependencies must pin revs whose declared versions
+   exist on crates.io.
+
+Keep the interaction incremental:
+
+1. Confirm the target version and that `origin/main` is green and clean.
+2. Phase 1: version-bump PR (workspace version plus every internal
+   cross-crate `version = "..."` requirement) and the full pre-push
+   checklist.
+3. Phase 2: tag the merged commit and push the tag.
+4. Phase 3: publish crates in dependency order from a worktree of the tag,
+   waiting for the registry index between crates. Confirm with the user
+   immediately before the first `cargo publish`.
+5. Phase 4: verify crates.io versions and `.cargo_vcs_info.json`
+   provenance, then clean up.
