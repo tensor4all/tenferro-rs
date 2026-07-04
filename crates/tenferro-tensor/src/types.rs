@@ -4330,6 +4330,106 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         }
     }
 
+    /// Borrow a read-only strided region view over this tensor's backend
+    /// (device) buffer from explicit layout metadata.
+    ///
+    /// This is a metadata-only view: no data is copied or transferred. The
+    /// layout's reachable element span is validated against the backend
+    /// buffer's physical length. Host-backed tensors are rejected with an
+    /// explicit backend error; host regions are expressed with
+    /// [`TypedTensorView::from_slice`] over host storage instead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// // Host tensors are rejected: this constructor is for backend buffers.
+    /// let host = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap();
+    /// let err = host.backend_region_view(vec![2, 2], vec![1, 2], 0).unwrap_err();
+    /// assert!(err.to_string().contains("backend"));
+    /// ```
+    pub fn backend_region_view(
+        &self,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> crate::Result<TypedTensorView<'_, T, DynRank>>
+    where
+        T: 'static,
+    {
+        let op = "TypedTensor::backend_region_view";
+        let Buffer::Backend(buffer) = &self.buffer else {
+            return Err(crate::Error::backend_failure(
+                op,
+                "expected a backend (device) buffer; host tensors use \
+                 TypedTensorView::from_slice over host storage",
+            ));
+        };
+        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
+            .map_err(|err| tensor_layout_error(op, err))?;
+        Ok(TypedTensorView {
+            buffer: TensorBufferRef::Backend(Arc::clone(buffer)),
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+
+    /// Borrow a mutable strided region view over this tensor's backend
+    /// (device) buffer from explicit layout metadata.
+    ///
+    /// This is the mutable counterpart of
+    /// [`TypedTensor::backend_region_view`]. The layout's reachable element
+    /// span is validated against the backend buffer's physical length, and
+    /// layouts whose logical elements alias the same physical element are
+    /// rejected. Host-backed tensors are rejected with an explicit backend
+    /// error; mutable host regions must go through
+    /// [`TypedTensorViewMut::try_multi_slice_mut`] or host constructors.
+    ///
+    /// Backend buffers are shared handles, so distinct region views over one
+    /// buffer can coexist; disjointness between regions used concurrently by
+    /// backend operations is the caller's contract (as with BLAS-style
+    /// in-place update APIs).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// // Host tensors are rejected: this constructor is for backend buffers.
+    /// let mut host = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap();
+    /// let err = host.backend_region_view_mut(vec![2, 2], vec![1, 2], 0).unwrap_err();
+    /// assert!(err.to_string().contains("backend"));
+    /// ```
+    pub fn backend_region_view_mut(
+        &mut self,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank>>
+    where
+        T: 'static,
+    {
+        let op = "TypedTensor::backend_region_view_mut";
+        let Buffer::Backend(buffer) = &self.buffer else {
+            return Err(crate::Error::backend_failure(
+                op,
+                "expected a backend (device) buffer; mutable host regions use \
+                 TypedTensorViewMut host constructors or try_multi_slice_mut",
+            ));
+        };
+        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
+            .map_err(|err| tensor_layout_error(op, err))?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        Ok(TypedTensorViewMut {
+            buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+
     /// Consume this tensor and return its layout metadata.
     ///
     /// # Examples

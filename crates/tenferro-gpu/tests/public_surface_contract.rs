@@ -279,11 +279,11 @@ fn cubecl_structural_shape_arithmetic_is_checked() {
 fn cubecl_gemm_contracting_element_product_is_checked() {
     let gemm = repo_file("crates/tenferro-gpu/src/cubecl/gemm.rs");
     assert!(
-        gemm.contains("checked_mul(lhs.shape()[lhs_axis])"),
+        gemm.contains("checked_mul(lhs_shape[lhs_axis])"),
         "CubeCL GEMM must reject contracting dimension product overflow"
     );
     assert!(
-        !gemm.contains("contracting_elements *= lhs.shape()[lhs_axis];"),
+        !gemm.contains("contracting_elements *= lhs_shape[lhs_axis];"),
         "CubeCL GEMM must not use unchecked contracting dimension multiplication"
     );
 }
