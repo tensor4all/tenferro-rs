@@ -13,13 +13,14 @@ use tidu::{ADRuleKind, ADRuleResult};
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::ext_op::{
-    linearize_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
-    ExtensionRegistryError,
+    linearize_extension_rule, transpose_extension_rule, ExtensionLinearTransposeRule,
+    ExtensionLinearizeRule, ExtensionOp, ExtensionPrimalVjpRule, ExtensionRegistryError,
+    ExtensionRuleRole,
 };
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::DType;
 
 #[derive(Debug)]
 struct CoverageRule {
@@ -85,10 +86,6 @@ impl ExtensionOp for NoInlineRuleOp {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
 }
 
 impl ExtensionOp for FamilyOnlyOp {
@@ -129,10 +126,6 @@ impl ExtensionOp for FamilyOnlyOp {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
     }
 }
 
@@ -180,13 +173,9 @@ impl ExtensionOp for PayloadOp {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
 }
 
-impl ExtensionAdRule for CoverageRule {
+impl ExtensionLinearizeRule for CoverageRule {
     fn family_id(&self) -> &'static str {
         self.family
     }
@@ -202,14 +191,71 @@ impl ExtensionAdRule for CoverageRule {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[0]])
     }
+}
 
-    fn transpose_rule(
+#[derive(Debug)]
+struct CoverageLinearizeRule {
+    family: &'static str,
+}
+
+#[derive(Debug)]
+struct CoverageLinearTransposeRule {
+    family: &'static str,
+}
+
+#[derive(Debug)]
+struct CoveragePrimalVjpRule {
+    family: &'static str,
+}
+
+impl ExtensionLinearizeRule for CoverageLinearizeRule {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Ok(vec![tangent_in[0]])
+    }
+}
+
+impl ExtensionLinearTransposeRule for CoverageLinearTransposeRule {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn linear_transpose(
         &self,
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
+        active_mask: &[bool],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        assert_eq!(active_mask, &[true]);
+        Ok(vec![cotangent_out[0]])
+    }
+}
+
+impl ExtensionPrimalVjpRule for CoveragePrimalVjpRule {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn primal_vjp(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[0]])
@@ -287,31 +333,120 @@ fn extension_payload_does_not_affect_tensor_input_arity() {
 #[test]
 fn register_and_lookup_rule_roundtrips() {
     let family = "covtest.register_rule.v1";
-    let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
+    let rule: Arc<dyn ExtensionLinearizeRule> = Arc::new(CoverageRule { family });
     let mut rules = ExtensionRuleSet::new();
     rules
-        .register_rule(rule)
+        .register_linearize(rule)
         .expect("first rule registration should succeed");
 
-    assert!(rules.is_rule_registered(family));
+    assert!(rules.is_linearize_registered(family));
     let looked_up = rules
-        .lookup_rule(family)
+        .lookup_linearize(family)
         .expect("rule should be registered");
     assert_eq!(looked_up.family_id(), family);
 }
 
 #[test]
+fn role_split_rule_set_accepts_one_rule_per_role_for_same_family() {
+    let family = "covtest.role_split.v1";
+    let mut rules = ExtensionRuleSet::new();
+
+    rules
+        .register_linearize(Arc::new(CoverageLinearizeRule { family }))
+        .expect("linearize registration");
+    rules
+        .register_linear_transpose(Arc::new(CoverageLinearTransposeRule { family }))
+        .expect("linear transpose registration");
+    rules
+        .register_primal_vjp(Arc::new(CoveragePrimalVjpRule { family }))
+        .expect("primal VJP registration");
+
+    assert!(rules.lookup_linearize(family).is_some());
+    assert!(rules.lookup_linear_transpose(family).is_some());
+    assert!(rules.lookup_primal_vjp(family).is_some());
+}
+
+#[test]
+fn role_split_rule_set_rejects_duplicate_family_per_role() {
+    let family = "covtest.duplicate_linearize.v1";
+    let mut rules = ExtensionRuleSet::new()
+        .with_linearize(Arc::new(CoverageLinearizeRule { family }))
+        .expect("first linearize registration");
+
+    match rules.register_linearize(Arc::new(CoverageLinearizeRule { family })) {
+        Err(ExtensionRegistryError::DuplicateRule {
+            family_id,
+            role: ExtensionRuleRole::Linearize,
+        }) => assert_eq!(family_id, family),
+        other => panic!("expected duplicate linearize rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn transpose_dispatch_uses_linear_transpose_for_linearized_role() {
+    let family = "covtest.linear-transpose-dispatch.v1";
+    let op = FamilyOnlyOp { family };
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let ct = builder.add_input(TensorInputKey::User { id: 10_301 });
+    let rules = ExtensionRuleSet::new()
+        .with_linear_transpose(Arc::new(CoverageLinearTransposeRule { family }))
+        .expect("linear transpose registration");
+    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules);
+
+    let result = transpose_extension_rule(
+        &op,
+        &mut builder,
+        &[Some(ct)],
+        &[],
+        &OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+        &mut ctx,
+    )
+    .expect("linearized transpose dispatch");
+
+    assert_eq!(result, vec![Some(ct)]);
+}
+
+#[test]
+fn transpose_dispatch_uses_primal_vjp_for_primary_role() {
+    let family = "covtest.primal-vjp-dispatch.v1";
+    let op = FamilyOnlyOp { family };
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let ct = builder.add_input(TensorInputKey::User { id: 10_302 });
+    let rules = ExtensionRuleSet::new()
+        .with_primal_vjp(Arc::new(CoveragePrimalVjpRule { family }))
+        .expect("primal VJP registration");
+    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules);
+
+    let result = transpose_extension_rule(
+        &op,
+        &mut builder,
+        &[Some(ct)],
+        &[],
+        &OperationRole::Primary,
+        &mut ctx,
+    )
+    .expect("primary transpose dispatch");
+
+    assert_eq!(result, vec![Some(ct)]);
+}
+
+#[test]
 fn register_rule_rejects_duplicate_family_id() {
     let family = "covtest.duplicate_rule.v1";
-    let first: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
+    let first: Arc<dyn ExtensionLinearizeRule> = Arc::new(CoverageRule { family });
     let mut rules = ExtensionRuleSet::new();
     rules
-        .register_rule(first)
+        .register_linearize(first)
         .expect("first rule registration should succeed");
 
-    let second: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family });
-    match rules.register_rule(second) {
-        Err(ExtensionRegistryError::DuplicateRule { family_id }) => {
+    let second: Arc<dyn ExtensionLinearizeRule> = Arc::new(CoverageRule { family });
+    match rules.register_linearize(second) {
+        Err(ExtensionRegistryError::DuplicateRule {
+            family_id,
+            role: ExtensionRuleRole::Linearize,
+        }) => {
             assert_eq!(family_id, family);
         }
         other => panic!("expected DuplicateRule for {family:?}, got {other:?}"),
@@ -321,9 +456,9 @@ fn register_rule_rejects_duplicate_family_id() {
 #[test]
 fn register_rule_rejects_malformed_family_id() {
     let bad = "covtest.bad_rule";
-    let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family: bad });
+    let rule: Arc<dyn ExtensionLinearizeRule> = Arc::new(CoverageRule { family: bad });
 
-    match ExtensionRuleSet::new().with_rule(rule) {
+    match ExtensionRuleSet::new().with_linearize(rule) {
         Err(ExtensionRegistryError::MalformedFamilyId { family_id }) => {
             assert_eq!(family_id, bad);
         }
@@ -349,12 +484,12 @@ fn owned_rule_set_merge_is_atomic_on_duplicate_family() {
     let family_a = "covtest.merge_a.v1";
     let family_b = "covtest.merge_b.v1";
     let mut base = ExtensionRuleSet::new()
-        .with_rule(Arc::new(CoverageRule { family: family_a }))
+        .with_linearize(Arc::new(CoverageRule { family: family_a }))
         .expect("base rule should register");
     let other = ExtensionRuleSet::new()
-        .with_rule(Arc::new(CoverageRule { family: family_b }))
+        .with_linearize(Arc::new(CoverageRule { family: family_b }))
         .expect("other rule should register")
-        .with_rule(Arc::new(CoverageRule { family: family_a }))
+        .with_linearize(Arc::new(CoverageRule { family: family_a }))
         .expect("duplicate is only relative to base");
 
     let err = base
@@ -363,33 +498,35 @@ fn owned_rule_set_merge_is_atomic_on_duplicate_family() {
     assert!(matches!(
         err,
         ExtensionRegistryError::DuplicateRule {
-            family_id: "covtest.merge_a.v1"
+            family_id: "covtest.merge_a.v1",
+            role: ExtensionRuleRole::Linearize
         }
     ));
-    assert!(base.is_rule_registered(family_a));
-    assert!(!base.is_rule_registered(family_b));
+    assert!(base.is_linearize_registered(family_a));
+    assert!(!base.is_linearize_registered(family_b));
 }
 
 #[test]
 fn owned_rule_set_rejects_duplicate_and_malformed_rules() {
     let family = "covtest.owned_duplicate.v1";
     let mut rules = ExtensionRuleSet::new()
-        .with_rule(Arc::new(CoverageRule { family }))
+        .with_linearize(Arc::new(CoverageRule { family }))
         .expect("first owned rule should register");
     let duplicate_err = rules
-        .register_rule(Arc::new(CoverageRule { family }))
+        .register_linearize(Arc::new(CoverageRule { family }))
         .expect_err("duplicate owned rule should be rejected");
     assert!(matches!(
         duplicate_err,
         ExtensionRegistryError::DuplicateRule {
-            family_id: "covtest.owned_duplicate.v1"
+            family_id: "covtest.owned_duplicate.v1",
+            role: ExtensionRuleRole::Linearize
         }
     ));
-    assert!(rules.is_rule_registered(family));
+    assert!(rules.is_linearize_registered(family));
 
     let malformed = "covtest.owned_malformed";
     let malformed_err = ExtensionRuleSet::new()
-        .with_rule(Arc::new(CoverageRule { family: malformed }))
+        .with_linearize(Arc::new(CoverageRule { family: malformed }))
         .expect_err("malformed owned rule should be rejected");
     assert!(matches!(
         malformed_err,
@@ -440,8 +577,8 @@ fn register_rule_rejects_malformed_family_ids() {
         "fooあ.operation.v1",   // non-ASCII in crate
     ];
     for bad in cases {
-        let rule: Arc<dyn ExtensionAdRule> = Arc::new(CoverageRule { family: bad });
-        match ExtensionRuleSet::new().with_rule(rule) {
+        let rule: Arc<dyn ExtensionLinearizeRule> = Arc::new(CoverageRule { family: bad });
+        match ExtensionRuleSet::new().with_linearize(rule) {
             Err(ExtensionRegistryError::MalformedFamilyId { family_id }) => {
                 assert_eq!(family_id, bad);
             }

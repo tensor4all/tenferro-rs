@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::DType;
 
 use super::{ExtensionCacheStore, ExtensionExecutionContext};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
@@ -77,11 +77,5 @@ impl ExtensionOp for TestExtension {
         _input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(DType::F64, vec![])])
-    }
-
-    fn eager_execute(&self, _inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![
-            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()
-        ])
     }
 }

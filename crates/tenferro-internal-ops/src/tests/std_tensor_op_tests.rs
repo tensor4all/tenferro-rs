@@ -1,6 +1,6 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
-use crate::ext_op::{ExtensionAdRule, ExtensionOp};
+use crate::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp};
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ExtensionRuleSet, SymDim, TensorMeta};
 use computegraph::graph::{Graph, GraphBuilder};

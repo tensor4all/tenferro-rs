@@ -79,6 +79,37 @@ impl ExtensionLoweringError {
 pub type ExtensionLoweringResult =
     std::result::Result<Option<Vec<ValueRef<StdTensorOp>>>, ExtensionLoweringError>;
 
+/// Host/reference implementation for an extension family.
+///
+/// This capability is optional. Backend-only extension families can omit it
+/// and still implement [`ExtensionOp`]; runtimes that specifically delegate to
+/// host reference execution must report a typed capability-missing error when
+/// this hook is absent.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ext_op::HostReference;
+/// use tenferro_tensor::Tensor;
+///
+/// #[derive(Debug)]
+/// struct IdentityHost;
+///
+/// impl HostReference for IdentityHost {
+///     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+///         Ok(vec![inputs[0].clone()])
+///     }
+/// }
+///
+/// let input = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+/// let output = IdentityHost.execute(&[&input]).unwrap();
+/// assert_eq!(output[0].as_slice::<f64>().unwrap(), &[3.0]);
+/// ```
+pub trait HostReference: Debug + Send + Sync + 'static {
+    /// Execute the extension op on host/reference tensors.
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
+}
+
 /// The contract every out-of-tree extension primitive must satisfy.
 ///
 /// Implementations appear in the core graph as
@@ -89,13 +120,12 @@ pub type ExtensionLoweringResult =
 ///   + [`payload_eq`][Self::payload_eq];
 /// - fixed arity via [`input_count`][Self::input_count] / [`output_count`][Self::output_count];
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
-/// - host/reference forward execution via [`eager_execute`][Self::eager_execute];
-///   runtime-owned eager and compiled paths dispatch through registered
-///   extension runtimes instead of falling back to this method;
+/// - optional host/reference forward execution via
+///   [`host_reference`][Self::host_reference];
 /// - optional fixed-shape standard-op expansion via
 ///   [`lower_to_standard_ops`][Self::lower_to_standard_ops] for peer lowerers
 ///   such as XLA that cannot execute extension runtimes;
-/// - AD via a separately registered [`ExtensionAdRule`].
+/// - AD via separately registered role-specific extension rules.
 ///
 /// # Downcast convention
 ///
@@ -110,7 +140,7 @@ pub type ExtensionLoweringResult =
 /// ```
 /// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro_ops::ext_op::ExtensionOp;
+/// use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 /// use tenferro_ops::SymDim;
 /// use tenferro_tensor::{DType, Tensor};
 ///
@@ -134,7 +164,13 @@ pub type ExtensionLoweringResult =
 ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
 ///         Ok(vec![(dtypes[0], shapes[0].to_vec())])
 ///     }
-///     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+///     fn host_reference(&self) -> Option<&dyn HostReference> {
+///         Some(self)
+///     }
+/// }
+///
+/// impl HostReference for IdentityExt {
+///     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
 ///         Ok(vec![inputs[0].clone()])
 ///     }
 /// }
@@ -209,15 +245,17 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
-    // ----- Forward execution dispatch (spec Section 8) -----
+    // ----- Optional host/reference execution (spec Section 8) -----
 
-    /// Eager forward execution; called from the eager path and indirectly
-    /// from the compiled path.
+    /// Return the host/reference implementation for this payload, when the
+    /// family has one.
     ///
-    /// Input tensors are on the device the caller already arranged. Output
-    /// tensors MUST have shapes matching [`Self::infer_output_meta`] and MUST
-    /// be placed on a device the caller can consume.
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
+    /// Backend-only extension families may leave the default `None`. Runtime
+    /// execution never silently falls back to this hook; a runtime must opt in
+    /// explicitly by using this capability.
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        None
+    }
 
     /// Optionally expand this extension into standard tensor graph operations.
     ///
@@ -242,18 +280,15 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         Ok(None)
     }
 
-    // AD rules are registered separately; see [`ExtensionAdRule`].
+    // AD rules are registered separately; see the role-specific rule traits.
 }
 
-/// AD rule provider for an extension family.
+/// Definitional JVP rule provider for an extension family.
 ///
-/// Rules are registered independently from the primal operation so an
-/// out-of-tree crate can provide forward execution without AD, or gate AD
-/// support behind an optional feature. Rule methods receive the concrete
-/// [`ExtensionOp`] payload as a trait object; implementations should downcast
-/// through [`ExtensionOp::as_any`] when they need payload-specific parameters.
+/// Required only for families that appear in primal graphs and must be
+/// differentiable.
 #[cfg(feature = "autodiff")]
-pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
+pub trait ExtensionLinearizeRule: Debug + Send + Sync + 'static {
     /// The extension family this rule handles.
     fn family_id(&self) -> &'static str;
 
@@ -267,26 +302,72 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
         tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
 
-    /// Emit the transpose (VJP) rule.
-    fn transpose_rule(
+/// Adjoint rule for an extension op viewed as a linear map in active inputs.
+///
+/// This rule is used only while `linear_transpose` walks a linearized graph.
+#[cfg(feature = "autodiff")]
+pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
+    /// The extension family this rule handles.
+    fn family_id(&self) -> &'static str;
+
+    /// Emit cotangents for active linear inputs.
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+
+/// Optional direct primal VJP rule provider for an extension family.
+///
+/// This is an opt-in performance or compatibility escape hatch. The default
+/// reverse-mode path remains `linearize` followed by `linear_transpose`.
+#[cfg(feature = "autodiff")]
+pub trait ExtensionPrimalVjpRule: Debug + Send + Sync + 'static {
+    /// The extension family this rule handles.
+    fn family_id(&self) -> &'static str;
+
+    /// Emit a direct VJP from the primal op.
+    fn primal_vjp(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+
+/// Extension AD rule role.
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExtensionRuleRole {
+    /// Definitional JVP.
+    Linearize,
+    /// Transpose of an op as a linear map.
+    LinearTranspose,
+    /// Direct VJP from the primal graph.
+    PrimalVjp,
 }
 
 /// Errors returned from extension registries.
 #[cfg(feature = "autodiff")]
 #[derive(Debug, thiserror::Error)]
 pub enum ExtensionRegistryError {
-    /// An AD rule with the same `family_id` was already registered.
-    #[error("AD rule for family_id {family_id:?} already registered")]
-    DuplicateRule { family_id: &'static str },
+    /// An AD rule with the same `family_id` was already registered for one role.
+    #[error("extension AD {role:?} rule for family_id {family_id:?} already registered")]
+    DuplicateRule {
+        /// Duplicate extension family id.
+        family_id: &'static str,
+        /// Duplicate AD rule role.
+        role: ExtensionRuleRole,
+    },
     /// The `family_id` does not match the namespaced format
     /// `"<crate-name>.<op-name>.v<major>"`.
     #[error("family_id {family_id:?} does not match the namespaced format")]
@@ -294,7 +375,11 @@ pub enum ExtensionRegistryError {
 }
 
 #[cfg(feature = "autodiff")]
-type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
+type LinearizeRuleMap = HashMap<&'static str, Arc<dyn ExtensionLinearizeRule>>;
+#[cfg(feature = "autodiff")]
+type LinearTransposeRuleMap = HashMap<&'static str, Arc<dyn ExtensionLinearTransposeRule>>;
+#[cfg(feature = "autodiff")]
+type PrimalVjpRuleMap = HashMap<&'static str, Arc<dyn ExtensionPrimalVjpRule>>;
 
 /// Explicit, owned set of extension AD rules.
 ///
@@ -304,16 +389,24 @@ type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
 #[cfg(feature = "autodiff")]
 #[derive(Clone, Default)]
 pub struct ExtensionRuleSet {
-    rules: Arc<RuleMap>,
+    linearize_rules: Arc<LinearizeRuleMap>,
+    linear_transpose_rules: Arc<LinearTransposeRuleMap>,
+    primal_vjp_rules: Arc<PrimalVjpRuleMap>,
 }
 
 #[cfg(feature = "autodiff")]
 impl std::fmt::Debug for ExtensionRuleSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut families: Vec<_> = self.rules.keys().copied().collect();
-        families.sort_unstable();
+        let mut linearize: Vec<_> = self.linearize_rules.keys().copied().collect();
+        let mut linear_transpose: Vec<_> = self.linear_transpose_rules.keys().copied().collect();
+        let mut primal_vjp: Vec<_> = self.primal_vjp_rules.keys().copied().collect();
+        linearize.sort_unstable();
+        linear_transpose.sort_unstable();
+        primal_vjp.sort_unstable();
         f.debug_struct("ExtensionRuleSet")
-            .field("families", &families)
+            .field("linearize", &linearize)
+            .field("linear_transpose", &linear_transpose)
+            .field("primal_vjp", &primal_vjp)
             .finish()
     }
 }
@@ -328,30 +421,30 @@ impl ExtensionRuleSet {
     /// use tenferro_ops::ExtensionRuleSet;
     ///
     /// let rules = ExtensionRuleSet::new();
-    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// assert!(!rules.is_linearize_registered("example.missing.v1"));
     /// ```
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Add one rule to this owned set.
+    /// Add one linearize rule to this owned set.
     ///
     /// # Examples
     ///
     /// ```
     /// use std::sync::Arc;
     /// use tidu::ADRuleResult;
-    /// use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+    /// use computegraph::types::{LocalValueId, ValueKey};
     /// use tenferro_ops::ad::PrimitiveRuleBuilder;
-    /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
+    /// use tenferro_ops::ext_op::{ExtensionLinearizeRule, ExtensionOp};
     /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
     /// #[derive(Debug)]
     /// struct Rule;
     ///
-    /// impl ExtensionAdRule for Rule {
-    ///     fn family_id(&self) -> &'static str { "example.register_rule.v1" }
+    /// impl ExtensionLinearizeRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.register_linearize.v1" }
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
@@ -362,53 +455,66 @@ impl ExtensionRuleSet {
     ///         _ctx: &mut ShapeGuardContext,
     ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(tangent_in.to_vec())
-    ///     }
-    ///     fn transpose_rule(
-    ///         &self,
-    ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut dyn PrimitiveRuleBuilder,
-    ///         cotangent_out: &[Option<LocalValueId>],
-    ///         _inputs: &[ValueRef<StdTensorOp>],
-    ///         _mode: &OperationRole,
-    ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    ///         Ok(cotangent_out.to_vec())
     ///     }
     /// }
     ///
     /// let mut rules = ExtensionRuleSet::new();
-    /// rules.register_rule(Arc::new(Rule)).unwrap();
-    /// assert!(rules.lookup_rule("example.register_rule.v1").is_some());
+    /// rules.register_linearize(Arc::new(Rule)).unwrap();
+    /// assert!(rules.lookup_linearize("example.register_linearize.v1").is_some());
     /// ```
-    pub fn register_rule(
+    pub fn register_linearize(
         &mut self,
-        rule: Arc<dyn ExtensionAdRule>,
+        rule: Arc<dyn ExtensionLinearizeRule>,
     ) -> Result<(), ExtensionRegistryError> {
         let family_id = rule.family_id();
-        validate_rule_insert(&self.rules, family_id)?;
-        let rules = Arc::make_mut(&mut self.rules);
+        validate_linearize_insert(&self.linearize_rules, family_id)?;
+        let rules = Arc::make_mut(&mut self.linearize_rules);
         rules.insert(family_id, rule);
         Ok(())
     }
 
-    /// Return a new rule set containing `rule`.
+    /// Add one linear-transpose rule to this owned set.
+    pub fn register_linear_transpose(
+        &mut self,
+        rule: Arc<dyn ExtensionLinearTransposeRule>,
+    ) -> Result<(), ExtensionRegistryError> {
+        let family_id = rule.family_id();
+        validate_linear_transpose_insert(&self.linear_transpose_rules, family_id)?;
+        let rules = Arc::make_mut(&mut self.linear_transpose_rules);
+        rules.insert(family_id, rule);
+        Ok(())
+    }
+
+    /// Add one primal-VJP rule to this owned set.
+    pub fn register_primal_vjp(
+        &mut self,
+        rule: Arc<dyn ExtensionPrimalVjpRule>,
+    ) -> Result<(), ExtensionRegistryError> {
+        let family_id = rule.family_id();
+        validate_primal_vjp_insert(&self.primal_vjp_rules, family_id)?;
+        let rules = Arc::make_mut(&mut self.primal_vjp_rules);
+        rules.insert(family_id, rule);
+        Ok(())
+    }
+
+    /// Return a new rule set containing a linearize rule.
     ///
     /// # Examples
     ///
     /// ```
     /// use std::sync::Arc;
     /// use tidu::ADRuleResult;
-    /// use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+    /// use computegraph::types::{LocalValueId, ValueKey};
     /// use tenferro_ops::ad::PrimitiveRuleBuilder;
-    /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
+    /// use tenferro_ops::ext_op::{ExtensionLinearizeRule, ExtensionOp};
     /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
     /// #[derive(Debug)]
     /// struct Rule;
     ///
-    /// impl ExtensionAdRule for Rule {
-    ///     fn family_id(&self) -> &'static str { "example.with_rule.v1" }
+    /// impl ExtensionLinearizeRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.with_linearize.v1" }
     ///     fn linearize(
     ///         &self,
     ///         _op: &dyn ExtensionOp,
@@ -420,27 +526,34 @@ impl ExtensionRuleSet {
     ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     ///         Ok(tangent_in.to_vec())
     ///     }
-    ///     fn transpose_rule(
-    ///         &self,
-    ///         _op: &dyn ExtensionOp,
-    ///         _builder: &mut dyn PrimitiveRuleBuilder,
-    ///         cotangent_out: &[Option<LocalValueId>],
-    ///         _inputs: &[ValueRef<StdTensorOp>],
-    ///         _mode: &OperationRole,
-    ///         _ctx: &mut ShapeGuardContext,
-    ///     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    ///         Ok(cotangent_out.to_vec())
-    ///     }
     /// }
     ///
-    /// let rules = ExtensionRuleSet::new().with_rule(Arc::new(Rule)).unwrap();
-    /// assert!(rules.is_rule_registered("example.with_rule.v1"));
+    /// let rules = ExtensionRuleSet::new().with_linearize(Arc::new(Rule)).unwrap();
+    /// assert!(rules.is_linearize_registered("example.with_linearize.v1"));
     /// ```
-    pub fn with_rule(
+    pub fn with_linearize(
         mut self,
-        rule: Arc<dyn ExtensionAdRule>,
+        rule: Arc<dyn ExtensionLinearizeRule>,
     ) -> Result<Self, ExtensionRegistryError> {
-        self.register_rule(rule)?;
+        self.register_linearize(rule)?;
+        Ok(self)
+    }
+
+    /// Return a new rule set containing a linear-transpose rule.
+    pub fn with_linear_transpose(
+        mut self,
+        rule: Arc<dyn ExtensionLinearTransposeRule>,
+    ) -> Result<Self, ExtensionRegistryError> {
+        self.register_linear_transpose(rule)?;
+        Ok(self)
+    }
+
+    /// Return a new rule set containing a primal-VJP rule.
+    pub fn with_primal_vjp(
+        mut self,
+        rule: Arc<dyn ExtensionPrimalVjpRule>,
+    ) -> Result<Self, ExtensionRegistryError> {
+        self.register_primal_vjp(rule)?;
         Ok(self)
     }
 
@@ -456,18 +569,28 @@ impl ExtensionRuleSet {
     ///
     /// let mut rules = ExtensionRuleSet::new();
     /// rules.merge(ExtensionRuleSet::new()).unwrap();
-    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// assert!(!rules.is_linearize_registered("example.missing.v1"));
     /// ```
     pub fn merge(&mut self, other: ExtensionRuleSet) -> Result<(), ExtensionRegistryError> {
-        let mut rules = (*self.rules).clone();
-        for rule in other.rules.values() {
-            insert_rule(&mut rules, Arc::clone(rule))?;
+        let mut linearize_rules = (*self.linearize_rules).clone();
+        let mut linear_transpose_rules = (*self.linear_transpose_rules).clone();
+        let mut primal_vjp_rules = (*self.primal_vjp_rules).clone();
+        for rule in other.linearize_rules.values() {
+            insert_linearize_rule(&mut linearize_rules, Arc::clone(rule))?;
         }
-        self.rules = Arc::new(rules);
+        for rule in other.linear_transpose_rules.values() {
+            insert_linear_transpose_rule(&mut linear_transpose_rules, Arc::clone(rule))?;
+        }
+        for rule in other.primal_vjp_rules.values() {
+            insert_primal_vjp_rule(&mut primal_vjp_rules, Arc::clone(rule))?;
+        }
+        self.linearize_rules = Arc::new(linearize_rules);
+        self.linear_transpose_rules = Arc::new(linear_transpose_rules);
+        self.primal_vjp_rules = Arc::new(primal_vjp_rules);
         Ok(())
     }
 
-    /// Look up a rule in this set.
+    /// Look up a linearize rule in this set.
     ///
     /// # Examples
     ///
@@ -475,13 +598,26 @@ impl ExtensionRuleSet {
     /// use tenferro_ops::ExtensionRuleSet;
     ///
     /// let rules = ExtensionRuleSet::new();
-    /// assert!(rules.lookup_rule("example.missing.v1").is_none());
+    /// assert!(rules.lookup_linearize("example.missing.v1").is_none());
     /// ```
-    pub fn lookup_rule(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
-        self.rules.get(family_id).cloned()
+    pub fn lookup_linearize(&self, family_id: &str) -> Option<Arc<dyn ExtensionLinearizeRule>> {
+        self.linearize_rules.get(family_id).cloned()
     }
 
-    /// Return whether `family_id` is present in this set.
+    /// Look up a linear-transpose rule in this set.
+    pub fn lookup_linear_transpose(
+        &self,
+        family_id: &str,
+    ) -> Option<Arc<dyn ExtensionLinearTransposeRule>> {
+        self.linear_transpose_rules.get(family_id).cloned()
+    }
+
+    /// Look up a primal-VJP rule in this set.
+    pub fn lookup_primal_vjp(&self, family_id: &str) -> Option<Arc<dyn ExtensionPrimalVjpRule>> {
+        self.primal_vjp_rules.get(family_id).cloned()
+    }
+
+    /// Return whether `family_id` has a linearize rule.
     ///
     /// # Examples
     ///
@@ -489,10 +625,20 @@ impl ExtensionRuleSet {
     /// use tenferro_ops::ExtensionRuleSet;
     ///
     /// let rules = ExtensionRuleSet::new();
-    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// assert!(!rules.is_linearize_registered("example.missing.v1"));
     /// ```
-    pub fn is_rule_registered(&self, family_id: &str) -> bool {
-        self.rules.contains_key(family_id)
+    pub fn is_linearize_registered(&self, family_id: &str) -> bool {
+        self.linearize_rules.contains_key(family_id)
+    }
+
+    /// Return whether `family_id` has a linear-transpose rule.
+    pub fn is_linear_transpose_registered(&self, family_id: &str) -> bool {
+        self.linear_transpose_rules.contains_key(family_id)
+    }
+
+    /// Return whether `family_id` has a primal-VJP rule.
+    pub fn is_primal_vjp_registered(&self, family_id: &str) -> bool {
+        self.primal_vjp_rules.contains_key(family_id)
     }
 }
 
@@ -530,28 +676,87 @@ fn is_valid_family_id(family_id: &str) -> bool {
 }
 
 #[cfg(feature = "autodiff")]
-fn insert_rule(
-    rules: &mut RuleMap,
-    rule: Arc<dyn ExtensionAdRule>,
+fn insert_linearize_rule(
+    rules: &mut LinearizeRuleMap,
+    rule: Arc<dyn ExtensionLinearizeRule>,
 ) -> Result<(), ExtensionRegistryError> {
     let family_id = rule.family_id();
-    validate_rule_insert(rules, family_id)?;
+    validate_linearize_insert(rules, family_id)?;
+    rules.insert(family_id, rule);
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn insert_linear_transpose_rule(
+    rules: &mut LinearTransposeRuleMap,
+    rule: Arc<dyn ExtensionLinearTransposeRule>,
+) -> Result<(), ExtensionRegistryError> {
+    let family_id = rule.family_id();
+    validate_linear_transpose_insert(rules, family_id)?;
+    rules.insert(family_id, rule);
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn insert_primal_vjp_rule(
+    rules: &mut PrimalVjpRuleMap,
+    rule: Arc<dyn ExtensionPrimalVjpRule>,
+) -> Result<(), ExtensionRegistryError> {
+    let family_id = rule.family_id();
+    validate_primal_vjp_insert(rules, family_id)?;
     rules.insert(family_id, rule);
     Ok(())
 }
 
 #[cfg(feature = "autodiff")]
 fn validate_rule_insert(
-    rules: &RuleMap,
+    contains_family: bool,
     family_id: &'static str,
+    role: ExtensionRuleRole,
 ) -> Result<(), ExtensionRegistryError> {
     if !is_valid_family_id(family_id) {
         return Err(ExtensionRegistryError::MalformedFamilyId { family_id });
     }
-    if rules.contains_key(family_id) {
-        return Err(ExtensionRegistryError::DuplicateRule { family_id });
+    if contains_family {
+        return Err(ExtensionRegistryError::DuplicateRule { family_id, role });
     }
     Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_linearize_insert(
+    rules: &LinearizeRuleMap,
+    family_id: &'static str,
+) -> Result<(), ExtensionRegistryError> {
+    validate_rule_insert(
+        rules.contains_key(family_id),
+        family_id,
+        ExtensionRuleRole::Linearize,
+    )
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_linear_transpose_insert(
+    rules: &LinearTransposeRuleMap,
+    family_id: &'static str,
+) -> Result<(), ExtensionRegistryError> {
+    validate_rule_insert(
+        rules.contains_key(family_id),
+        family_id,
+        ExtensionRuleRole::LinearTranspose,
+    )
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_primal_vjp_insert(
+    rules: &PrimalVjpRuleMap,
+    family_id: &'static str,
+) -> Result<(), ExtensionRegistryError> {
+    validate_rule_insert(
+        rules.contains_key(family_id),
+        family_id,
+        ExtensionRuleRole::PrimalVjp,
+    )
 }
 
 /// Emit a registered extension linearization rule.
@@ -564,7 +769,7 @@ pub fn linearize_extension_rule(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    match ctx.extension_rule_for(op.family_id()) {
+    match ctx.extension_linearize_rule_for(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
         None => Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp)),
     }
@@ -580,12 +785,25 @@ pub fn transpose_extension_rule(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    match ctx.extension_rule_for(op.family_id()) {
-        Some(rule) => rule.transpose_rule(op, builder, cotangent_out, inputs, mode, ctx),
-        None => Err(ADRuleError::unsupported(
-            op.family_id(),
-            ADRuleKind::Transpose,
-        )),
+    match mode {
+        OperationRole::Linearized { active_mask } => {
+            match ctx.extension_linear_transpose_rule_for(op.family_id()) {
+                Some(rule) => {
+                    rule.linear_transpose(op, builder, cotangent_out, inputs, active_mask, ctx)
+                }
+                None => Err(ADRuleError::unsupported(
+                    op.family_id(),
+                    ADRuleKind::Transpose,
+                )),
+            }
+        }
+        OperationRole::Primary => match ctx.extension_primal_vjp_rule_for(op.family_id()) {
+            Some(rule) => rule.primal_vjp(op, builder, cotangent_out, inputs, ctx),
+            None => Err(ADRuleError::unsupported(
+                op.family_id(),
+                ADRuleKind::Transpose,
+            )),
+        },
     }
 }
 

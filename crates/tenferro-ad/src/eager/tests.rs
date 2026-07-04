@@ -10,7 +10,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
 use computegraph::{OperationRole, ValueRef};
 use tenferro_cpu::CpuBackend;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
@@ -260,7 +260,13 @@ impl ExtensionOp for ReadPathFallbackProbe {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for ReadPathFallbackProbe {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -279,7 +285,11 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
         inputs: &[&Tensor],
         _ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        op.eager_execute(inputs)
+        op.host_reference()
+            .ok_or(tenferro_tensor::Error::NoHostReference {
+                family_id: op.family_id(),
+            })?
+            .execute(inputs)
     }
 
     fn execute_reads(

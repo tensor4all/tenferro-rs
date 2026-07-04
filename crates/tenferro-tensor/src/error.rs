@@ -70,6 +70,8 @@ pub enum Error {
     },
     #[error("{op}: invalid config: {message}")]
     InvalidConfig { op: &'static str, message: String },
+    #[error("extension family {family_id:?} has no host reference implementation")]
+    NoHostReference { family_id: &'static str },
     #[error("{op}: backend failure: {message}")]
     BackendFailure { op: &'static str, message: String },
     #[error("missing runtime value for slot {slot}")]

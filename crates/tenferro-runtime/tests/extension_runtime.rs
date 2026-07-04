@@ -5,11 +5,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use tenferro_cpu::CpuBackend;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 use tenferro_ops::SymDim;
 use tenferro_runtime::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionExecutionContext,
     ExtensionExecutor, ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
+    HostReferenceRuntime,
 };
 use tenferro_tensor::{
     Buffer, BufferHandle, DType, MemoryKind, Placement, Tensor, TensorOwnedView, TensorRead,
@@ -61,8 +62,60 @@ impl ExtensionOp for IdentityRuntimeOp {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for IdentityRuntimeOp {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BackendOnlyRuntimeOp {
+    family: &'static str,
+}
+
+impl ExtensionOp for BackendOnlyRuntimeOp {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write(self.family.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<BackendOnlyRuntimeOp>()
+            .is_some_and(|op| op.family == self.family)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 }
 
@@ -206,6 +259,47 @@ fn extension_executor_executes_registered_runtime_and_manages_caches() {
 
     executor.clear_caches();
     assert_eq!(executor.cache_stats().entries, 0);
+}
+
+#[test]
+fn host_reference_runtime_delegates_to_optional_host_reference() {
+    let family = "runtime.host-reference.v1";
+    let mut executor = ExtensionExecutor::<CpuBackend>::new();
+    executor
+        .registry_mut()
+        .register(Arc::new(HostReferenceRuntime::<CpuBackend>::new(family)))
+        .expect("host reference runtime registration");
+
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let output = executor
+        .execute(&mut backend, &IdentityRuntimeOp { family }, &[&input])
+        .expect("host reference execution");
+
+    assert_eq!(output[0].as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+}
+
+#[test]
+fn host_reference_runtime_reports_backend_only_family() {
+    let family = "runtime.backend-only.v1";
+    let mut executor = ExtensionExecutor::<CpuBackend>::new();
+    executor
+        .registry_mut()
+        .register(Arc::new(HostReferenceRuntime::<CpuBackend>::new(family)))
+        .expect("host reference runtime registration");
+
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let err = executor
+        .execute(&mut backend, &BackendOnlyRuntimeOp { family }, &[&input])
+        .expect_err("backend-only op should not fabricate a host reference");
+
+    assert!(matches!(
+        err,
+        tenferro_tensor::Error::NoHostReference {
+            family_id: "runtime.backend-only.v1"
+        }
+    ));
 }
 
 #[test]

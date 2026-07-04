@@ -26,11 +26,15 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
     );
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
-    let err = op.eager_execute(&[&tensor]).unwrap_err();
+    let err = op
+        .host_reference()
+        .expect("linalg host reference")
+        .execute(&[&tensor])
+        .unwrap_err();
 
     match err {
         Error::BackendFailure { op, message } => {
-            assert_eq!(op, "linalg_eager_execute");
+            assert_eq!(op, "linalg_host_reference");
             assert!(message.contains("cuda feature"));
             assert!(message.contains("download"));
         }

@@ -47,10 +47,6 @@ impl ExtensionOp for TestExtensionOp {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
 }
 
 #[test]

@@ -29,13 +29,14 @@ pub mod std_tensor_op;
 pub mod sym_dim;
 
 pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
-#[cfg(not(feature = "autodiff"))]
-pub use ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 pub use ext_op::{
-    linearize_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
-    ExtensionRegistryError, ExtensionRuleSet,
+    linearize_extension_rule, transpose_extension_rule, ExtensionLinearTransposeRule,
+    ExtensionLinearizeRule, ExtensionOp, ExtensionPrimalVjpRule, ExtensionRegistryError,
+    ExtensionRuleRole, ExtensionRuleSet, HostReference,
 };
+#[cfg(not(feature = "autodiff"))]
+pub use ext_op::{ExtensionOp, HostReference};
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;
 pub use tenferro_extension_macros::ExtensionFamilyId;

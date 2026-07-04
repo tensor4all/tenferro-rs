@@ -3,7 +3,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
-use tenferro_tensor::{CompareDir, DType, Tensor};
+use tenferro_tensor::{CompareDir, DType};
 
 use crate::ext_op::ExtensionOp;
 use crate::std_tensor_op::StdTensorOp;
@@ -45,10 +45,6 @@ impl ExtensionOp for CatalogExt {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
     }
 }
 

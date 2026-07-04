@@ -60,7 +60,7 @@ pub use extension_cache::{
 };
 pub use extension_runtime::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
+    ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
 pub use graph::{
     GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,

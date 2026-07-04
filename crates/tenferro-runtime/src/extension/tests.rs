@@ -47,10 +47,6 @@ impl ExtensionOp for TestExtension {
             .map(|_| (dtypes[0], shapes[0].to_vec()))
             .collect())
     }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
 }
 
 #[test]

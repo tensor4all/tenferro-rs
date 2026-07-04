@@ -14,7 +14,7 @@
 //! hand-computed expected values.
 
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_ad::{AdContext, AdContextBuilder, EagerRuntime, EagerTensor};
+use tenferro_ad::{AdContext, AdContextBuilder, EagerBackend, EagerRuntime, EagerTensor};
 #[path = "extension_op/api_and_registry.rs"]
 mod api_and_registry;
 mod support;
@@ -25,16 +25,19 @@ use support::RunTraced;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_ad::extension::{apply_eager, ExtensionAdRule, ExtensionRuleSet};
+use tenferro_ad::extension::{
+    apply_eager, ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
+    ExtensionRuleRole, ExtensionRuleSet, HostReference,
+};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
-use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
+use tenferro_runtime::extension::{apply, HostReferenceRuntime};
 use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::{DType, TensorBackend, TensorRead, TypedTensor};
+use tenferro_tensor::{DType, TensorBackend, TypedTensor};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 // ----------------------------------------------------------------------
@@ -83,7 +86,13 @@ impl ExtensionOp for TestScaleBy2 {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestScaleBy2 {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = inputs[0];
         // Reuse the same strategy the AD rules use: output = input + input.
         match input {
@@ -108,7 +117,7 @@ impl ExtensionOp for TestScaleBy2 {
 #[derive(Debug)]
 struct TestScaleBy2Rule;
 
-impl ExtensionAdRule for TestScaleBy2Rule {
+impl ExtensionLinearizeRule for TestScaleBy2Rule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.scale_by_2.v1"
     }
@@ -136,14 +145,20 @@ impl ExtensionAdRule for TestScaleBy2Rule {
             None => Ok(vec![None]),
         }
     }
+}
 
-    fn transpose_rule(
+impl ExtensionLinearTransposeRule for TestScaleBy2Rule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.scale_by_2.v1"
+    }
+
+    fn linear_transpose(
         &self,
         _op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
+        _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         match cotangent_out[0] {
@@ -164,7 +179,9 @@ impl ExtensionAdRule for TestScaleBy2Rule {
 
 fn scale_by_2_rules() -> ExtensionRuleSet {
     ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestScaleBy2Rule))
+        .with_linearize(Arc::new(TestScaleBy2Rule))
+        .expect("scale_by_2 linearize rule registration")
+        .with_linear_transpose(Arc::new(TestScaleBy2Rule))
         .expect("scale_by_2 rule registration")
 }
 
@@ -226,7 +243,13 @@ impl ExtensionOp for TestSwap {
         ])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestSwap {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[1].clone(), inputs[0].clone()])
     }
 }
@@ -234,7 +257,7 @@ impl ExtensionOp for TestSwap {
 #[derive(Debug)]
 struct TestSwapRule;
 
-impl ExtensionAdRule for TestSwapRule {
+impl ExtensionLinearizeRule for TestSwapRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.swap.v1"
     }
@@ -250,14 +273,20 @@ impl ExtensionAdRule for TestSwapRule {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[1], tangent_in[0]])
     }
+}
 
-    fn transpose_rule(
+impl ExtensionLinearTransposeRule for TestSwapRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.swap.v1"
+    }
+
+    fn linear_transpose(
         &self,
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
+        _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[1], cotangent_out[0]])
@@ -266,7 +295,9 @@ impl ExtensionAdRule for TestSwapRule {
 
 fn swap_rules() -> ExtensionRuleSet {
     ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestSwapRule))
+        .with_linearize(Arc::new(TestSwapRule))
+        .expect("swap linearize rule registration")
+        .with_linear_transpose(Arc::new(TestSwapRule))
         .expect("swap rule registration")
 }
 
@@ -325,7 +356,13 @@ impl ExtensionOp for TestPreferLinearize {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestPreferLinearize {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -333,7 +370,7 @@ impl ExtensionOp for TestPreferLinearize {
 #[derive(Debug)]
 struct TestPreferLinearizeRule;
 
-impl ExtensionAdRule for TestPreferLinearizeRule {
+impl ExtensionLinearizeRule for TestPreferLinearizeRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.prefer_linearize.v1"
     }
@@ -349,14 +386,19 @@ impl ExtensionAdRule for TestPreferLinearizeRule {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[0]])
     }
+}
 
-    fn transpose_rule(
+impl ExtensionPrimalVjpRule for TestPreferLinearizeRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.prefer_linearize.v1"
+    }
+
+    fn primal_vjp(
         &self,
         _op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let _ = ctx.transpose_primal_outputs();
@@ -378,7 +420,9 @@ impl ExtensionAdRule for TestPreferLinearizeRule {
 
 fn prefer_linearize_rules() -> ExtensionRuleSet {
     ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestPreferLinearizeRule))
+        .with_linearize(Arc::new(TestPreferLinearizeRule))
+        .expect("prefer_linearize linearize rule registration")
+        .with_primal_vjp(Arc::new(TestPreferLinearizeRule))
         .expect("prefer_linearize rule registration")
 }
 
@@ -435,7 +479,13 @@ impl ExtensionOp for TestPrimaryTransposeOnly {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestPrimaryTransposeOnly {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -443,7 +493,7 @@ impl ExtensionOp for TestPrimaryTransposeOnly {
 #[derive(Debug)]
 struct TestPrimaryTransposeOnlyRule;
 
-impl ExtensionAdRule for TestPrimaryTransposeOnlyRule {
+impl ExtensionLinearizeRule for TestPrimaryTransposeOnlyRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.primary_transpose_only.v1"
     }
@@ -465,14 +515,19 @@ impl ExtensionAdRule for TestPrimaryTransposeOnlyRule {
             ADRuleKind::Jvp,
         ))
     }
+}
 
-    fn transpose_rule(
+impl ExtensionPrimalVjpRule for TestPrimaryTransposeOnlyRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.primary_transpose_only.v1"
+    }
+
+    fn primal_vjp(
         &self,
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let _ = ctx.transpose_primal_outputs();
@@ -484,7 +539,9 @@ fn primary_transpose_only_ad_context() -> AdContext {
     AdContext::builder()
         .with_extension_rules(
             ExtensionRuleSet::new()
-                .with_rule(Arc::new(TestPrimaryTransposeOnlyRule))
+                .with_linearize(Arc::new(TestPrimaryTransposeOnlyRule))
+                .expect("primary_transpose_only linearize registration")
+                .with_primal_vjp(Arc::new(TestPrimaryTransposeOnlyRule))
                 .expect("primary_transpose_only rule registration"),
         )
         .build()
@@ -533,7 +590,13 @@ impl ExtensionOp for TestNoAd {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestNoAd {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -585,7 +648,13 @@ impl ExtensionOp for TestProbeIdentity {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestProbeIdentity {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -632,7 +701,13 @@ impl ExtensionOp for TestProbeLinear {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestProbeLinear {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -640,7 +715,7 @@ impl ExtensionOp for TestProbeLinear {
 #[derive(Debug)]
 struct TestProbeIdentityRule;
 
-impl ExtensionAdRule for TestProbeIdentityRule {
+impl ExtensionLinearizeRule for TestProbeIdentityRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_identity.v1"
     }
@@ -676,47 +751,23 @@ impl ExtensionAdRule for TestProbeIdentityRule {
         );
         Ok(vec![Some(out[0])])
     }
-
-    fn transpose_rule(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Ok(vec![cotangent_out[0], None])
-    }
 }
 
 #[derive(Debug)]
 struct TestProbeLinearRule;
 
-impl ExtensionAdRule for TestProbeLinearRule {
+impl ExtensionLinearTransposeRule for TestProbeLinearRule {
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_linear.v1"
     }
 
-    fn linearize(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Ok(vec![tangent_in[0]])
-    }
-
-    fn transpose_rule(
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
+        _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let Some(ct) = cotangent_out[0] else {
@@ -782,7 +833,13 @@ impl ExtensionOp for TestBadOutputCount {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestBadOutputCount {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[0].clone()])
     }
 }
@@ -793,9 +850,9 @@ impl ExtensionOp for TestBadOutputCount {
 
 fn probe_rules() -> ExtensionRuleSet {
     ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestProbeIdentityRule))
+        .with_linearize(Arc::new(TestProbeIdentityRule))
         .expect("probe identity rule registration")
-        .with_rule(Arc::new(TestProbeLinearRule))
+        .with_linear_transpose(Arc::new(TestProbeLinearRule))
         .expect("probe linear rule registration")
 }
 
@@ -820,40 +877,6 @@ fn f64_slice(tensor: &Tensor) -> &[f64] {
     }
 }
 
-#[derive(Debug)]
-struct TestRuntime {
-    family_id: &'static str,
-}
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TestRuntime {
-    fn family_id(&self) -> &'static str {
-        self.family_id
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[&Tensor],
-        _ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        op.eager_execute(inputs)
-    }
-
-    fn execute_reads(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[TensorRead<'_>],
-        ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
-        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-        self.execute(op, &input_refs, ctx)
-    }
-}
-
 fn register_test_runtime<B: TensorBackend + 'static>(
     executor: &mut GraphExecutor<B>,
     family_id: &'static str,
@@ -862,7 +885,7 @@ fn register_test_runtime<B: TensorBackend + 'static>(
         .register_extension(|extension_executor| {
             extension_executor
                 .registry_mut()
-                .register(Arc::new(TestRuntime { family_id }))
+                .register(Arc::new(HostReferenceRuntime::<B>::new(family_id)))
         })
         .expect("register test extension runtime");
 }
@@ -870,9 +893,9 @@ fn register_test_runtime<B: TensorBackend + 'static>(
 fn register_test_eager_runtime(runtime: &EagerRuntime, family_id: &'static str) {
     runtime
         .register_extension(|extension_executor| {
-            extension_executor
-                .registry_mut()
-                .register(Arc::new(TestRuntime { family_id }))
+            extension_executor.registry_mut().register(Arc::new(
+                HostReferenceRuntime::<EagerBackend>::new(family_id),
+            ))
         })
         .expect("register test eager extension runtime");
 }
@@ -957,16 +980,17 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     };
     assert!(err.to_string().contains("tenferro-tests.scale_by_2.v1"));
 
-    let rules = ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestScaleBy2Rule))
-        .expect("owned scale_by_2 rule registration");
+    let rules = scale_by_2_rules();
     let ad = AdContext::builder()
         .with_extension_rules(rules)
         .build()
         .unwrap();
     assert!(ad
         .extension_rules()
-        .is_rule_registered("tenferro-tests.scale_by_2.v1"));
+        .is_linearize_registered("tenferro-tests.scale_by_2.v1"));
+    assert!(ad
+        .extension_rules()
+        .is_linear_transpose_registered("tenferro-tests.scale_by_2.v1"));
 
     let grad = ad
         .grad_optional(&loss, &x)
@@ -1066,12 +1090,8 @@ fn traced_vjp_primary_transpose_fallback_reports_inactive_wrt() {
 
 #[test]
 fn ad_context_builder_rejects_duplicate_extension_rule_sets() {
-    let first = ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestScaleBy2Rule))
-        .expect("first rule set");
-    let second = ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestScaleBy2Rule))
-        .expect("second rule set");
+    let first = scale_by_2_rules();
+    let second = scale_by_2_rules();
 
     let err = AdContextBuilder::new()
         .with_extension_rules(first)
@@ -1081,7 +1101,8 @@ fn ad_context_builder_rejects_duplicate_extension_rule_sets() {
     assert!(matches!(
         err,
         tenferro_ad::extension::ExtensionRegistryError::DuplicateRule {
-            family_id: "tenferro-tests.scale_by_2.v1"
+            family_id: "tenferro-tests.scale_by_2.v1",
+            role: ExtensionRuleRole::Linearize
         }
     ));
 }
@@ -1107,9 +1128,7 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
         .expect_err("explicit empty rule set should not use global fallback");
     assert!(err.to_string().contains("tenferro-tests.scale_by_2.v1"));
 
-    let rules = ExtensionRuleSet::new()
-        .with_rule(Arc::new(TestScaleBy2Rule))
-        .expect("owned scale_by_2 rule registration");
+    let rules = scale_by_2_rules();
     let ad = AdContext::builder()
         .with_extension_rules(rules)
         .build()
