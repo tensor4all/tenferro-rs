@@ -1,6 +1,8 @@
 use crate::buffer_pool::BufferPool;
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
-use tenferro_tensor::backend::{dot_general_accum_via_temp, validate_dot_general_accumulation};
+use tenferro_tensor::backend::{
+    dot_general_accum_via_temp, validate_dot_general_accumulation, ElementwiseFusionPlan,
+};
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -665,6 +667,14 @@ impl TensorBuffer for CpuExecSession<'_> {
 }
 
 impl TensorFusion for CpuExecSession<'_> {
+    fn execute_elementwise_fusion(
+        &mut self,
+        inputs: &[&Tensor],
+        plan: &ElementwiseFusionPlan,
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        elementwise::elementwise_fusion_with_pool(self.buffers, inputs, plan)
+    }
+
     fn execute_broadcast_multiply(
         &mut self,
         lhs: TensorRead<'_>,
