@@ -1,6 +1,6 @@
 # PyTorch and JAX Mapping
 
-This page is for readers who already know either `torch` or `jax.numpy` and want to find the tenferro equivalent quickly.
+This page is a translation guide for readers who already know `torch` or `jax.numpy`: find the tenferro equivalent quickly, then read [Core Concepts](./core-concepts.md) for tenferro's own mental model.
 
 ## Concept mapping
 
