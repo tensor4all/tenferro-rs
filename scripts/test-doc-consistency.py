@@ -104,8 +104,15 @@ def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
     assert "repository rules review (LLM)" not in text
     assert text.index("pre-gpu-gate:") < text.index("cuda-archive:")
     assert text.index("pre-gpu-gate:") < text.index("runs-on: ubuntu-gpu")
-    assert "needs: [pre-gpu-gate]" in text
+    # The expensive GPU runner (cuda-run) stays gated behind the review +
+    # non-GPU checks: it needs both pre-gpu-gate and the archive.
     assert "needs: [pre-gpu-gate, cuda-archive]" in text
+    # The cheap non-GPU archive build must NOT be gated on pre-gpu-gate: it
+    # compiles in parallel with the non-GPU CI so the GPU stage can start the
+    # moment the gate clears. Guard against re-adding a bare `needs:
+    # [pre-gpu-gate]`, which would serialize the archive back onto the critical
+    # path (only cuda-run carries the gate).
+    assert "needs: [pre-gpu-gate]" not in text
 
 
 def test_pre_pr_checklist_requires_local_llm_review() -> None:
