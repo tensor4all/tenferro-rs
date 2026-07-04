@@ -2064,3 +2064,90 @@ fn n_elements_invariant_checks_do_not_use_unsafe_unreachable() {
         "n_elements panic path should document the constructor-validation invariant"
     );
 }
+
+fn backend_tensor_f64(id: u64, len: usize) -> TypedTensor<f64> {
+    TypedTensor::<f64>::from_buffer_col_major(
+        vec![len],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(id, len))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn backend_region_view_exposes_layout_and_shared_buffer() {
+    let tensor = backend_tensor_f64(90, 16);
+    let view = tensor
+        .backend_region_view(vec![2, 3], vec![1, 4], 5)
+        .unwrap();
+
+    assert_eq!(view.shape(), &[2, 3]);
+    assert_eq!(view.strides(), &[1, 4]);
+    assert_eq!(view.offset(), 5);
+    assert_eq!(view.placement(), tensor.placement());
+    let buffer = view.backend_buffer().expect("backend buffer");
+    assert_eq!(buffer.len(), 16);
+}
+
+#[test]
+fn backend_region_view_mut_exposes_layout_and_shared_buffer() {
+    let mut tensor = backend_tensor_f64(91, 16);
+    let placement = tensor.placement().clone();
+    let view = tensor
+        .backend_region_view_mut(vec![2, 2], vec![1, 4], 10)
+        .unwrap();
+
+    assert_eq!(view.shape(), &[2, 2]);
+    assert_eq!(view.strides(), &[1, 4]);
+    assert_eq!(view.offset(), 10);
+    assert_eq!(view.placement(), &placement);
+    let buffer = view.backend_buffer().expect("backend buffer");
+    assert_eq!(buffer.len(), 16);
+}
+
+#[test]
+fn backend_region_view_rejects_host_buffer() {
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap();
+    let err = tensor
+        .backend_region_view(vec![2, 2], vec![1, 2], 0)
+        .unwrap_err();
+    assert!(err.to_string().contains("backend"));
+
+    let mut tensor = tensor;
+    let err = tensor
+        .backend_region_view_mut(vec![2, 2], vec![1, 2], 0)
+        .unwrap_err();
+    assert!(err.to_string().contains("backend"));
+}
+
+#[test]
+fn backend_region_view_rejects_out_of_bounds_span() {
+    let tensor = backend_tensor_f64(92, 8);
+    // Max reachable element offset 7 + 1*1 + 4*1 = 12 exceeds len 8.
+    assert!(tensor
+        .backend_region_view(vec![2, 2], vec![1, 4], 7)
+        .is_err());
+    let mut tensor = tensor;
+    assert!(tensor
+        .backend_region_view_mut(vec![2, 2], vec![1, 4], 7)
+        .is_err());
+}
+
+#[test]
+fn backend_region_view_mut_rejects_aliasing_layout() {
+    let mut tensor = backend_tensor_f64(93, 8);
+    // Zero stride on a non-singleton axis aliases physical elements.
+    assert!(tensor
+        .backend_region_view_mut(vec![2, 2], vec![0, 1], 0)
+        .is_err());
+    // The read-only variant accepts the same broadcast-style layout.
+    assert!(tensor
+        .backend_region_view(vec![2, 2], vec![0, 1], 0)
+        .is_ok());
+}
