@@ -100,10 +100,14 @@ summary, with PyTorch/JAX demoted to explanatory anchors. Keep the
 
 ## getting-started/
 
-Alignment edits only; no structural or content reorganization.
+Alignment edits only; no structural reorganization.
 
-- `index.md`, `core-concepts.md`: align opening framing with the
-  one-liner.
+- `index.md`: make Setup crates.io-first — the crates are published as of
+  2026-06-23, so the local-checkout-first text and the "Switch to crates.io
+  once published" block are factual drift. Keep the rest.
+- `core-concepts.md`: unchanged. Refined during planning: the page is
+  already task-oriented with no stale positioning, and repeating the
+  identity line on a sub-page adds nothing.
 - `pytorch-jax-mapping.md`: add an intro positioning it as a translation
   guide for PyTorch/JAX users.
 
