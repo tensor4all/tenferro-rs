@@ -1,8 +1,11 @@
 name: CI_gpu
 
-# Wait for repository-policy and non-GPU CI checks before building CUDA test
-# archives, then execute CUDA-feature GPU tests on the org larger GPU runner
-# `ubuntu-gpu` to minimize GPU billing.
+# Build the CUDA test archive on a cheap non-GPU runner IN PARALLEL with the
+# repository-policy and non-GPU CI checks, then execute CUDA-feature GPU tests
+# on the org larger GPU runner `ubuntu-gpu` only after those checks pass, to
+# minimize GPU billing. Only the GPU runner (`cuda-run`) is gated behind
+# `pre-gpu-gate`; the archive build is not, so the GPU stage can start the
+# moment the gate clears instead of waiting for the archive to compile.
 
 on:
   pull_request:
@@ -38,14 +41,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // Gate GPU billing on the checks that best predict a broken PR:
+            // formatting, lint, coverage (frequently the failing check here),
+            // and the full non-GPU workspace test aggregate, plus repository
+            // policy. Other merge-required checks (docs-site, blas inject,
+            // tensor core dependency boundary) still block merge via branch
+            // protection, but do not need to hold up the GPU runner.
             const required = [
               "repository rules review",
               "rustfmt",
               "clippy",
-              "cargo test (blas inject)",
-              "tensor core dependency boundary",
               "coverage",
-              "docs-site",
               "CI gate (PR workspace tests)",
             ];
 
@@ -112,13 +118,12 @@ jobs:
 
   cuda-archive:
     name: CUDA test archive
-    needs: [pre-gpu-gate]
-    if: |
-      always() &&
-      (
-        github.event.pull_request.head.repo.full_name != github.repository ||
-        needs.pre-gpu-gate.result == 'success'
-      )
+    # NOT gated on pre-gpu-gate: this build runs on a cheap non-GPU runner, so
+    # it compiles in parallel with the non-GPU CI + repository review to keep it
+    # off the critical path. The expensive GPU runner is still gated -- `cuda-run`
+    # needs [pre-gpu-gate, cuda-archive]. Runs for both fork and same-repo PRs;
+    # the build result (and its cache) is reused even if a prerequisite check
+    # later fails, so the only cost is cheap-runner minutes on doomed PRs.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
