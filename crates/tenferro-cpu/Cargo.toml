@@ -81,3 +81,7 @@ harness = false
 name = "openblas_direct_overhead"
 harness = false
 required-features = ["cpu-blas"]
+
+[[bench]]
+name = "grouped_gemm"
+harness = false

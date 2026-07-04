@@ -3,7 +3,65 @@ use num_complex::{Complex32, Complex64};
 
 use crate::Error;
 
-pub(crate) trait BlasGemm: Sized {
+pub(crate) struct BlasGemmBatch<T> {
+    pub(crate) a_ptr: *const T,
+    pub(crate) b_ptr: *const T,
+    pub(crate) c_ptr: *mut T,
+    pub(crate) m: usize,
+    pub(crate) n: usize,
+    pub(crate) k: usize,
+    pub(crate) a_rs: isize,
+    pub(crate) a_cs: isize,
+    pub(crate) b_rs: isize,
+    pub(crate) b_cs: isize,
+    pub(crate) c_rs: isize,
+    pub(crate) c_cs: isize,
+}
+
+#[cfg(feature = "blas-openblas")]
+const OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT: usize = 16;
+
+#[cfg(feature = "blas-openblas")]
+pub(super) fn openblas_should_use_gemm_batch<T>(batches: &[BlasGemmBatch<T>]) -> bool {
+    batches.len() > 1
+        && batches.iter().all(|batch| {
+            batch.m <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
+                && batch.n <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
+                && batch.k <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
+        })
+}
+
+unsafe fn grouped_gemm_sequential<T: BlasGemm>(
+    alpha: T,
+    beta: T,
+    batches: &[BlasGemmBatch<T>],
+) -> crate::Result<bool> {
+    for batch in batches {
+        // SAFETY: this fallback preserves the caller's grouped-GEMM contract by
+        // executing each already-validated job sequentially.
+        unsafe {
+            T::strided_gemm(
+                alpha,
+                batch.a_ptr,
+                batch.m,
+                batch.k,
+                batch.a_rs,
+                batch.a_cs,
+                batch.b_ptr,
+                batch.n,
+                batch.b_rs,
+                batch.b_cs,
+                beta,
+                batch.c_ptr,
+                batch.c_rs,
+                batch.c_cs,
+            )?;
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) trait BlasGemm: Sized + Copy {
     // Kept as a provider-local contiguous BLAS entry point for direct BLAS
     // validation even when the optimized path uses explicit strides.
     #[allow(dead_code)]
@@ -80,6 +138,23 @@ pub(crate) trait BlasGemm: Sized {
             )?;
         }
         Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Run a group of raw strided GEMMs with shared alpha/beta.
+    ///
+    /// # Safety
+    ///
+    /// Each batch entry must satisfy [`BlasGemm::strided_gemm`]'s pointer
+    /// safety contract. Mutable output regions must be pairwise disjoint.
+    unsafe fn grouped_gemm(
+        alpha: Self,
+        beta: Self,
+        batches: &[BlasGemmBatch<Self>],
+    ) -> crate::Result<bool> {
+        // SAFETY: this default provider preserves the caller's grouped-GEMM
+        // contract by executing each already-validated job sequentially.
+        unsafe { grouped_gemm_sequential(alpha, beta, batches) }
     }
 }
 
@@ -199,8 +274,372 @@ fn apply_conj_transpose(trans: CBLAS_TRANSPOSE, conj: bool) -> Option<CBLAS_TRAN
     }
 }
 
+#[cfg(feature = "blas-openblas")]
+mod openblas_batch {
+    use super::*;
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn cblas_sgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const f32,
+            a: *const *const f32,
+            lda: *const i32,
+            b: *const *const f32,
+            ldb: *const i32,
+            beta: *const f32,
+            c: *const *mut f32,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_dgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const f64,
+            a: *const *const f64,
+            lda: *const i32,
+            b: *const *const f64,
+            ldb: *const i32,
+            beta: *const f64,
+            c: *const *mut f64,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_cgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const c_void,
+            a: *const *const c_void,
+            lda: *const i32,
+            b: *const *const c_void,
+            ldb: *const i32,
+            beta: *const c_void,
+            c: *const *mut c_void,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_zgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const c_void,
+            a: *const *const c_void,
+            lda: *const i32,
+            b: *const *const c_void,
+            ldb: *const i32,
+            beta: *const c_void,
+            c: *const *mut c_void,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    struct PreparedGroup {
+        trans_a: CBLAS_TRANSPOSE,
+        trans_b: CBLAS_TRANSPOSE,
+        m: i32,
+        n: i32,
+        k: i32,
+        lda: i32,
+        ldb: i32,
+        ldc: i32,
+    }
+
+    fn same_group(lhs: PreparedGroup, rhs: PreparedGroup) -> bool {
+        lhs.trans_a as i32 == rhs.trans_a as i32
+            && lhs.trans_b as i32 == rhs.trans_b as i32
+            && lhs.m == rhs.m
+            && lhs.n == rhs.n
+            && lhs.k == rhs.k
+            && lhs.lda == rhs.lda
+            && lhs.ldb == rhs.ldb
+            && lhs.ldc == rhs.ldc
+    }
+
+    struct PreparedBatch<T> {
+        groups: Vec<PreparedGroup>,
+        a: Vec<*const T>,
+        b: Vec<*const T>,
+        c: Vec<*mut T>,
+        group_size: Vec<i32>,
+    }
+
+    impl<T> PreparedBatch<T> {
+        fn group_count(&self) -> usize {
+            self.groups.len()
+        }
+
+        fn push_group(&mut self, group: PreparedGroup) -> crate::Result<()> {
+            match self.groups.last().copied() {
+                Some(last) if same_group(last, group) => {
+                    let Some(last_size) = self.group_size.last_mut() else {
+                        return Err(Error::InvalidConfig {
+                            op: "grouped_gemm",
+                            message: "OpenBLAS grouped GEMM metadata is inconsistent".into(),
+                        });
+                    };
+                    *last_size = last_size
+                        .checked_add(1)
+                        .ok_or_else(|| Error::InvalidConfig {
+                            op: "grouped_gemm",
+                            message: "OpenBLAS grouped GEMM group_size overflows i32".into(),
+                        })?;
+                }
+                _ => {
+                    self.groups.push(group);
+                    self.group_size.push(1);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn prepare<T>(batches: &[BlasGemmBatch<T>]) -> crate::Result<PreparedBatch<T>> {
+        // OpenBLAS consumes C-contiguous descriptor arrays for one immediate
+        // call. These Vecs are deliberately not SmallVec-backed: job count is
+        // runtime-dependent, and capacity reservation plus a stable slice keeps
+        // the FFI boundary simple without a second inline/spill path.
+        let mut prepared = PreparedBatch {
+            groups: Vec::with_capacity(batches.len()),
+            a: Vec::with_capacity(batches.len()),
+            b: Vec::with_capacity(batches.len()),
+            c: Vec::with_capacity(batches.len()),
+            group_size: Vec::with_capacity(batches.len()),
+        };
+        for batch in batches {
+            let (trans_a, lda) = infer_a_layout(batch.m, batch.k, batch.a_rs, batch.a_cs)?;
+            let (trans_b, ldb) = infer_b_layout(batch.k, batch.n, batch.b_rs, batch.b_cs)?;
+            prepared.push_group(PreparedGroup {
+                trans_a,
+                trans_b,
+                m: dim_to_i32("m", batch.m)?,
+                n: dim_to_i32("n", batch.n)?,
+                k: dim_to_i32("k", batch.k)?,
+                lda,
+                ldb,
+                ldc: infer_c_layout(batch.m, batch.c_rs, batch.c_cs)?,
+            })?;
+            prepared.a.push(batch.a_ptr);
+            prepared.b.push(batch.b_ptr);
+            prepared.c.push(batch.c_ptr);
+        }
+        Ok(prepared)
+    }
+
+    pub(crate) unsafe fn sgemm_batch(
+        alpha: f32,
+        beta: f32,
+        batches: &[BlasGemmBatch<f32>],
+    ) -> crate::Result<bool> {
+        if batches.is_empty() {
+            return Ok(true);
+        }
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", prepared.group_count())?;
+        // alpha/beta are per OpenBLAS group, not per job. Keep them in Vecs so
+        // the C call receives stable contiguous descriptor slices.
+        let alpha = vec![alpha; prepared.group_count()];
+        let beta = vec![beta; prepared.group_count()];
+        let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
+        let trans_b: Vec<_> = prepared.groups.iter().map(|group| group.trans_b).collect();
+        let m: Vec<_> = prepared.groups.iter().map(|group| group.m).collect();
+        let n: Vec<_> = prepared.groups.iter().map(|group| group.n).collect();
+        let k: Vec<_> = prepared.groups.iter().map(|group| group.k).collect();
+        let lda: Vec<_> = prepared.groups.iter().map(|group| group.lda).collect();
+        let ldb: Vec<_> = prepared.groups.iter().map(|group| group.ldb).collect();
+        let ldc: Vec<_> = prepared.groups.iter().map(|group| group.ldc).collect();
+        unsafe {
+            cblas_sgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                trans_a.as_ptr(),
+                trans_b.as_ptr(),
+                m.as_ptr(),
+                n.as_ptr(),
+                k.as_ptr(),
+                alpha.as_ptr(),
+                prepared.a.as_ptr(),
+                lda.as_ptr(),
+                prepared.b.as_ptr(),
+                ldb.as_ptr(),
+                beta.as_ptr(),
+                prepared.c.as_ptr(),
+                ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn dgemm_batch(
+        alpha: f64,
+        beta: f64,
+        batches: &[BlasGemmBatch<f64>],
+    ) -> crate::Result<bool> {
+        if batches.is_empty() {
+            return Ok(true);
+        }
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", prepared.group_count())?;
+        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        let alpha = vec![alpha; prepared.group_count()];
+        let beta = vec![beta; prepared.group_count()];
+        let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
+        let trans_b: Vec<_> = prepared.groups.iter().map(|group| group.trans_b).collect();
+        let m: Vec<_> = prepared.groups.iter().map(|group| group.m).collect();
+        let n: Vec<_> = prepared.groups.iter().map(|group| group.n).collect();
+        let k: Vec<_> = prepared.groups.iter().map(|group| group.k).collect();
+        let lda: Vec<_> = prepared.groups.iter().map(|group| group.lda).collect();
+        let ldb: Vec<_> = prepared.groups.iter().map(|group| group.ldb).collect();
+        let ldc: Vec<_> = prepared.groups.iter().map(|group| group.ldc).collect();
+        unsafe {
+            cblas_dgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                trans_a.as_ptr(),
+                trans_b.as_ptr(),
+                m.as_ptr(),
+                n.as_ptr(),
+                k.as_ptr(),
+                alpha.as_ptr(),
+                prepared.a.as_ptr(),
+                lda.as_ptr(),
+                prepared.b.as_ptr(),
+                ldb.as_ptr(),
+                beta.as_ptr(),
+                prepared.c.as_ptr(),
+                ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn cgemm_batch(
+        alpha: Complex32,
+        beta: Complex32,
+        batches: &[BlasGemmBatch<Complex32>],
+    ) -> crate::Result<bool> {
+        if batches.is_empty() {
+            return Ok(true);
+        }
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", prepared.group_count())?;
+        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        let alpha = vec![alpha; prepared.group_count()];
+        let beta = vec![beta; prepared.group_count()];
+        let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
+        let trans_b: Vec<_> = prepared.groups.iter().map(|group| group.trans_b).collect();
+        let m: Vec<_> = prepared.groups.iter().map(|group| group.m).collect();
+        let n: Vec<_> = prepared.groups.iter().map(|group| group.n).collect();
+        let k: Vec<_> = prepared.groups.iter().map(|group| group.k).collect();
+        let lda: Vec<_> = prepared.groups.iter().map(|group| group.lda).collect();
+        let ldb: Vec<_> = prepared.groups.iter().map(|group| group.ldb).collect();
+        let ldc: Vec<_> = prepared.groups.iter().map(|group| group.ldc).collect();
+        // Complex OpenBLAS ABI uses c_void pointer arrays, so these Vecs mirror
+        // the provider descriptor arrays instead of SmallVec rank metadata.
+        let a: Vec<*const c_void> = prepared.a.iter().map(|&ptr| ptr as *const c_void).collect();
+        let b: Vec<*const c_void> = prepared.b.iter().map(|&ptr| ptr as *const c_void).collect();
+        let c: Vec<*mut c_void> = prepared.c.iter().map(|&ptr| ptr as *mut c_void).collect();
+        unsafe {
+            cblas_cgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                trans_a.as_ptr(),
+                trans_b.as_ptr(),
+                m.as_ptr(),
+                n.as_ptr(),
+                k.as_ptr(),
+                alpha.as_ptr() as *const c_void,
+                a.as_ptr(),
+                lda.as_ptr(),
+                b.as_ptr(),
+                ldb.as_ptr(),
+                beta.as_ptr() as *const c_void,
+                c.as_ptr(),
+                ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn zgemm_batch(
+        alpha: Complex64,
+        beta: Complex64,
+        batches: &[BlasGemmBatch<Complex64>],
+    ) -> crate::Result<bool> {
+        if batches.is_empty() {
+            return Ok(true);
+        }
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", prepared.group_count())?;
+        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        let alpha = vec![alpha; prepared.group_count()];
+        let beta = vec![beta; prepared.group_count()];
+        let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
+        let trans_b: Vec<_> = prepared.groups.iter().map(|group| group.trans_b).collect();
+        let m: Vec<_> = prepared.groups.iter().map(|group| group.m).collect();
+        let n: Vec<_> = prepared.groups.iter().map(|group| group.n).collect();
+        let k: Vec<_> = prepared.groups.iter().map(|group| group.k).collect();
+        let lda: Vec<_> = prepared.groups.iter().map(|group| group.lda).collect();
+        let ldb: Vec<_> = prepared.groups.iter().map(|group| group.ldb).collect();
+        let ldc: Vec<_> = prepared.groups.iter().map(|group| group.ldc).collect();
+        // Complex OpenBLAS ABI uses c_void pointer arrays, so these Vecs mirror
+        // the provider descriptor arrays instead of SmallVec rank metadata.
+        let a: Vec<*const c_void> = prepared.a.iter().map(|&ptr| ptr as *const c_void).collect();
+        let b: Vec<*const c_void> = prepared.b.iter().map(|&ptr| ptr as *const c_void).collect();
+        let c: Vec<*mut c_void> = prepared.c.iter().map(|&ptr| ptr as *mut c_void).collect();
+        unsafe {
+            cblas_zgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                trans_a.as_ptr(),
+                trans_b.as_ptr(),
+                m.as_ptr(),
+                n.as_ptr(),
+                k.as_ptr(),
+                alpha.as_ptr() as *const c_void,
+                a.as_ptr(),
+                lda.as_ptr(),
+                b.as_ptr(),
+                ldb.as_ptr(),
+                beta.as_ptr() as *const c_void,
+                c.as_ptr(),
+                ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+}
+
 macro_rules! impl_real_blas_gemm {
-    ($ty:ty, $gemm:path) => {
+    ($ty:ty, $gemm:path, $batch:path) => {
         impl BlasGemm for $ty {
             fn contiguous_gemm(
                 alpha: Self,
@@ -283,12 +722,33 @@ macro_rules! impl_real_blas_gemm {
                 );
                 Ok(())
             }
+
+            #[cfg(feature = "blas-openblas")]
+            unsafe fn grouped_gemm(
+                alpha: Self,
+                beta: Self,
+                batches: &[BlasGemmBatch<Self>],
+            ) -> crate::Result<bool> {
+                if batches.is_empty() {
+                    return Ok(true);
+                }
+                if openblas_should_use_gemm_batch(batches) {
+                    // SAFETY: callers validate job pointers, dimensions, and
+                    // disjoint outputs. The heuristic keeps OpenBLAS
+                    // gemm_batch on the small-job regime measured to win.
+                    unsafe { $batch(alpha, beta, batches) }
+                } else {
+                    // SAFETY: same grouped-GEMM contract, executed through the
+                    // existing per-job BLAS path for larger jobs.
+                    unsafe { grouped_gemm_sequential(alpha, beta, batches) }
+                }
+            }
         }
     };
 }
 
 macro_rules! impl_complex_blas_gemm {
-    ($ty:ty, $gemm:path) => {
+    ($ty:ty, $gemm:path, $batch:path) => {
         impl BlasGemm for $ty {
             fn contiguous_gemm(
                 alpha: Self,
@@ -432,11 +892,40 @@ macro_rules! impl_complex_blas_gemm {
                 );
                 Ok(true)
             }
+
+            #[cfg(feature = "blas-openblas")]
+            unsafe fn grouped_gemm(
+                alpha: Self,
+                beta: Self,
+                batches: &[BlasGemmBatch<Self>],
+            ) -> crate::Result<bool> {
+                if batches.is_empty() {
+                    return Ok(true);
+                }
+                if openblas_should_use_gemm_batch(batches) {
+                    // SAFETY: callers validate job pointers, dimensions, and
+                    // disjoint outputs. The heuristic keeps OpenBLAS
+                    // gemm_batch on the small-job regime measured to win.
+                    unsafe { $batch(alpha, beta, batches) }
+                } else {
+                    // SAFETY: same grouped-GEMM contract, executed through the
+                    // existing per-job BLAS path for larger jobs.
+                    unsafe { grouped_gemm_sequential(alpha, beta, batches) }
+                }
+            }
         }
     };
 }
 
-impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm);
-impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm);
-impl_complex_blas_gemm!(Complex64, cblas_sys::cblas_zgemm);
-impl_complex_blas_gemm!(Complex32, cblas_sys::cblas_cgemm);
+impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm, openblas_batch::dgemm_batch);
+impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm, openblas_batch::sgemm_batch);
+impl_complex_blas_gemm!(
+    Complex64,
+    cblas_sys::cblas_zgemm,
+    openblas_batch::zgemm_batch
+);
+impl_complex_blas_gemm!(
+    Complex32,
+    cblas_sys::cblas_cgemm,
+    openblas_batch::cgemm_batch
+);

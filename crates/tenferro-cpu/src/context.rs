@@ -171,6 +171,12 @@ impl CpuContext {
             faer::Par::rayon(0)
         }
     }
+
+    #[cfg(feature = "cpu-faer")]
+    #[doc(hidden)]
+    pub fn faer_seq(&self) -> faer::Par {
+        faer::Par::Seq
+    }
 }
 
 #[cfg(test)]

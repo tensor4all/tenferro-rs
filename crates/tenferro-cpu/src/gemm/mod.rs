@@ -11,6 +11,9 @@ use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
 use crate::{Error, Result};
+#[cfg(feature = "cpu-faer")]
+use rayon::prelude::*;
+use tenferro_tensor::backend::GroupedGemmConfig;
 use tenferro_tensor::{
     col_major_strides, Buffer, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
@@ -27,6 +30,8 @@ mod strided_dot;
 
 #[cfg(feature = "cpu-blas")]
 use blas_gemm::BlasGemm;
+#[cfg(feature = "cpu-blas")]
+use blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
 
@@ -624,6 +629,47 @@ fn dim_to_isize(dim: usize, context: &'static str) -> Result<isize> {
         op: OP,
         message: format!("{context}: dimension {dim} does not fit in isize"),
     })
+}
+
+fn add_job_offset(base: isize, offset: usize, role: &'static str) -> Result<isize> {
+    let offset = isize::try_from(offset).map_err(|_| Error::InvalidConfig {
+        op: "grouped_gemm",
+        message: format!("{role} offset {offset} does not fit in isize"),
+    })?;
+    base.checked_add(offset)
+        .ok_or_else(|| Error::InvalidConfig {
+            op: "grouped_gemm",
+            message: format!("{role} offset overflows isize: base={base} offset={offset}"),
+        })
+}
+
+fn scale_grouped_empty_output<T>(
+    c_ptr: *mut T,
+    rows: usize,
+    cols: usize,
+    beta: T,
+) -> crate::Result<()>
+where
+    T: Copy + Zero + PartialEq + std::ops::Mul<Output = T>,
+{
+    if rows == 0 || cols == 0 {
+        return Ok(());
+    }
+    let beta_is_zero = beta == T::zero();
+    for col in 0..cols {
+        let col_offset = col.checked_mul(rows).ok_or_else(|| Error::InvalidConfig {
+            op: "grouped_gemm",
+            message: format!("output column offset overflows usize: col={col} rows={rows}"),
+        })?;
+        for row in 0..rows {
+            let offset = col_offset + row;
+            unsafe {
+                let dst = c_ptr.add(offset);
+                *dst = if beta_is_zero { T::zero() } else { beta * *dst };
+            }
+        }
+    }
+    Ok(())
 }
 
 fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
@@ -1342,6 +1388,174 @@ pub(crate) fn dot_general_faer_read_into_accum_cached(
 }
 
 #[cfg(feature = "cpu-faer")]
+pub(crate) fn grouped_gemm_faer_cached(
+    ctx: &crate::CpuContext,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &GroupedGemmConfig<'_>,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (config.accumulation().alpha, config.accumulation().beta)
+            {
+                match (&lhs, &rhs, &mut *out) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(false)
+}
+
+#[cfg(feature = "cpu-faer")]
+fn grouped_gemm_faer_typed<L, R, T>(
+    ctx: &crate::CpuContext,
+    lhs: &L,
+    rhs: &R,
+    config: &GroupedGemmConfig<'_>,
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<bool>
+where
+    L: TypedTensorRead<T> + Sync,
+    R: TypedTensorRead<T> + Sync,
+    T: FaerGemm
+        + Copy
+        + Clone
+        + Zero
+        + PartialEq
+        + std::ops::Mul<Output = T>
+        + Send
+        + Sync
+        + 'static,
+{
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    let c_base = out.offset();
+    let c_data = out.host_storage_mut()?.as_mut_ptr();
+    let a_addr = a_data as usize;
+    let b_addr = b_data as usize;
+    let c_addr = c_data as usize;
+    // Rayon closures cannot capture raw pointers as Sync. Keep only integer
+    // base addresses outside the closure and reconstruct execution-local
+    // pointers after validate_grouped_gemm has checked each job range.
+    let run_job = |job: &tenferro_tensor::backend::GroupedGemmJob| -> crate::Result<()> {
+        let a_ptr =
+            (a_addr as *const T).wrapping_offset(add_job_offset(a_base, job.lhs_offset(), "lhs")?);
+        let b_ptr =
+            (b_addr as *const T).wrapping_offset(add_job_offset(b_base, job.rhs_offset(), "rhs")?);
+        let c_ptr =
+            (c_addr as *mut T).wrapping_offset(add_job_offset(c_base, job.out_offset(), "out")?);
+        if job.rows() == 0 || job.cols() == 0 || job.contracted() == 0 {
+            return scale_grouped_empty_output(c_ptr, job.rows(), job.cols(), beta);
+        }
+        let rows = dim_to_isize(job.rows(), "grouped_gemm rows")?;
+        let contracted = dim_to_isize(job.contracted(), "grouped_gemm contracted")?;
+        // SAFETY: validate_grouped_gemm checked input/output ranges and output
+        // disjointness before this provider path; child faer calls run
+        // sequentially to avoid nested Rayon fan-out.
+        unsafe {
+            T::strided_gemm_with_conj_par(
+                ctx,
+                ctx.faer_seq(),
+                alpha,
+                a_ptr,
+                job.rows(),
+                job.contracted(),
+                1,
+                rows,
+                config.accumulation().lhs_conj,
+                b_ptr,
+                job.cols(),
+                1,
+                contracted,
+                config.accumulation().rhs_conj,
+                beta,
+                c_ptr,
+                1,
+                rows,
+            );
+        }
+        Ok(())
+    };
+
+    if ctx.num_threads() > 1 && config.jobs().len() > 1 {
+        config.jobs().par_iter().try_for_each(run_job)?;
+    } else {
+        for job in config.jobs() {
+            run_job(job)?;
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(feature = "cpu-faer")]
 fn dot_general_faer_into_typed<L, R, T>(
     lhs: &L,
     rhs: &R,
@@ -1604,6 +1818,9 @@ where
 }
 
 #[cfg(feature = "cpu-blas")]
+// INVARIANT: BLAS conjugation dispatch needs buffer/cache state, operands,
+// dot_general config, and two conjugation flags at the backend boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_general_blas_with_conj_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
@@ -1944,6 +2161,157 @@ pub(crate) fn dot_general_blas_read_into_accum_cached(
 }
 
 #[cfg(feature = "cpu-blas")]
+pub(crate) fn grouped_gemm_blas_cached(
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &GroupedGemmConfig<'_>,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (config.accumulation().alpha, config.accumulation().beta)
+            {
+                match (&lhs, &rhs, &mut *out) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(false)
+}
+
+#[cfg(feature = "cpu-blas")]
+fn grouped_gemm_blas_typed<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    config: &GroupedGemmConfig<'_>,
+    alpha: T,
+    beta: T,
+    out: &mut TypedTensorViewMut<'_, T>,
+) -> crate::Result<bool>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: BlasGemm + Copy + Clone + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if config.accumulation().lhs_conj || config.accumulation().rhs_conj {
+        return Ok(false);
+    }
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    let c_base = out.offset();
+    let c_data = out.host_storage_mut()?.as_mut_ptr();
+
+    // Raw pointers are execution-local and must not be cached. The job count is
+    // runtime-dependent, so use a reserved Vec rather than a SmallVec threshold
+    // for the contiguous provider descriptor slice.
+    let mut batches = Vec::with_capacity(config.jobs().len());
+    for job in config.jobs() {
+        // SAFETY: validate_grouped_gemm checked each job's range before this
+        // provider path; add_job_offset only combines the checked view base
+        // with the checked element offset.
+        let (a_ptr, b_ptr, c_ptr) = unsafe {
+            (
+                a_data.offset(add_job_offset(a_base, job.lhs_offset(), "lhs")?),
+                b_data.offset(add_job_offset(b_base, job.rhs_offset(), "rhs")?),
+                c_data.offset(add_job_offset(c_base, job.out_offset(), "out")?),
+            )
+        };
+        if job.rows() == 0 || job.cols() == 0 || job.contracted() == 0 {
+            scale_grouped_empty_output(c_ptr, job.rows(), job.cols(), beta)?;
+            continue;
+        }
+        let rows = dim_to_isize(job.rows(), "grouped_gemm rows")?;
+        let contracted = dim_to_isize(job.contracted(), "grouped_gemm contracted")?;
+        batches.push(BlasGemmBatch {
+            a_ptr,
+            b_ptr,
+            c_ptr,
+            m: job.rows(),
+            n: job.cols(),
+            k: job.contracted(),
+            a_rs: 1,
+            a_cs: rows,
+            b_rs: 1,
+            b_cs: contracted,
+            c_rs: 1,
+            c_cs: rows,
+        });
+    }
+    // SAFETY: every descriptor uses validated dimensions and output regions are
+    // pairwise-disjoint, so the BLAS provider may run jobs in batch order or as
+    // a native grouped call.
+    unsafe {
+        T::grouped_gemm(alpha, beta, &batches)?;
+    }
+    Ok(true)
+}
+
+#[cfg(feature = "cpu-blas")]
 // INVARIANT: typed BLAS accumulation needs the validated operand views, cache
 // metadata, scalar coefficients, and output view together.
 #[allow(clippy::too_many_arguments)]
@@ -2051,6 +2419,9 @@ where
 }
 
 #[cfg(feature = "cpu-blas")]
+// INVARIANT: typed BLAS conjugation needs the cache slot/kind, validated
+// operand views, dot_general config, and conjugation flags together.
+#[allow(clippy::too_many_arguments)]
 fn typed_blas_gemm_with_conj<L, R, T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,

@@ -48,14 +48,60 @@ pub(crate) trait FaerGemm: Sized {
         c_ptr: *mut Self,
         c_rs: isize,
         c_cs: isize,
+    ) {
+        unsafe {
+            Self::strided_gemm_with_conj_par(
+                ctx,
+                ctx.faer_par(),
+                alpha,
+                a_ptr,
+                m,
+                k,
+                a_rs,
+                a_cs,
+                conj_a,
+                b_ptr,
+                n,
+                b_rs,
+                b_cs,
+                conj_b,
+                beta,
+                c_ptr,
+                c_rs,
+                c_cs,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn strided_gemm_with_conj_par(
+        ctx: &CpuContext,
+        par: faer::Par,
+        alpha: Self,
+        a_ptr: *const Self,
+        m: usize,
+        k: usize,
+        a_rs: isize,
+        a_cs: isize,
+        conj_a: bool,
+        b_ptr: *const Self,
+        n: usize,
+        b_rs: isize,
+        b_cs: isize,
+        conj_b: bool,
+        beta: Self,
+        c_ptr: *mut Self,
+        c_rs: isize,
+        c_cs: isize,
     );
 }
 
 macro_rules! impl_faer_gemm {
     ($ty:ty) => {
         impl FaerGemm for $ty {
-            unsafe fn strided_gemm_with_conj(
+            unsafe fn strided_gemm_with_conj_par(
                 ctx: &CpuContext,
+                par: faer::Par,
                 alpha: $ty,
                 a_ptr: *const $ty,
                 m: usize,
@@ -73,6 +119,7 @@ macro_rules! impl_faer_gemm {
                 c_rs: isize,
                 c_cs: isize,
             ) {
+                let _ = ctx;
                 use faer::{Accum, Conj, MatMut, MatRef};
                 let a_rs = super::normalize_singleton_stride(a_rs, m, k);
                 let a_cs = super::normalize_singleton_stride(a_cs, k, m);
@@ -110,14 +157,7 @@ macro_rules! impl_faer_gemm {
                 let conj_a = if conj_a { Conj::Yes } else { Conj::No };
                 let conj_b = if conj_b { Conj::Yes } else { Conj::No };
                 faer::linalg::matmul::matmul_with_conj(
-                    &mut c_mat,
-                    accum,
-                    &a_mat,
-                    conj_a,
-                    &b_mat,
-                    conj_b,
-                    alpha,
-                    ctx.faer_par(),
+                    &mut c_mat, accum, &a_mat, conj_a, &b_mat, conj_b, alpha, par,
                 );
             }
         }

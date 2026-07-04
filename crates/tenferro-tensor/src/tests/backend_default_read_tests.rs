@@ -1,9 +1,11 @@
 use crate::{
+    backend::{validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob},
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, ContractionScalar,
     DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
-    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -666,6 +668,411 @@ fn dot_general_accum_default_fallback_rejects_scalar_dtype_mismatch() {
         .unwrap_err();
 
     assert!(err.to_string().contains("dtype mismatch"));
+}
+
+fn scalar_grouped_config<'a>(jobs: &'a [GroupedGemmJob], dtype: DType) -> GroupedGemmConfig<'a> {
+    GroupedGemmConfig::new(jobs, DotGeneralAccumulation::overwrite(dtype).unwrap())
+}
+
+#[test]
+fn grouped_gemm_job_and_config_metadata_are_preserved() {
+    let job = GroupedGemmJob::new(1, 2, 3, 4, 5, 6);
+
+    assert_eq!(job.out_offset(), 1);
+    assert_eq!(job.lhs_offset(), 2);
+    assert_eq!(job.rhs_offset(), 3);
+    assert_eq!(job.rows(), 4);
+    assert_eq!(job.contracted(), 5);
+    assert_eq!(job.cols(), 6);
+
+    let jobs = [job];
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: true,
+        alpha: ContractionScalar::F64(2.0),
+        beta: ContractionScalar::F64(3.0),
+    };
+    let config = GroupedGemmConfig::new(&jobs, accumulation);
+
+    assert_eq!(config.jobs(), &jobs);
+    assert_eq!(config.accumulation(), accumulation);
+}
+
+fn run_grouped_f64_default_combo(
+    lhs_as_view: bool,
+    rhs_as_view: bool,
+    out_as_view: bool,
+) -> Vec<f64> {
+    let lhs_tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs_tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let lhs_storage = [0.0_f64, 1.0];
+    let rhs_storage = [0.0_f64, 2.0];
+    let lhs_view =
+        TypedTensorView::from_slice(vec![1], vec![1], 1, lhs_storage.as_slice()).unwrap();
+    let rhs_view =
+        TypedTensorView::from_slice(vec![1], vec![1], 1, rhs_storage.as_slice()).unwrap();
+
+    let lhs_read = if lhs_as_view {
+        TensorRead::from_view(TensorView::F64(lhs_view))
+    } else {
+        TensorRead::from_tensor(&lhs_tensor)
+    };
+    let rhs_read = if rhs_as_view {
+        TensorRead::from_view(TensorView::F64(rhs_view))
+    } else {
+        TensorRead::from_tensor(&rhs_tensor)
+    };
+
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+    let config = scalar_grouped_config(&jobs, DType::F64);
+    let mut cache = ();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64]).unwrap()),
+        ..Default::default()
+    };
+
+    if out_as_view {
+        let mut out_storage = vec![100.0_f64, 9.0];
+        {
+            let out_view =
+                TypedTensorViewMut::from_slice(vec![1], vec![1], 1, out_storage.as_mut_slice())
+                    .unwrap();
+            BackendCachedDot::grouped_gemm_cached(
+                &mut backend,
+                &mut cache,
+                Some(3),
+                lhs_read,
+                rhs_read,
+                &config,
+                TensorWrite::from_view(TensorViewMut::F64(out_view)),
+            )
+            .unwrap();
+        }
+        out_storage
+    } else {
+        let mut out = Tensor::from_vec_col_major(vec![1], vec![9.0_f64]).unwrap();
+        BackendCachedDot::grouped_gemm_cached(
+            &mut backend,
+            &mut cache,
+            Some(3),
+            lhs_read,
+            rhs_read,
+            &config,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+        out.as_slice::<f64>().unwrap().to_vec()
+    }
+}
+
+#[test]
+fn grouped_gemm_default_fallback_covers_tensor_and_view_dispatch() {
+    for lhs_as_view in [false, true] {
+        for rhs_as_view in [false, true] {
+            for out_as_view in [false, true] {
+                let values = run_grouped_f64_default_combo(lhs_as_view, rhs_as_view, out_as_view);
+                if out_as_view {
+                    assert_eq!(values, vec![100.0, 4.0]);
+                } else {
+                    assert_eq!(values, vec![4.0]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn grouped_gemm_default_fallback_updates_shared_buffer_offsets() {
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(2, 2, 2, 1, 1, 1),
+    ];
+    let config = GroupedGemmConfig::new(
+        &jobs,
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(2.0),
+            beta: ContractionScalar::F64(0.5),
+        },
+    );
+    let mut cache = ();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64]).unwrap()),
+        ..Default::default()
+    };
+
+    BackendCachedDot::grouped_gemm_cached(
+        &mut backend,
+        &mut cache,
+        Some(9),
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[13.0, 20.0, 23.0, 40.0]);
+    assert_eq!(
+        backend
+            .calls
+            .iter()
+            .filter(|&&call| call == "dot_general")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn grouped_gemm_default_fallback_covers_supported_dtypes() {
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+    let mut cache = ();
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f32]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![5.0_f32]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]).unwrap()),
+        ..Default::default()
+    };
+    BackendCachedDot::grouped_gemm_cached(
+        &mut backend,
+        &mut cache,
+        None,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F32(3.0),
+                beta: ContractionScalar::F32(1.0),
+            },
+        ),
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+    assert_eq!(out.as_slice::<f32>().unwrap(), &[11.0]);
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(2.0, 0.0)]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(3.0, -1.0)]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(
+            Tensor::from_vec_col_major(vec![1, 1], vec![Complex32::new(1.0, 1.0)]).unwrap(),
+        ),
+        ..Default::default()
+    };
+    BackendCachedDot::grouped_gemm_cached(
+        &mut backend,
+        &mut cache,
+        None,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
+                beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
+            },
+        ),
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_slice::<Complex32>().unwrap(),
+        &[Complex32::new(3.0, 5.0)]
+    );
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(2.0, 0.0)]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(
+            Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(4.0, -2.0)]).unwrap(),
+        ),
+        ..Default::default()
+    };
+    BackendCachedDot::grouped_gemm_cached(
+        &mut backend,
+        &mut cache,
+        None,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+                beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
+            },
+        ),
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(4.0, -2.0)]
+    );
+}
+
+#[test]
+fn grouped_gemm_validation_rejects_invalid_metadata() {
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    let out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let mut out_mut = out.clone();
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+
+    let rhs_f32 = Tensor::from_vec_col_major(vec![2], vec![3.0_f32, 4.0]).unwrap();
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs_f32),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("dtype mismatch"));
+
+    let mut out_f32 = Tensor::from_vec_col_major(vec![2], vec![0.0_f32, 0.0]).unwrap();
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_f32),
+        &scalar_grouped_config(&jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("dtype mismatch"));
+
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F32(1.0),
+                beta: ContractionScalar::F64(0.0),
+            },
+        ),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("dtype mismatch"));
+
+    let lhs_range_jobs = [GroupedGemmJob::new(0, 1, 0, 2, 1, 1)];
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&lhs_range_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("lhs matrix range"));
+
+    let rhs_range_jobs = [GroupedGemmJob::new(0, 0, 1, 1, 1, 2)];
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&rhs_range_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("rhs matrix range"));
+
+    let out_range_jobs = [GroupedGemmJob::new(1, 0, 0, 1, 1, 2)];
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&out_range_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("out matrix range"));
+
+    let overlapping_jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(0, 1, 1, 1, 1, 1),
+    ];
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&overlapping_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("overlaps job"));
+
+    let overflow_jobs = [GroupedGemmJob::new(0, 0, 0, usize::MAX, 0, 2)];
+    let err = validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&overflow_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("element count overflows"));
+
+    let empty_jobs = [GroupedGemmJob::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        0,
+        0,
+        2,
+    )];
+    validate_grouped_gemm(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &TensorWrite::from_tensor(&mut out_mut),
+        &scalar_grouped_config(&empty_jobs, DType::F64),
+        "test_grouped_gemm",
+    )
+    .unwrap();
+}
+
+#[test]
+fn grouped_gemm_default_fallback_rejects_offsets_that_do_not_fit_isize() {
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    let jobs = [GroupedGemmJob::new(0, usize::MAX, 0, 0, 0, 0)];
+    let config = scalar_grouped_config(&jobs, DType::F64);
+    let mut cache = ();
+    let mut backend = DefaultReadBackend {
+        dot_result: Some(Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap()),
+        ..Default::default()
+    };
+
+    let err = BackendCachedDot::grouped_gemm_cached(
+        &mut backend,
+        &mut cache,
+        None,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("offset"));
 }
 
 #[test]
