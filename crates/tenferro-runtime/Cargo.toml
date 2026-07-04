@@ -33,4 +33,9 @@ smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.1.0", default-features = false }
+
+[[bench]]
+name = "elementwise_fusion"
+harness = false

@@ -446,8 +446,23 @@ fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {
 pub struct ElementwiseFusionPlan {
     dtype: crate::DType,
     input_count: usize,
+    // Keep view metadata in Vecs. A/B benchmarking on the broadcast_mul
+    // path showed SmallVec made this metadata path about 6-7% slower.
+    input_views: Vec<ElementwiseFusionInputView>,
     outputs: Vec<usize>,
     ops: Vec<ElementwiseFusionInst>,
+}
+
+/// Metadata-only view applied to one backend fusion input.
+#[doc(hidden)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum ElementwiseFusionInputView {
+    Identity,
+    BroadcastInDim {
+        // Vec is intentional here; see ElementwiseFusionPlan::input_views.
+        shape: Vec<usize>,
+        dims: Vec<usize>,
+    },
 }
 
 /// One node in a canonical elementwise fusion plan.
@@ -485,9 +500,45 @@ impl ElementwiseFusionPlan {
         outputs: Vec<usize>,
         ops: Vec<ElementwiseFusionInst>,
     ) -> Self {
+        Self::with_input_views(
+            dtype,
+            vec![ElementwiseFusionInputView::Identity; input_count],
+            outputs,
+            ops,
+        )
+    }
+
+    /// Build a backend elementwise fusion plan with input view metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::{
+    ///     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionOp,
+    ///     ElementwiseFusionPlan,
+    /// };
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::with_input_views(
+    ///     DType::F64,
+    ///     vec![ElementwiseFusionInputView::broadcast_in_dim(vec![2, 3], vec![0])],
+    ///     vec![1],
+    ///     vec![ElementwiseFusionInst::new(ElementwiseFusionOp::Negate, vec![0])],
+    /// );
+    /// assert_eq!(plan.input_count(), 1);
+    /// ```
+    pub fn with_input_views(
+        dtype: crate::DType,
+        input_views: impl IntoIterator<Item = ElementwiseFusionInputView>,
+        outputs: Vec<usize>,
+        ops: Vec<ElementwiseFusionInst>,
+    ) -> Self {
+        let input_views = input_views.into_iter().collect::<Vec<_>>();
+        let input_count = input_views.len();
         Self {
             dtype,
             input_count,
+            input_views,
             outputs,
             ops,
         }
@@ -523,6 +574,21 @@ impl ElementwiseFusionPlan {
         self.input_count
     }
 
+    /// Return metadata views applied to fusion inputs before executing ops.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionPlan;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let plan = ElementwiseFusionPlan::new(DType::F64, 2, Vec::new(), Vec::new());
+    /// assert_eq!(plan.input_views().len(), 2);
+    /// ```
+    pub fn input_views(&self) -> &[ElementwiseFusionInputView] {
+        &self.input_views
+    }
+
     /// Return the value ids selected as fusion outputs.
     ///
     /// # Examples
@@ -554,6 +620,41 @@ impl ElementwiseFusionPlan {
     /// ```
     pub fn ops(&self) -> &[ElementwiseFusionInst] {
         &self.ops
+    }
+}
+
+impl ElementwiseFusionInputView {
+    /// Build metadata for a `BroadcastInDim` fusion input view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionInputView;
+    ///
+    /// let view = ElementwiseFusionInputView::broadcast_in_dim(vec![2, 3], vec![0]);
+    /// assert!(matches!(view, ElementwiseFusionInputView::BroadcastInDim { .. }));
+    /// ```
+    pub fn broadcast_in_dim(
+        shape: impl IntoIterator<Item = usize>,
+        dims: impl IntoIterator<Item = usize>,
+    ) -> Self {
+        Self::BroadcastInDim {
+            shape: shape.into_iter().collect(),
+            dims: dims.into_iter().collect(),
+        }
+    }
+
+    /// Return true when this fusion input is an identity view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::backend::ElementwiseFusionInputView;
+    ///
+    /// assert!(ElementwiseFusionInputView::Identity.is_identity());
+    /// ```
+    pub fn is_identity(&self) -> bool {
+        matches!(self, Self::Identity)
     }
 }
 

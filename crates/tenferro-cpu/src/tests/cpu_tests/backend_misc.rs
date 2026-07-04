@@ -61,6 +61,130 @@ fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_in
 }
 
 #[test]
+fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
+    let mut backend = CpuBackend::new();
+    let n = 65_536usize;
+    let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
+    let rhs_data = (0..n).map(|i| (i as f64 + 1.0) * 10.0).collect::<Vec<_>>();
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![n], lhs_data).unwrap());
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![n], rhs_data).unwrap());
+    let fusion_plan = tenferro_tensor::backend::ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![3],
+        vec![
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Add,
+                vec![0, 1],
+            ),
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Multiply,
+                vec![2, 0],
+            ),
+        ],
+    );
+
+    let outputs = backend
+        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .unwrap()
+        .expect("CPU backend should execute supported elementwise fusion plans");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[n]);
+    let actual = outputs[0].as_slice::<f64>().unwrap();
+    assert_eq!(actual[0], 11.0);
+    assert_eq!(actual[1], 44.0);
+    assert_eq!(actual[n - 1], 11.0 * (n as f64).powi(2));
+}
+
+#[test]
+fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
+    let mut backend = CpuBackend::new();
+    let n = 8_192usize;
+    let lhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![n], lhs_data).unwrap());
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 11.0]).unwrap());
+    let output_shape = vec![n, 2];
+    let fusion_plan = tenferro_tensor::backend::ElementwiseFusionPlan::with_input_views(
+        DType::F64,
+        vec![
+            tenferro_tensor::backend::ElementwiseFusionInputView::broadcast_in_dim(
+                output_shape.clone(),
+                vec![0],
+            ),
+            tenferro_tensor::backend::ElementwiseFusionInputView::broadcast_in_dim(
+                output_shape,
+                vec![1],
+            ),
+        ],
+        vec![3],
+        vec![
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Multiply,
+                vec![0, 1],
+            ),
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Add,
+                vec![2, 0],
+            ),
+        ],
+    );
+
+    let outputs = backend
+        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .unwrap()
+        .expect("CPU backend should execute broadcast input views in fusion plans");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[n, 2]);
+    let actual = outputs[0].as_slice::<f64>().unwrap();
+    assert_eq!(actual[0], 8.0);
+    assert_eq!(actual[n - 1], n as f64 * 8.0);
+    assert_eq!(actual[n], 12.0);
+    assert_eq!(actual[2 * n - 1], n as f64 * 12.0);
+}
+
+#[test]
+fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
+    let mut backend = CpuBackend::new();
+    let n = 16_384usize;
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![3.0]).unwrap());
+    let rhs_data = (0..n).map(|i| i as f64 + 1.0).collect::<Vec<_>>();
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![n], rhs_data).unwrap());
+    let fusion_plan = tenferro_tensor::backend::ElementwiseFusionPlan::with_input_views(
+        DType::F64,
+        vec![
+            tenferro_tensor::backend::ElementwiseFusionInputView::broadcast_in_dim(
+                vec![n],
+                vec![0],
+            ),
+            tenferro_tensor::backend::ElementwiseFusionInputView::Identity,
+        ],
+        vec![3],
+        vec![
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Multiply,
+                vec![0, 1],
+            ),
+            tenferro_tensor::backend::ElementwiseFusionInst::new(
+                tenferro_tensor::backend::ElementwiseFusionOp::Add,
+                vec![2, 0],
+            ),
+        ],
+    );
+
+    let outputs = backend
+        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .unwrap()
+        .expect("CPU backend should broadcast mapped unit axes in fusion plans");
+
+    assert_eq!(outputs[0].shape(), &[n]);
+    let actual = outputs[0].as_slice::<f64>().unwrap();
+    assert_eq!(actual[0], 6.0);
+    assert_eq!(actual[n - 1], 3.0 * n as f64 + 3.0);
+}
+
+#[test]
 fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
     let tensors = [
         Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),

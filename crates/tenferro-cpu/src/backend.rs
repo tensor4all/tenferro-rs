@@ -11,7 +11,9 @@ use crate::{
     Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TensorWrite, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
 };
-use tenferro_tensor::backend::{dot_general_accum_via_temp, validate_dot_general_accumulation};
+use tenferro_tensor::backend::{
+    dot_general_accum_via_temp, validate_dot_general_accumulation, ElementwiseFusionPlan,
+};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
     DotGeneralAccumulation, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
@@ -1598,6 +1600,16 @@ where
 }
 
 impl TensorFusion for CpuBackend {
+    fn execute_elementwise_fusion(
+        &mut self,
+        inputs: &[&Tensor],
+        plan: &ElementwiseFusionPlan,
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        self.install_with_pool(|buffers| {
+            elementwise::elementwise_fusion_with_pool(buffers, inputs, plan)
+        })
+    }
+
     fn execute_broadcast_multiply(
         &mut self,
         lhs: TensorRead<'_>,

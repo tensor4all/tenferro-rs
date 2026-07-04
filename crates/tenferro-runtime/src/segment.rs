@@ -15,7 +15,10 @@ use crate::exec::{
     ExecOp, ExecProgram, ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
-use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionPlan};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_tensor::backend::{
+    ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
+};
 use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
@@ -64,7 +67,9 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
             );
             segments.push(Segment::Ffi(inst.clone()));
             idx += 1;
-        } else if is_broadcast_multiply_triplet_at(program, idx) {
+        } else if is_broadcast_multiply_triplet_at(program, idx)
+            && !segment_outputs_have_future_uses(program, &future_uses, idx, idx + 3)
+        {
             flush_fused_segment(
                 program,
                 &future_uses,
@@ -74,7 +79,9 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
             );
             segments.push(build_fused_segment(program, &future_uses, idx, idx + 3));
             idx += 3;
-        } else if is_single_broadcast_multiply_pair_at(program, idx) {
+        } else if is_single_broadcast_multiply_pair_at(program, idx)
+            && !segment_outputs_have_future_uses(program, &future_uses, idx, idx + 2)
+        {
             flush_fused_segment(
                 program,
                 &future_uses,
@@ -100,6 +107,18 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
         program.instructions.len(),
     );
     segments
+}
+
+fn segment_outputs_have_future_uses(
+    program: &ExecProgram,
+    use_summary: &SegmentUseSummary,
+    start: usize,
+    end: usize,
+) -> bool {
+    program.instructions[start..end]
+        .iter()
+        .flat_map(|inst| inst.output_slots.iter().copied())
+        .any(|slot| use_summary.is_used_at_or_after(slot, end))
 }
 
 fn is_broadcast_multiply_triplet_at(program: &ExecProgram, idx: usize) -> bool {
@@ -954,15 +973,43 @@ fn build_elementwise_fusion_plan(
     let first = instructions.first()?;
     let dtype = first.dtype;
     let mut slot_to_value = HashMap::with_capacity(input_slots.len() + instructions.len());
+    // Keep this as Vec to match ElementwiseFusionPlan metadata; A/B
+    // benchmarks showed SmallVec made the broadcast metadata path slower.
+    let mut input_views = Vec::with_capacity(input_slots.len());
+    input_views.resize(input_slots.len(), ElementwiseFusionInputView::Identity);
     for (value, &slot) in input_slots.iter().enumerate() {
         slot_to_value.insert(slot, value);
     }
 
     let mut ops = Vec::with_capacity(instructions.len());
-    for (next_value, inst) in (input_slots.len()..).zip(instructions.iter()) {
+    let mut next_value = input_slots.len();
+    for inst in instructions {
         if inst.dtype != dtype || inst.output_slots.len() != 1 {
             return None;
         }
+        if let ExecOp::BroadcastInDim { shape, dims } = &inst.op {
+            let input_slot = *inst.input_slots.first()?;
+            if inst.input_slots.len() != 1
+                || source_slot_is_used_directly_by_elementwise(instructions, input_slot)
+            {
+                return None;
+            }
+            let input_value = *slot_to_value.get(&input_slot)?;
+            if input_value >= input_views.len()
+                || !matches!(
+                    input_views[input_value],
+                    ElementwiseFusionInputView::Identity
+                )
+            {
+                return None;
+            }
+            let shape = const_dim_expr_shape(shape)?;
+            input_views[input_value] =
+                ElementwiseFusionInputView::broadcast_in_dim(shape, dims.clone());
+            slot_to_value.insert(inst.output_slots[0], input_value);
+            continue;
+        }
+
         let op = inst.op.elementwise_fusion_op()?;
         let inputs = inst
             .input_slots
@@ -971,6 +1018,7 @@ fn build_elementwise_fusion_plan(
             .collect::<Option<Vec<_>>>()?;
         ops.push(ElementwiseFusionInst::new(op, inputs));
         slot_to_value.insert(inst.output_slots[0], next_value);
+        next_value += 1;
     }
 
     let outputs = output_slots
@@ -978,12 +1026,31 @@ fn build_elementwise_fusion_plan(
         .map(|slot| slot_to_value.get(slot).copied())
         .collect::<Option<Vec<_>>>()?;
 
-    Some(ElementwiseFusionPlan::new(
+    Some(ElementwiseFusionPlan::with_input_views(
         dtype,
-        input_slots.len(),
+        input_views,
         outputs,
         ops,
     ))
+}
+
+fn source_slot_is_used_directly_by_elementwise(
+    instructions: &[ExecInstruction],
+    source_slot: usize,
+) -> bool {
+    instructions.iter().any(|inst| {
+        !matches!(inst.op, ExecOp::BroadcastInDim { .. }) && inst.input_slots.contains(&source_slot)
+    })
+}
+
+fn const_dim_expr_shape(shape: &[DimExpr]) -> Option<Vec<usize>> {
+    shape
+        .iter()
+        .map(|dim| match dim {
+            DimExpr::Const(value) => Some(*value),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -21,6 +21,9 @@ where
     if plan.dtype() != T::DTYPE || plan.input_count() != inputs.len() || plan.outputs().is_empty() {
         return Ok(None);
     }
+    if !plan.input_views().iter().all(|view| view.is_identity()) {
+        return Ok(None);
+    }
     if !plan.ops().iter().all(|inst| T::supports_op(&inst.op())) {
         return Ok(None);
     }

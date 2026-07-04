@@ -2,6 +2,7 @@ use super::*;
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
+use tenferro_tensor::backend::{ElementwiseFusionInputView, ElementwiseFusionOp};
 use tenferro_tensor::{DType, Tensor};
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
@@ -47,6 +48,18 @@ fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -
     }
 }
 
+fn add_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> ExecInstruction {
+    ExecInstruction {
+        op: ExecOp::Add,
+        input_slots: vec![lhs, rhs],
+        output_slots: vec![output],
+        dtype: DType::F64,
+        output_shapes: vec![dim_shape(shape)].into(),
+        output_extents: vec![exact_extents(shape)].into(),
+        last_use: vec![true, true],
+    }
+}
+
 fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::BroadcastInDim {
@@ -83,6 +96,53 @@ fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
 }
 
 #[test]
+fn elementwise_fusion_plan_uses_dense_segment_value_ids() {
+    let instructions = vec![
+        add_with_shape(10, 20, 30, &[4]),
+        multiply_with_shape(30, 10, 40, &[4]),
+    ];
+
+    let plan = build_elementwise_fusion_plan(&instructions, &[10, 20], &[40])
+        .expect("add-multiply segment should build a fusion plan");
+
+    assert_eq!(plan.dtype(), DType::F64);
+    assert_eq!(plan.input_count(), 2);
+    assert!(plan.input_views().iter().all(|view| view.is_identity()));
+    assert_eq!(plan.outputs(), &[3]);
+    assert_eq!(plan.ops().len(), 2);
+    assert_eq!(plan.ops()[0].op(), ElementwiseFusionOp::Add);
+    assert_eq!(plan.ops()[0].inputs(), &[0, 1]);
+    assert_eq!(plan.ops()[1].op(), ElementwiseFusionOp::Multiply);
+    assert_eq!(plan.ops()[1].inputs(), &[2, 0]);
+}
+
+#[test]
+fn elementwise_fusion_plan_absorbs_broadcast_input_views() {
+    let instructions = vec![
+        broadcast_with_shape(0, 2, &[3, 2], vec![0]),
+        broadcast_with_shape(1, 3, &[3, 2], vec![1]),
+        multiply_with_shape(2, 3, 4, &[3, 2]),
+    ];
+
+    let plan = build_elementwise_fusion_plan(&instructions, &[0, 1], &[4])
+        .expect("broadcast-multiply segment should build a fusion plan");
+
+    assert_eq!(plan.input_count(), 2);
+    assert_eq!(plan.outputs(), &[2]);
+    assert_eq!(plan.ops().len(), 1);
+    assert_eq!(plan.ops()[0].op(), ElementwiseFusionOp::Multiply);
+    assert_eq!(plan.ops()[0].inputs(), &[0, 1]);
+    assert_eq!(
+        plan.input_views()[0],
+        ElementwiseFusionInputView::broadcast_in_dim(vec![3, 2], vec![0])
+    );
+    assert_eq!(
+        plan.input_views()[1],
+        ElementwiseFusionInputView::broadcast_in_dim(vec![3, 2], vec![1])
+    );
+}
+
+#[test]
 fn segmenter_isolates_consecutive_broadcast_multiply_triples() {
     let program = ExecProgram {
         instructions: vec![
@@ -107,6 +167,29 @@ fn segmenter_isolates_consecutive_broadcast_multiply_triples() {
             Segment::Fused { instructions, .. } if instructions.len() == 3
         ));
     }
+}
+
+#[test]
+fn segmenter_keeps_broadcast_multiply_chain_when_outputs_are_reused() {
+    let program = ExecProgram {
+        instructions: vec![
+            broadcast_with_shape(0, 2, &[3, 2], vec![0]),
+            broadcast_with_shape(1, 3, &[3, 2], vec![1]),
+            multiply_with_shape(2, 3, 4, &[3, 2]),
+            add_with_shape(4, 2, 5, &[3, 2]),
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![5],
+        n_slots: 6,
+    };
+
+    let segments = segment_exec_program(&program);
+
+    assert_eq!(segments.len(), 1);
+    assert!(matches!(
+        &segments[0],
+        Segment::Fused { instructions, .. } if instructions.len() == 4
+    ));
 }
 
 #[test]
