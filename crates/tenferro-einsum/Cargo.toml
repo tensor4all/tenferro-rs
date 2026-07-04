@@ -42,12 +42,12 @@ webgpu = ["tenferro-ad?/webgpu", "tenferro-internal-ops/webgpu"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.1.0", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", version = "0.1.0", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.1.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.1.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.2.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.2.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
 computegraph.workspace = true
 tidu = { workspace = true, optional = true }
 lru.workspace = true
@@ -56,8 +56,8 @@ smallvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.1.0", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false }
 criterion.workspace = true
 num-complex.workspace = true
 

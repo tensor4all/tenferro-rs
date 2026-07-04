@@ -61,13 +61,13 @@ cuda = [
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.1.0", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", version = "0.1.0", default-features = false, optional = true }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.1.0", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.1.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.1.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.1.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.2.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.2.0", default-features = false, optional = true }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
 cblas-inject = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }
 tidu = { workspace = true, optional = true }

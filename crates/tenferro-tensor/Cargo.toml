@@ -17,11 +17,11 @@ name = "tenferro_tensor"
 default = []
 
 [dependencies]
-tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.1.0" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.2.0" }
 num-traits.workspace = true
 num-complex.workspace = true
 smallvec.workspace = true
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.1.0" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.2.0" }
 thiserror.workspace = true
 
 [dev-dependencies]
