@@ -18,7 +18,9 @@ use tenferro_tensor::DType;
 
 use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{ExtensionAdRule, ExtensionRuleSet};
+use crate::ext_op::{
+    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule, ExtensionRuleSet,
+};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -373,15 +375,44 @@ impl ShapeGuardContext {
         self.transpose_primal_outputs_used
     }
 
-    /// Look up an extension AD rule using this context's ownership policy.
+    /// Look up an extension linearize rule using this context's ownership policy.
     ///
     /// Contexts without an explicit rule set have no extension AD rules.
     #[doc(hidden)]
     #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_rule_for(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
+    pub(crate) fn extension_linearize_rule_for(
+        &self,
+        family_id: &str,
+    ) -> Option<Arc<dyn ExtensionLinearizeRule>> {
         self.extension_rules
             .as_ref()
-            .and_then(|rules| rules.lookup_rule(family_id))
+            .and_then(|rules| rules.lookup_linearize(family_id))
+    }
+
+    /// Look up an extension linear-transpose rule using this context's
+    /// ownership policy.
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn extension_linear_transpose_rule_for(
+        &self,
+        family_id: &str,
+    ) -> Option<Arc<dyn ExtensionLinearTransposeRule>> {
+        self.extension_rules
+            .as_ref()
+            .and_then(|rules| rules.lookup_linear_transpose(family_id))
+    }
+
+    /// Look up an extension direct primal-VJP rule using this context's
+    /// ownership policy.
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn extension_primal_vjp_rule_for(
+        &self,
+        family_id: &str,
+    ) -> Option<Arc<dyn ExtensionPrimalVjpRule>> {
+        self.extension_rules
+            .as_ref()
+            .and_then(|rules| rules.lookup_primal_vjp(family_id))
     }
 
     /// Returns the guards recorded so far.

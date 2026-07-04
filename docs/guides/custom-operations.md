@@ -39,7 +39,10 @@ An extension crate is responsible for:
 - a stable operation descriptor, so graphs can compare and cache it,
 - output dtype and shape inference,
 - concrete execution for the supported backend and device combinations,
-- optional JVP/VJP rules for automatic differentiation,
+- optional host/reference execution for families that can run without a
+  backend-specific kernel,
+- optional linearize, linear-transpose, and direct primal-VJP rules for
+  automatic differentiation,
 - clear errors when a dtype, shape, backend, or AD path is not supported.
 
 ## Cache Ownership
@@ -84,13 +87,21 @@ Extension operation descriptors do not need process-global registration. Constru
 `Arc<dyn ExtensionOp>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
-For AD, implement `tenferro_ad::extension::ExtensionAdRule`, put the rule
-in a `tenferro_ad::extension::ExtensionRuleSet`, and attach that set with
-`tenferro_ad::AdContext::builder().with_extension_rules(...)`. Rule builders
-expose incoming tangents/cotangents and helper methods for emitting tensor
-operations, so extension authors do not need to handle graph IDs directly. The
-extension crate should expose a small `ad_rules()` helper that constructs the
-fresh rule set its operations need.
+Forward execution goes through a registered
+`tenferro_runtime::ExtensionRuntime`. If the operation has a simple
+host/reference implementation, expose it with `ExtensionOp::host_reference`
+and register `HostReferenceRuntime`; otherwise register a backend-specific
+runtime owned by the extension crate.
+
+For AD, implement the role-specific traits the operation needs:
+`tenferro_ad::extension::ExtensionLinearizeRule`,
+`ExtensionLinearTransposeRule`, and optionally `ExtensionPrimalVjpRule`. Put
+those rules in a `tenferro_ad::extension::ExtensionRuleSet`, and attach that
+set with `tenferro_ad::AdContext::builder().with_extension_rules(...)`. Rule
+builders expose incoming tangents/cotangents and helper methods for emitting
+tensor operations, so extension authors do not need to handle graph IDs
+directly. The extension crate should expose a small `ad_rules()` helper that
+constructs the fresh rule set its operations need.
 
 When porting Julia `frule` / `rrule` code:
 
@@ -102,7 +113,7 @@ When porting Julia `frule` / `rrule` code:
 
 The lower-level adapter API remains available for specialized extension
 authors who need direct graph-builder control. New extension authors should
-start with `ExtensionAdRule` plus an explicit `ExtensionRuleSet`.
+start with role-specific AD rule traits plus an explicit `ExtensionRuleSet`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
 removed; operation descriptors are carried directly in the graph.
 

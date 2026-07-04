@@ -8,7 +8,6 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor,
 };
 
 use super::*;
@@ -314,9 +313,5 @@ impl ExtensionOp for CollidingExtension {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
     }
 }

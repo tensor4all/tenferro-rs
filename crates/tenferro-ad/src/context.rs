@@ -13,7 +13,7 @@ use tenferro_runtime::{Result, TracedTensor};
 /// use tenferro_ad::AdContext;
 ///
 /// let ad = AdContext::builder().build().unwrap();
-/// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+/// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
 /// ```
 #[derive(Clone, Debug)]
 pub struct AdContext {
@@ -42,7 +42,7 @@ impl AdContext {
     /// use tenferro_ad::AdContext;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// assert!(!ad.extension_rules().is_rule_registered("example.missing.v1"));
+    /// assert!(!ad.extension_rules().is_linearize_registered("example.missing.v1"));
     /// ```
     pub fn extension_rules(&self) -> &ExtensionRuleSet {
         &self.extension_rules
@@ -204,7 +204,7 @@ impl AdContext {
 /// use tenferro_ad::AdContextBuilder;
 ///
 /// let ad = AdContextBuilder::new().build().unwrap();
-/// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+/// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct AdContextBuilder {
@@ -252,7 +252,7 @@ impl AdContextBuilder {
     /// use tenferro_ad::AdContext;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+    /// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
     /// ```
     pub fn build(self) -> std::result::Result<AdContext, ExtensionRegistryError> {
         let mut extension_rules = ExtensionRuleSet::new();

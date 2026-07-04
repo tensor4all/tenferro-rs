@@ -2,9 +2,9 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tenferro_runtime::extension::{apply, ExtensionOp};
+use tenferro_runtime::SymDim;
 use tenferro_runtime::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
-use tenferro_runtime::{SymDim, Tensor};
 
 #[derive(Clone)]
 struct ConstantDebugExtension {
@@ -55,10 +55,6 @@ impl ExtensionOp for ConstantDebugExtension {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
     }
 }
 

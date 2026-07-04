@@ -230,7 +230,7 @@ The unsegmented internal path evaluates one instruction at a time and is used
 for parity checks and narrow owner-scoped extension-runtime composition. It is
 not a general public execution surface. Extension instructions must run through
 a registered `ExtensionRuntime`; missing runtime registration is an error, not
-a fallback to `ExtensionOp::eager_execute()`.
+a fallback to optional host-reference execution.
 
 The engine uses `last_use` metadata to reclaim buffers via
 `BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.

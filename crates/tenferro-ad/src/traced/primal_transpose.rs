@@ -254,8 +254,12 @@ pub(super) fn try_primal_transpose(
             &wrt_value_key_set,
             &mut dependency_memo,
         );
-        let transpose_mode = OperationRole::Linearized {
-            active_mask: active_mask.clone(),
+        let transpose_mode = if matches!(op_key.operation(), StdTensorOp::Extension(_)) {
+            OperationRole::Primary
+        } else {
+            OperationRole::Linearized {
+                active_mask: active_mask.clone(),
+            }
         };
 
         ctx.set_transpose_primal_outputs(Some(output_keys.clone()));
@@ -267,13 +271,8 @@ pub(super) fn try_primal_transpose(
             &transpose_mode,
             ctx,
         );
-        let used_primal_outputs = ctx.transpose_primal_outputs_were_used();
         ctx.set_transpose_primal_outputs(None);
         let cotangent_in = cotangent_in?;
-
-        if matches!(op_key.operation(), StdTensorOp::Extension(_)) && !used_primal_outputs {
-            return Err(unsupported_primal_transpose(op_key.operation()));
-        }
 
         if cotangent_in.len() != rule_inputs.len() {
             return Err(ADRuleError::invalid_input(

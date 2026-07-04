@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use tenferro_runtime::extension::{apply, ExtensionOp};
-use tenferro_runtime::{DType, GraphCompiler, SymDim, Tensor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, SymDim, TracedTensor};
 use tenferro_xla::{lower_to_stablehlo, Error};
 
 #[derive(Clone, Debug)]
@@ -41,10 +41,6 @@ impl ExtensionOp for RuntimeOnlyExtension {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
     }
 }
 

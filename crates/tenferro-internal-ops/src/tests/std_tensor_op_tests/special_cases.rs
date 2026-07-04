@@ -545,13 +545,6 @@ impl ExtensionOp for RuleOnlyExt {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     }
-
-    fn eager_execute(
-        &self,
-        inputs: &[&tenferro_tensor::Tensor],
-    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
 }
 
 #[derive(Debug)]
@@ -559,7 +552,7 @@ struct RuleOnlyIdentityAd {
     family: &'static str,
 }
 
-impl ExtensionAdRule for RuleOnlyIdentityAd {
+impl ExtensionLinearizeRule for RuleOnlyIdentityAd {
     fn family_id(&self) -> &'static str {
         self.family
     }
@@ -575,14 +568,20 @@ impl ExtensionAdRule for RuleOnlyIdentityAd {
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![tangent_in[0]])
     }
+}
 
-    fn transpose_rule(
+impl ExtensionLinearTransposeRule for RuleOnlyIdentityAd {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn linear_transpose(
         &self,
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
+        _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         Ok(vec![cotangent_out[0]])
@@ -593,7 +592,7 @@ impl ExtensionAdRule for RuleOnlyIdentityAd {
 fn extension_linearize_uses_registered_rule() {
     let family = "stdtensor.rule_only_identity.v1";
     let rules = ExtensionRuleSet::new()
-        .with_rule(Arc::new(RuleOnlyIdentityAd { family }))
+        .with_linearize(Arc::new(RuleOnlyIdentityAd { family }))
         .expect("extension rule should register");
     let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
     let mut builder = GraphBuilder::<StdTensorOp>::new();
@@ -610,7 +609,7 @@ fn extension_linearize_uses_registered_rule() {
 fn extension_transpose_uses_registered_rule() {
     let family = "stdtensor.rule_only_transpose.v1";
     let rules = ExtensionRuleSet::new()
-        .with_rule(Arc::new(RuleOnlyIdentityAd { family }))
+        .with_linear_transpose(Arc::new(RuleOnlyIdentityAd { family }))
         .expect("extension rule should register");
     let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
     let mut builder = GraphBuilder::<StdTensorOp>::new();

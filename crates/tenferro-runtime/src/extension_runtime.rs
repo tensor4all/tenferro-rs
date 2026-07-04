@@ -155,6 +155,80 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
     ) -> tenferro_tensor::Result<Vec<Tensor>>;
 }
 
+/// Runtime adapter that delegates execution to an extension op's optional
+/// host/reference implementation.
+///
+/// Register one adapter per extension family. Backend-specific runtimes should
+/// implement [`ExtensionRuntime`] directly instead of using this adapter.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{ExtensionRuntime, HostReferenceRuntime};
+///
+/// let runtime = HostReferenceRuntime::<CpuBackend>::new("example.identity.v1");
+/// assert_eq!(runtime.family_id(), "example.identity.v1");
+/// ```
+#[derive(Clone, Copy)]
+pub struct HostReferenceRuntime<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: TensorBackend + 'static> HostReferenceRuntime<B> {
+    /// Create a host-reference runtime for one extension family.
+    pub fn new(family_id: &'static str) -> Self {
+        Self {
+            family_id,
+            _backend: PhantomData,
+        }
+    }
+}
+
+impl<B: TensorBackend + 'static> Debug for HostReferenceRuntime<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostReferenceRuntime")
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("family_id", &self.family_id)
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for HostReferenceRuntime<B> {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let host = op
+            .host_reference()
+            .ok_or(tenferro_tensor::Error::NoHostReference {
+                family_id: op.family_id(),
+            })?;
+        host.execute(inputs)
+    }
+
+    fn execute_reads(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[TensorRead<'_>],
+        ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let materialized_inputs: Vec<Tensor> = inputs
+            .iter()
+            .map(TensorRead::to_tensor)
+            .collect::<tenferro_tensor::Result<_>>()?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        self.execute(op, &input_refs, ctx)
+    }
+}
+
 fn validate_runtime_output_count(
     op: &dyn ExtensionOp,
     outputs: Vec<Tensor>,
@@ -368,14 +442,11 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///
     /// ```
     /// use std::any::Any;
-    /// use std::hash::Hasher;
     /// use std::sync::Arc;
     ///
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ops::{ext_op::ExtensionOp, SymDim};
-    /// use tenferro_runtime::{
-    ///     DType, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime, Tensor,
-    /// };
+    /// use tenferro_ops::{ext_op::{ExtensionOp, HostReference}, SymDim};
+    /// use tenferro_runtime::{DType, ExtensionExecutor, HostReferenceRuntime, Tensor};
     /// use tenferro_tensor::TensorRead;
     ///
     /// #[derive(Clone, Debug)]
@@ -386,7 +457,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///         "example.identity.v1"
     ///     }
     ///
-    ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    ///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
     ///
     ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
     ///         other.as_any().is::<IdentityOp>()
@@ -416,45 +487,23 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
     ///     }
     ///
-    ///     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    ///     fn host_reference(&self) -> Option<&dyn HostReference> {
+    ///         Some(self)
+    ///     }
+    /// }
+    ///
+    /// impl HostReference for IdentityOp {
+    ///     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
     ///         Ok(vec![inputs[0].clone()])
     ///     }
     /// }
     ///
-    /// #[derive(Debug)]
-    /// struct IdentityRuntime;
-    ///
-    /// impl ExtensionRuntime<CpuBackend> for IdentityRuntime {
-    ///     fn family_id(&self) -> &'static str {
-    ///         "example.identity.v1"
-    ///     }
-    ///
-    ///     fn execute(
-    ///         &self,
-    ///         op: &dyn ExtensionOp,
-    ///         inputs: &[&Tensor],
-    ///         _ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
-    ///     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    ///         op.eager_execute(inputs)
-    ///     }
-    ///
-    ///     fn execute_reads(
-    ///         &self,
-    ///         op: &dyn ExtensionOp,
-    ///         inputs: &[TensorRead<'_>],
-    ///         ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
-    ///     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    ///         let materialized_inputs: Vec<Tensor> = inputs
-    ///             .iter()
-    ///             .map(TensorRead::to_tensor)
-    ///             .collect::<tenferro_tensor::Result<_>>()?;
-    ///         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    ///         self.execute(op, &input_refs, ctx)
-    ///     }
-    /// }
-    ///
     /// let mut executor = ExtensionExecutor::<CpuBackend>::new();
-    /// executor.registry_mut().register(Arc::new(IdentityRuntime))?;
+    /// executor
+    ///     .registry_mut()
+    ///     .register(Arc::new(HostReferenceRuntime::<CpuBackend>::new(
+    ///         "example.identity.v1",
+    ///     )))?;
     /// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let read = TensorRead::from_tensor(&input);
     /// let mut backend = CpuBackend::new();

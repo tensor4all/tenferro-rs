@@ -105,9 +105,18 @@ pub enum StdTensorOp {
 ```
 
 The `ExtensionOp` trait itself is the following contract. All methods are
-required unless explicitly marked `provided`.
+required unless explicitly marked `provided`. Host/reference execution is a
+separate optional capability exposed through `HostReference`.
 
 ```rust
+/// Optional host/reference implementation for an extension family.
+pub trait HostReference: std::fmt::Debug + Send + Sync + 'static {
+    fn execute(
+        &self,
+        inputs: &[&tenferro_tensor::Tensor],
+    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>>;
+}
+
 /// An out-of-tree operation that participates in the `StdTensorOp` graph
 /// via the `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` carrier.
 ///
@@ -180,6 +189,15 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         input_shapes: &[&[SymDim]],
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
+    /// Optional host/reference execution capability.
+    ///
+    /// Backend-only extension families MAY return `None`. Runtime execution
+    /// never silently falls back to this hook; a runtime must opt in
+    /// explicitly, for example by registering `HostReferenceRuntime`.
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        None
+    }
+
     /// Optionally expand this extension into standard tensor graph operations.
     ///
     /// This is a provided method. Return `Ok(Some(outputs))` after adding only
@@ -196,21 +214,6 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     ) -> ExtensionLoweringResult {
         Ok(None)
     }
-
-    // ----- Forward execution dispatch (Section 8) -----
-
-    /// Eager forward execution.
-    ///
-    /// Called from the runtime extension dispatcher when the eager path
-    /// encounters an `Extension` variant. Input tensors are on the device
-    /// the caller already arranged. Returned tensors MUST have shapes that
-    /// match `infer_output_meta` and MUST be placed on a device the caller
-    /// can consume (per `backend-contract.md`'s device-transfer policy,
-    /// there is no implicit cross-device transfer).
-    fn eager_execute(
-        &self,
-        inputs: &[&tenferro_tensor::Tensor],
-    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>>;
 
     // AD rules are registered separately; see Section 10.
 }
@@ -513,8 +516,8 @@ The dispatcher integration in `crates/tenferro-internal-ops/src/ad/mod.rs` MUST 
 - The number of `primal_out` keys MUST equal `op.output_count()`.
 - The returned tangent-output vector from `linearize` MUST have length
   `op.output_count()`.
-- The returned cotangent-input vector from `transpose_rule` MUST have
-  length `op.input_count()`.
+- The returned cotangent-input vector from `linear_transpose` or
+  `primal_vjp` MUST have length `op.input_count()`.
 
 ### Variable-arity extensions (discouraged)
 
@@ -538,8 +541,8 @@ store the arity in their payload and are handled by the core enum directly.
 
 - `input_count` disagreeing with `linearize`'s `primal_in` length in the
   dispatcher causes `Error::InvalidConfig` (see Section 12).
-- `output_count` disagreeing with `eager_execute`'s returned vector
-  length causes `Error::InvalidConfig`.
+- `output_count` disagreeing with a registered runtime or host-reference
+  returned vector length causes `Error::InvalidConfig`.
 
 ---
 
@@ -623,11 +626,19 @@ StdTensorOp::Extension(ext) => extension_executor.execute(backend, ext, inputs)?
 The eager path MUST NOT open a backend execution session for extension
 ops before handing control to the extension runtime; the extension runtime owns
 its execution model and receives the backend plus its runtime-owned cache store.
-The context-free `ExtensionOp::eager_execute` method is a host/reference
-implementation for direct extension-op calls. Runtime-owned execution MUST NOT
-fall back to it when an extension family is unregistered; that is a missing
-runtime error. Built-in extensions with long-lived caches MUST register a
-runtime so `EagerRuntime`-attached execution uses the runtime-owned cache store.
+Runtime-owned execution MUST NOT fall back to host/reference execution when an
+extension family is unregistered; that is a missing-runtime error.
+
+Extension families that have a simple host/reference implementation MAY expose
+it through `ExtensionOp::host_reference`. That capability is optional and is
+not part of the mandatory `ExtensionOp` contract. Callers that want to use it
+MUST register a runtime that explicitly delegates to the capability, such as
+`HostReferenceRuntime<B>`. If such a runtime receives an op whose
+`host_reference()` is `None`, it MUST return a typed missing-capability error
+rather than panicking.
+
+Built-in extensions with long-lived caches MUST register a runtime so
+`EagerRuntime`-attached execution uses the runtime-owned cache store.
 
 ### Compiled path
 
@@ -658,12 +669,12 @@ standard tensor ops for those inputs, it adds those ops and returns their
 outputs.
 
 The hook MUST NOT call backend kernels, inspect tensor values, or fall back to
-`ExtensionOp::eager_execute`. It is a graph rewrite hook, not an execution
+`ExtensionOp::host_reference`. It is a graph rewrite hook, not an execution
 hook. Returning `Ok(None)` means "this extension cannot lower to standard ops
 for this metadata"; strict lowerers MUST report that as an error instead of
-silently switching to the native extension runtime. Returning
-`ExtensionLoweringError` is reserved for malformed payloads or invalid metadata
-detected while constructing the standard graph.
+silently switching to the native extension runtime or host-reference execution.
+Returning `ExtensionLoweringError` is reserved for malformed payloads or invalid
+metadata detected while constructing the standard graph.
 
 ### Responsibility split (normative)
 
@@ -682,6 +693,9 @@ detected while constructing the standard graph.
 - **Extension runtime (`ExtensionRuntime<B>`)** is responsible for: actual
   forward computation, backend use, runtime cache entries, and device placement
   of outputs. The core pipeline MUST NOT second-guess these choices.
+- **Host-reference runtime (`HostReferenceRuntime<B>`)** is responsible for:
+  adapting the optional `HostReference` capability into `ExtensionRuntime<B>`
+  when an owner deliberately chooses reference execution.
 
 ### Rationale
 
@@ -720,14 +734,16 @@ than overloading runtime graph construction.
 ### AD rule ownership
 
 AD rules are owned by an explicit `ExtensionRuleSet` attached to
-`tenferro_ad::AdContext`. New extension crates should expose a helper that
-constructs a fresh rule set and registers one `ExtensionAdRule` per supported
-family:
+`tenferro_ad::AdContext`. The rule surface is role-specific: linearization,
+linear-transpose, and optional direct primal VJP rules are registered
+independently. New extension crates should expose a helper that constructs a
+fresh rule set and registers the roles supported by each family:
 
 ```rust
 pub fn extension_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     let mut rules = ExtensionRuleSet::new();
-    rules.register_rule(Arc::new(MyExtensionRule))?;
+    rules.register_linearize(Arc::new(MyLinearizeRule))?;
+    rules.register_linear_transpose(Arc::new(MyLinearTransposeRule))?;
     Ok(rules)
 }
 ```
@@ -736,16 +752,20 @@ Applications then pass that set through
 `tenferro_ad::AdContext::builder().with_extension_rules(...)`; eager runtimes
 that need extension AD should be built from the same `AdContext`.
 
-Double-registration under the same `family_id` in a rule set MUST be rejected
-with `ExtensionRegistryError::DuplicateRule { family_id }`.
+Double-registration under the same `(family_id, role)` in a rule set MUST be
+rejected with `ExtensionRegistryError::DuplicateRule { family_id, role }`.
+Registering different roles for the same `family_id` is valid.
 
 `ExtensionRegistryError`:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum ExtensionRegistryError {
-    #[error("AD rule for family_id {family_id:?} already registered")]
-    DuplicateRule { family_id: &'static str },
+    #[error("extension AD {role:?} rule for family_id {family_id:?} already registered")]
+    DuplicateRule {
+        family_id: &'static str,
+        role: ExtensionRuleRole,
+    },
     #[error("family_id {family_id:?} does not match the namespaced format")]
     MalformedFamilyId { family_id: &'static str },
 }
@@ -760,9 +780,9 @@ owner of extension AD rules for a transform.
 
 ### Failure signature
 
-- Registering two AD rules with the same `family_id` in one rule set returns
-  `ExtensionRegistryError::DuplicateRule`.
-- Looking up an unregistered AD rule `family_id` returns `None`.
+- Registering two AD rules with the same `(family_id, role)` in one rule set
+  returns `ExtensionRegistryError::DuplicateRule`.
+- Looking up an unregistered AD rule role for a `family_id` returns `None`.
 - Running a graph that references an extension op with no rule in the active
   `AdContext` is valid for forward execution. AD through that op returns
   `ADRuleError::Unsupported` with the `family_id` and rule kind.
@@ -772,32 +792,61 @@ owner of extension AD rules for a transform.
 ## 10. AD API surface
 
 Extension AD is registered independently from the primal op. Extension crates
-implement `ExtensionAdRule` and add it to an `ExtensionRuleSet`. Rule
-signatures mirror `Primitive::jvp_rule` and
-`Primitive::transpose_rule` and return `ADRuleResult<_>` so missing rules
-can propagate without panic:
+implement one or more role-specific rule traits and add them to an
+`ExtensionRuleSet`. Rules return `ADRuleResult<_>` so missing rules can
+propagate without panic.
+
+`ExtensionLinearizeRule` provides the definitional JVP used when an extension
+appears in a primal graph:
 
 ```rust
-pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
+pub trait ExtensionLinearizeRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut GraphBuilder<StdTensorOp>,
+        builder: &mut dyn PrimitiveRuleBuilder,
         primal_in: &[ValueKey<StdTensorOp>],
         primal_out: &[ValueKey<StdTensorOp>],
         tangent_in: &[Option<LocalValueId>],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+```
 
-    fn transpose_rule(
+`ExtensionLinearTransposeRule` provides the transpose of an extension viewed as
+a linear map in the active linearized inputs:
+
+```rust
+pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
+    fn family_id(&self) -> &'static str;
+
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveBuilder<StdTensorOp>,
+        builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+```
+
+`ExtensionPrimalVjpRule` is an optional direct VJP hook for reverse-mode
+fallbacks from the primal graph:
+
+```rust
+pub trait ExtensionPrimalVjpRule: Debug + Send + Sync + 'static {
+    fn family_id(&self) -> &'static str;
+
+    fn primal_vjp(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[ValueRef<StdTensorOp>],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
@@ -806,13 +855,20 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
 The `op` argument is the concrete extension payload as a trait object. Rules
 that need payload parameters should downcast via `op.as_any()`.
 
+The AD engine dispatches by operation role:
+
+- `linearize` uses `ExtensionRuleSet::lookup_linearize`.
+- `linear_transpose` of a linearized extension op uses
+  `ExtensionRuleSet::lookup_linear_transpose` and passes the active input mask.
+- primal reverse-mode fallback uses `ExtensionRuleSet::lookup_primal_vjp`.
+
 ### AD closure
 
-`linearize` and `transpose_rule` may add core `StdTensorOp` values and
-`StdTensorOp::Extension` values. Emitted extension families MUST have their
-own `ExtensionAdRule` in the active `ExtensionRuleSet` before a subsequent AD
-pass reaches them. Terminal first-order helper families MAY omit a separate AD
-rule when the owning extension documents that higher-order AD through that
+`linearize`, `linear_transpose`, and `primal_vjp` may add core `StdTensorOp`
+values and `StdTensorOp::Extension` values. Emitted extension families MUST
+have the role-specific rules needed by any subsequent AD pass in the active
+`ExtensionRuleSet`. Terminal first-order helper families MAY omit separate
+rules when the owning extension documents that higher-order AD through that
 helper is unsupported. This keeps out-of-tree operations in the same compute
 graph while preserving the `Primitive` closure invariant at the
 `StdTensorOp` carrier level.
@@ -841,8 +897,8 @@ extension's AD rules.
 ### Failure signature
 
 - Dispatcher reaching a `StdTensorOp::Extension` variant for an
-  `family_id` with no `ExtensionAdRule` in the active rule set returns
-  `ADRuleError::Unsupported` with the family ID and rule kind.
+  `family_id` with no rule for the required role in the active rule set
+  returns `ADRuleError::Unsupported` with the family ID and rule kind.
 
 ---
 
@@ -907,10 +963,11 @@ these error types / behaviours in the listed scenarios.
 |---|---|
 | Extension runtime execution returns `Err` | Propagate to caller with `Error::backend_failure("extension", message)` and include `family_id` in `message`. MUST NOT retry, MUST NOT swallow. |
 | Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::backend_failure(...)` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
+| `HostReferenceRuntime` receives an op with no `host_reference()` capability | Return `Error::NoHostReference { family_id }`. MUST NOT panic or synthesize a fake result. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no rule in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
-| Duplicate AD rule `family_id` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule`. |
+| AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
+| Duplicate AD rule `(family_id, role)` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule { family_id, role }`. |
 | Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
@@ -921,7 +978,7 @@ these error types / behaviours in the listed scenarios.
 
 Where the table specifies `op: "extension"`, that is the recommended
 constant. Implementations MAY refine it (e.g. `op: "ExtensionOp::linearize"` vs
-`op: "ExtensionOp::eager_execute"`) to give better error messages, as
+`op: "HostReference::execute"`) to give better error messages, as
 long as every `Error` value for an extension includes the `family_id`
 somewhere in its message or fields.
 
@@ -1046,10 +1103,10 @@ without revisiting this document.
    (e.g. for cross-thread isolation), the concrete semantics of that
    split are open.
 
-4. **Metrics / observability hooks.** Whether `eager_execute` should
-   add tracing spans (via `tracing` crate or similar) is deferred.
-   Extensions MAY add their own; the core pipeline does not
-   instrument extension calls today.
+4. **Metrics / observability hooks.** Whether extension runtimes or
+   host-reference adapters should add tracing spans (via `tracing` crate or
+   similar) is deferred. Extensions MAY add their own; the core pipeline does
+   not instrument extension calls today.
 
 ---
 

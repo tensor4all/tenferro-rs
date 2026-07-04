@@ -308,12 +308,13 @@ fn duplicate_rule_registration_is_rejected() {
 
     let mut rules = scale_by_2_rules();
     let err = rules
-        .register_rule(Arc::new(TestScaleBy2Rule))
+        .register_linearize(Arc::new(TestScaleBy2Rule))
         .expect_err("second rule registration must error");
     assert!(matches!(
         err,
         ExtensionRegistryError::DuplicateRule {
-            family_id: "tenferro-tests.scale_by_2.v1"
+            family_id: "tenferro-tests.scale_by_2.v1",
+            role: ExtensionRuleRole::Linearize
         }
     ));
 }
@@ -324,7 +325,7 @@ fn malformed_family_id_is_rejected() {
 
     #[derive(Debug)]
     struct BadRule;
-    impl ExtensionAdRule for BadRule {
+    impl ExtensionLinearizeRule for BadRule {
         fn family_id(&self) -> &'static str {
             "no-version-suffix"
         }
@@ -339,21 +340,10 @@ fn malformed_family_id_is_rejected() {
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             Ok(vec![])
         }
-        fn transpose_rule(
-            &self,
-            _op: &dyn ExtensionOp,
-            _builder: &mut dyn PrimitiveRuleBuilder,
-            _cotangent_out: &[Option<LocalValueId>],
-            _inputs: &[ValueRef<StdTensorOp>],
-            _mode: &OperationRole,
-            _ctx: &mut ShapeGuardContext,
-        ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            Ok(vec![])
-        }
     }
 
     let err = ExtensionRuleSet::new()
-        .with_rule(Arc::new(BadRule))
+        .with_linearize(Arc::new(BadRule))
         .expect_err("malformed family_id must error");
     assert!(matches!(
         err,

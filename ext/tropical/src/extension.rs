@@ -9,8 +9,8 @@ use tenferro_einsum::Subscripts;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::ExtensionAdRule;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
+use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -18,14 +18,10 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
-use tenferro_runtime::{
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime, ExtensionRuntimeRegistryError,
-};
-#[cfg(not(feature = "autodiff"))]
-use tenferro_tensor::TensorBackend;
-use tenferro_tensor::{DType, Tensor, TensorRead};
+use tenferro_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime};
+use tenferro_tensor::{DType, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
-use tenferro_tensor::{TensorBackend, TensorScalar};
+use tenferro_tensor::TensorScalar;
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -47,46 +43,10 @@ fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tens
     }
 }
 
-#[derive(Debug)]
-struct TropicalRuntime {
-    family_id: &'static str,
-}
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TropicalRuntime {
-    fn family_id(&self) -> &'static str {
-        self.family_id
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[&Tensor],
-        _ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        op.eager_execute(inputs)
-    }
-
-    fn execute_reads(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[TensorRead<'_>],
-        ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        // Tropical CPU kernels consume compact host tensors, so view
-        // materialization is an explicit runtime choice.
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
-        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-        self.execute(op, &input_refs, ctx)
-    }
-}
-
 /// Register tropical extension runtimes on a graph or eager executor.
 ///
 /// The runtime executor is intentionally thin: it delegates to each tropical
-/// extension op's [`tenferro_runtime::extension::ExtensionOp::eager_execute`].
+/// extension op's optional host reference implementation.
 /// AD rules are registered separately through `tropical_ad_rules` when the
 /// `autodiff` feature is enabled.
 ///
@@ -113,17 +73,23 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TropicalRuntime {
 pub fn register_runtime<B: TensorBackend + 'static>(
     executor: &mut ExtensionExecutor<B>,
 ) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor.registry_mut().register(Arc::new(TropicalRuntime {
-        family_id: TROPICAL_EINSUM_FAMILY_ID,
-    }))?;
+    executor
+        .registry_mut()
+        .register(Arc::new(HostReferenceRuntime::<B>::new(
+            TROPICAL_EINSUM_FAMILY_ID,
+        )))?;
     #[cfg(feature = "autodiff")]
     {
-        executor.registry_mut().register(Arc::new(TropicalRuntime {
-            family_id: TROPICAL_EINSUM_JVP_FAMILY_ID,
-        }))?;
-        executor.registry_mut().register(Arc::new(TropicalRuntime {
-            family_id: TROPICAL_EINSUM_VJP_FAMILY_ID,
-        }))?;
+        executor
+            .registry_mut()
+            .register(Arc::new(HostReferenceRuntime::<B>::new(
+                TROPICAL_EINSUM_JVP_FAMILY_ID,
+            )))?;
+        executor
+            .registry_mut()
+            .register(Arc::new(HostReferenceRuntime::<B>::new(
+                TROPICAL_EINSUM_VJP_FAMILY_ID,
+            )))?;
     }
     Ok(())
 }
@@ -180,7 +146,13 @@ impl ExtensionOp for TropicalEinsumOp {
         Ok(vec![meta])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TropicalEinsumOp {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         let result = tropical_einsum_subscripts_with_argmax(self.kind, inputs, &self.subscripts)?;
         Ok(vec![result.output])
     }
@@ -286,7 +258,14 @@ impl ExtensionOp for TropicalEinsumJvpOp {
         Ok(vec![primal])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl HostReference for TropicalEinsumJvpOp {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         if inputs.len() != self.input_count() {
             return Err(invalid_config(
                 "tropical_einsum_jvp",
@@ -407,7 +386,14 @@ impl ExtensionOp for TropicalEinsumVjpOp {
         )])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl HostReference for TropicalEinsumVjpOp {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         if inputs.len() != 3 {
             return Err(invalid_config(
                 "tropical_einsum_vjp",
@@ -442,7 +428,7 @@ impl ExtensionOp for TropicalEinsumVjpOp {
 struct TropicalEinsumAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionAdRule for TropicalEinsumAdRule {
+impl ExtensionLinearizeRule for TropicalEinsumAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_FAMILY_ID
     }
@@ -495,20 +481,6 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
         Ok(vec![Some(out[0])])
     }
 
-    fn transpose_rule(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Err(ADRuleError::unsupported(
-            "tropical einsum transpose is supported via its linearized JVP op",
-            ADRuleKind::Transpose,
-        ))
-    }
 }
 
 #[cfg(feature = "autodiff")]
@@ -516,43 +488,24 @@ impl ExtensionAdRule for TropicalEinsumAdRule {
 struct TropicalEinsumJvpAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionAdRule for TropicalEinsumJvpAdRule {
+impl ExtensionLinearTransposeRule for TropicalEinsumJvpAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_JVP_FAMILY_ID
     }
 
-    fn linearize(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        _tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Err(ADRuleError::unsupported(
-            TROPICAL_EINSUM_JVP_FAMILY_ID,
-            ADRuleKind::Jvp,
-        ))
-    }
-
-    fn transpose_rule(
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
         validate_ad_supported(&op.subscripts, ADRuleKind::Transpose)?;
         let Some(ct) = cotangent_out.first().copied().flatten() else {
             return Ok(vec![None; op.input_count()]);
-        };
-        let active_mask = match mode {
-            OperationRole::Linearized { active_mask } => active_mask,
-            OperationRole::Primary => return Ok(vec![None; op.input_count()]),
         };
 
         let mut result = vec![None; op.input_count()];
@@ -594,14 +547,14 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
 /// ```
 /// let rules = tenferro_ext_tropical::tropical_ad_rules().unwrap();
 ///
-/// assert!(rules.is_rule_registered("tenferro-ext-tropical.einsum.v1"));
-/// assert!(rules.is_rule_registered("tenferro-ext-tropical.einsum_jvp.v1"));
+/// assert!(rules.is_linearize_registered("tenferro-ext-tropical.einsum.v1"));
+/// assert!(rules.is_linear_transpose_registered("tenferro-ext-tropical.einsum_jvp.v1"));
 /// ```
 #[cfg(feature = "autodiff")]
 pub fn tropical_ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     let mut rules = ExtensionRuleSet::new();
-    rules.register_rule(Arc::new(TropicalEinsumAdRule))?;
-    rules.register_rule(Arc::new(TropicalEinsumJvpAdRule))?;
+    rules.register_linearize(Arc::new(TropicalEinsumAdRule))?;
+    rules.register_linear_transpose(Arc::new(TropicalEinsumJvpAdRule))?;
     Ok(rules)
 }
 

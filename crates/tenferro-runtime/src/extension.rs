@@ -39,7 +39,7 @@ pub use crate::shape_infer::{
     infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
     promote_dtype_div_like, promote_dtype_for_binary_op, promote_dtypes,
 };
-pub use tenferro_ops::ext_op::ExtensionOp;
+pub use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 pub use tenferro_ops::ExtensionFamilyId;
 
 pub use crate::extension_cache::{
@@ -47,7 +47,7 @@ pub use crate::extension_cache::{
 };
 pub use crate::extension_runtime::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
+    ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
 
 /// Execute a lowered core program with caller-owned backend runtime cache state.
@@ -88,7 +88,7 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// # use std::any::Any;
 /// use std::sync::Arc;
 /// use tenferro_runtime::extension::{apply, ExtensionOp};
-/// use tenferro_runtime::{DType, SymDim, Tensor, TracedTensor};
+/// use tenferro_runtime::{DType, SymDim, TracedTensor};
 ///
 /// # #[derive(Clone, Debug)]
 /// # struct IdentityExt;
@@ -108,9 +108,6 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// #         shapes: &[&[SymDim]],
 /// #     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
 /// #         Ok(vec![(dtypes[0], shapes[0].to_vec())])
-/// #     }
-/// #     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-/// #         Ok(vec![inputs[0].clone()])
 /// #     }
 /// # }
 /// let op: Arc<dyn ExtensionOp> = Arc::new(IdentityExt);

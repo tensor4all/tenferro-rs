@@ -22,8 +22,10 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::ExtensionAdRule;
-use tenferro_ops::ext_op::{ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp};
+use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
+use tenferro_ops::ext_op::{
+    ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp, HostReference,
+};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
@@ -60,9 +62,9 @@ type InputIndexVec = SmallVec<[usize; 8]>;
 /// Standard einsum extension payload.
 ///
 /// This mirrors the current `tenferro.einsum.v1` payload shape. Runtime-owned
-/// execution goes through [`EinsumRuntime`]; [`ExtensionOp::eager_execute`]
-/// remains only as a host reference implementation for direct context-free
-/// extension calls.
+/// execution goes through [`EinsumRuntime`]. The optional
+/// [`ExtensionOp::host_reference`] hook remains available for direct
+/// context-free reference execution.
 #[derive(Clone)]
 pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,
@@ -289,11 +291,8 @@ impl ExtensionOp for EinsumExtensionOp {
         )])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let mut backend = tenferro_cpu::CpuBackend::new();
-        let subscripts = Subscripts::from(&self.subscripts);
-        crate::eager::eager_einsum_subscripts(&mut backend, inputs, &subscripts)
-            .map(|output| vec![output])
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
     }
 
     fn lower_to_standard_ops(
@@ -329,6 +328,15 @@ impl ExtensionOp for EinsumExtensionOp {
     }
 }
 
+impl HostReference for EinsumExtensionOp {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let mut backend = tenferro_cpu::CpuBackend::new();
+        let subscripts = Subscripts::from(&self.subscripts);
+        crate::eager::eager_einsum_subscripts(&mut backend, inputs, &subscripts)
+            .map(|output| vec![output])
+    }
+}
+
 fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize>>> {
     input_shapes
         .iter()
@@ -344,7 +352,9 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
 /// Return the explicit einsum extension AD rule set.
 #[cfg(feature = "autodiff")]
 pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new().with_rule(Arc::new(EinsumAdRule))
+    ExtensionRuleSet::new()
+        .with_linearize(Arc::new(EinsumAdRule))?
+        .with_linear_transpose(Arc::new(EinsumAdRule))
 }
 
 #[derive(Debug)]
@@ -352,7 +362,7 @@ pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
 struct EinsumAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionAdRule for EinsumAdRule {
+impl ExtensionLinearizeRule for EinsumAdRule {
     fn family_id(&self) -> &'static str {
         EINSUM_EXTENSION_FAMILY_ID
     }
@@ -395,14 +405,21 @@ impl ExtensionAdRule for EinsumAdRule {
 
         Ok(vec![sum_terms(builder, terms)])
     }
+}
 
-    fn transpose_rule(
+#[cfg(feature = "autodiff")]
+impl ExtensionLinearTransposeRule for EinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
@@ -412,10 +429,6 @@ impl ExtensionAdRule for EinsumAdRule {
 
         let Some(ct) = cotangent_out.first().copied().flatten() else {
             return Ok(vec![None; input_count]);
-        };
-        let active_mask = match mode {
-            OperationRole::Linearized { active_mask } => active_mask,
-            OperationRole::Primary => return Ok(vec![None; input_count]),
         };
         let primal_input_shapes: Vec<Vec<SymDim>> = inputs
             .iter()

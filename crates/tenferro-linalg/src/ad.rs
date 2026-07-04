@@ -25,7 +25,8 @@ use std::sync::Arc;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ad::extension::{
-    ExtensionAdRule, ExtensionOp, ExtensionRegistryError, ExtensionRuleSet,
+    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp, ExtensionRegistryError,
+    ExtensionRuleSet,
 };
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -44,16 +45,19 @@ pub mod support;
 ///
 /// ```rust
 /// let rules = tenferro_linalg::ad_rules().unwrap();
-/// assert!(rules.is_rule_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
+/// assert!(rules.is_linearize_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
+/// assert!(rules.is_linear_transpose_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
 /// ```
 pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new().with_rule(Arc::new(LinalgAdRule))
+    ExtensionRuleSet::new()
+        .with_linearize(Arc::new(LinalgAdRule))?
+        .with_linear_transpose(Arc::new(LinalgAdRule))
 }
 
 #[derive(Debug)]
 struct LinalgAdRule;
 
-impl ExtensionAdRule for LinalgAdRule {
+impl ExtensionLinearizeRule for LinalgAdRule {
     fn family_id(&self) -> &'static str {
         LINALG_EXTENSION_FAMILY_ID
     }
@@ -131,18 +135,27 @@ impl ExtensionAdRule for LinalgAdRule {
             }
         }
     }
+}
 
-    fn transpose_rule(
+impl ExtensionLinearTransposeRule for LinalgAdRule {
+    fn family_id(&self) -> &'static str {
+        LINALG_EXTENSION_FAMILY_ID
+    }
+
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
         let mut builder = DynBuilder(builder);
+        let mode = OperationRole::Linearized {
+            active_mask: active_mask.to_vec(),
+        };
         match op.op() {
             LinalgOp::TriangularSolve {
                 left_side,
@@ -153,7 +166,7 @@ impl ExtensionAdRule for LinalgAdRule {
                 &mut builder,
                 cotangent_out,
                 inputs,
-                mode,
+                &mode,
                 rules::TriangularSolveFlags::new(left_side, lower, transpose_a, unit_diagonal),
                 ctx,
             ),
@@ -164,7 +177,7 @@ impl ExtensionAdRule for LinalgAdRule {
                 &mut builder,
                 cotangent_out,
                 inputs,
-                mode,
+                &mode,
                 transpose_a,
                 conjugate_a,
                 ctx,
@@ -173,18 +186,18 @@ impl ExtensionAdRule for LinalgAdRule {
                 &mut builder,
                 cotangent_out,
                 inputs,
-                mode,
+                &mode,
                 transpose_a,
                 ctx,
             ),
             LinalgOp::Eigh { eps } => {
-                rules::transpose_eigh(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+                rules::transpose_eigh(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
             }
             LinalgOp::EighVals { eps } => {
-                rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, mode, eps, ctx)
+                rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
             }
-            LinalgOp::Lu => rules::transpose_lu(&mut builder, cotangent_out, inputs, mode, ctx),
-            LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, mode, ctx),
+            LinalgOp::Lu => rules::transpose_lu(&mut builder, cotangent_out, inputs, &mode, ctx),
+            LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, &mode, ctx),
             LinalgOp::Cholesky
             | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
@@ -620,14 +633,12 @@ mod tests {
         });
 
         let result = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[Some(cotangent)],
                 &[ValueRef::External(lhs.clone()), ValueRef::External(rhs)],
-                &OperationRole::Linearized {
-                    active_mask: vec![false, true],
-                },
+                &[false, true],
                 &mut ctx,
             )
             .unwrap();
@@ -651,26 +662,24 @@ mod tests {
         ctx.set_transpose_primal_outputs(Some(primal_outputs));
 
         let inactive = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[Some(cotangent), None],
                 &[ValueRef::External(a.clone())],
-                &OperationRole::Linearized {
-                    active_mask: vec![false],
-                },
+                &[false],
                 &mut ctx,
             )
             .unwrap();
         assert_eq!(inactive, vec![None]);
 
         let zero_seed = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[None, None],
                 &[ValueRef::External(a)],
-                &OperationRole::Primary,
+                &[true],
                 &mut ctx,
             )
             .unwrap();
@@ -687,12 +696,12 @@ mod tests {
         });
 
         let err = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[Some(cotangent), None],
                 &[],
-                &OperationRole::Primary,
+                &[true],
                 &mut ctx,
             )
             .unwrap_err();
@@ -701,12 +710,12 @@ mod tests {
         let vector = input_key(71);
         insert_meta(&mut ctx, vector.clone(), &[2]);
         let inactive = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[Some(cotangent), None],
                 &[ValueRef::External(vector)],
-                &OperationRole::Primary,
+                &[true],
                 &mut ctx,
             )
             .unwrap();
@@ -724,12 +733,12 @@ mod tests {
         ctx.set_transpose_primal_outputs(Some(vec![primal_outputs[0].clone()]));
 
         let err = LinalgAdRule
-            .transpose_rule(
+            .linear_transpose(
                 &op,
                 &mut builder,
                 &[Some(cotangent), None],
                 &[ValueRef::External(a)],
-                &OperationRole::Primary,
+                &[true],
                 &mut ctx,
             )
             .unwrap_err();
@@ -757,12 +766,12 @@ mod tests {
             ctx.set_transpose_primal_outputs(Some(primal_outputs));
 
             let result = LinalgAdRule
-                .transpose_rule(
+                .linear_transpose(
                     &op,
                     &mut builder,
                     &[g_l, g_v],
                     &[ValueRef::External(a)],
-                    &OperationRole::Primary,
+                    &[true],
                     &mut ctx,
                 )
                 .unwrap();
@@ -782,12 +791,12 @@ mod tests {
             ctx.set_transpose_primal_outputs(Some(primal_outputs));
 
             let result = LinalgAdRule
-                .transpose_rule(
+                .linear_transpose(
                     &LinalgExtensionOp::new(LinalgOp::Lu),
                     &mut builder,
                     &[None, Some(g_l), Some(g_u), None],
                     &[ValueRef::External(a)],
-                    &OperationRole::Primary,
+                    &[true],
                     &mut ctx,
                 )
                 .unwrap();
@@ -811,12 +820,12 @@ mod tests {
             ctx.set_transpose_primal_outputs(Some(primal_outputs));
 
             let result = LinalgAdRule
-                .transpose_rule(
+                .linear_transpose(
                     &LinalgExtensionOp::new(LinalgOp::Qr),
                     &mut builder,
                     &[Some(g_q), Some(g_r)],
                     &[ValueRef::External(a)],
-                    &OperationRole::Primary,
+                    &[true],
                     &mut ctx,
                 )
                 .unwrap();

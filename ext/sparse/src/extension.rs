@@ -6,21 +6,23 @@ use std::sync::Arc;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
-use tenferro_ad::extension::{ExtensionAdRule, ExtensionRegistryError, ExtensionRuleSet};
-#[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
-use tenferro_ops::ext_op::ExtensionOp;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::{
+    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionRegistryError,
+    ExtensionRuleSet,
+};
+use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{
-    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
+    apply, ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
-use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
@@ -145,17 +147,17 @@ impl SparseMatmulPlan {
 pub fn register_runtime<B: TensorBackend + 'static>(
     executor: &mut ExtensionExecutor<B>,
 ) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
-    executor.registry_mut().register(Arc::new(SparseRuntime {
-        family_id: FAMILY_ID,
-    }))?;
+    executor
+        .registry_mut()
+        .register(Arc::new(HostReferenceRuntime::<B>::new(FAMILY_ID)))?;
     #[cfg(feature = "autodiff")]
     {
-        executor.registry_mut().register(Arc::new(SparseRuntime {
-            family_id: JVP_FAMILY_ID,
-        }))?;
-        executor.registry_mut().register(Arc::new(SparseRuntime {
-            family_id: VJP_FAMILY_ID,
-        }))?;
+        executor
+            .registry_mut()
+            .register(Arc::new(HostReferenceRuntime::<B>::new(JVP_FAMILY_ID)))?;
+        executor
+            .registry_mut()
+            .register(Arc::new(HostReferenceRuntime::<B>::new(VJP_FAMILY_ID)))?;
     }
     Ok(())
 }
@@ -211,40 +213,6 @@ pub fn sparse_matmul(
     )
 }
 
-#[derive(Debug)]
-struct SparseRuntime {
-    family_id: &'static str,
-}
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for SparseRuntime {
-    fn family_id(&self) -> &'static str {
-        self.family_id
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[&Tensor],
-        _ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> Result<Vec<Tensor>> {
-        op.eager_execute(inputs)
-    }
-
-    fn execute_reads(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[TensorRead<'_>],
-        ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<Result<_>>()?;
-        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-        self.execute(op, &input_refs, ctx)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SparseMatmulOp {
     plan: SparseMatmulPlan,
@@ -291,7 +259,13 @@ impl ExtensionOp for SparseMatmulOp {
         )])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for SparseMatmulOp {
+    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
         validate_primal_inputs(&self.plan, inputs)?;
         apply_sparse_matmul(&self.plan, inputs[0], inputs[1]).map(|tensor| vec![tensor])
     }
@@ -371,7 +345,14 @@ impl ExtensionOp for SparseMatmulJvpOp {
         )])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl HostReference for SparseMatmulJvpOp {
+    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
         validate_primal_inputs(&self.plan, &inputs[..2])?;
         execute_jvp(&self.plan, inputs, &self.active_inputs).map(|tensor| vec![tensor])
     }
@@ -438,7 +419,14 @@ impl ExtensionOp for SparseMatmulVjpOp {
         )])
     }
 
-    fn eager_execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl HostReference for SparseMatmulVjpOp {
+    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
         validate_primal_inputs(&self.plan, &inputs[..2])?;
         validate_value_tensor(inputs[2], self.plan.output_nnz())?;
         execute_vjp(&self.plan, inputs, self.active_input).map(|tensor| vec![tensor])
@@ -450,7 +438,7 @@ impl ExtensionOp for SparseMatmulVjpOp {
 struct SparseMatmulAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionAdRule for SparseMatmulAdRule {
+impl ExtensionLinearizeRule for SparseMatmulAdRule {
     fn family_id(&self) -> &'static str {
         FAMILY_ID
     }
@@ -497,20 +485,6 @@ impl ExtensionAdRule for SparseMatmulAdRule {
         Ok(vec![Some(out[0])])
     }
 
-    fn transpose_rule(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
-        _mode: &OperationRole,
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Err(ADRuleError::unsupported(
-            "sparse matmul transpose is supported through its JVP op",
-            ADRuleKind::Transpose,
-        ))
-    }
 }
 
 #[cfg(feature = "autodiff")]
@@ -518,39 +492,23 @@ impl ExtensionAdRule for SparseMatmulAdRule {
 struct SparseMatmulJvpAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionAdRule for SparseMatmulJvpAdRule {
+impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
     fn family_id(&self) -> &'static str {
         JVP_FAMILY_ID
     }
 
-    fn linearize(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        _tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Err(ADRuleError::unsupported(JVP_FAMILY_ID, ADRuleKind::Jvp))
-    }
-
-    fn transpose_rule(
+    fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[ValueRef<StdTensorOp>],
-        mode: &OperationRole,
+        active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
         let Some(ct) = cotangent_out.first().copied().flatten() else {
             return Ok(vec![None; op.input_count()]);
-        };
-        let active_mask = match mode {
-            OperationRole::Linearized { active_mask } => active_mask,
-            OperationRole::Primary => return Ok(vec![None; op.input_count()]),
         };
         let mut result = vec![None; op.input_count()];
         for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
@@ -584,14 +542,14 @@ impl ExtensionAdRule for SparseMatmulJvpAdRule {
 ///
 /// ```
 /// let rules = tenferro_ext_sparse::sparse_ad_rules().unwrap();
-/// assert!(rules.is_rule_registered("tenferro-ext-sparse.matmul.v1"));
-/// assert!(rules.is_rule_registered("tenferro-ext-sparse.matmul_jvp.v1"));
+/// assert!(rules.is_linearize_registered("tenferro-ext-sparse.matmul.v1"));
+/// assert!(rules.is_linear_transpose_registered("tenferro-ext-sparse.matmul_jvp.v1"));
 /// ```
 #[cfg(feature = "autodiff")]
 pub fn sparse_ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
     let mut rules = ExtensionRuleSet::new();
-    rules.register_rule(Arc::new(SparseMatmulAdRule))?;
-    rules.register_rule(Arc::new(SparseMatmulJvpAdRule))?;
+    rules.register_linearize(Arc::new(SparseMatmulAdRule))?;
+    rules.register_linear_transpose(Arc::new(SparseMatmulJvpAdRule))?;
     Ok(rules)
 }
 
