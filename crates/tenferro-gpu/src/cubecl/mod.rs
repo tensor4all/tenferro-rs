@@ -2331,9 +2331,9 @@ impl TensorDot for CudaBackend {
 
     // CUDA-native accumulation (tensor4all/tenferro-rs#1287): one cuTENSOR
     // contraction with C = D = out; no temporary result tensor, no host
-    // transfer. Stage 1 accepts compact owned tensors on all three slots;
-    // views are an explicit backend limitation until cuTENSOR
-    // extent/stride/offset view mapping lands.
+    // transfer. Stage 2 accepts compact owned tensors and borrowed strided
+    // views over device buffers on all three slots; host-backed views are an
+    // explicit backend error.
     fn dot_general_read_into_accum(
         &mut self,
         lhs: TensorRead<'_>,
@@ -2350,19 +2350,7 @@ impl TensorDot for CudaBackend {
             &out,
             "dot_general",
         )?;
-        let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) else {
-            return Err(crate::Error::backend_failure(
-                "dot_general",
-                "CUDA dot-general accumulation requires compact owned operand tensors; borrowed views are not yet supported",
-            ));
-        };
-        let TensorWrite::Tensor(out) = &mut out else {
-            return Err(crate::Error::backend_failure(
-                "dot_general",
-                "CUDA dot-general accumulation requires a compact owned output tensor; borrowed views are not yet supported",
-            ));
-        };
-        gemm::dot_general_with_conj_into_accum(self, lhs, rhs, config, accumulation, out)
+        gemm::dot_general_read_into_accum(self, &lhs, &rhs, config, accumulation, &mut out)
     }
 }
 
