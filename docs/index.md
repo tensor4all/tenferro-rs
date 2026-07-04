@@ -1,8 +1,8 @@
 # tenferro
 
-tenferro is a dense tensor computation stack for Rust users who want typed
-tensor computation, PyTorch-like immediate execution with `backward()`,
-JAX-like traced graphs, einsum, linear algebra, and explicit CPU, CUDA, and
+tenferro is a Rust-native tensor & autodiff stack for scientific computing:
+typed tensors, PyTorch-style immediate execution with `backward()`, JAX-style
+traced graphs, einsum, linear algebra, FFT, and explicit CPU, CUDA, and
 experimental WebGPU backend control.
 
 The project covers both ordinary tensor computation and autodiff workflows.

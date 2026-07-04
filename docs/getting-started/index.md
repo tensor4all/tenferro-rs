@@ -23,8 +23,16 @@ runtime crate and CPU backend.
 
 ## Setup
 
-Start with the runtime crate and CPU backend crate. Use a local checkout while
-the crates are still evolving:
+Start with the runtime crate and CPU backend crate from crates.io:
+
+```toml
+[dependencies]
+tenferro-runtime = "0.2"
+tenferro-cpu = "0.2"
+```
+
+For development against a local checkout of this repository, use path
+dependencies instead:
 
 ```toml
 [dependencies]
@@ -106,13 +114,6 @@ support:
 tenferro-ad = { path = "/path/to/tenferro-rs/crates/tenferro-ad", features = ["cuda"] }
 tenferro-gpu = { path = "/path/to/tenferro-rs/crates/tenferro-gpu", features = ["cuda"] }
 tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", features = ["autodiff", "cuda"] }
-```
-
-Switch to crates.io once published:
-
-```toml
-[dependencies]
-tenferro-runtime = "..."
 ```
 
 ## First CPU Program
