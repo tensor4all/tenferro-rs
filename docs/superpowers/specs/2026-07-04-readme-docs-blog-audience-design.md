@@ -109,8 +109,15 @@ Alignment edits only; no structural or content reorganization.
 
 ## Blog post (separate repository)
 
-1. Align the opening line with the unified one-liner (currently a feature
-   list).
+Source: `tensor4all/tensor4all.github.io` (Jekyll site), checked out at
+`~/tensor4all/tensor4all.github.io`. The post exists in three language
+versions — `blog/introducing-tenferro-rs`, `…-rs-ja`, `…-rs-zh` — and
+every change below must be applied to all three in sync. Blog changes
+ship as a separate PR in that repository.
+
+1. Align the opening italic line with the unified one-liner (currently a
+   feature list). The H1 ("… a differentiable tensor stack for
+   scientific computing …") is already close and stays.
 2. Fix any drift against the current project state (post published
    2026-06-23; expected minor).
 3. Absorb narrative elements compressed out of the README that the post
@@ -119,11 +126,6 @@ Alignment edits only; no structural or content reorganization.
    AI-development model, and verification philosophy, so no major
    additions are expected.
 4. Confirm/strengthen the closing pointer to docs Getting Started.
-
-Dependency: the website repository is not checked out locally under
-`~/tensor4all`; the maintainer will provide its location at
-implementation time. Blog changes ship as a separate PR in that
-repository.
 
 ## Success criteria
 
