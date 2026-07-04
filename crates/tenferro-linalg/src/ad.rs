@@ -222,6 +222,7 @@ mod tests {
     use super::*;
     use crate::extension::DEFAULT_DECOMPOSITION_AD_EPS;
     use computegraph::graph::GraphBuilder;
+    use std::collections::HashSet;
     use tenferro_ops::input_key::TensorInputKey;
     use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     use tenferro_tensor::DType;
@@ -289,6 +290,26 @@ mod tests {
         (ctx, a, vec![p, l, u, parity])
     }
 
+    fn svd_context(
+        shape: &[usize],
+    ) -> (
+        ShapeGuardContext,
+        ValueKey<StdTensorOp>,
+        Vec<ValueKey<StdTensorOp>>,
+    ) {
+        let mut ctx = ShapeGuardContext::default();
+        let a = input_key(120);
+        let u = input_key(121);
+        let s = input_key(122);
+        let vt = input_key(123);
+        let k = shape[0].min(shape[1]);
+        insert_typed_meta(&mut ctx, a.clone(), DType::F64, shape);
+        insert_typed_meta(&mut ctx, u.clone(), DType::F64, &[shape[0], k]);
+        insert_typed_meta(&mut ctx, s.clone(), DType::F64, &[k]);
+        insert_typed_meta(&mut ctx, vt.clone(), DType::F64, &[k, shape[1]]);
+        (ctx, a, vec![u, s, vt])
+    }
+
     fn qr_context(
         shape: &[usize],
     ) -> (
@@ -305,6 +326,13 @@ mod tests {
         insert_typed_meta(&mut ctx, q.clone(), DType::F64, &[shape[0], k]);
         insert_typed_meta(&mut ctx, r.clone(), DType::F64, &[k, shape[1]]);
         (ctx, a, vec![q, r])
+    }
+
+    fn with_active_values(
+        ctx: ShapeGuardContext,
+        values: impl IntoIterator<Item = ValueKey<StdTensorOp>>,
+    ) -> ShapeGuardContext {
+        ctx.with_linearize_active_values(Arc::new(values.into_iter().collect::<HashSet<_>>()))
     }
 
     #[test]
@@ -336,6 +364,138 @@ mod tests {
 
         assert_eq!(result, vec![None, None, None, None, None]);
         assert!(builder.build().operations().is_empty());
+    }
+
+    #[test]
+    fn lu_linearize_prunes_inactive_factor_outputs() {
+        let op = LinalgExtensionOp::new(LinalgOp::Lu);
+        for (case, active_slot, expected_active) in [
+            ("l only", 1_usize, vec![false, true, false, false]),
+            ("u only", 2_usize, vec![false, false, true, false]),
+        ] {
+            let (ctx, a, outputs) = lu_context(&[2, 2]);
+            let mut ctx = with_active_values(ctx, [outputs[active_slot].clone()]);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let tangent = builder.add_input(TensorInputKey::User { id: 130 });
+
+            let result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut builder,
+                    &[a],
+                    &outputs,
+                    &[Some(tangent)],
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert_eq!(
+                result.iter().map(Option::is_some).collect::<Vec<_>>(),
+                expected_active,
+                "{case}"
+            );
+            let pruned_count = builder.build().operations().len();
+
+            let (full_ctx, full_a, full_outputs) = lu_context(&[2, 2]);
+            let mut full_ctx =
+                with_active_values(full_ctx, [full_outputs[1].clone(), full_outputs[2].clone()]);
+            let mut full_builder = GraphBuilder::<StdTensorOp>::new();
+            let full_tangent = full_builder.add_input(TensorInputKey::User { id: 131 });
+            let full_result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut full_builder,
+                    &[full_a],
+                    &full_outputs,
+                    &[Some(full_tangent)],
+                    &mut full_ctx,
+                )
+                .unwrap();
+
+            assert_eq!(
+                full_result.iter().map(Option::is_some).collect::<Vec<_>>(),
+                vec![false, true, true, false],
+                "{case}"
+            );
+            let full_count = full_builder.build().operations().len();
+            assert!(
+                pruned_count < full_count,
+                "{case} should not emit both LU factor tangent branches: {pruned_count} >= {full_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_input_linalg_jvps_prune_when_all_outputs_are_inactive() {
+        let cases = [
+            (
+                LinalgOp::Lu,
+                lu_context(&[2, 2]),
+                vec![None, None, None, None],
+            ),
+            (
+                LinalgOp::Svd {
+                    eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                },
+                svd_context(&[2, 2]),
+                vec![None, None, None],
+            ),
+        ];
+
+        for (kind, (ctx, a, outputs), expected) in cases {
+            let mut ctx = with_active_values(ctx, []);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let tangent = builder.add_input(TensorInputKey::User { id: 132 });
+            let op = LinalgExtensionOp::new(kind);
+
+            let result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut builder,
+                    &[a],
+                    &outputs,
+                    &[Some(tangent)],
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert_eq!(result, expected, "{kind:?}");
+            assert!(
+                builder.build().operations().is_empty(),
+                "{kind:?} should not emit AD graph operations for inactive outputs"
+            );
+        }
+    }
+
+    #[test]
+    fn svd_linearize_prunes_inactive_vector_outputs() {
+        let (ctx, a, outputs) = svd_context(&[2, 2]);
+        let mut ctx = with_active_values(ctx, [outputs[1].clone()]);
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let tangent = builder.add_input(TensorInputKey::User { id: 133 });
+        let op = LinalgExtensionOp::new(LinalgOp::Svd {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[a],
+                &outputs,
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.iter().map(Option::is_some).collect::<Vec<_>>(),
+            vec![false, true, false]
+        );
+        assert!(
+            builder.build().operations().len() <= 5,
+            "singular-value-only SVD JVP should not emit the vector F-matrix chain"
+        );
     }
 
     #[test]

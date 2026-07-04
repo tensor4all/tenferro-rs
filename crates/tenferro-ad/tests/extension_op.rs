@@ -35,7 +35,7 @@ use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
 use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TensorRead, TypedTensor};
-use tidu::ADRuleResult;
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 // ----------------------------------------------------------------------
 // TestScaleBy2: single-input, single-output. y = x + x (= 2x).
@@ -275,6 +275,220 @@ fn swap_ad_context() -> AdContext {
         .with_extension_rules(swap_rules())
         .build()
         .expect("swap AD context")
+}
+
+// ----------------------------------------------------------------------
+// TestPreferLinearize: identity op with a deliberately distinguishable
+// primary transpose. This guards VJP path ordering: the generic
+// linearize -> linear_transpose path must be preferred when linearization is
+// available, while primary transpose remains an escape hatch.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestPreferLinearize;
+
+impl ExtensionOp for TestPreferLinearize {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.prefer_linearize.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestPreferLinearize>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Debug)]
+struct TestPreferLinearizeRule;
+
+impl ExtensionAdRule for TestPreferLinearizeRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.prefer_linearize.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Ok(vec![tangent_in[0]])
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let _ = ctx.transpose_primal_outputs();
+        match cotangent_out[0] {
+            Some(ct) => {
+                let doubled = builder.add_operation(
+                    StdTensorOp::Add,
+                    vec![ValueRef::Local(ct), ValueRef::Local(ct)],
+                    OperationRole::Linearized {
+                        active_mask: vec![true, true],
+                    },
+                );
+                Ok(vec![Some(doubled[0])])
+            }
+            None => Ok(vec![None]),
+        }
+    }
+}
+
+fn prefer_linearize_rules() -> ExtensionRuleSet {
+    ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestPreferLinearizeRule))
+        .expect("prefer_linearize rule registration")
+}
+
+fn prefer_linearize_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(prefer_linearize_rules())
+        .build()
+        .expect("prefer_linearize AD context")
+}
+
+// ----------------------------------------------------------------------
+// TestPrimaryTransposeOnly: identity op whose linearize deliberately fails.
+// This forces traced VJP to exercise the primary-transpose escape hatch.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestPrimaryTransposeOnly;
+
+impl ExtensionOp for TestPrimaryTransposeOnly {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.primary_transpose_only.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestPrimaryTransposeOnly>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Debug)]
+struct TestPrimaryTransposeOnlyRule;
+
+impl ExtensionAdRule for TestPrimaryTransposeOnlyRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.primary_transpose_only.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        if tangent_in[0].is_none() {
+            return Ok(vec![None]);
+        }
+        Err(ADRuleError::unsupported(
+            "tenferro-tests.primary_transpose_only linearize is intentionally unsupported",
+            ADRuleKind::Jvp,
+        ))
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _mode: &OperationRole,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let _ = ctx.transpose_primal_outputs();
+        Ok(vec![cotangent_out[0]])
+    }
+}
+
+fn primary_transpose_only_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(
+            ExtensionRuleSet::new()
+                .with_rule(Arc::new(TestPrimaryTransposeOnlyRule))
+                .expect("primary_transpose_only rule registration"),
+        )
+        .build()
+        .expect("primary_transpose_only AD context")
 }
 
 // ----------------------------------------------------------------------
@@ -789,6 +1003,65 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let vjp_out = vjp.run_with(&mut engine).unwrap();
     assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);
+}
+
+#[test]
+fn traced_vjp_prefers_linearize_transpose_over_primary_transpose() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).unwrap();
+    let y = apply(Arc::new(TestPreferLinearize), &[&x])
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("single prefer_linearize output");
+    let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]).unwrap();
+
+    let vjp = prefer_linearize_ad_context()
+        .vjp(&y, &x, &dy)
+        .expect("vjp should build through linearize");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let vjp_out = vjp.run_with(&mut engine).unwrap();
+
+    assert_eq!(f64_slice(&vjp_out), &[7.0, 11.0]);
+}
+
+#[test]
+fn traced_vjp_falls_back_to_primary_transpose_when_linearize_fails() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let y = apply(Arc::new(TestPrimaryTransposeOnly), &[&x])
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("single primary_transpose_only output");
+    let squared = (&y * &y).unwrap();
+    let observable = (&squared + &y).unwrap();
+    let loss = observable.reduce_sum(&[0]).unwrap();
+
+    let grad = primary_transpose_only_ad_context()
+        .grad(&loss, &x)
+        .expect("grad should fall back to primary transpose");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    register_test_runtime(&mut engine, "tenferro-tests.primary_transpose_only.v1");
+    let grad_out = grad.run_with(&mut engine).unwrap();
+
+    assert_eq!(f64_slice(&grad_out), &[5.0, 7.0]);
+}
+
+#[test]
+fn traced_vjp_primary_transpose_fallback_reports_inactive_wrt() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let z = TracedTensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap();
+    let y = apply(Arc::new(TestPrimaryTransposeOnly), &[&x])
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("single primary_transpose_only output");
+    let loss = y.reduce_sum(&[0]).unwrap();
+
+    let grad = primary_transpose_only_ad_context()
+        .grad_optional(&loss, &z)
+        .expect("inactive fallback should build");
+
+    assert!(grad.is_none());
 }
 
 #[test]
