@@ -1,7 +1,9 @@
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use crate::types::{
+    Buffer, TensorRank, TensorView, TensorViewMut, TypedTensor, TypedTensorView, TypedTensorViewMut,
+};
 use crate::validate::validate_convert_dtype;
 use crate::{DType, RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
@@ -292,6 +294,90 @@ pub struct DotGeneralAccumulation {
     pub beta: ContractionScalar,
 }
 
+/// One matrix multiply in a grouped GEMM over shared flat buffers.
+///
+/// Offsets are element offsets into the corresponding shared lhs, rhs, and
+/// output buffers. Each job computes a column-major `rows x cols` output block
+/// from a column-major `rows x contracted` lhs block and a column-major
+/// `contracted x cols` rhs block.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GroupedGemmJob {
+    out_offset: usize,
+    lhs_offset: usize,
+    rhs_offset: usize,
+    rows: usize,
+    contracted: usize,
+    cols: usize,
+}
+
+impl GroupedGemmJob {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        out_offset: usize,
+        lhs_offset: usize,
+        rhs_offset: usize,
+        rows: usize,
+        contracted: usize,
+        cols: usize,
+    ) -> Self {
+        Self {
+            out_offset,
+            lhs_offset,
+            rhs_offset,
+            rows,
+            contracted,
+            cols,
+        }
+    }
+
+    pub fn out_offset(&self) -> usize {
+        self.out_offset
+    }
+
+    pub fn lhs_offset(&self) -> usize {
+        self.lhs_offset
+    }
+
+    pub fn rhs_offset(&self) -> usize {
+        self.rhs_offset
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn contracted(&self) -> usize {
+        self.contracted
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+}
+
+/// Shared scalar/update metadata for grouped GEMM execution.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupedGemmConfig<'a> {
+    jobs: &'a [GroupedGemmJob],
+    accumulation: DotGeneralAccumulation,
+}
+
+impl<'a> GroupedGemmConfig<'a> {
+    pub fn new(jobs: &'a [GroupedGemmJob], accumulation: DotGeneralAccumulation) -> Self {
+        Self { jobs, accumulation }
+    }
+
+    pub fn jobs(&self) -> &'a [GroupedGemmJob] {
+        self.jobs
+    }
+
+    pub fn accumulation(&self) -> DotGeneralAccumulation {
+        self.accumulation
+    }
+}
+
 impl DotGeneralAccumulation {
     /// Return overwrite semantics, `out = lhs dot rhs`, for `dtype`.
     pub fn overwrite(dtype: DType) -> crate::Result<Self> {
@@ -349,6 +435,449 @@ pub fn dot_general_accum_via_temp<B: TensorDot + ?Sized>(
         accumulation.rhs_conj,
     )?;
     accumulate_dot_result_into(&dot, accumulation, &mut out)
+}
+
+fn grouped_checked_product(
+    op: &'static str,
+    role: &'static str,
+    dims: &[usize],
+) -> crate::Result<usize> {
+    dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("{role} logical element count overflows usize for shape {dims:?}"),
+            })
+    })
+}
+
+fn checked_gemm_span(
+    op: &'static str,
+    role: &'static str,
+    offset: usize,
+    rows: usize,
+    cols: usize,
+) -> crate::Result<Option<std::ops::Range<usize>>> {
+    let len = rows
+        .checked_mul(cols)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "{role} matrix element count overflows usize: rows={rows} cols={cols}"
+            ),
+        })?;
+    if len == 0 {
+        return Ok(None);
+    }
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!("{role} matrix range overflows usize: offset={offset} len={len}"),
+        })?;
+    Ok(Some(offset..end))
+}
+
+fn validate_grouped_gemm_range(
+    op: &'static str,
+    role: &'static str,
+    len: usize,
+    range: Option<std::ops::Range<usize>>,
+) -> crate::Result<()> {
+    let Some(range) = range else {
+        return Ok(());
+    };
+    if range.end > len {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "{role} matrix range {}..{} exceeds shared buffer logical length {len}",
+                range.start, range.end
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+pub fn validate_grouped_gemm(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    out: &TensorWrite<'_>,
+    config: &GroupedGemmConfig<'_>,
+    op: &'static str,
+) -> crate::Result<()> {
+    if lhs.dtype() != rhs.dtype() {
+        return Err(crate::Error::DTypeMismatch {
+            op,
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        });
+    }
+    if lhs.dtype() != out.dtype() {
+        return Err(crate::Error::DTypeMismatch {
+            op,
+            lhs: lhs.dtype(),
+            rhs: out.dtype(),
+        });
+    }
+    config.accumulation.validate_for_dtype(lhs.dtype())?;
+
+    let lhs_len = grouped_checked_product(op, "lhs", lhs.shape())?;
+    let rhs_len = grouped_checked_product(op, "rhs", rhs.shape())?;
+    let out_len = grouped_checked_product(op, "out", out.shape())?;
+    let mut out_ranges = Vec::<std::ops::Range<usize>>::new();
+    for (idx, job) in config.jobs.iter().enumerate() {
+        validate_grouped_gemm_range(
+            op,
+            "lhs",
+            lhs_len,
+            checked_gemm_span(op, "lhs", job.lhs_offset, job.rows, job.contracted)?,
+        )?;
+        validate_grouped_gemm_range(
+            op,
+            "rhs",
+            rhs_len,
+            checked_gemm_span(op, "rhs", job.rhs_offset, job.contracted, job.cols)?,
+        )?;
+        let out_range = checked_gemm_span(op, "out", job.out_offset, job.rows, job.cols)?;
+        validate_grouped_gemm_range(op, "out", out_len, out_range.clone())?;
+        if let Some(out_range) = out_range {
+            for previous in &out_ranges {
+                if previous.start < out_range.end && out_range.start < previous.end {
+                    return Err(crate::Error::InvalidConfig {
+                        op,
+                        message: format!(
+                            "grouped GEMM output range for job {idx} overlaps previous range {}..{}",
+                            previous.start, previous.end
+                        ),
+                    });
+                }
+            }
+            out_ranges.push(out_range);
+        }
+    }
+    Ok(())
+}
+
+fn add_element_offsets(
+    op: &'static str,
+    base: isize,
+    offset: usize,
+    role: &'static str,
+) -> crate::Result<isize> {
+    let offset = isize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
+        op,
+        message: format!("{role} offset {offset} does not fit in isize"),
+    })?;
+    base.checked_add(offset)
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op,
+            message: format!("{role} offset overflows isize: base={base} offset={offset}"),
+        })
+}
+
+fn dim_stride(op: &'static str, dim: usize, role: &'static str) -> crate::Result<isize> {
+    isize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
+        op,
+        message: format!("{role} leading dimension {dim} does not fit in isize"),
+    })
+}
+
+fn typed_read_storage<'a, T>(
+    tensor: &'a TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(&'a [T], isize)> {
+    match tensor.buffer() {
+        Buffer::Host(data) => Ok((data, 0)),
+        Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            op,
+            "grouped GEMM default path requires host-backed tensor storage",
+        )),
+    }
+}
+
+fn grouped_gemm_default_config() -> DotGeneralConfig {
+    DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: Vec::new(),
+        rhs_batch_dims: Vec::new(),
+    }
+}
+
+trait GroupedGemmDType<T> {
+    fn wrap_read(view: TypedTensorView<'_, T>) -> TensorView<'_>;
+    fn wrap_write(view: TypedTensorViewMut<'_, T>) -> TensorViewMut<'_>;
+}
+
+struct GroupedF32;
+struct GroupedF64;
+struct GroupedC32;
+struct GroupedC64;
+
+impl GroupedGemmDType<f32> for GroupedF32 {
+    fn wrap_read(view: TypedTensorView<'_, f32>) -> TensorView<'_> {
+        TensorView::F32(view)
+    }
+
+    fn wrap_write(view: TypedTensorViewMut<'_, f32>) -> TensorViewMut<'_> {
+        TensorViewMut::F32(view)
+    }
+}
+
+impl GroupedGemmDType<f64> for GroupedF64 {
+    fn wrap_read(view: TypedTensorView<'_, f64>) -> TensorView<'_> {
+        TensorView::F64(view)
+    }
+
+    fn wrap_write(view: TypedTensorViewMut<'_, f64>) -> TensorViewMut<'_> {
+        TensorViewMut::F64(view)
+    }
+}
+
+impl GroupedGemmDType<Complex32> for GroupedC32 {
+    fn wrap_read(view: TypedTensorView<'_, Complex32>) -> TensorView<'_> {
+        TensorView::C32(view)
+    }
+
+    fn wrap_write(view: TypedTensorViewMut<'_, Complex32>) -> TensorViewMut<'_> {
+        TensorViewMut::C32(view)
+    }
+}
+
+impl GroupedGemmDType<Complex64> for GroupedC64 {
+    fn wrap_read(view: TypedTensorView<'_, Complex64>) -> TensorView<'_> {
+        TensorView::C64(view)
+    }
+
+    fn wrap_write(view: TypedTensorViewMut<'_, Complex64>) -> TensorViewMut<'_> {
+        TensorViewMut::C64(view)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn grouped_gemm_default_loop<B, T, V>(
+    backend: &mut B,
+    lhs_data: &[T],
+    lhs_base: isize,
+    rhs_data: &[T],
+    rhs_base: isize,
+    out_view: &mut TypedTensorViewMut<'_, T>,
+    config: &GroupedGemmConfig<'_>,
+) -> crate::Result<()>
+where
+    B: TensorDot + ?Sized,
+    T: 'static,
+    V: GroupedGemmDType<T>,
+{
+    let op = "grouped_gemm";
+    let dot_config = grouped_gemm_default_config();
+    for job in config.jobs {
+        let lhs_offset = add_element_offsets(op, lhs_base, job.lhs_offset, "lhs")?;
+        let rhs_offset = add_element_offsets(op, rhs_base, job.rhs_offset, "rhs")?;
+        let out_offset = add_element_offsets(op, out_view.offset(), job.out_offset, "out")?;
+        let lhs_rows = dim_stride(op, job.rows, "lhs")?;
+        let rhs_rows = dim_stride(op, job.contracted, "rhs")?;
+        let out_rows = dim_stride(op, job.rows, "out")?;
+        let lhs_matrix = TypedTensorView::from_slice(
+            vec![job.rows, job.contracted],
+            vec![1, lhs_rows],
+            lhs_offset,
+            lhs_data,
+        )?;
+        let rhs_matrix = TypedTensorView::from_slice(
+            vec![job.contracted, job.cols],
+            vec![1, rhs_rows],
+            rhs_offset,
+            rhs_data,
+        )?;
+        let out_storage = out_view.host_storage_mut()?;
+        let out_matrix = TypedTensorViewMut::from_slice(
+            vec![job.rows, job.cols],
+            vec![1, out_rows],
+            out_offset,
+            out_storage,
+        )?;
+        backend.dot_general_read_into_accum(
+            TensorRead::from_view(V::wrap_read(lhs_matrix)),
+            TensorRead::from_view(V::wrap_read(rhs_matrix)),
+            &dot_config,
+            config.accumulation,
+            TensorWrite::from_view(V::wrap_write(out_matrix)),
+        )?;
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+pub fn grouped_gemm_via_sequential<B>(
+    backend: &mut B,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &GroupedGemmConfig<'_>,
+    mut out: TensorWrite<'_>,
+) -> crate::Result<()>
+where
+    B: TensorDot + ?Sized,
+{
+    validate_grouped_gemm(&lhs, &rhs, &out, config, "grouped_gemm")?;
+    macro_rules! dispatch {
+        ($variant:ident, $wrapper:ty) => {
+            match (&lhs, &rhs, &mut out) {
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorWrite::Tensor(Tensor::$variant(c)),
+                ) => {
+                    let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
+                    let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
+                    let mut c_view = c.as_view_mut();
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a_data,
+                        a_base,
+                        b_data,
+                        b_base,
+                        &mut c_view,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                    TensorWrite::Tensor(Tensor::$variant(c)),
+                ) => {
+                    let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
+                    let mut c_view = c.as_view_mut();
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a_data,
+                        a_base,
+                        b.host_storage()?,
+                        b.offset(),
+                        &mut c_view,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorWrite::Tensor(Tensor::$variant(c)),
+                ) => {
+                    let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
+                    let mut c_view = c.as_view_mut();
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a.host_storage()?,
+                        a.offset(),
+                        b_data,
+                        b_base,
+                        &mut c_view,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                    TensorWrite::Tensor(Tensor::$variant(c)),
+                ) => {
+                    let mut c_view = c.as_view_mut();
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a.host_storage()?,
+                        a.offset(),
+                        b.host_storage()?,
+                        b.offset(),
+                        &mut c_view,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorWrite::View(TensorViewMut::$variant(c)),
+                ) => {
+                    let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
+                    let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend, a_data, a_base, b_data, b_base, c, config,
+                    );
+                }
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                    TensorWrite::View(TensorViewMut::$variant(c)),
+                ) => {
+                    let (a_data, a_base) = typed_read_storage(a, "grouped_gemm")?;
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a_data,
+                        a_base,
+                        b.host_storage()?,
+                        b.offset(),
+                        c,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                    TensorWrite::View(TensorViewMut::$variant(c)),
+                ) => {
+                    let (b_data, b_base) = typed_read_storage(b, "grouped_gemm")?;
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a.host_storage()?,
+                        a.offset(),
+                        b_data,
+                        b_base,
+                        c,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                    TensorWrite::View(TensorViewMut::$variant(c)),
+                ) => {
+                    return grouped_gemm_default_loop::<_, _, $wrapper>(
+                        backend,
+                        a.host_storage()?,
+                        a.offset(),
+                        b.host_storage()?,
+                        b.offset(),
+                        c,
+                        config,
+                    );
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch!(F32, GroupedF32);
+    dispatch!(F64, GroupedF64);
+    dispatch!(C32, GroupedC32);
+    dispatch!(C64, GroupedC64);
+    Err(crate::Error::DTypeMismatch {
+        op: "grouped_gemm",
+        lhs: lhs.dtype(),
+        rhs: out.dtype(),
+    })
+}
+
+fn grouped_gemm_default<B>(
+    backend: &mut B,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &GroupedGemmConfig<'_>,
+    out: TensorWrite<'_>,
+) -> crate::Result<()>
+where
+    B: TensorDot + ?Sized,
+{
+    grouped_gemm_via_sequential(backend, lhs, rhs, config, out)
 }
 
 fn accumulate_dot_result_into(
@@ -1316,6 +1845,18 @@ pub trait SessionCachedDot: TensorDot {
     ) -> crate::Result<()> {
         self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     }
+
+    #[doc(hidden)]
+    fn grouped_gemm_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &GroupedGemmConfig<'_>,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        grouped_gemm_default(self, lhs, rhs, config, out)
+    }
 }
 
 /// Indexing, slicing, and padding operations.
@@ -1598,6 +2139,19 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
+    }
+
+    #[doc(hidden)]
+    fn grouped_gemm_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &GroupedGemmConfig<'_>,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        grouped_gemm_default(self, lhs, rhs, config, out)
     }
 }
 

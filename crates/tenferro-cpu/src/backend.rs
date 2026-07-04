@@ -12,7 +12,8 @@ use crate::{
     TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::{
-    dot_general_accum_via_temp, validate_dot_general_accumulation, ElementwiseFusionPlan,
+    dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
+    validate_grouped_gemm, ElementwiseFusionPlan, GroupedGemmConfig,
 };
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
@@ -1409,6 +1410,56 @@ impl BackendCachedDot for CpuBackend {
         }
 
         dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)
+    }
+
+    fn grouped_gemm_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &GroupedGemmConfig<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        validate_grouped_gemm(&lhs, &rhs, &out, config, "grouped_gemm")?;
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = Arc::clone(&self.ctx);
+                    self.install_with_pool(|_buffers| {
+                        gemm::grouped_gemm_faer_cached(
+                            ctx.as_ref(),
+                            lhs.clone(),
+                            rhs.clone(),
+                            config,
+                            &mut out,
+                        )
+                    })?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "grouped_gemm"));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.run_with_pool(|_buffers| {
+                        gemm::grouped_gemm_blas_cached(lhs.clone(), rhs.clone(), config, &mut out)
+                    })?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "grouped_gemm"));
+                }
+            }
+        };
+        if direct {
+            return Ok(());
+        }
+
+        grouped_gemm_via_sequential(self, lhs, rhs, config, out)
     }
 }
 

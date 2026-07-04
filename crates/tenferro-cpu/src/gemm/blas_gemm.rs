@@ -3,7 +3,22 @@ use num_complex::{Complex32, Complex64};
 
 use crate::Error;
 
-pub(crate) trait BlasGemm: Sized {
+pub(crate) struct BlasGemmBatch<T> {
+    pub(crate) a_ptr: *const T,
+    pub(crate) b_ptr: *const T,
+    pub(crate) c_ptr: *mut T,
+    pub(crate) m: usize,
+    pub(crate) n: usize,
+    pub(crate) k: usize,
+    pub(crate) a_rs: isize,
+    pub(crate) a_cs: isize,
+    pub(crate) b_rs: isize,
+    pub(crate) b_cs: isize,
+    pub(crate) c_rs: isize,
+    pub(crate) c_cs: isize,
+}
+
+pub(crate) trait BlasGemm: Sized + Copy {
     // Kept as a provider-local contiguous BLAS entry point for direct BLAS
     // validation even when the optimized path uses explicit strides.
     #[allow(dead_code)]
@@ -78,6 +93,41 @@ pub(crate) trait BlasGemm: Sized {
             Self::strided_gemm(
                 alpha, a_ptr, m, k, a_rs, a_cs, b_ptr, n, b_rs, b_cs, beta, c_ptr, c_rs, c_cs,
             )?;
+        }
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Run a group of raw strided GEMMs with shared alpha/beta.
+    ///
+    /// # Safety
+    ///
+    /// Each batch entry must satisfy [`BlasGemm::strided_gemm`]'s pointer
+    /// safety contract. Mutable output regions must be pairwise disjoint.
+    unsafe fn grouped_gemm(
+        alpha: Self,
+        beta: Self,
+        batches: &[BlasGemmBatch<Self>],
+    ) -> crate::Result<bool> {
+        for batch in batches {
+            unsafe {
+                Self::strided_gemm(
+                    alpha,
+                    batch.a_ptr,
+                    batch.m,
+                    batch.k,
+                    batch.a_rs,
+                    batch.a_cs,
+                    batch.b_ptr,
+                    batch.n,
+                    batch.b_rs,
+                    batch.b_cs,
+                    beta,
+                    batch.c_ptr,
+                    batch.c_rs,
+                    batch.c_cs,
+                )?;
+            }
         }
         Ok(true)
     }
@@ -199,8 +249,272 @@ fn apply_conj_transpose(trans: CBLAS_TRANSPOSE, conj: bool) -> Option<CBLAS_TRAN
     }
 }
 
+#[cfg(feature = "blas-openblas")]
+mod openblas_batch {
+    use super::*;
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn cblas_sgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const f32,
+            a: *const *const f32,
+            lda: *const i32,
+            b: *const *const f32,
+            ldb: *const i32,
+            beta: *const f32,
+            c: *const *mut f32,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_dgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const f64,
+            a: *const *const f64,
+            lda: *const i32,
+            b: *const *const f64,
+            ldb: *const i32,
+            beta: *const f64,
+            c: *const *mut f64,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_cgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const c_void,
+            a: *const *const c_void,
+            lda: *const i32,
+            b: *const *const c_void,
+            ldb: *const i32,
+            beta: *const c_void,
+            c: *const *mut c_void,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+
+        fn cblas_zgemm_batch(
+            order: CBLAS_LAYOUT,
+            trans_a: *const CBLAS_TRANSPOSE,
+            trans_b: *const CBLAS_TRANSPOSE,
+            m: *const i32,
+            n: *const i32,
+            k: *const i32,
+            alpha: *const c_void,
+            a: *const *const c_void,
+            lda: *const i32,
+            b: *const *const c_void,
+            ldb: *const i32,
+            beta: *const c_void,
+            c: *const *mut c_void,
+            ldc: *const i32,
+            group_count: i32,
+            group_size: *const i32,
+        );
+    }
+
+    struct PreparedBatch<T> {
+        trans_a: Vec<CBLAS_TRANSPOSE>,
+        trans_b: Vec<CBLAS_TRANSPOSE>,
+        m: Vec<i32>,
+        n: Vec<i32>,
+        k: Vec<i32>,
+        a: Vec<*const T>,
+        b: Vec<*const T>,
+        c: Vec<*mut T>,
+        lda: Vec<i32>,
+        ldb: Vec<i32>,
+        ldc: Vec<i32>,
+        group_size: Vec<i32>,
+    }
+
+    fn prepare<T>(batches: &[BlasGemmBatch<T>]) -> crate::Result<PreparedBatch<T>> {
+        let mut prepared = PreparedBatch {
+            trans_a: Vec::with_capacity(batches.len()),
+            trans_b: Vec::with_capacity(batches.len()),
+            m: Vec::with_capacity(batches.len()),
+            n: Vec::with_capacity(batches.len()),
+            k: Vec::with_capacity(batches.len()),
+            a: Vec::with_capacity(batches.len()),
+            b: Vec::with_capacity(batches.len()),
+            c: Vec::with_capacity(batches.len()),
+            lda: Vec::with_capacity(batches.len()),
+            ldb: Vec::with_capacity(batches.len()),
+            ldc: Vec::with_capacity(batches.len()),
+            group_size: Vec::with_capacity(batches.len()),
+        };
+        for batch in batches {
+            let (trans_a, lda) = infer_a_layout(batch.m, batch.k, batch.a_rs, batch.a_cs)?;
+            let (trans_b, ldb) = infer_b_layout(batch.k, batch.n, batch.b_rs, batch.b_cs)?;
+            let ldc = infer_c_layout(batch.m, batch.c_rs, batch.c_cs)?;
+            prepared.trans_a.push(trans_a);
+            prepared.trans_b.push(trans_b);
+            prepared.m.push(dim_to_i32("m", batch.m)?);
+            prepared.n.push(dim_to_i32("n", batch.n)?);
+            prepared.k.push(dim_to_i32("k", batch.k)?);
+            prepared.a.push(batch.a_ptr);
+            prepared.b.push(batch.b_ptr);
+            prepared.c.push(batch.c_ptr);
+            prepared.lda.push(lda);
+            prepared.ldb.push(ldb);
+            prepared.ldc.push(ldc);
+            prepared.group_size.push(1);
+        }
+        Ok(prepared)
+    }
+
+    pub(crate) unsafe fn sgemm_batch(
+        alpha: f32,
+        beta: f32,
+        batches: &[BlasGemmBatch<f32>],
+    ) -> crate::Result<bool> {
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", batches.len())?;
+        unsafe {
+            cblas_sgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                prepared.trans_a.as_ptr(),
+                prepared.trans_b.as_ptr(),
+                prepared.m.as_ptr(),
+                prepared.n.as_ptr(),
+                prepared.k.as_ptr(),
+                vec![alpha; batches.len()].as_ptr(),
+                prepared.a.as_ptr(),
+                prepared.lda.as_ptr(),
+                prepared.b.as_ptr(),
+                prepared.ldb.as_ptr(),
+                vec![beta; batches.len()].as_ptr(),
+                prepared.c.as_ptr(),
+                prepared.ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn dgemm_batch(
+        alpha: f64,
+        beta: f64,
+        batches: &[BlasGemmBatch<f64>],
+    ) -> crate::Result<bool> {
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", batches.len())?;
+        unsafe {
+            cblas_dgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                prepared.trans_a.as_ptr(),
+                prepared.trans_b.as_ptr(),
+                prepared.m.as_ptr(),
+                prepared.n.as_ptr(),
+                prepared.k.as_ptr(),
+                vec![alpha; batches.len()].as_ptr(),
+                prepared.a.as_ptr(),
+                prepared.lda.as_ptr(),
+                prepared.b.as_ptr(),
+                prepared.ldb.as_ptr(),
+                vec![beta; batches.len()].as_ptr(),
+                prepared.c.as_ptr(),
+                prepared.ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn cgemm_batch(
+        alpha: Complex32,
+        beta: Complex32,
+        batches: &[BlasGemmBatch<Complex32>],
+    ) -> crate::Result<bool> {
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", batches.len())?;
+        let alpha = vec![alpha; batches.len()];
+        let beta = vec![beta; batches.len()];
+        let a: Vec<*const c_void> = prepared.a.iter().map(|&ptr| ptr as *const c_void).collect();
+        let b: Vec<*const c_void> = prepared.b.iter().map(|&ptr| ptr as *const c_void).collect();
+        let c: Vec<*mut c_void> = prepared.c.iter().map(|&ptr| ptr as *mut c_void).collect();
+        unsafe {
+            cblas_cgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                prepared.trans_a.as_ptr(),
+                prepared.trans_b.as_ptr(),
+                prepared.m.as_ptr(),
+                prepared.n.as_ptr(),
+                prepared.k.as_ptr(),
+                alpha.as_ptr() as *const c_void,
+                a.as_ptr(),
+                prepared.lda.as_ptr(),
+                b.as_ptr(),
+                prepared.ldb.as_ptr(),
+                beta.as_ptr() as *const c_void,
+                c.as_ptr(),
+                prepared.ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+
+    pub(crate) unsafe fn zgemm_batch(
+        alpha: Complex64,
+        beta: Complex64,
+        batches: &[BlasGemmBatch<Complex64>],
+    ) -> crate::Result<bool> {
+        let prepared = prepare(batches)?;
+        let group_count = dim_to_i32("group_count", batches.len())?;
+        let alpha = vec![alpha; batches.len()];
+        let beta = vec![beta; batches.len()];
+        let a: Vec<*const c_void> = prepared.a.iter().map(|&ptr| ptr as *const c_void).collect();
+        let b: Vec<*const c_void> = prepared.b.iter().map(|&ptr| ptr as *const c_void).collect();
+        let c: Vec<*mut c_void> = prepared.c.iter().map(|&ptr| ptr as *mut c_void).collect();
+        unsafe {
+            cblas_zgemm_batch(
+                CBLAS_LAYOUT::CblasColMajor,
+                prepared.trans_a.as_ptr(),
+                prepared.trans_b.as_ptr(),
+                prepared.m.as_ptr(),
+                prepared.n.as_ptr(),
+                prepared.k.as_ptr(),
+                alpha.as_ptr() as *const c_void,
+                a.as_ptr(),
+                prepared.lda.as_ptr(),
+                b.as_ptr(),
+                prepared.ldb.as_ptr(),
+                beta.as_ptr() as *const c_void,
+                c.as_ptr(),
+                prepared.ldc.as_ptr(),
+                group_count,
+                prepared.group_size.as_ptr(),
+            );
+        }
+        Ok(true)
+    }
+}
+
 macro_rules! impl_real_blas_gemm {
-    ($ty:ty, $gemm:path) => {
+    ($ty:ty, $gemm:path, $batch:path) => {
         impl BlasGemm for $ty {
             fn contiguous_gemm(
                 alpha: Self,
@@ -283,12 +597,24 @@ macro_rules! impl_real_blas_gemm {
                 );
                 Ok(())
             }
+
+            #[cfg(feature = "blas-openblas")]
+            unsafe fn grouped_gemm(
+                alpha: Self,
+                beta: Self,
+                batches: &[BlasGemmBatch<Self>],
+            ) -> crate::Result<bool> {
+                if batches.is_empty() {
+                    return Ok(true);
+                }
+                unsafe { $batch(alpha, beta, batches) }
+            }
         }
     };
 }
 
 macro_rules! impl_complex_blas_gemm {
-    ($ty:ty, $gemm:path) => {
+    ($ty:ty, $gemm:path, $batch:path) => {
         impl BlasGemm for $ty {
             fn contiguous_gemm(
                 alpha: Self,
@@ -432,11 +758,31 @@ macro_rules! impl_complex_blas_gemm {
                 );
                 Ok(true)
             }
+
+            #[cfg(feature = "blas-openblas")]
+            unsafe fn grouped_gemm(
+                alpha: Self,
+                beta: Self,
+                batches: &[BlasGemmBatch<Self>],
+            ) -> crate::Result<bool> {
+                if batches.is_empty() {
+                    return Ok(true);
+                }
+                unsafe { $batch(alpha, beta, batches) }
+            }
         }
     };
 }
 
-impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm);
-impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm);
-impl_complex_blas_gemm!(Complex64, cblas_sys::cblas_zgemm);
-impl_complex_blas_gemm!(Complex32, cblas_sys::cblas_cgemm);
+impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm, openblas_batch::dgemm_batch);
+impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm, openblas_batch::sgemm_batch);
+impl_complex_blas_gemm!(
+    Complex64,
+    cblas_sys::cblas_zgemm,
+    openblas_batch::zgemm_batch
+);
+impl_complex_blas_gemm!(
+    Complex32,
+    cblas_sys::cblas_cgemm,
+    openblas_batch::cgemm_batch
+);
