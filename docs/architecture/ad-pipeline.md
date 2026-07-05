@@ -89,13 +89,40 @@ the compiler still perform their own deduplication and backend-oriented
 optimization, but AD rules should not rely on late flattening to remove large,
 known-inactive derivative subgraphs.
 
-AD transform outputs are not cached in a new persistent AD graph cache. The
-caller-owned traced result keeps the transformed graph and any required extra
-roots alive, while compile-time and runtime caches remain owned by the existing
-compiler, executor, and extension runtime contexts. If a future AD optimizer
-cache is introduced, its key must include the resolved output keys, `wrt`
+Current tenferro eager AD uses the same primitive rule set through a different
+interpreter:
+
+```text
+forward eager op:
+  execute concrete op -> record a small RecordedGraph node
+
+stateful eager backward:
+  tidu backward walker -> per-node linearize -> linear_transpose -> execute cotangents
+
+functional eager jvp:
+  tidu forward walker -> per-node linearize -> execute tangents
+
+functional eager grad/vjp:
+  tidu backward walker -> execute emitted derivative primitives through eager recording
+```
+
+tidu owns the eager trace traversal and determines which recorded graph nodes
+are visited. tenferro owns concrete tensor execution, public eager APIs,
+gradient slots, extension-rule context, and runtime caches. Functional eager
+transforms return ordinary eager tensors rather than writing into gradient
+slots, so their derivative computations can be traced by later eager
+transforms.
+
+Traced AD transform outputs are not cached in a new persistent AD graph cache.
+The caller-owned traced result keeps the transformed graph and any required
+extra roots alive, while compile-time and runtime caches remain owned by the
+existing compiler, executor, and extension runtime contexts. Eager runtimes do
+own a bounded Tier-1 AD transform cache for `RecordedGraph` linearization,
+keyed by recorded graph structural fingerprint plus requested output slots.
+That cache is a same-tape per-node memoization layer; a future whole-program AD
+optimizer cache would need keys that include the resolved output keys, `wrt`
 inputs, extension rule set identity, shape/dtype guard inputs, and optimizer
-configuration version; it must not live inside semantic op payloads.
+configuration version. Such keys must not live inside semantic op payloads.
 
 Four crates, strictly layered:
 
@@ -105,7 +132,8 @@ computegraph   GraphOperation + Operand traits, Graph, resolve,
                compilation cache
     ↓
 tidu           Primitive: GraphOperation (adds add + JVP + transpose_rule),
-               linearize, linear_transpose; no graph infrastructure of its own
+               linearize, linear_transpose, eager forward/backward walkers;
+               no graph infrastructure of its own
     ↓
 tenferro       Concrete tensor primitives + execution lowering
 ```
@@ -821,6 +849,8 @@ details (execution lowering, GPU dispatch) remain in `../spec/backend-contract.m
 The important contract is:
 
 - AD transforms (tidu) are graph-based and resolver-backed
+- eager AD traversal (tidu) is separate from concrete execution and cache
+  ownership (tenferro)
 - graph infrastructure (computegraph) is AD-agnostic
 - backends only see the materialized or compiled result
 
@@ -900,7 +930,9 @@ Expected second-order result for `exp(a*x)` with unit seeds:
 ## X. Implementation Status
 
 Phases 1–3 (scalar graph AD, tensor primitives, backend compilation) are
-implemented and tested. Current work focuses on:
+implemented and tested. Eager reverse mode, eager JVP, functional eager
+`grad`/`vjp`/`jvp`, and per-recorded-graph eager linearization caching are
+implemented on the same primitive rule set. Current work focuses on:
 
 - Logical-DAG-aware checkpoint scheduling
 - Partial linear_transpose / cross-country mode

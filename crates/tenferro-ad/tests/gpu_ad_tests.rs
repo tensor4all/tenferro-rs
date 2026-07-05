@@ -1,12 +1,12 @@
 #![cfg(feature = "cuda")]
 
-use tenferro_ad::TracedTensorAdExt;
+use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 mod support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
-use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::Buffer;
+use tenferro_tensor::{Buffer, TensorDeviceTransfer};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -79,7 +79,48 @@ fn matmul(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 }
 
 #[test]
+fn test_gpu_eager_backward_smoke() {
+    if !gpu_available() {
+        return;
+    }
+
+    let upload_backend = CudaBackend::new(0).unwrap();
+    let x_gpu = upload_tensor(
+        upload_backend.runtime(),
+        &f64_tensor(vec![2], vec![2.0_f64, 3.0]),
+    )
+    .unwrap();
+    let seed_gpu = upload_tensor(
+        upload_backend.runtime(),
+        &f64_tensor(vec![2], vec![1.0_f64, 1.0]),
+    )
+    .unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
+    let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
+    let y = x.mul(&x).unwrap();
+
+    y.backward_with(&seed).unwrap();
+    let grad = x.grad().unwrap().unwrap();
+    let grad_host = ctx
+        .with_backend_mut(|backend| backend.download_to_host(grad.as_ref()))
+        .unwrap()
+        .unwrap();
+
+    assert_f64_tensor_close(
+        &grad_host,
+        &f64_tensor(vec![2], vec![4.0_f64, 6.0]),
+        1.0e-10,
+        1.0e-10,
+    );
+}
+
+#[test]
 fn test_gpu_matmul_vjp() {
+    if !gpu_available() {
+        return;
+    }
+
     let a_host = f64_tensor(
         vec![3, 4],
         vec![

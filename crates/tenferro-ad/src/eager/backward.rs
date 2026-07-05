@@ -7,7 +7,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
-use tidu::eager::BackwardExecutor;
+use tidu::eager::{BackwardExecutor, RecordedGraph};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, LinearizedGraph, PrimitiveGraph};
 
 use crate::eager_builder::EagerPrimitiveBuilder;
@@ -18,24 +18,36 @@ use crate::metadata::{
     GlobalMetadataScope,
 };
 
-use super::zero_like_tensor;
+use super::{zero_like_tensor, EagerRuntime};
 
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
     extension_executor: Option<&'a mut ExtensionExecutor<B>>,
+    runtime: Option<&'a EagerRuntime>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     deferred_error: Option<ADRuleError>,
 }
 
 impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
+    #[cfg(test)]
     pub(crate) fn new(
         backend: &'a mut B,
         extension_executor: Option<&'a mut ExtensionExecutor<B>>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Self {
+        Self::with_runtime(backend, extension_executor, None, metadata_scopes)
+    }
+
+    pub(crate) fn with_runtime(
+        backend: &'a mut B,
+        extension_executor: Option<&'a mut ExtensionExecutor<B>>,
+        runtime: Option<&'a EagerRuntime>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Self {
         Self {
             backend,
             extension_executor,
+            runtime,
             metadata_scopes,
             deferred_error: None,
         }
@@ -104,7 +116,7 @@ pub(super) fn eager_forward_value<B: TensorBackend>(
     Ok(value)
 }
 
-fn live_graph_values(graph: &Graph<StdTensorOp>) -> HashSet<LocalValueId> {
+pub(super) fn live_graph_values(graph: &Graph<StdTensorOp>) -> HashSet<LocalValueId> {
     let mut producers = HashMap::new();
     for (op_index, op_node) in graph.operations().iter().enumerate() {
         for &output_id in &op_node.outputs {
@@ -183,7 +195,7 @@ pub(super) fn zero_from_exact_metadata<B: TensorBackend>(
     })?))
 }
 
-fn prefill_missing_linear_zero_values<B: TensorBackend>(
+pub(super) fn prefill_missing_linear_zero_values<B: TensorBackend>(
     linear: &LinearizedGraph<StdTensorOp>,
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ctx: &mut ShapeGuardContext,
@@ -224,6 +236,18 @@ fn eager_ad_invalid_input(message: impl Into<String>) -> ADRuleError {
 impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
     for TenferroBackwardCallbacks<'_, B>
 {
+    fn linearize_recorded_graph(
+        &mut self,
+        graph: &RecordedGraph<StdTensorOp>,
+        output_slots: &[usize],
+        ctx: &mut ShapeGuardContext,
+    ) -> tidu::ADRuleResult<Arc<LinearizedGraph<StdTensorOp>>> {
+        match self.runtime {
+            Some(runtime) => runtime.cached_linearize_recorded_graph(graph, output_slots, ctx),
+            None => graph.linearize(output_slots, ctx).map(Arc::new),
+        }
+    }
+
     fn execute_forward(
         &mut self,
         graph: PrimitiveGraph<'_, StdTensorOp>,

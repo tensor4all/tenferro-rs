@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
@@ -30,8 +30,11 @@ use tenferro_tensor::{
     TypedTensor,
 };
 use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recorder, Trace};
+use tidu::{ADRuleError, ADRuleKind, LinearizedGraph};
 
 use self::backward::TenferroBackwardCallbacks;
+use self::cache::{EagerAdTransformCache, EagerAdTransformCacheKey};
+use self::functional::{functional_jvp, functional_vjp_optional};
 use crate::eager_backend::EagerBackend;
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
@@ -50,6 +53,8 @@ use crate::traced::next_input_key;
 use crate::AdContext;
 
 mod backward;
+mod cache;
+mod functional;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
@@ -63,10 +68,55 @@ struct EagerOpProfileEntry {
 thread_local! {
     static EAGER_OP_PROFILE_STATE: RefCell<HashMap<&'static str, EagerOpProfileEntry>> =
         RefCell::new(HashMap::new());
+    static EAGER_NO_GRAD_DEPTH: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn eager_grad_recording_enabled() -> bool {
+    EAGER_NO_GRAD_DEPTH.with(|depth| depth.get() == 0)
+}
+
+/// Scope guard that temporarily disables eager operation recording.
+///
+/// Values computed while this guard is alive are concrete eager tensors, but
+/// they do not participate in reverse-mode gradient tracking.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let x = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+///     ctx.clone(),
+/// )?;
+/// let y = {
+///     let _guard = ctx.no_grad();
+///     x.mul(&x)?
+/// };
+/// assert!(!y.tracks_grad());
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct EagerNoGradGuard {
+    active: bool,
+}
+
+impl Drop for EagerNoGradGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        EAGER_NO_GRAD_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+        self.active = false;
+    }
 }
 
 pub(crate) fn eager_op_profile_enabled() -> bool {
@@ -171,6 +221,8 @@ fn eager_op_profile_per_call_us(entry: &EagerOpProfileEntry) -> Option<f64> {
 pub struct EagerRuntimeCacheStats {
     /// Generic extension runtime caches.
     pub extensions: CacheStats,
+    /// Eager AD transform memoization cache.
+    pub ad_transforms: CacheStats,
 }
 
 #[cfg(test)]
@@ -203,6 +255,9 @@ pub struct EagerRuntime {
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
     extension_rules: Option<ExtensionRuleSet>,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
+    value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
+    value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
+    ad_transform_cache: Mutex<EagerAdTransformCache>,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -234,6 +289,30 @@ impl fmt::Debug for EagerRuntime {
                 debug.field("grad_slots_len", &"<locked>");
             }
         }
+        match self.value_records.try_lock() {
+            Ok(records) => {
+                debug.field("value_records_len", &records.len());
+            }
+            Err(_) => {
+                debug.field("value_records_len", &"<locked>");
+            }
+        }
+        match self.value_ptr_records.try_lock() {
+            Ok(records) => {
+                debug.field("value_ptr_records_len", &records.len());
+            }
+            Err(_) => {
+                debug.field("value_ptr_records_len", &"<locked>");
+            }
+        }
+        match self.ad_transform_cache.try_lock() {
+            Ok(cache) => {
+                debug.field("ad_transform_cache_stats", &cache.stats());
+            }
+            Err(_) => {
+                debug.field("ad_transform_cache_stats", &"<locked>");
+            }
+        }
         debug.finish_non_exhaustive()
     }
 }
@@ -259,6 +338,28 @@ impl EagerRuntime {
             .map_err(|_| Error::Internal("gradient slot registry lock poisoned".to_string()))
     }
 
+    fn lock_value_records(
+        &self,
+    ) -> Result<MutexGuard<'_, HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>> {
+        self.value_records
+            .lock()
+            .map_err(|_| Error::Internal("eager value registry lock poisoned".to_string()))
+    }
+
+    fn lock_value_ptr_records(
+        &self,
+    ) -> Result<MutexGuard<'_, HashMap<usize, Weak<EagerTensorRecord>>>> {
+        self.value_ptr_records
+            .lock()
+            .map_err(|_| Error::Internal("eager value pointer registry lock poisoned".to_string()))
+    }
+
+    pub(crate) fn lock_ad_transform_cache(&self) -> Result<MutexGuard<'_, EagerAdTransformCache>> {
+        self.ad_transform_cache
+            .lock()
+            .map_err(|_| Error::Internal("eager AD transform cache lock poisoned".to_string()))
+    }
+
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_rules(backend, None)
     }
@@ -273,6 +374,9 @@ impl EagerRuntime {
             extension_executor: Mutex::new(ExtensionExecutor::new()),
             extension_rules,
             grad_slots: Mutex::new(HashMap::new()),
+            value_records: Mutex::new(HashMap::new()),
+            value_ptr_records: Mutex::new(HashMap::new()),
+            ad_transform_cache: Mutex::new(EagerAdTransformCache::new()),
         }
     }
 
@@ -409,6 +513,36 @@ impl EagerRuntime {
         self.id
     }
 
+    /// Disable eager operation recording on the current thread until the guard is dropped.
+    ///
+    /// This is useful for optimizer updates, metric calculations, and other
+    /// eager computations that should not become part of the AD tape.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = {
+    ///     let _guard = ctx.no_grad();
+    ///     x.mul(&x)?
+    /// };
+    /// assert!(!y.tracks_grad());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn no_grad(&self) -> EagerNoGradGuard {
+        EAGER_NO_GRAD_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_add(1));
+        });
+        EagerNoGradGuard { active: true }
+    }
+
     /// Register one extension runtime on this eager context.
     pub fn register_extension(
         &self,
@@ -453,10 +587,13 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// ctx.clear_caches()?;
     /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
+    /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn clear_caches(&self) -> Result<()> {
-        self.clear_extension_caches()
+        self.clear_extension_caches()?;
+        self.lock_ad_transform_cache()?.clear();
+        Ok(())
     }
 
     /// Return eager runtime cache-entry and retained-byte stats.
@@ -470,11 +607,13 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let stats = ctx.cache_stats()?;
     /// assert_eq!(stats.extensions.entries, 0);
+    /// assert_eq!(stats.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
         Ok(EagerRuntimeCacheStats {
             extensions: self.lock_extension_executor()?.cache_stats(),
+            ad_transforms: self.lock_ad_transform_cache()?.stats(),
         })
     }
 
@@ -707,6 +846,90 @@ impl EagerRuntime {
         Ok(())
     }
 
+    pub(crate) fn try_register_value_record(
+        &self,
+        key: &ValueKey<StdTensorOp>,
+        record: &Arc<EagerTensorRecord>,
+    ) -> Result<()> {
+        self.lock_value_records()?
+            .insert(key.clone(), Arc::downgrade(record));
+        self.try_register_value_record_ptr(record)?;
+        Ok(())
+    }
+
+    pub(crate) fn try_register_value_record_ptr(
+        &self,
+        record: &Arc<EagerTensorRecord>,
+    ) -> Result<()> {
+        let tensor = match record.value.as_tensor_arc() {
+            Some(tensor) => Some(Arc::clone(tensor)),
+            None => record.materialized_cache.get().cloned(),
+        };
+        let Some(tensor) = tensor else {
+            return Ok(());
+        };
+        self.lock_value_ptr_records()?
+            .insert(tensor_ptr(&tensor), Arc::downgrade(record));
+        Ok(())
+    }
+
+    pub(crate) fn value_record(
+        &self,
+        key: &ValueKey<StdTensorOp>,
+    ) -> Result<Option<Arc<EagerTensorRecord>>> {
+        let mut records = self.lock_value_records()?;
+        let Some(record) = records.get(key).cloned() else {
+            return Ok(None);
+        };
+        match record.upgrade() {
+            Some(record) => Ok(Some(record)),
+            None => {
+                records.remove(key);
+                Ok(None)
+            }
+        }
+    }
+
+    pub(crate) fn value_record_by_tensor(
+        &self,
+        tensor: &Arc<Tensor>,
+    ) -> Result<Option<Arc<EagerTensorRecord>>> {
+        let ptr = tensor_ptr(tensor);
+        let mut records = self.lock_value_ptr_records()?;
+        let Some(record) = records.get(&ptr).cloned() else {
+            return Ok(None);
+        };
+        match record.upgrade() {
+            Some(record) => Ok(Some(record)),
+            None => {
+                records.remove(&ptr);
+                Ok(None)
+            }
+        }
+    }
+
+    pub(crate) fn cached_linearize_recorded_graph(
+        &self,
+        graph: &RecordedGraph<StdTensorOp>,
+        output_slots: &[usize],
+        ctx: &mut ShapeGuardContext,
+    ) -> tidu::ADRuleResult<Arc<LinearizedGraph<StdTensorOp>>> {
+        let key = EagerAdTransformCacheKey::new(graph, output_slots);
+        if let Some(linear) = self
+            .lock_ad_transform_cache()
+            .map_err(eager_ad_transform_cache_error)?
+            .get(&key)
+        {
+            return Ok(linear);
+        }
+
+        let linear = Arc::new(graph.linearize(output_slots, ctx)?);
+        self.lock_ad_transform_cache()
+            .map_err(eager_ad_transform_cache_error)?
+            .put(key, Arc::clone(&linear));
+        Ok(linear)
+    }
+
     /// Clear all live gradient slots tracked by this context.
     ///
     /// This resets the stored gradients to `None` without unregistering the
@@ -809,6 +1032,221 @@ impl EagerRuntime {
         EagerTensor::new_leaf(Arc::clone(self), tensor, true)
     }
 
+    /// Gradient of a scalar eager output with respect to an eager tensor.
+    ///
+    /// Functional eager gradients return ordinary eager tensors and do not
+    /// write into `grad()` slots. The returned tensor keeps a trace when the
+    /// derivative computation depends on tracked eager values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let loss = x.mul(&x)?;
+    /// let dx = ctx.grad(&loss, &x)?;
+    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn grad(self: &Arc<Self>, output: &EagerTensor, wrt: &EagerTensor) -> Result<EagerTensor> {
+        self.grad_optional(output, wrt)?
+            .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt.key)))
+    }
+
+    /// Gradient that returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let loss = y.mul(&y)?;
+    /// assert!(ctx.grad_optional(&loss, &x)?.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn grad_optional(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        if !output.shape().is_empty() {
+            return Err(Error::NonScalarGrad {
+                shape: output.shape().to_vec(),
+            });
+        }
+
+        let value = output.materialized_arc()?;
+        let seed = {
+            let mut backend = self.lock_backend()?;
+            one_like_tensor(value.as_ref(), &mut *backend)?
+        };
+        let seed = EagerTensor::new_result_arc(
+            Arc::clone(self),
+            eager_val_key(),
+            Arc::new(seed),
+            false,
+            None,
+            Vec::new(),
+        )?;
+        self.vjp_optional(output, wrt, &seed)
+    }
+
+    /// Reverse-mode vector-Jacobian product for eager tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = x.mul(&x)?;
+    /// let seed = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let dx = ctx.vjp(&y, &x, &seed)?;
+    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn vjp(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.vjp_optional(output, wrt, cotangent)?
+            .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt.key)))
+    }
+
+    /// Reverse-mode vector-Jacobian product that returns `None` for inactive inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let seed = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let loss = y.mul(&y)?;
+    /// assert!(ctx.vjp_optional(&loss, &x, &seed)?.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn vjp_optional(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        validate_same_runtime(self, output, "vjp output")?;
+        validate_same_runtime(self, wrt, "vjp wrt")?;
+        validate_same_runtime(self, cotangent, "vjp cotangent")?;
+        validate_seed_tensor("vjp", output, cotangent)?;
+        functional_vjp_optional(self, output, wrt, cotangent)
+    }
+
+    /// Forward-mode Jacobian-vector product for eager tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let tangent = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = x.mul(&x)?;
+    /// let dy = ctx.jvp(&y, &x, &tangent)?;
+    /// assert_eq!(dy.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn jvp(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        tangent: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.jvp_optional(output, wrt, tangent)?
+            .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt.key)))
+    }
+
+    /// Forward-mode Jacobian-vector product that returns `None` for inactive outputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let y = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let tangent = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let loss = y.mul(&y)?;
+    /// assert!(ctx.jvp_optional(&loss, &x, &tangent)?.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn jvp_optional(
+        self: &Arc<Self>,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        tangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        validate_same_runtime(self, output, "jvp output")?;
+        validate_same_runtime(self, wrt, "jvp wrt")?;
+        validate_same_runtime(self, tangent, "jvp tangent")?;
+        validate_seed_tensor("jvp", wrt, tangent)?;
+        functional_jvp(self, output, wrt, tangent)
+    }
+
     fn store_grads(
         &self,
         cotangents: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
@@ -846,6 +1284,48 @@ impl EagerRuntime {
     }
 }
 
+fn validate_same_runtime(
+    runtime: &Arc<EagerRuntime>,
+    tensor: &EagerTensor,
+    role: &'static str,
+) -> Result<()> {
+    if tensor.ctx_id() != runtime.id() {
+        return Err(Error::ContextMismatch {
+            lhs: runtime.id(),
+            rhs: tensor.ctx_id(),
+        });
+    }
+    let _ = role;
+    Ok(())
+}
+
+pub(crate) fn tensor_ptr(tensor: &Arc<Tensor>) -> usize {
+    Arc::as_ptr(tensor) as usize
+}
+
+fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
+    if primal.dtype() != seed.dtype() {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op,
+            message: format!(
+                "{op} cotangent dtype must match primal dtype: {:?} vs {:?}",
+                seed.dtype(),
+                primal.dtype()
+            ),
+        }
+        .into());
+    }
+    if primal.shape() != seed.shape() {
+        return Err(tenferro_tensor::Error::ShapeMismatch {
+            op,
+            lhs: primal.shape().to_vec(),
+            rhs: seed.shape().to_vec(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Eager tensor with reverse-mode autodiff over concrete tensor values.
 ///
 /// This executes each primitive immediately and records a lightweight reverse
@@ -881,6 +1361,18 @@ pub struct EagerTensor {
     grad_slot: GradSlot,
     pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     pub(crate) ctx: Arc<EagerRuntime>,
+    _record: Arc<EagerTensorRecord>,
+}
+
+pub(crate) struct EagerTensorRecord {
+    value: Arc<TensorValue>,
+    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
+    key: ValueKey<StdTensorOp>,
+    trace: Option<Trace<StdTensorOp>>,
+    requires_grad: bool,
+    grad_slot: GradSlot,
+    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ctx: Arc<EagerRuntime>,
 }
 
 impl fmt::Debug for EagerTensor {
@@ -943,22 +1435,15 @@ impl EagerTensor {
             register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
                 |err| Error::Internal(format!("eager leaf metadata registration failed: {err}")),
             )?;
-        let tensor = Arc::new(tensor);
-        let grad_slot = Arc::new(Mutex::new(None));
-        if requires_grad {
-            ctx.try_register_grad_slot(&key, &grad_slot)?;
-        }
-
-        Ok(Self {
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
-            materialized_cache: Arc::new(OnceLock::new()),
-            key,
-            trace: None,
-            requires_grad,
-            grad_slot,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+        Self::from_parts(
             ctx,
-        })
+            key,
+            requires_grad,
+            None,
+            Arc::new(TensorValue::from_tensor_arc(Arc::new(tensor))),
+            metadata_scopes_for_scope(metadata_scope),
+            true,
+        )
     }
 
     pub(crate) fn new_result(
@@ -987,21 +1472,15 @@ impl EagerTensor {
         trace: Option<Trace<StdTensorOp>>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        let grad_slot = Arc::new(Mutex::new(None));
-        if requires_grad {
-            ctx.try_register_grad_slot(&key, &grad_slot)?;
-        }
-
-        Ok(Self {
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
-            materialized_cache: Arc::new(OnceLock::new()),
-            key,
-            trace,
-            requires_grad,
-            grad_slot,
-            metadata_scopes,
+        Self::from_parts(
             ctx,
-        })
+            key,
+            requires_grad,
+            trace,
+            Arc::new(TensorValue::from_tensor_arc(tensor)),
+            metadata_scopes,
+            true,
+        )
     }
 
     pub(crate) fn new_result_value(
@@ -1012,20 +1491,55 @@ impl EagerTensor {
         trace: Option<Trace<StdTensorOp>>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        Self::from_parts(
+            ctx,
+            key,
+            requires_grad,
+            trace,
+            Arc::new(value),
+            metadata_scopes,
+            true,
+        )
+    }
+
+    fn from_parts(
+        ctx: Arc<EagerRuntime>,
+        key: ValueKey<StdTensorOp>,
+        requires_grad: bool,
+        trace: Option<Trace<StdTensorOp>>,
+        value: Arc<TensorValue>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+        register_value: bool,
+    ) -> Result<Self> {
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
+        let materialized_cache = Arc::new(OnceLock::new());
+        let record = Arc::new(EagerTensorRecord {
+            value: Arc::clone(&value),
+            materialized_cache: Arc::clone(&materialized_cache),
+            key: key.clone(),
+            trace: trace.clone(),
+            requires_grad,
+            grad_slot: Arc::clone(&grad_slot),
+            metadata_scopes: metadata_scopes.clone(),
+            ctx: Arc::clone(&ctx),
+        });
+        if register_value {
+            ctx.try_register_value_record(&key, &record)?;
+        }
 
         Ok(Self {
-            value: Arc::new(value),
-            materialized_cache: Arc::new(OnceLock::new()),
+            value,
+            materialized_cache,
             key,
             trace,
             requires_grad,
             grad_slot,
             metadata_scopes,
             ctx,
+            _record: record,
         })
     }
 
@@ -1034,15 +1548,44 @@ impl EagerTensor {
     }
 
     pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue) -> Self {
-        Self {
-            value: Arc::new(value),
-            materialized_cache: Arc::new(OnceLock::new()),
-            key: eager_val_key(),
+        let value = Arc::new(value);
+        let materialized_cache = Arc::new(OnceLock::new());
+        let key = eager_val_key();
+        let grad_slot = Arc::new(Mutex::new(None));
+        let record = Arc::new(EagerTensorRecord {
+            value: Arc::clone(&value),
+            materialized_cache: Arc::clone(&materialized_cache),
+            key: key.clone(),
             trace: None,
             requires_grad: false,
-            grad_slot: Arc::new(Mutex::new(None)),
+            grad_slot: Arc::clone(&grad_slot),
+            metadata_scopes: Vec::new(),
+            ctx: Arc::clone(&ctx),
+        });
+        Self {
+            value,
+            materialized_cache,
+            key,
+            trace: None,
+            requires_grad: false,
+            grad_slot,
             metadata_scopes: Vec::new(),
             ctx,
+            _record: record,
+        }
+    }
+
+    pub(crate) fn from_record(record: Arc<EagerTensorRecord>) -> Self {
+        Self {
+            value: Arc::clone(&record.value),
+            materialized_cache: Arc::clone(&record.materialized_cache),
+            key: record.key.clone(),
+            trace: record.trace.clone(),
+            requires_grad: record.requires_grad,
+            grad_slot: Arc::clone(&record.grad_slot),
+            metadata_scopes: record.metadata_scopes.clone(),
+            ctx: Arc::clone(&record.ctx),
+            _record: record,
         }
     }
 
@@ -1140,14 +1683,17 @@ impl EagerTensor {
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
         if let Some(tensor) = self.value.as_tensor_arc() {
+            self.ctx.try_register_value_record_ptr(&self._record)?;
             return Ok(Arc::clone(tensor));
         }
         if let Some(tensor) = self.materialized_cache.get() {
+            self.ctx.try_register_value_record_ptr(&self._record)?;
             return Ok(Arc::clone(tensor));
         }
 
         let materialized = Arc::new(self.value.to_tensor().map_err(Error::from)?);
         let _ = self.materialized_cache.set(Arc::clone(&materialized));
+        self.ctx.try_register_value_record_ptr(&self._record)?;
         Ok(self
             .materialized_cache
             .get()
@@ -1329,7 +1875,7 @@ impl EagerTensor {
             )));
         }
 
-        if !inputs.iter().any(|input| input.requires_grad) {
+        if !eager_grad_recording_enabled() || !inputs.iter().any(|input| input.requires_grad) {
             return execution
                 .outputs
                 .into_iter()
@@ -1425,12 +1971,64 @@ impl EagerTensor {
         }
 
         let value = self.materialized_arc()?;
+        let seed = {
+            let mut backend = self.ctx.lock_backend()?;
+            Arc::new(one_like_tensor(value.as_ref(), &mut *backend)?)
+        };
+        self.backward_from_seed(seed)
+    }
+
+    /// Run reverse-mode AD from this output with an explicit cotangent seed.
+    ///
+    /// This is the stateful eager VJP sugar: it returns the cotangent map and
+    /// accumulates reachable tracked leaves into their `grad()` slots. Use
+    /// [`EagerRuntime::vjp`] when the VJP result should be returned as a
+    /// composable eager tensor without touching grad slots.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ///     ctx.clone(),
+    /// )?;
+    /// let seed = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ///     ctx,
+    /// )?;
+    /// let y = x.mul(&x)?;
+    /// y.backward_with(&seed)?;
+    /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn backward_with(
+        &self,
+        cotangent: &EagerTensor,
+    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+        if !self.same_context(cotangent) {
+            return Err(Error::ContextMismatch {
+                lhs: self.ctx_id(),
+                rhs: cotangent.ctx_id(),
+            });
+        }
+        validate_seed_tensor("backward", self, cotangent)?;
+        self.backward_from_seed(cotangent.materialized_arc()?)
+    }
+
+    fn backward_from_seed(
+        &self,
+        seed: Arc<Tensor>,
+    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
         let mut backend = self.ctx.lock_backend()?;
         let mut extension_executor = self.ctx.lock_extension_executor()?;
-        let seed = Arc::new(one_like_tensor(value.as_ref(), &mut *backend)?);
-        let mut callbacks = TenferroBackwardCallbacks::new(
+        let mut callbacks = TenferroBackwardCallbacks::with_runtime(
             &mut *backend,
             Some(&mut *extension_executor),
+            Some(self.ctx.as_ref()),
             self.metadata_scopes.clone(),
         );
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
@@ -1536,6 +2134,14 @@ pub(crate) fn record_eager_recorded_graph_outputs(
 
 fn eager_record_error(err: tidu::eager::EagerRecordError) -> Error {
     Error::Internal(format!("invalid eager recording metadata: {err}"))
+}
+
+fn eager_ad_transform_cache_error(message: impl ToString) -> ADRuleError {
+    ADRuleError::invalid_input(
+        "tenferro-ad.eager.transform-cache",
+        ADRuleKind::Jvp,
+        message.to_string(),
+    )
 }
 
 pub(crate) fn exec_single_output(
