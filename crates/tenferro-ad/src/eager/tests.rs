@@ -631,6 +631,229 @@ fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
 }
 
 #[test]
+fn eager_backward_with_accepts_vector_cotangent_seed() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    y.backward_with(&seed).unwrap();
+
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 12.0]
+    );
+}
+
+#[test]
+fn eager_backward_with_rejects_mismatched_seed_shape() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    let err = y.backward_with(&seed).unwrap_err();
+
+    assert!(
+        err.to_string().contains("shape mismatch"),
+        "unexpected error: {err}"
+    );
+    assert!(x.grad().unwrap().is_none());
+}
+
+#[test]
+fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    let dx = ctx.vjp(&y, &x, &seed).unwrap();
+
+    assert!(dx.tracks_grad());
+    assert_eq!(
+        dx.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 12.0]
+    );
+    assert!(x.grad().unwrap().is_none());
+}
+
+#[test]
+fn eager_runtime_jvp_uses_forward_walker() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let tangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    let dy = ctx.jvp(&y, &x, &tangent).unwrap();
+
+    assert!(dy.tracks_grad());
+    assert_eq!(
+        dy.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 6.0]
+    );
+}
+
+#[test]
+fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    assert_eq!(ctx.cache_stats().unwrap().ad_transforms.entries, 0);
+
+    let first = ctx.vjp(&y, &x, &seed).unwrap();
+    assert_eq!(
+        first.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 6.0]
+    );
+    let after_first = ctx.cache_stats().unwrap().ad_transforms;
+    assert!(after_first.entries > 0);
+
+    let second = ctx.vjp(&y, &x, &seed).unwrap();
+    assert_eq!(
+        second.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 6.0]
+    );
+    let after_second = ctx.cache_stats().unwrap().ad_transforms;
+    assert_eq!(after_second.entries, after_first.entries);
+    assert_eq!(after_second.retained_bytes, after_first.retained_bytes);
+
+    ctx.clear_caches().unwrap();
+    assert_eq!(ctx.cache_stats().unwrap().ad_transforms.entries, 0);
+
+    let tangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let dy = ctx.jvp(&y, &x, &tangent).unwrap();
+    assert_eq!(
+        dy.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 6.0]
+    );
+    assert!(ctx.cache_stats().unwrap().ad_transforms.entries > 0);
+}
+
+#[test]
+fn eager_functional_grad_can_feed_jvp() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let tangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let loss = x.mul(&x).unwrap();
+
+    let grad = ctx.grad(&loss, &x).unwrap();
+    let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
+
+    assert!(grad.tracks_grad());
+    assert_eq!(
+        grad.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[6.0]
+    );
+    assert_eq!(
+        hvp.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0]
+    );
+}
+
+#[test]
+fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let tangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let x2 = x.mul(&x).unwrap();
+    let loss = x2.mul(&x).unwrap();
+
+    let grad = ctx.grad(&loss, &x).unwrap();
+    let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
+
+    assert_eq!(
+        grad.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[27.0]
+    );
+    assert_eq!(
+        hvp.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[18.0]
+    );
+}
+
+#[test]
+fn eager_no_grad_scope_suppresses_operation_recording() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+
+    let y = {
+        let _guard = ctx.no_grad();
+        x.mul(&x).unwrap()
+    };
+    let z = x.mul(&x).unwrap();
+
+    assert!(!y.tracks_grad());
+    assert!(z.tracks_grad());
+}
+
+#[test]
 fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
     let err = match EagerTensor::standard_graph_op(&[], |_| {
         panic!("empty inputs should fail before graph construction")

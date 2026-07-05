@@ -42,7 +42,7 @@ mod shape_packing;
 pub mod traced;
 
 pub use context::{AdContext, AdContextBuilder};
-pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
+pub use eager::{EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
 pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
 pub(crate) mod shape_infer {

@@ -239,7 +239,15 @@ row-major order.
 ## Eager Forward And Reverse-Mode Gradients
 
 Eager tensors always compute the forward value immediately. Tracked eager
-tensors also support reverse-mode autodiff on scalar losses with accumulation.
+tensors support two AD styles:
+
+- `backward()` and `backward_with(seed)` are stateful reverse-mode APIs. They
+  return the cotangent map and accumulate reachable tracked leaves into
+  `grad()` slots.
+- `EagerRuntime::grad`, `EagerRuntime::vjp`, and `EagerRuntime::jvp` are
+  functional APIs. They return ordinary eager tensors and do not mutate
+  `grad()` slots, so their results can feed later eager transforms.
+
 Repeated `backward()` calls add to the existing gradients, and you clear them
 explicitly when you want a fresh pass.
 
@@ -269,6 +277,100 @@ assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 ctx.clear_grads().unwrap();
 assert!(x.grad().unwrap().is_none());
 assert!(y.grad().unwrap().is_none());
+```
+
+Use `backward_with` when the output is not scalar or when reverse mode should
+start from an explicit cotangent seed:
+
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
+
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let x = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ctx.clone(),
+).unwrap();
+let seed = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ctx,
+).unwrap();
+
+let y = x.mul(&x).unwrap();
+y.backward_with(&seed).unwrap();
+assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
+```
+
+Functional eager transforms return tensors instead of updating gradient slots:
+
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
+
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let x = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ctx.clone(),
+).unwrap();
+let y = x.mul(&x).unwrap();
+let seed = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+    ctx.clone(),
+).unwrap();
+let tangent = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+    ctx.clone(),
+).unwrap();
+
+let vjp = ctx.vjp(&y, &x, &seed).unwrap();
+let jvp = ctx.jvp(&y, &x, &tangent).unwrap();
+assert_eq!(vjp.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+assert_eq!(jvp.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+assert!(x.grad().unwrap().is_none());
+```
+
+Because functional derivatives are eager tensors, Hessian-vector products can
+be written as `jvp(grad(f))`:
+
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
+
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let x = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+    ctx.clone(),
+).unwrap();
+let tangent = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+    ctx,
+).unwrap();
+
+let loss = x.mul(&x).unwrap().mul(&x).unwrap();
+let grad = ctx.grad(&loss, &x).unwrap();
+let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
+
+assert_eq!(grad.materialized().unwrap().as_slice::<f64>().unwrap(), &[27.0]);
+assert_eq!(hvp.materialized().unwrap().as_slice::<f64>().unwrap(), &[18.0]);
+```
+
+Wrap updates, metric computations, and other non-differentiated eager work in
+`no_grad` when they should not be recorded:
+
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
+
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let x = EagerTensor::requires_grad_in(
+    Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+    ctx.clone(),
+).unwrap();
+let y = {
+    let _guard = ctx.no_grad();
+    x.mul(&x).unwrap()
+};
+assert!(!y.tracks_grad());
 ```
 
 `matmul` participates in the same eager reverse-mode workflow:
@@ -307,6 +409,7 @@ assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0
 | Tight inner loops | Direct/eager execution |
 | Exploratory computation | Direct/eager execution |
 | Immediate forward execution through one runtime | `EagerTensor` |
-| Need reverse-mode gradients on scalar losses | tracked `EagerTensor` variables + `backward()` |
-| Need `grad` / `vjp` / `jvp` / HVP via composition on traced graphs | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
+| Need reverse-mode gradients with gradient slots | tracked `EagerTensor` variables + `backward()` / `backward_with(seed)` |
+| Need functional eager `grad` / `vjp` / `jvp` / HVP composition | `EagerRuntime` functional APIs |
+| Need compiled `grad` / `vjp` / `jvp` / HVP composition | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
 | CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphExecutor<B>`) with explicit upload/download |

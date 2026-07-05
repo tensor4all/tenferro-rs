@@ -8,7 +8,7 @@ use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{Error, Result};
 use tenferro_tensor::{Tensor, TensorValue};
 
-use crate::eager::{record_eager_outputs, EagerRuntime, EagerTensor};
+use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
 
 pub use tenferro_ops::ext_op::{
     ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
@@ -104,7 +104,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
         )));
     }
 
-    if !inputs.iter().any(|input| input.requires_grad) {
+    if !eager_grad_recording_enabled() || !inputs.iter().any(|input| input.requires_grad) {
         return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))

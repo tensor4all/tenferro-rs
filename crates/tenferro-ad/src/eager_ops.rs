@@ -12,8 +12,9 @@ use tenferro_tensor::{
 };
 
 use crate::eager::{
-    exec_single_output, exec_single_output_read, maybe_print_eager_op_profile,
-    profile_eager_op_section, record_eager_op_profile, record_eager_outputs, EagerTensor,
+    eager_grad_recording_enabled, exec_single_output, exec_single_output_read,
+    maybe_print_eager_op_profile, profile_eager_op_section, record_eager_op_profile,
+    record_eager_outputs, EagerTensor,
 };
 use crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads;
 use crate::error::{Error, Result};
@@ -882,7 +883,7 @@ impl EagerTensor {
             }
         }
 
-        if !tensors.iter().any(|tensor| tensor.requires_grad) {
+        if !eager_grad_recording_enabled() || !tensors.iter().any(|tensor| tensor.requires_grad) {
             return Ok(Self::new_untracked_value_result(ctx, value));
         }
 
@@ -933,7 +934,7 @@ impl EagerTensor {
         })?;
 
         let any_requires_grad = profile_eager_op_section("nary_op.requires_grad_scan", || {
-            tensors.iter().any(|tensor| tensor.requires_grad)
+            eager_grad_recording_enabled() && tensors.iter().any(|tensor| tensor.requires_grad)
         });
         if !any_requires_grad {
             let input_reads = profile_eager_op_section("nary_op.collect_input_reads", || {

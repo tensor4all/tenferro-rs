@@ -45,7 +45,7 @@ where
         primal_outputs: &[ValueKey<Self>],
         tangent_inputs: &[Option<LocalValueId>],
         ctx: &mut Self::ADContext,
-    ) -> Vec<Option<LocalValueId>>
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>
     where
         Self: Sized;
 
@@ -57,11 +57,14 @@ where
         inputs: &[PrimitiveValue<Self>],
         role: &OperationRole,
         ctx: &mut Self::ADContext,
-    ) -> Vec<Option<LocalValueId>>
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>
     where
         Self: Sized;
 }
 ```
+
+`ADRuleResult<T>` is tidu's rule-emission result type. Rule failures must be
+reported through it instead of panicking or silently dropping derivative flow.
 
 ## ADKey trait (canonical signature)
 
@@ -83,7 +86,7 @@ pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 Defined in `tidu-rs/src/linearized_graph.rs`. Returned by
 `tidu::linearize` (which internally calls `Primitive::jvp_rule`
 per operation node — note that `jvp_rule` itself returns
-`Vec<Option<LocalValueId>>`, not `LinearizedGraph`; the graph is
+`ADRuleResult<Vec<Option<LocalValueId>>>`, not `LinearizedGraph`; the graph is
 assembled by `linearize`).
 
 ```rust
@@ -124,6 +127,39 @@ impl<Op: GraphOperation> LinearizedGraph<Op> {
    `StdTensorOp::Extension` may participate in AD only when its operation
    family registers an extension AD rule. Missing extension rules must report
    unsupported AD; they must not silently drop or zero gradients.
+
+## Mode Interpreters And Cacheability
+
+The AD trait contract has one derivative rule set. `jvp_rule` is the only
+primitive-local derivative producer. `transpose_rule` applies only to linear
+flow that was already produced by linearization; it is not a separate primal
+reverse-mode derivative rule. Eager and traced execution choose different
+interpreters for the same rule set:
+
+- **Traced transforms** operate on recorded graphs, then compile and execute a
+  materialized graph.
+- **Eager transforms** record each eager op as a small `RecordedGraph`.
+  tidu owns the eager forward and backward graph traversal. tenferro owns
+  concrete graph execution, public eager APIs, runtime state, extension rules,
+  and cache storage.
+- **Stateful eager reverse mode** (`backward()` and `backward_with(seed)`)
+  accumulates reachable tracked leaves into gradient slots.
+- **Functional eager transforms** (`grad`, `vjp`, `jvp`) return ordinary eager
+  tensors and do not mutate gradient slots. When their derivative computation
+  depends on tracked eager values, the returned tensor remains traceable, so
+  transforms such as `jvp(grad(f))` can be expressed by composing eager calls.
+
+Rule emission must be deterministic for a fixed primitive payload, input and
+output metadata, active mask, requested output slots, AD context, and extension
+rule set. Rules must not read hidden runtime state or environment state to
+decide graph structure. That purity lets runtime owners safely memoize
+recorded-graph linearization through tidu's eager executor hook.
+
+tenferro's eager runtime owns a bounded Tier-1 AD transform cache keyed by the
+recorded graph structural fingerprint and requested output slots. This cache
+reuses linearization for repeated transforms on the same eager tape node. It is
+not a whole-program backward cache and it does not generalize across
+structurally similar but distinct tapes.
 
 ## Complex AD convention
 
@@ -221,6 +257,8 @@ difference requirements for AD at those discontinuous boundaries.
 - Cotangent accumulation rule
 - Linear op rule
 - Primal reuse rule
+- Eager/traced interpreter split
+- Rule-emission cacheability contract
 - Complex AD convention
 - Convert dtype-boundary AD convention
 - Elementwise nondifferentiable boundary AD convention

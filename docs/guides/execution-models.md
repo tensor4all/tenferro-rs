@@ -18,8 +18,9 @@ autodiff.
 Use `TypedTensor<T, R>` or `Tensor` when no gradient state is needed.
 `TypedTensor<T, R>` carries the scalar type in Rust; `Tensor` stores dtype at
 runtime. Use `EagerTensor` when you want immediate forward execution through an
-`EagerRuntime`, and make tensors tracked when you want PyTorch-style
-`backward()` on scalar losses.
+`EagerRuntime`. Make tensors tracked for PyTorch-style `backward()` on scalar
+losses, or call the runtime functional APIs (`grad`, `vjp`, `jvp`) when the
+derivative should be returned as another eager tensor.
 
 ## Eager GPU
 
@@ -39,10 +40,10 @@ Traced mode records operations into a graph first. It is similar to JAX's
 tracing and `jit` workflow: build the expression, compile it, then run the
 compiled program through a `GraphExecutor<B>`.
 
-Use traced mode for `grad`, `vjp`, `jvp`, and HVP via composition on traced
-graphs, symbolic inputs, graph optimization, and repeated execution. The
-executor backend decides whether the compiled program runs on CPU or CUDA for
-supported operations.
+Use traced mode for symbolic inputs, graph optimization, repeated execution,
+and compiled `grad`, `vjp`, `jvp`, and HVP workflows. The executor backend
+decides whether the compiled program runs on CPU or CUDA for supported
+operations.
 
 ### Dynamic Shapes in Traced Mode
 
@@ -66,7 +67,8 @@ Eager and traced serve different workflows on the same tensor stack.
 | --- | --- |
 | Inspect intermediate values while developing | Eager CPU or eager GPU with explicit download |
 | Immediate forward execution through one runtime | `EagerTensor` |
-| Reverse-mode AD on scalar losses with gradient accumulation | tracked `EagerTensor` variables |
-| `grad`, `vjp`, `jvp`, and higher-order AD on traced graphs | `TracedTensor` |
+| Reverse-mode AD on scalar losses with gradient accumulation | tracked `EagerTensor` variables + `backward()` |
+| Functional eager `grad`, `vjp`, `jvp`, or HVP composition | `EagerRuntime` functional APIs |
+| Compiled `grad`, `vjp`, `jvp`, and higher-order AD | `TracedTensor` |
 | Reuse the same computation many times | `GraphCompiler` + `GraphExecutor<B>` |
 | Keep code without autodiff simple | `TypedTensor<T, R>` or `Tensor` |
