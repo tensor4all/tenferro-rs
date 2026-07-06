@@ -40,11 +40,13 @@ pub(crate) mod eager_ops_elementwise;
 pub mod extension;
 mod shape_packing;
 pub mod traced;
+mod transform_cache;
 
-pub use context::{AdContext, AdContextBuilder};
+pub use context::{AdContext, AdContextBuilder, AdContextCacheStats};
 pub use eager::{EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
 pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
+pub use transform_cache::AdTransformCacheLimits;
 pub(crate) mod shape_infer {
     pub use tenferro_runtime::extension::{
         promote_dtype, promote_dtype_for_binary_op, promote_dtypes,
