@@ -192,7 +192,12 @@ impl AdContext {
     /// assert_eq!(grad.rank, 0);
     /// ```
     pub fn grad(&self, output: &TracedTensor, wrt: &TracedTensor) -> Result<TracedTensor> {
-        crate::traced::grad_with_rules(output, wrt, &self.extension_rules)
+        crate::traced::grad_with_rules_and_cache(
+            output,
+            wrt,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Gradient that returns `None` when `wrt` is inactive.
@@ -213,7 +218,12 @@ impl AdContext {
         output: &TracedTensor,
         wrt: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::grad_optional_with_rules(output, wrt, &self.extension_rules)
+        crate::traced::grad_optional_with_rules_and_cache(
+            output,
+            wrt,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Forward-mode Jacobian-vector product.
@@ -237,7 +247,13 @@ impl AdContext {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<TracedTensor> {
-        crate::traced::jvp_with_rules(output, wrt, tangent, &self.extension_rules)
+        crate::traced::jvp_with_rules_and_cache(
+            output,
+            wrt,
+            tangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Forward-mode Jacobian-vector product that returns `None` for inactive output.
@@ -260,7 +276,13 @@ impl AdContext {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::jvp_optional_with_rules(output, wrt, tangent, &self.extension_rules)
+        crate::traced::jvp_optional_with_rules_and_cache(
+            output,
+            wrt,
+            tangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Reverse-mode vector-Jacobian product.
@@ -289,7 +311,13 @@ impl AdContext {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<TracedTensor> {
-        crate::traced::vjp_with_rules(output, wrt, cotangent, &self.extension_rules)
+        crate::traced::vjp_with_rules_and_cache(
+            output,
+            wrt,
+            cotangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Reverse-mode vector-Jacobian product that returns `None` for inactive input.
@@ -312,7 +340,13 @@ impl AdContext {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::vjp_optional_with_rules(output, wrt, cotangent, &self.extension_rules)
+        crate::traced::vjp_optional_with_rules_and_cache(
+            output,
+            wrt,
+            cotangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 }
 

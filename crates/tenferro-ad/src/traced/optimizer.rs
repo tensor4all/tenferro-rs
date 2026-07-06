@@ -7,6 +7,8 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
 
+use crate::transform_cache::CachedOptimizedLinearGraph;
+
 pub(super) struct OptimizedLinearGraph {
     graph: Graph<StdTensorOp>,
     tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
@@ -20,18 +22,11 @@ impl OptimizedLinearGraph {
         optimize_graph(linear.into_graph(), tangent_inputs, tangent_outputs)
     }
 
-    pub(super) fn as_graph(&self) -> &Graph<StdTensorOp> {
-        &self.graph
+    pub(super) fn into_cached(self) -> CachedOptimizedLinearGraph {
+        CachedOptimizedLinearGraph::new(self.graph, self.tangent_inputs, self.tangent_outputs)
     }
 
-    pub(super) fn into_graph(self) -> Graph<StdTensorOp> {
-        self.graph
-    }
-
-    pub(super) fn tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
-        &self.tangent_inputs
-    }
-
+    #[cfg(test)]
     pub(super) fn tangent_outputs(&self) -> &[Option<LocalValueId>] {
         &self.tangent_outputs
     }

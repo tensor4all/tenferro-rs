@@ -129,3 +129,20 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
 }
+
+#[test]
+fn ad_context_traced_vjp_reuses_transform_cache() {
+    let ad = AdContext::builder().build().unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let y = (&x * &x).unwrap();
+    let seed = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap();
+
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+    let _ = ad.vjp(&y, &x, &seed).unwrap();
+    let after_first = ad.ad_transform_cache_stats().unwrap();
+    assert!(after_first.entries > 0);
+    assert!(after_first.retained_bytes > 0);
+
+    let _ = ad.vjp(&y, &x, &seed).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap(), after_first);
+}

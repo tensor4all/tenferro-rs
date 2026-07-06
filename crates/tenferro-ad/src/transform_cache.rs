@@ -1,11 +1,15 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use computegraph::graph::Graph;
+use computegraph::{LocalValueId, ValueKey};
 use lru::LruCache;
+use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{CacheStats, Error, Result};
 use tidu::eager::RecordedGraph;
@@ -114,6 +118,137 @@ pub(crate) struct EagerAdTransformCacheKey {
     output_slots: Vec<usize>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TracedAdTransformKind {
+    Jvp,
+    Vjp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TracedAdTransformCacheKey {
+    kind: TracedAdTransformKind,
+    roots_fingerprint: u64,
+    output_key: ValueKey<StdTensorOp>,
+    wrt_input_key: TensorInputKey,
+    aliases_fingerprint: u64,
+}
+
+impl TracedAdTransformCacheKey {
+    pub(crate) fn new(
+        kind: TracedAdTransformKind,
+        roots: &[Arc<Graph<StdTensorOp>>],
+        output_key: &ValueKey<StdTensorOp>,
+        wrt_input_key: &TensorInputKey,
+        aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
+    ) -> Self {
+        Self {
+            kind,
+            roots_fingerprint: traced_roots_fingerprint(roots),
+            output_key: output_key.clone(),
+            wrt_input_key: wrt_input_key.clone(),
+            aliases_fingerprint: aliases_fingerprint(aliases),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedOptimizedLinearGraph {
+    graph: Arc<Graph<StdTensorOp>>,
+    tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+    tangent_outputs: Vec<Option<LocalValueId>>,
+}
+
+impl CachedOptimizedLinearGraph {
+    pub(crate) fn new(
+        graph: Graph<StdTensorOp>,
+        tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+        tangent_outputs: Vec<Option<LocalValueId>>,
+    ) -> Self {
+        Self {
+            graph: Arc::new(graph),
+            tangent_inputs,
+            tangent_outputs,
+        }
+    }
+
+    pub(crate) fn graph(&self) -> &Arc<Graph<StdTensorOp>> {
+        &self.graph
+    }
+
+    pub(crate) fn as_graph(&self) -> &Graph<StdTensorOp> {
+        self.graph.as_ref()
+    }
+
+    pub(crate) fn tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
+        &self.tangent_inputs
+    }
+
+    pub(crate) fn tangent_outputs(&self) -> &[Option<LocalValueId>] {
+        &self.tangent_outputs
+    }
+}
+
+impl fmt::Debug for CachedOptimizedLinearGraph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachedOptimizedLinearGraph")
+            .field("values_len", &self.graph.values().len())
+            .field("operations_len", &self.graph.operations().len())
+            .field("tangent_inputs_len", &self.tangent_inputs.len())
+            .field("tangent_outputs_len", &self.tangent_outputs.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedTracedVjpTransform {
+    linear_graph: Arc<Graph<StdTensorOp>>,
+    linear_tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+    transposed: Arc<CachedOptimizedLinearGraph>,
+}
+
+impl CachedTracedVjpTransform {
+    pub(crate) fn new(
+        linear_graph: Arc<Graph<StdTensorOp>>,
+        linear_tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+        transposed: CachedOptimizedLinearGraph,
+    ) -> Self {
+        Self {
+            linear_graph,
+            linear_tangent_inputs,
+            transposed: Arc::new(transposed),
+        }
+    }
+
+    pub(crate) fn linear_graph(&self) -> &Arc<Graph<StdTensorOp>> {
+        &self.linear_graph
+    }
+
+    pub(crate) fn linear_tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
+        &self.linear_tangent_inputs
+    }
+
+    pub(crate) fn transposed(&self) -> &CachedOptimizedLinearGraph {
+        self.transposed.as_ref()
+    }
+}
+
+impl fmt::Debug for CachedTracedVjpTransform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachedTracedVjpTransform")
+            .field("linear_values_len", &self.linear_graph.values().len())
+            .field(
+                "linear_operations_len",
+                &self.linear_graph.operations().len(),
+            )
+            .field(
+                "linear_tangent_inputs_len",
+                &self.linear_tangent_inputs.len(),
+            )
+            .field("transposed", &self.transposed)
+            .finish()
+    }
+}
+
 impl EagerAdTransformCacheKey {
     pub(crate) fn new(graph: &RecordedGraph<StdTensorOp>, output_slots: &[usize]) -> Self {
         Self {
@@ -121,6 +256,60 @@ impl EagerAdTransformCacheKey {
             output_slots: output_slots.to_vec(),
         }
     }
+}
+
+fn traced_roots_fingerprint(roots: &[Arc<Graph<StdTensorOp>>]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    roots.len().hash(&mut hasher);
+    let mut visited = HashSet::new();
+    for root in roots {
+        hash_graph(root.as_ref(), &mut hasher, &mut visited);
+    }
+    hasher.finish()
+}
+
+fn hash_graph<H: Hasher>(
+    graph: &Graph<StdTensorOp>,
+    hasher: &mut H,
+    visited: &mut HashSet<*const Graph<StdTensorOp>>,
+) {
+    let graph_ptr: *const Graph<StdTensorOp> = graph;
+    if !visited.insert(graph_ptr) {
+        return;
+    }
+    graph.inputs().hash(hasher);
+    graph.outputs().hash(hasher);
+    for value in graph.values() {
+        value.key.hash(hasher);
+        value.producer.hash(hasher);
+    }
+    for op in graph.operations() {
+        op.operation.hash(hasher);
+        op.inputs.hash(hasher);
+        op.outputs.hash(hasher);
+        op.role.hash(hasher);
+    }
+    graph.parents().len().hash(hasher);
+    for parent in graph.parents() {
+        hash_graph(parent.as_ref(), hasher, visited);
+    }
+}
+
+fn aliases_fingerprint(aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>) -> u64 {
+    let mut entry_hashes = aliases
+        .iter()
+        .map(|(key, value)| {
+            let mut hasher = DefaultHasher::new();
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect::<Vec<_>>();
+    entry_hashes.sort_unstable();
+
+    let mut hasher = DefaultHasher::new();
+    entry_hashes.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn eager_recorded_graph_fingerprint(graph: &RecordedGraph<StdTensorOp>) -> u64 {
@@ -188,6 +377,38 @@ impl AdTransformCache {
         Ok(())
     }
 
+    pub(crate) fn get_traced_linearized(
+        &self,
+        key: &TracedAdTransformCacheKey,
+    ) -> Result<Option<Arc<CachedOptimizedLinearGraph>>> {
+        Ok(self.lock_store()?.get_traced_linearized(key))
+    }
+
+    pub(crate) fn put_traced_linearized(
+        &self,
+        key: TracedAdTransformCacheKey,
+        value: Arc<CachedOptimizedLinearGraph>,
+    ) -> Result<()> {
+        self.lock_store()?.put_traced_linearized(key, value);
+        Ok(())
+    }
+
+    pub(crate) fn get_traced_vjp(
+        &self,
+        key: &TracedAdTransformCacheKey,
+    ) -> Result<Option<Arc<CachedTracedVjpTransform>>> {
+        Ok(self.lock_store()?.get_traced_vjp(key))
+    }
+
+    pub(crate) fn put_traced_vjp(
+        &self,
+        key: TracedAdTransformCacheKey,
+        value: Arc<CachedTracedVjpTransform>,
+    ) -> Result<()> {
+        self.lock_store()?.put_traced_vjp(key, value);
+        Ok(())
+    }
+
     fn lock_store(&self) -> Result<MutexGuard<'_, AdTransformCacheStore>> {
         self.store
             .lock()
@@ -225,6 +446,7 @@ impl AdTransformCacheStore {
             .get(&AdTransformCacheKey::EagerLinearize(key.clone()))
             .and_then(|entry| match &entry.entry {
                 AdTransformCacheEntry::EagerLinearized(linear) => Some(Arc::clone(linear)),
+                _ => None,
             })
     }
 
@@ -235,6 +457,50 @@ impl AdTransformCacheStore {
     ) {
         let key = AdTransformCacheKey::EagerLinearize(key);
         let entry = AdTransformCacheEntry::EagerLinearized(value);
+        self.put_entry(key, entry);
+    }
+
+    fn get_traced_linearized(
+        &mut self,
+        key: &TracedAdTransformCacheKey,
+    ) -> Option<Arc<CachedOptimizedLinearGraph>> {
+        self.entries
+            .get(&AdTransformCacheKey::Traced(key.clone()))
+            .and_then(|entry| match &entry.entry {
+                AdTransformCacheEntry::TracedLinearized(linear) => Some(Arc::clone(linear)),
+                _ => None,
+            })
+    }
+
+    fn put_traced_linearized(
+        &mut self,
+        key: TracedAdTransformCacheKey,
+        value: Arc<CachedOptimizedLinearGraph>,
+    ) {
+        let key = AdTransformCacheKey::Traced(key);
+        let entry = AdTransformCacheEntry::TracedLinearized(value);
+        self.put_entry(key, entry);
+    }
+
+    fn get_traced_vjp(
+        &mut self,
+        key: &TracedAdTransformCacheKey,
+    ) -> Option<Arc<CachedTracedVjpTransform>> {
+        self.entries
+            .get(&AdTransformCacheKey::Traced(key.clone()))
+            .and_then(|entry| match &entry.entry {
+                AdTransformCacheEntry::TracedVjp(vjp) => Some(Arc::clone(vjp)),
+                _ => None,
+            })
+    }
+
+    fn put_traced_vjp(
+        &mut self,
+        key: TracedAdTransformCacheKey,
+        value: Arc<CachedTracedVjpTransform>,
+    ) {
+        let key = AdTransformCacheKey::Traced(key);
+        let entry = AdTransformCacheEntry::TracedVjp(value);
         self.put_entry(key, entry);
     }
 
@@ -288,16 +554,21 @@ impl Default for AdTransformCacheStore {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum AdTransformCacheKey {
     EagerLinearize(EagerAdTransformCacheKey),
+    Traced(TracedAdTransformCacheKey),
 }
 
 enum AdTransformCacheEntry {
     EagerLinearized(Arc<LinearizedGraph<StdTensorOp>>),
+    TracedLinearized(Arc<CachedOptimizedLinearGraph>),
+    TracedVjp(Arc<CachedTracedVjpTransform>),
 }
 
 impl fmt::Debug for AdTransformCacheEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EagerLinearized(_) => f.write_str("EagerLinearized(..)"),
+            Self::TracedLinearized(_) => f.write_str("TracedLinearized(..)"),
+            Self::TracedVjp(_) => f.write_str("TracedVjp(..)"),
         }
     }
 }
@@ -323,6 +594,7 @@ fn ad_transform_cache_key_retained_bytes(key: &AdTransformCacheKey) -> usize {
         AdTransformCacheKey::EagerLinearize(key) => {
             key.output_slots.capacity() * size_of::<usize>()
         }
+        AdTransformCacheKey::Traced(_) => 0,
     }
 }
 
@@ -336,5 +608,36 @@ fn ad_transform_cache_value_retained_bytes(entry: &AdTransformCacheEntry) -> usi
                 + size_of_val(linear.tangent_inputs())
                 + size_of_val(linear.tangent_outputs())
         }
+        AdTransformCacheEntry::TracedLinearized(linear) => {
+            size_of::<Arc<CachedOptimizedLinearGraph>>()
+                + cached_optimized_linear_graph_retained_bytes(linear.as_ref())
+        }
+        AdTransformCacheEntry::TracedVjp(vjp) => {
+            size_of::<Arc<CachedTracedVjpTransform>>()
+                + cached_traced_vjp_retained_bytes(vjp.as_ref())
+        }
     }
+}
+
+fn cached_traced_vjp_retained_bytes(vjp: &CachedTracedVjpTransform) -> usize {
+    size_of::<CachedTracedVjpTransform>()
+        + graph_retained_bytes(vjp.linear_graph.as_ref())
+        + vjp.linear_tangent_inputs.capacity() * size_of::<(TensorInputKey, LocalValueId)>()
+        + cached_optimized_linear_graph_retained_bytes(vjp.transposed.as_ref())
+}
+
+fn cached_optimized_linear_graph_retained_bytes(linear: &CachedOptimizedLinearGraph) -> usize {
+    size_of::<CachedOptimizedLinearGraph>()
+        + graph_retained_bytes(linear.graph.as_ref())
+        + linear.tangent_inputs.capacity() * size_of::<(TensorInputKey, LocalValueId)>()
+        + linear.tangent_outputs.capacity() * size_of::<Option<LocalValueId>>()
+}
+
+fn graph_retained_bytes(graph: &Graph<StdTensorOp>) -> usize {
+    size_of::<Graph<StdTensorOp>>()
+        + size_of_val(graph.values())
+        + size_of_val(graph.operations())
+        + size_of_val(graph.inputs())
+        + size_of_val(graph.outputs())
+        + size_of_val(graph.parents())
 }
