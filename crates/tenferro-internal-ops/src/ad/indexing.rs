@@ -34,7 +34,7 @@ use tenferro_tensor::{GatherConfig, ScatterConfig};
 use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::zeros::build_zero_like;
+use crate::ad::zeros::{build_zero_like, SymbolicZero};
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::shape_extent::ShapeExtent;
@@ -161,14 +161,14 @@ pub fn linearize_dynamic_update_slice(
         Some(tangent) => tangent,
         None => {
             let meta = ctx.metadata_of(&operand)?;
-            build_zero_like(builder, meta.dtype, operand, meta.rank())
+            SymbolicZero::from_meta(operand, meta).instantiate(builder)
         }
     };
     let d_update = match tangent_in[1] {
         Some(tangent) => tangent,
         None => {
             let meta = ctx.metadata_of(&update)?;
-            build_zero_like(builder, meta.dtype, update, meta.rank())
+            SymbolicZero::from_meta(update, meta).instantiate(builder)
         }
     };
 
@@ -451,10 +451,8 @@ pub fn linearize_scatter(
         (None, Some(d_up)) => {
             let operand_key = ValueRef::External(primal_in[0].clone());
             let operand_meta = ctx.metadata_of(&operand_key)?;
-            let operand_rank = operand_meta.rank();
-            let operand_dtype = operand_meta.dtype;
             let zero_operand =
-                build_zero_like(builder, operand_dtype, operand_key.clone(), operand_rank);
+                SymbolicZero::from_meta(operand_key.clone(), operand_meta).instantiate(builder);
             let out = builder.add_operation(
                 StdTensorOp::Scatter(config.clone()),
                 vec![

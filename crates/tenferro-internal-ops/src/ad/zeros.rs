@@ -2,8 +2,55 @@ use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_tensor::DType;
 
+use crate::ad::context::TensorMeta;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SymbolicZero {
+    dtype: DType,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+}
+
+impl SymbolicZero {
+    pub(super) fn new(dtype: DType, anchor: ValueRef<StdTensorOp>, anchor_rank: usize) -> Self {
+        Self {
+            dtype,
+            anchor,
+            anchor_rank,
+        }
+    }
+
+    pub(super) fn from_meta(anchor: ValueRef<StdTensorOp>, meta: &TensorMeta) -> Self {
+        Self::new(meta.dtype, anchor, meta.rank())
+    }
+
+    #[cfg(test)]
+    pub(super) fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    #[cfg(test)]
+    pub(super) fn rank(&self) -> usize {
+        self.anchor_rank
+    }
+
+    #[cfg(test)]
+    pub(super) fn anchor(&self) -> &ValueRef<StdTensorOp> {
+        &self.anchor
+    }
+
+    pub(super) fn instantiate(&self, builder: &mut dyn PrimitiveRuleBuilder) -> LocalValueId {
+        build_scalar_like(
+            builder,
+            self.dtype,
+            zero_bytes(self.dtype),
+            self.anchor.clone(),
+            self.anchor_rank,
+        )
+    }
+}
 
 pub(super) fn build_zero_like(
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -11,7 +58,7 @@ pub(super) fn build_zero_like(
     anchor: ValueRef<StdTensorOp>,
     anchor_rank: usize,
 ) -> LocalValueId {
-    build_scalar_like(builder, dtype, zero_bytes(dtype), anchor, anchor_rank)
+    SymbolicZero::new(dtype, anchor, anchor_rank).instantiate(builder)
 }
 
 pub(super) fn build_one_like(

@@ -4,9 +4,10 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType};
 
-use crate::ad::context::ShapeGuardContext;
+use crate::ad::context::{ShapeGuardContext, TensorMeta};
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
+use crate::SymDim;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -75,6 +76,33 @@ fn zero_like_covers_scalar_and_broadcasted_dtype_paths() {
         }
     );
     assert_eq!(op.inputs[1], ValueRef::Local(anchor));
+}
+
+#[test]
+fn symbolic_zero_carries_aval_until_instantiated() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let anchor = builder.add_input(tensor_input(1));
+    let meta = TensorMeta::exact(DType::C64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
+
+    let zero = super::super::zeros::SymbolicZero::from_meta(ValueRef::Local(anchor), &meta);
+    assert_eq!(zero.dtype(), DType::C64);
+    assert_eq!(zero.rank(), 2);
+    assert_eq!(zero.anchor(), &ValueRef::Local(anchor));
+    assert!(builder.build().operations().is_empty());
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let anchor = builder.add_input(tensor_input(2));
+    let zero = super::super::zeros::SymbolicZero::from_meta(ValueRef::Local(anchor), &meta);
+    let materialized = zero.instantiate(&mut builder);
+    let graph = builder.build();
+
+    let (op_id, _) = graph.values()[materialized]
+        .producer
+        .expect("ranked symbolic zero should materialize as broadcast");
+    assert!(matches!(
+        graph.operations()[op_id].operation,
+        StdTensorOp::BroadcastInDim { .. }
+    ));
 }
 
 #[test]
