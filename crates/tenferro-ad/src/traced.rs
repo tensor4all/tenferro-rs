@@ -22,9 +22,12 @@ use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor
 use tenferro_tensor::TensorBackend;
 use tidu::{linear_transpose, linearize};
 
+#[path = "traced/optimizer.rs"]
+mod optimizer;
 #[path = "traced/primal_transpose.rs"]
 mod primal_transpose;
 
+use optimizer::OptimizedLinearGraph;
 use primal_transpose::{try_primal_transpose, PrimalTransposeGraph};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -448,6 +451,7 @@ fn jvp_optional_impl(
         &aliases,
     )
     .map_err(|err| ad_rule_error("jvp", err))?;
+    let linear = OptimizedLinearGraph::from_tidu(linear);
     let Some(tangent_output) = linear.tangent_outputs()[0] else {
         return Ok(None);
     };
@@ -501,12 +505,12 @@ fn jvp_optional_impl(
 
 enum VjpTransposeGraph {
     Primal(PrimalTransposeGraph),
-    Linear(tidu::LinearizedGraph<StdTensorOp>),
+    Linear(OptimizedLinearGraph),
 }
 
 struct ActiveLinearVjp {
     linear: tidu::LinearizedGraph<StdTensorOp>,
-    transposed: tidu::LinearizedGraph<StdTensorOp>,
+    transposed: OptimizedLinearGraph,
     metadata_scope: GlobalMetadataScope,
 }
 
@@ -588,6 +592,7 @@ fn vjp_optional_impl(
                 )?;
                 linear_ad_ctx.refresh_global_metadata();
                 linear_transpose(&linear, &mut linear_ad_ctx).map(|transposed| {
+                    let transposed = OptimizedLinearGraph::from_tidu(transposed);
                     Some(ActiveLinearVjp {
                         linear,
                         transposed,
