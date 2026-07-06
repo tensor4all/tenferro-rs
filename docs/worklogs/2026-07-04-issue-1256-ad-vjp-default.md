@@ -12,6 +12,13 @@ decomposition linearizers where the active-output metadata already existed but
 was not fully used: `Svd` now skips the vector tangent chain when only singular
 values are consumed, and `Lu` now emits only requested factor tangent branches.
 
+Follow-up work extended that active-output pruning to `Eigh`, `Eig`, and `Qr`.
+`Eigh` now skips the eigenvalue tangent when only eigenvectors are consumed,
+`Eig` now skips eigenvalue-only tangent work when the eigenvalue output is
+inactive, and all three rules return no tangent graph when all outputs are
+inactive. `Qr` now returns only the requested factor tangent and avoids the
+final inactive branch emission.
+
 ## Context Read
 
 - Issue #1256 and its acceptance criteria around VJP generation, active output
@@ -40,6 +47,10 @@ values are consumed, and `Lu` now emits only requested factor tangent branches.
 - Use the existing `linearize_active_value_keys` analysis as the explicit
   used-output pruning pass for traced AD. Linalg multi-output rules now check
   `ctx.is_value_active_in_linearize` before emitting expensive tangent branches.
+- Keep the QR/Eigh/Eig follow-up at the rule-emission level rather than adding a
+  new whole-graph optimizer pass. The existing active-output metadata is enough
+  to avoid the known dead decomposition branches without changing the broader
+  AD transform contract.
 - Document cache ownership as unchanged: no persistent AD optimizer cache is
   introduced here. Transformed graphs live with the returned traced tensor and
   existing compiler/runtime/extension caches keep their current owners.
@@ -50,6 +61,10 @@ values are consumed, and `Lu` now emits only requested factor tangent branches.
   `cargo test -p tenferro-ad --test extension_op traced_vjp_prefers_linearize_transpose_over_primary_transpose -- --nocapture`
 - Red/green linalg active-output pruning tests:
   `cargo test -p tenferro-linalg --features autodiff prune -- --nocapture`
+- QR/Eigh/Eig follow-up RED/GREEN tests:
+  `cargo test -p tenferro-linalg --features autodiff "linearize_prunes" -- --nocapture`
+  `cargo test -p tenferro-linalg --features autodiff eig_linearize_prunes_unsupported_inactive_eigenvalue_output -- --nocapture`
+  `cargo test -p tenferro-linalg --features autodiff one_input_linalg_jvps_prune_when_all_outputs_are_inactive -- --nocapture`
 - Primary-transpose fallback coverage after generic VJP became the default:
   `cargo test -p tenferro-ad --test extension_op traced_vjp_ -- --nocapture`
 - Full touched-crate and linalg AD checks:
@@ -70,7 +85,8 @@ values are consumed, and `Lu` now emits only requested factor tangent branches.
 ## Residual Risks
 
 - This is an initial #1256 slice. It makes generic VJP the default and prunes
-  two high-impact decomposition linearizers, but it does not add a broad AD
-  algebraic canonicalizer or a persistent AD graph optimizer cache.
+  high-impact decomposition linearizers, but it does not add a broad AD
+  algebraic canonicalizer, aval-carrying symbolic zero type, or persistent AD
+  graph optimizer cache.
 - The primary transpose fallback remains necessary for extension rules whose
   generic linearized path is incomplete.
