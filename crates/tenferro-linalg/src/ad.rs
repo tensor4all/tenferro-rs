@@ -281,6 +281,21 @@ mod tests {
         (ctx, a, vec![w, v])
     }
 
+    fn eig_context() -> (
+        ShapeGuardContext,
+        ValueKey<StdTensorOp>,
+        Vec<ValueKey<StdTensorOp>>,
+    ) {
+        let mut ctx = ShapeGuardContext::default();
+        let a = input_key(114);
+        let w = input_key(115);
+        let v = input_key(116);
+        insert_typed_meta(&mut ctx, a.clone(), DType::F64, &[2, 2]);
+        insert_typed_meta(&mut ctx, w.clone(), DType::C64, &[2]);
+        insert_typed_meta(&mut ctx, v.clone(), DType::C64, &[2, 2]);
+        (ctx, a, vec![w, v])
+    }
+
     fn lu_context(
         shape: &[usize],
     ) -> (
@@ -453,6 +468,21 @@ mod tests {
                 svd_context(&[2, 2]),
                 vec![None, None, None],
             ),
+            (
+                LinalgOp::Eigh {
+                    eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                },
+                eigh_context(),
+                vec![None, None],
+            ),
+            (
+                LinalgOp::Eig {
+                    input_dtype: DType::F64,
+                },
+                eig_context(),
+                vec![None, None],
+            ),
+            (LinalgOp::Qr, qr_context(&[3, 2]), vec![None, None]),
         ];
 
         for (kind, (ctx, a, outputs), expected) in cases {
@@ -509,6 +539,120 @@ mod tests {
             builder.build().operations().len() <= 5,
             "singular-value-only SVD JVP should not emit the vector F-matrix chain"
         );
+    }
+
+    #[test]
+    fn eigh_linearize_prunes_inactive_eigenvalue_output() {
+        let (ctx, a, outputs) = eigh_context();
+        let mut ctx = with_active_values(ctx, [outputs[1].clone()]);
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let tangent = builder.add_input(TensorInputKey::User { id: 134 });
+        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[a],
+                &outputs,
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.iter().map(Option::is_some).collect::<Vec<_>>(),
+            vec![false, true]
+        );
+    }
+
+    #[test]
+    fn eig_linearize_prunes_unsupported_inactive_eigenvalue_output() {
+        let (ctx, a, outputs) = eig_context();
+        let mut ctx = with_active_values(ctx, [outputs[1].clone()]);
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let tangent = builder.add_input(TensorInputKey::User { id: 137 });
+        let op = LinalgExtensionOp::new(LinalgOp::Eig {
+            input_dtype: DType::F64,
+        });
+
+        let result = LinalgAdRule
+            .linearize(
+                &op,
+                &mut builder,
+                &[a],
+                &outputs,
+                &[Some(tangent)],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![None, None]);
+        assert!(
+            builder.build().operations().is_empty(),
+            "eigenvectors-only Eig JVP is unsupported and should not emit eigenvalue tangent work"
+        );
+    }
+
+    #[test]
+    fn qr_linearize_prunes_inactive_factor_outputs() {
+        let op = LinalgExtensionOp::new(LinalgOp::Qr);
+        for (case, active_slot, expected_active) in [
+            ("q only", 0_usize, vec![true, false]),
+            ("r only", 1_usize, vec![false, true]),
+        ] {
+            let (ctx, a, outputs) = qr_context(&[3, 2]);
+            let mut ctx = with_active_values(ctx, [outputs[active_slot].clone()]);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let tangent = builder.add_input(TensorInputKey::User { id: 135 });
+
+            let result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut builder,
+                    &[a],
+                    &outputs,
+                    &[Some(tangent)],
+                    &mut ctx,
+                )
+                .unwrap();
+
+            assert_eq!(
+                result.iter().map(Option::is_some).collect::<Vec<_>>(),
+                expected_active,
+                "{case}"
+            );
+            let pruned_count = builder.build().operations().len();
+
+            let (full_ctx, full_a, full_outputs) = qr_context(&[3, 2]);
+            let mut full_ctx =
+                with_active_values(full_ctx, [full_outputs[0].clone(), full_outputs[1].clone()]);
+            let mut full_builder = GraphBuilder::<StdTensorOp>::new();
+            let full_tangent = full_builder.add_input(TensorInputKey::User { id: 136 });
+            let full_result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut full_builder,
+                    &[full_a],
+                    &full_outputs,
+                    &[Some(full_tangent)],
+                    &mut full_ctx,
+                )
+                .unwrap();
+
+            assert_eq!(
+                full_result.iter().map(Option::is_some).collect::<Vec<_>>(),
+                vec![true, true],
+                "{case}"
+            );
+            let full_count = full_builder.build().operations().len();
+            assert!(
+                pruned_count < full_count,
+                "{case} should not emit both QR factor tangent branches: {pruned_count} >= {full_count}"
+            );
+        }
     }
 
     #[test]

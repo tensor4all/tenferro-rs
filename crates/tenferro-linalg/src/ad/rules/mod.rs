@@ -314,6 +314,10 @@ pub(crate) fn linearize_eig(
         return Ok(vec![None, None]);
     };
 
+    if !ctx.is_value_active_in_linearize(&primal_out[0]) {
+        return Ok(vec![None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
@@ -667,6 +671,12 @@ pub(crate) fn linearize_eigh(
         return Ok(vec![None, None]);
     };
 
+    let w_active = ctx.is_value_active_in_linearize(&primal_out[0]);
+    let v_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    if !w_active && !v_active {
+        return Ok(vec![None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
@@ -693,11 +703,15 @@ pub(crate) fn linearize_eigh(
         vec![true, false],
         matrix_rank,
     );
-    let dw = extract_diag_linear(builder, projected);
-    let dw = convert_linear_to_dtype(builder, dw, dtype, w_dtype);
+    let dw = if w_active {
+        let dw = extract_diag_linear(builder, projected);
+        Some(convert_linear_to_dtype(builder, dw, dtype, w_dtype))
+    } else {
+        None
+    };
 
-    if !ctx.is_value_active_in_linearize(&primal_out[1]) {
-        return Ok(vec![Some(dw), None]);
+    if !v_active {
+        return Ok(vec![dw, None]);
     }
 
     let diag_w = embed_diag_fixed(builder, w.clone());
@@ -729,7 +743,7 @@ pub(crate) fn linearize_eigh(
         matrix_rank,
     );
 
-    Ok(vec![Some(dw), Some(dv)])
+    Ok(vec![dw, Some(dv)])
 }
 
 pub(crate) fn linearize_eigh_values(
@@ -854,6 +868,12 @@ pub(crate) fn linearize_qr(
         return Ok(vec![None, None]);
     };
 
+    let q_active = ctx.is_value_active_in_linearize(&primal_out[0]);
+    let r_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    if !q_active && !r_active {
+        return Ok(vec![None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None]);
     };
@@ -928,31 +948,40 @@ pub(crate) fn linearize_qr(
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
-        let q_dr_leading_hat = matmul_linear(
-            builder,
-            q.clone(),
-            ValueRef::Local(dr_leading_hat),
-            vec![false, true],
-            matrix_rank,
-        );
-        let dq = linear_sub(builder, dx_rinv, q_dr_leading_hat);
-        let dr_leading = matmul_linear(
-            builder,
-            ValueRef::Local(dr_leading_hat),
-            ValueRef::Local(r_leading),
-            vec![true, false],
-            matrix_rank,
-        );
-        let mut dr = matmul_linear(
-            builder,
-            ValueRef::Local(dr_leading),
-            ValueRef::Local(leading_selector),
-            vec![true, false],
-            matrix_rank,
-        );
+        let dq = if q_active {
+            let q_dr_leading_hat = matmul_linear(
+                builder,
+                q.clone(),
+                ValueRef::Local(dr_leading_hat),
+                vec![false, true],
+                matrix_rank,
+            );
+            Some(linear_sub(builder, dx_rinv, q_dr_leading_hat))
+        } else {
+            None
+        };
+
+        let mut dr = if r_active {
+            let dr_leading = matmul_linear(
+                builder,
+                ValueRef::Local(dr_leading_hat),
+                ValueRef::Local(r_leading),
+                vec![true, false],
+                matrix_rank,
+            );
+            Some(matmul_linear(
+                builder,
+                ValueRef::Local(dr_leading),
+                ValueRef::Local(leading_selector),
+                vec![true, false],
+                matrix_rank,
+            ))
+        } else {
+            None
+        };
 
         let trailing_cols = n_size - m_size;
-        if trailing_cols > 0 {
+        if r_active && trailing_cols > 0 {
             let trailing_selector = trailing_column_selector_fixed(
                 builder,
                 m_size,
@@ -999,10 +1028,12 @@ pub(crate) fn linearize_qr(
                 vec![true, false],
                 matrix_rank,
             );
-            dr = linear_add(builder, dr, dr_trailing_full);
+            if let Some(current_dr) = dr {
+                dr = Some(linear_add(builder, current_dr, dr_trailing_full));
+            }
         }
 
-        return Ok(vec![Some(dq), Some(dr)]);
+        return Ok(vec![dq, dr]);
     }
 
     let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank, dtype);
@@ -1042,21 +1073,29 @@ pub(crate) fn linearize_qr(
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 
-    let q_dr_hat = matmul_linear(
-        builder,
-        q.clone(),
-        ValueRef::Local(dr_hat),
-        vec![false, true],
-        matrix_rank,
-    );
-    let dq = linear_sub(builder, dx_rinv, q_dr_hat);
-    let dr = matmul_linear(
-        builder,
-        ValueRef::Local(dr_hat),
-        r,
-        vec![true, false],
-        matrix_rank,
-    );
+    let dq = if q_active {
+        let q_dr_hat = matmul_linear(
+            builder,
+            q.clone(),
+            ValueRef::Local(dr_hat),
+            vec![false, true],
+            matrix_rank,
+        );
+        Some(linear_sub(builder, dx_rinv, q_dr_hat))
+    } else {
+        None
+    };
+    let dr = if r_active {
+        Some(matmul_linear(
+            builder,
+            ValueRef::Local(dr_hat),
+            r,
+            vec![true, false],
+            matrix_rank,
+        ))
+    } else {
+        None
+    };
 
-    Ok(vec![Some(dq), Some(dr)])
+    Ok(vec![dq, dr])
 }
