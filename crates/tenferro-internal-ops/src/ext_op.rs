@@ -280,6 +280,17 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Optionally return an equivalent op that produces only live outputs.
+    ///
+    /// `live_outputs` is aligned with this op's current output slots. Return
+    /// `None` when the family does not support output pruning. Return
+    /// `Some(op)` only when the new op's outputs are exactly the live output
+    /// slots, in ascending slot order, and `op.output_count()` equals the
+    /// number of `true` entries in `live_outputs`.
+    fn prune_outputs(&self, _live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
+        None
+    }
+
     // AD rules are registered separately; see the role-specific rule traits.
 }
 
