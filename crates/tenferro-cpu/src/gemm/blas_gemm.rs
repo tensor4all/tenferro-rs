@@ -18,16 +18,16 @@ pub(crate) struct BlasGemmBatch<T> {
     pub(crate) c_cs: isize,
 }
 
-#[cfg(feature = "blas-openblas")]
-const OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT: usize = 16;
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
+const PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT: usize = 16;
 
-#[cfg(feature = "blas-openblas")]
-pub(super) fn openblas_should_use_gemm_batch<T>(batches: &[BlasGemmBatch<T>]) -> bool {
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
+pub(super) fn provider_should_use_gemm_batch<T>(batches: &[BlasGemmBatch<T>]) -> bool {
     batches.len() > 1
         && batches.iter().all(|batch| {
-            batch.m <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
-                && batch.n <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
-                && batch.k <= OPENBLAS_GEMM_BATCH_SMALL_DIM_LIMIT
+            batch.m <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
+                && batch.n <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
+                && batch.k <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
         })
 }
 
@@ -274,8 +274,8 @@ fn apply_conj_transpose(trans: CBLAS_TRANSPOSE, conj: bool) -> Option<CBLAS_TRAN
     }
 }
 
-#[cfg(feature = "blas-openblas")]
-mod openblas_batch {
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
+mod provider_batch {
     use super::*;
     use std::ffi::c_void;
 
@@ -399,14 +399,14 @@ mod openblas_batch {
                     let Some(last_size) = self.group_size.last_mut() else {
                         return Err(Error::InvalidConfig {
                             op: "grouped_gemm",
-                            message: "OpenBLAS grouped GEMM metadata is inconsistent".into(),
+                            message: "BLAS grouped GEMM metadata is inconsistent".into(),
                         });
                     };
                     *last_size = last_size
                         .checked_add(1)
                         .ok_or_else(|| Error::InvalidConfig {
                             op: "grouped_gemm",
-                            message: "OpenBLAS grouped GEMM group_size overflows i32".into(),
+                            message: "BLAS grouped GEMM group_size overflows i32".into(),
                         })?;
                 }
                 _ => {
@@ -460,7 +460,7 @@ mod openblas_batch {
         }
         let prepared = prepare(batches)?;
         let group_count = dim_to_i32("group_count", prepared.group_count())?;
-        // alpha/beta are per OpenBLAS group, not per job. Keep them in Vecs so
+        // alpha/beta are per BLAS group, not per job. Keep them in Vecs so
         // the C call receives stable contiguous descriptor slices.
         let alpha = vec![alpha; prepared.group_count()];
         let beta = vec![beta; prepared.group_count()];
@@ -505,7 +505,7 @@ mod openblas_batch {
         }
         let prepared = prepare(batches)?;
         let group_count = dim_to_i32("group_count", prepared.group_count())?;
-        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        // See sgemm_batch: scalar and metadata arrays are per BLAS group.
         let alpha = vec![alpha; prepared.group_count()];
         let beta = vec![beta; prepared.group_count()];
         let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
@@ -549,7 +549,7 @@ mod openblas_batch {
         }
         let prepared = prepare(batches)?;
         let group_count = dim_to_i32("group_count", prepared.group_count())?;
-        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        // See sgemm_batch: scalar and metadata arrays are per BLAS group.
         let alpha = vec![alpha; prepared.group_count()];
         let beta = vec![beta; prepared.group_count()];
         let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
@@ -598,7 +598,7 @@ mod openblas_batch {
         }
         let prepared = prepare(batches)?;
         let group_count = dim_to_i32("group_count", prepared.group_count())?;
-        // See sgemm_batch: scalar and metadata arrays are per OpenBLAS group.
+        // See sgemm_batch: scalar and metadata arrays are per BLAS group.
         let alpha = vec![alpha; prepared.group_count()];
         let beta = vec![beta; prepared.group_count()];
         let trans_a: Vec<_> = prepared.groups.iter().map(|group| group.trans_a).collect();
@@ -723,7 +723,7 @@ macro_rules! impl_real_blas_gemm {
                 Ok(())
             }
 
-            #[cfg(feature = "blas-openblas")]
+            #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
             unsafe fn grouped_gemm(
                 alpha: Self,
                 beta: Self,
@@ -732,9 +732,9 @@ macro_rules! impl_real_blas_gemm {
                 if batches.is_empty() {
                     return Ok(true);
                 }
-                if openblas_should_use_gemm_batch(batches) {
+                if provider_should_use_gemm_batch(batches) {
                     // SAFETY: callers validate job pointers, dimensions, and
-                    // disjoint outputs. The heuristic keeps OpenBLAS
+                    // disjoint outputs. The heuristic keeps provider
                     // gemm_batch on the small-job regime measured to win.
                     unsafe { $batch(alpha, beta, batches) }
                 } else {
@@ -893,7 +893,7 @@ macro_rules! impl_complex_blas_gemm {
                 Ok(true)
             }
 
-            #[cfg(feature = "blas-openblas")]
+            #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
             unsafe fn grouped_gemm(
                 alpha: Self,
                 beta: Self,
@@ -902,9 +902,9 @@ macro_rules! impl_complex_blas_gemm {
                 if batches.is_empty() {
                     return Ok(true);
                 }
-                if openblas_should_use_gemm_batch(batches) {
+                if provider_should_use_gemm_batch(batches) {
                     // SAFETY: callers validate job pointers, dimensions, and
-                    // disjoint outputs. The heuristic keeps OpenBLAS
+                    // disjoint outputs. The heuristic keeps provider
                     // gemm_batch on the small-job regime measured to win.
                     unsafe { $batch(alpha, beta, batches) }
                 } else {
@@ -917,15 +917,15 @@ macro_rules! impl_complex_blas_gemm {
     };
 }
 
-impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm, openblas_batch::dgemm_batch);
-impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm, openblas_batch::sgemm_batch);
+impl_real_blas_gemm!(f64, cblas_sys::cblas_dgemm, provider_batch::dgemm_batch);
+impl_real_blas_gemm!(f32, cblas_sys::cblas_sgemm, provider_batch::sgemm_batch);
 impl_complex_blas_gemm!(
     Complex64,
     cblas_sys::cblas_zgemm,
-    openblas_batch::zgemm_batch
+    provider_batch::zgemm_batch
 );
 impl_complex_blas_gemm!(
     Complex32,
     cblas_sys::cblas_cgemm,
-    openblas_batch::cgemm_batch
+    provider_batch::cgemm_batch
 );

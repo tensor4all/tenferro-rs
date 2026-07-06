@@ -3,8 +3,8 @@ use super::{
     try_fuse_dims, GemmAnalysisCache, GemmAnalysisCacheKind,
 };
 
-#[cfg(feature = "blas-openblas")]
-use super::blas_gemm::openblas_should_use_gemm_batch;
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
+use super::blas_gemm::provider_should_use_gemm_batch;
 #[cfg(feature = "cpu-blas")]
 use super::blas_gemm::{BlasGemm, BlasGemmBatch};
 #[cfg(feature = "cpu-blas")]
@@ -416,9 +416,9 @@ fn blas_complex_conj_no_trans_reports_materialization_needed() {
     assert_eq!(c, [Complex64::new(0.0, 0.0); 4]);
 }
 
-#[cfg(feature = "blas-openblas")]
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
 #[test]
-fn openblas_gemm_batch_heuristic_keeps_medium_jobs_on_sequential_path() {
+fn provider_gemm_batch_heuristic_keeps_medium_jobs_on_sequential_path() {
     fn batch(m: usize, n: usize, k: usize) -> BlasGemmBatch<f64> {
         BlasGemmBatch {
             a_ptr: std::ptr::null(),
@@ -436,12 +436,12 @@ fn openblas_gemm_batch_heuristic_keeps_medium_jobs_on_sequential_path() {
         }
     }
 
-    assert!(openblas_should_use_gemm_batch(&[
+    assert!(provider_should_use_gemm_batch(&[
         batch(8, 8, 8),
         batch(8, 8, 8)
     ]));
-    assert!(!openblas_should_use_gemm_batch(&[batch(8, 8, 8)]));
-    assert!(!openblas_should_use_gemm_batch(&[
+    assert!(!provider_should_use_gemm_batch(&[batch(8, 8, 8)]));
+    assert!(!provider_should_use_gemm_batch(&[
         batch(8, 8, 8),
         batch(32, 32, 32)
     ]));
