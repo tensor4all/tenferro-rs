@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use tenferro_ad::{AdContext, AdTransformCacheLimits};
+use tenferro_ad::{AdContext, AdTransformCacheLimits, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
@@ -75,4 +75,57 @@ fn ad_context_transform_cache_limits_stats_and_clear_are_public() {
 
     ad.clear_ad_transform_caches().unwrap();
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+}
+
+#[test]
+fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
+    let ad = AdContext::builder().build().unwrap();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+    let _ = ctx.vjp(&y, &x, &seed).unwrap();
+    assert!(ad.ad_transform_cache_stats().unwrap().entries > 0);
+
+    ad.clear_ad_transform_caches().unwrap();
+    assert_eq!(ctx.cache_stats().unwrap().ad_transforms.entries, 0);
+}
+
+#[test]
+fn ad_transform_cache_entry_limit_evicts_lru_entries() {
+    let ad = AdContext::builder().build().unwrap();
+    ad.set_ad_transform_cache_limits(AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap()))
+        .unwrap();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+
+    let x0 = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let x1 = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+
+    let _ = ctx.vjp(&x0.mul(&x0).unwrap(), &x0, &seed).unwrap();
+    let _ = ctx.vjp(&x1.mul(&x1).unwrap(), &x1, &seed).unwrap();
+
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
 }

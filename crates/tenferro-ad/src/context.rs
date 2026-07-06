@@ -77,6 +77,10 @@ impl AdContext {
         self.extension_rules.clone()
     }
 
+    pub(crate) fn ad_transform_cache(&self) -> Arc<AdTransformCache> {
+        Arc::clone(&self.ad_transform_cache)
+    }
+
     /// Return AD transform cache retention limits.
     ///
     /// # Examples
