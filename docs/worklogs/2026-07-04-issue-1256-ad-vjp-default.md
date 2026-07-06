@@ -19,6 +19,14 @@ inactive, and all three rules return no tangent graph when all outputs are
 inactive. `Qr` now returns only the requested factor tangent and avoids the
 final inactive branch emission.
 
+The final slice added a traced AD transform optimizer, aval-carrying symbolic
+zero instantiation, and regression coverage for zero propagation,
+canonicalization, multi-output pruning, and cotangent accumulation. The
+optimizer runs before materialization on traced JVP outputs and traced generic
+VJP transpose outputs. It does reachable-output DCE plus local algebraic
+canonicalization for AD-heavy identity patterns, leaving backend/layout
+rewrites to the runtime compiler.
+
 ## Context Read
 
 - Issue #1256 and its acceptance criteria around VJP generation, active output
@@ -33,6 +41,10 @@ final inactive branch emission.
   primary transpose fallback in `traced/primal_transpose.rs`.
 - Existing linalg AD rules in `crates/tenferro-linalg/src/ad/rules/mod.rs`,
   including the prior `Eigh` active-output pruning pattern.
+- `crates/tenferro-ad/src/traced/optimizer.rs` for the materialize-pre traced
+  AD graph optimizer added in this work.
+- `crates/tenferro-internal-ops/src/ad/zeros.rs` for symbolic zero
+  instantiation helpers.
 
 ## Decisions
 
@@ -47,13 +59,22 @@ final inactive branch emission.
 - Use the existing `linearize_active_value_keys` analysis as the explicit
   used-output pruning pass for traced AD. Linalg multi-output rules now check
   `ctx.is_value_active_in_linearize` before emitting expensive tangent branches.
-- Keep the QR/Eigh/Eig follow-up at the rule-emission level rather than adding a
-  new whole-graph optimizer pass. The existing active-output metadata is enough
-  to avoid the known dead decomposition branches without changing the broader
-  AD transform contract.
-- Document cache ownership as unchanged: no persistent AD optimizer cache is
-  introduced here. Transformed graphs live with the returned traced tensor and
-  existing compiler/runtime/extension caches keep their current owners.
+- Keep QR/Eigh/Eig multi-output pruning at the rule-emission level. The
+  existing active-output metadata is enough to avoid the known dead
+  decomposition branches before any graph optimizer pass runs.
+- Add a small traced AD graph optimizer for backend-independent cleanup after
+  transform graph construction. It is intentionally stateless and
+  metadata-only: DCE, double-neg/conj cancellation, identity convert/transpose,
+  scalar add-zero, and scalar mul-one. Runtime compiler passes remain
+  responsible for layout, dot, backend, and execution-IR cleanup.
+- Carry zero abstract values at forced-instantiation boundaries with
+  `SymbolicZero { dtype, rank, anchor }`. The tidu API still uses `None` for
+  absent tangent/cotangent flow; tenferro instantiates zeros only when a
+  primitive needs an actual zero input.
+- Do not add a persistent traced AD optimizer cache. The optimizer has no
+  current partial-result cache, uses only per-invocation scratch maps, and is
+  covered by existing cache-owner documentation. The eager Tier-1 AD transform
+  cache remains owned by `EagerRuntime`.
 
 ## Verification
 
@@ -65,6 +86,12 @@ final inactive branch emission.
   `cargo test -p tenferro-linalg --features autodiff "linearize_prunes" -- --nocapture`
   `cargo test -p tenferro-linalg --features autodiff eig_linearize_prunes_unsupported_inactive_eigenvalue_output -- --nocapture`
   `cargo test -p tenferro-linalg --features autodiff one_input_linalg_jvps_prune_when_all_outputs_are_inactive -- --nocapture`
+- AD graph optimizer RED/GREEN tests:
+  `cargo test -p tenferro-ad optimizer_canonicalizes_ad_identity_chains -- --nocapture`
+  `cargo test -p tenferro-ad --test ad_optimizer -- --nocapture`
+- Symbolic zero RED/GREEN tests:
+  `cargo test -p tenferro-internal-ops symbolic_zero_carries_aval_until_instantiated -- --nocapture`
+  `cargo test -p tenferro-internal-ops ad::tests:: -- --nocapture`
 - Primary-transpose fallback coverage after generic VJP became the default:
   `cargo test -p tenferro-ad --test extension_op traced_vjp_ -- --nocapture`
 - Full touched-crate and linalg AD checks:
@@ -84,9 +111,13 @@ final inactive branch emission.
 
 ## Residual Risks
 
-- This is an initial #1256 slice. It makes generic VJP the default and prunes
-  high-impact decomposition linearizers, but it does not add a broad AD
-  algebraic canonicalizer, aval-carrying symbolic zero type, or persistent AD
-  graph optimizer cache.
+- The traced AD graph optimizer is intentionally conservative. It folds only
+  identities that do not need shape reasoning beyond scalar constant facts and
+  local unary provenance. Broader algebraic rewrites should be added with
+  explicit metadata legality checks.
 - The primary transpose fallback remains necessary for extension rules whose
   generic linearized path is incomplete.
+- No persistent traced partial-result AD optimizer cache is introduced because
+  the current pass is stateless and linear in the reachable transform graph.
+  Future cache work must stay under one explicit owner and use structure and
+  metadata keys only.
