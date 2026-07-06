@@ -4,7 +4,7 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::{ShapeGuardContext, ShapeGuardError};
 use crate::ad::support::{is_differentiable_dtype, linear_transpose_input_active};
-use crate::ad::zeros::build_zero_like;
+use crate::ad::zeros::SymbolicZero;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
 use crate::shape_extent::ShapeExtent;
@@ -274,7 +274,7 @@ pub fn linearize_concatenate(
             None => {
                 let anchor = ValueRef::External(primal_in[input_index].clone());
                 let meta = ctx.metadata_of(&anchor)?;
-                let zero = build_zero_like(builder, meta.dtype, anchor, meta.rank());
+                let zero = SymbolicZero::from_meta(anchor, meta).instantiate(builder);
                 inputs.push(ValueRef::Local(zero));
                 active_mask.push(false);
             }
