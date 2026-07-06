@@ -168,17 +168,33 @@ rules carry dtype, rank, and an anchor value as a `SymbolicZero` and instantiate
 it as a dtype-aware scalar zero plus shape-restoring broadcast when needed. Do
 not synthesize zeros through analytic operations or tensor buffers.
 
-tenferro's eager runtime owns a bounded Tier-1 AD transform cache keyed by the
-recorded graph structural fingerprint and requested output slots. This cache
-reuses linearization for repeated transforms on the same eager tape node. It is
-not a whole-program backward cache and it does not generalize across
-structurally similar but distinct tapes.
+`AdContext` is the explicit owner for shared AD transform memoization. It owns
+the extension AD rules and a bounded AD transform cache used by
+context-driven traced transforms. Eager runtimes created with
+`EagerRuntime::with_*_and_ad_context` share that same cache handle; eager
+runtimes created directly own a private cache. Direct `TracedTensorAdExt`
+methods remain stateless.
 
-The traced AD graph optimizer is currently stateless and has no persistent
-partial-result cache. Future partial AD optimizer caching must stay under one
-explicit long-lived owner for the relevant execution surface, expose bounded
-capacity/clear/stats controls, use structure and metadata keys, and never retain
-tensor buffers. Pass-local memo tables are per-invocation scratch state.
+The AD transform cache stores graph artifacts only: eager `RecordedGraph`
+linearization, traced JVP linearized/optimized graphs, and traced VJP
+linearized plus optimized transposed graphs. The default retention policy is
+bounded by both entry count and logical retained bytes. Owners expose limits,
+stats, and clear APIs through `AdContext` and `EagerRuntime`; retained-byte
+stats are logical estimates and do not report process RSS.
+
+Cache keys must be deterministic, structural, and metadata-only. Eager keys
+cover the recorded graph fingerprint and requested output slots. Traced keys
+cover root graph structure, output key, `wrt` input key, and traced input
+aliases. Rules whose emitted graph depends on additional metadata must make that
+metadata part of the cache key or bypass caching for the affected transform.
+Cached entries must not retain tensor buffers, backend allocations, or concrete
+execution outputs.
+
+The AD graph optimizer remains per-invocation apart from storing its final graph
+inside an owner-scoped transform-cache entry. Reachability, rewrite facts, and
+multi-output live masks are scratch data. Partial output pruning is legal only
+when the operation family explicitly opts in, currently through
+`ExtensionOp::prune_outputs`.
 
 ## Complex AD convention
 

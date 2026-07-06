@@ -7,6 +7,8 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
 
+use crate::transform_cache::CachedOptimizedLinearGraph;
+
 pub(super) struct OptimizedLinearGraph {
     graph: Graph<StdTensorOp>,
     tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
@@ -20,18 +22,11 @@ impl OptimizedLinearGraph {
         optimize_graph(linear.into_graph(), tangent_inputs, tangent_outputs)
     }
 
-    pub(super) fn as_graph(&self) -> &Graph<StdTensorOp> {
-        &self.graph
+    pub(super) fn into_cached(self) -> CachedOptimizedLinearGraph {
+        CachedOptimizedLinearGraph::new(self.graph, self.tangent_inputs, self.tangent_outputs)
     }
 
-    pub(super) fn into_graph(self) -> Graph<StdTensorOp> {
-        self.graph
-    }
-
-    pub(super) fn tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
-        &self.tangent_inputs
-    }
-
+    #[cfg(test)]
     pub(super) fn tangent_outputs(&self) -> &[Option<LocalValueId>] {
         &self.tangent_outputs
     }
@@ -142,6 +137,7 @@ fn prune_unreachable_graph(
             }
         }
     }
+    let live_output_masks = live_output_masks(&graph, &needed_values, &needed_ops);
 
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     for parent in graph.parents() {
@@ -166,10 +162,19 @@ fn prune_unreachable_graph(
             .iter()
             .map(|input| remap_value(input, &remap))
             .collect();
-        let outputs =
-            builder.add_operation(op_node.operation.clone(), inputs, op_node.role.clone());
-        for (&old_output, &new_output) in op_node.outputs.iter().zip(outputs.iter()) {
-            remap[old_output] = Some(ValueRef::Local(new_output));
+        if let Some((operation, kept_slots)) =
+            pruned_operation_outputs(&op_node.operation, &live_output_masks[op_id])
+        {
+            let outputs = builder.add_operation(operation, inputs, op_node.role.clone());
+            for (new_slot, old_slot) in kept_slots.into_iter().enumerate() {
+                remap[op_node.outputs[old_slot]] = Some(ValueRef::Local(outputs[new_slot]));
+            }
+        } else {
+            let outputs =
+                builder.add_operation(op_node.operation.clone(), inputs, op_node.role.clone());
+            for (&old_output, &new_output) in op_node.outputs.iter().zip(outputs.iter()) {
+                remap[old_output] = Some(ValueRef::Local(new_output));
+            }
         }
     }
 
@@ -190,6 +195,56 @@ fn prune_unreachable_graph(
         graph: builder.build(),
         tangent_inputs,
         tangent_outputs,
+    }
+}
+
+fn live_output_masks(
+    graph: &Graph<StdTensorOp>,
+    needed_values: &HashSet<LocalValueId>,
+    needed_ops: &HashSet<usize>,
+) -> Vec<Vec<bool>> {
+    let mut masks: Vec<Vec<bool>> = graph
+        .operations()
+        .iter()
+        .map(|op| vec![false; op.outputs.len()])
+        .collect();
+    for &value_id in needed_values {
+        let Some((op_id, output_slot)) = graph.values()[value_id].producer else {
+            continue;
+        };
+        if needed_ops.contains(&op_id) {
+            masks[op_id][output_slot] = true;
+        }
+    }
+    masks
+}
+
+fn pruned_operation_outputs(
+    operation: &StdTensorOp,
+    live_outputs: &[bool],
+) -> Option<(StdTensorOp, Vec<usize>)> {
+    let kept_slots: Vec<_> = live_outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, live)| live.then_some(slot))
+        .collect();
+    if kept_slots.is_empty() || kept_slots.len() == live_outputs.len() {
+        return None;
+    }
+
+    let pruned = prune_operation_outputs(operation, live_outputs)?;
+    match &pruned {
+        StdTensorOp::Extension(op) if op.output_count() == kept_slots.len() => {
+            Some((pruned, kept_slots))
+        }
+        _ => None,
+    }
+}
+
+fn prune_operation_outputs(operation: &StdTensorOp, live_outputs: &[bool]) -> Option<StdTensorOp> {
+    match operation {
+        StdTensorOp::Extension(op) => op.prune_outputs(live_outputs).map(StdTensorOp::Extension),
+        _ => None,
     }
 }
 
@@ -346,7 +401,73 @@ fn input_can_alias(role: &OperationRole, input_index: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use super::*;
+    use tenferro_ops::ext_op::ExtensionOp;
+    use tenferro_ops::SymDim;
+
+    #[derive(Clone, Debug)]
+    struct PrunableTestOp {
+        kept_outputs: Vec<usize>,
+    }
+
+    impl ExtensionOp for PrunableTestOp {
+        fn family_id(&self) -> &'static str {
+            "tenferro-tests.prunable-output.v1"
+        }
+
+        fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
+            hasher.write_usize(self.kept_outputs.len());
+            for output in &self.kept_outputs {
+                hasher.write_usize(*output);
+            }
+        }
+
+        fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|that| that.kept_outputs == self.kept_outputs)
+        }
+
+        fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+            Arc::new(self.clone())
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn input_count(&self) -> usize {
+            1
+        }
+
+        fn output_count(&self) -> usize {
+            self.kept_outputs.len()
+        }
+
+        fn infer_output_meta(
+            &self,
+            input_dtypes: &[DType],
+            input_shapes: &[&[SymDim]],
+        ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+            Ok(self
+                .kept_outputs
+                .iter()
+                .map(|_| (input_dtypes[0], input_shapes[0].to_vec()))
+                .collect())
+        }
+
+        fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
+            let kept_outputs = live_outputs
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, live)| live.then_some(self.kept_outputs[slot]))
+                .collect::<Vec<_>>();
+            Some(Arc::new(Self { kept_outputs }))
+        }
+    }
 
     fn scalar_constant(dtype: DType, value: f64) -> StdTensorOp {
         match dtype {
@@ -434,5 +555,40 @@ mod tests {
             operations.len()
         );
         assert_eq!(optimized.tangent_outputs(), &[Some(0)]);
+    }
+
+    #[test]
+    fn optimizer_prunes_unused_multi_output_slots_with_extension_hook() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let x = builder.add_input(TensorInputKey::User { id: 7 });
+        let outputs = builder.add_operation(
+            StdTensorOp::Extension(Arc::new(PrunableTestOp {
+                kept_outputs: vec![0, 1, 2],
+            })),
+            vec![ValueRef::Local(x)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        );
+        builder.set_outputs(vec![outputs[1]]);
+
+        let optimized = optimize_graph(
+            builder.build(),
+            vec![(TensorInputKey::User { id: 7 }, x)],
+            vec![Some(outputs[1])],
+        );
+
+        let operations = optimized.graph.operations();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].outputs.len(), 1);
+        let StdTensorOp::Extension(op) = &operations[0].operation else {
+            panic!("expected pruned extension op");
+        };
+        let pruned = op.as_any().downcast_ref::<PrunableTestOp>().unwrap();
+        assert_eq!(pruned.kept_outputs, vec![1]);
+        assert_eq!(
+            optimized.tangent_outputs(),
+            &[Some(operations[0].outputs[0])]
+        );
     }
 }

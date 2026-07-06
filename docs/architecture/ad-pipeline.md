@@ -97,7 +97,8 @@ is deliberately metadata-only: it rewrites graph topology and static operation
 payloads, and it never inspects or retains tensor buffers. The current pass set
 is:
 
-- reachable-output DCE on the transform graph;
+- reachable-output DCE on the transform graph, including opt-in pruning of
+  unused multi-output slots through `ExtensionOp::prune_outputs`;
 - algebraic identity canonicalization for AD-heavy patterns such as
   `neg(neg(x))`, `conj(conj(x))`, identity `convert`, identity `transpose`,
   scalar `add(x, 0)`, and scalar `mul(x, 1)`;
@@ -144,31 +145,32 @@ transforms return ordinary eager tensors rather than writing into gradient
 slots, so their derivative computations can be traced by later eager
 transforms.
 
-Traced AD transform outputs are not cached in a new persistent AD graph cache.
-The AD graph optimizer is currently stateless and uses only per-invocation local
-maps for rewrite facts and reachability. The caller-owned traced result keeps
-the transformed graph and any required extra roots alive, while compile-time and
-runtime caches remain owned by the existing compiler, executor, and extension
-runtime contexts.
+`AdContext` owns the shared AD transform graph cache for context-driven traced
+AD and eager runtimes created with `EagerRuntime::with_*_and_ad_context`.
+Direct `TracedTensorAdExt` methods remain stateless; eager runtimes created
+without an `AdContext` allocate a private AD transform cache. The cache stores
+graph transform artifacts only:
 
-Eager runtimes own a bounded Tier-1 AD transform cache for `RecordedGraph`
-linearization, keyed by recorded graph structural fingerprint plus requested
-output slots. That cache is a same-tape per-node memoization layer; it has one
-top-level owner (`EagerRuntime`), is cleared by `EagerRuntime::clear_caches()`,
-and reports retained-entry and retained-byte estimates through
-`EagerRuntime::cache_stats()`.
+- eager `RecordedGraph` linearization;
+- traced JVP linearized/optimized graphs;
+- traced VJP linearized graphs plus optimized transposed graphs.
 
-No partial-result AD optimizer cache exists today. If traced or eager AD adds
-one, it must stay under a single long-lived top-level owner for that execution
-surface rather than under individual passes. Candidate entry kinds are local
-rewrite summaries, subgraph DCE summaries, multi-output pruning decisions,
-symbolic-zero instantiation summaries, residual-use summaries, and
-transpose/accumulation normalization summaries. Keys must be structural and
-metadata-only: resolved output keys, `wrt` inputs, active/usage masks, extension
-rule-set identity or fingerprint, symbolic shape/dtype metadata required for
-legality, and AD optimizer configuration version. Entries must not retain tensor
-buffers and must be bounded with explicit clear/configure/stats APIs. Per-pass
-memo tables remain ephemeral per optimizer invocation.
+The default limit is 128 entries and 64 MiB of logical retained bytes. Users can
+query, configure, and clear it through
+`AdContext::{ad_transform_cache_limits,set_ad_transform_cache_limits,ad_transform_cache_stats,clear_ad_transform_caches,cache_stats,clear_caches}`
+and the matching eager runtime aggregate APIs. Retained-byte stats are logical
+payload estimates, not process RSS, and cached entries must not retain tensor
+buffers or backend allocations.
+
+Cache keys are structural and metadata-only. Eager keys cover the recorded graph
+fingerprint and requested output slots. Traced keys cover the root graph
+structure, output key, `wrt` input key, and traced input-alias fingerprint. If a
+future AD rule starts depending on metadata not represented in those graph keys,
+that rule must extend the key or bypass caching for the affected transform.
+
+The AD graph optimizer itself still uses only per-invocation scratch maps for
+rewrite facts, reachability, and live-output masks. No pass-local persistent
+memo table exists.
 
 Four crates, strictly layered:
 

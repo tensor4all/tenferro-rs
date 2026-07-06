@@ -33,7 +33,6 @@ use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recor
 use tidu::{ADRuleError, ADRuleKind, LinearizedGraph};
 
 use self::backward::TenferroBackwardCallbacks;
-use self::cache::{EagerAdTransformCache, EagerAdTransformCacheKey};
 use self::functional::{functional_jvp, functional_vjp_optional};
 use crate::eager_backend::EagerBackend;
 #[cfg(test)]
@@ -49,11 +48,11 @@ use crate::metadata::{
     tensor_meta_from_tensor, GlobalMetadataScope,
 };
 use crate::traced::next_input_key;
+use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits, EagerAdTransformCacheKey};
 
 use crate::AdContext;
 
 mod backward;
-mod cache;
 mod functional;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
@@ -257,7 +256,7 @@ pub struct EagerRuntime {
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
-    ad_transform_cache: Mutex<EagerAdTransformCache>,
+    ad_transform_cache: Arc<AdTransformCache>,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -305,12 +304,12 @@ impl fmt::Debug for EagerRuntime {
                 debug.field("value_ptr_records_len", &"<locked>");
             }
         }
-        match self.ad_transform_cache.try_lock() {
-            Ok(cache) => {
-                debug.field("ad_transform_cache_stats", &cache.stats());
+        match self.ad_transform_cache.stats() {
+            Ok(stats) => {
+                debug.field("ad_transform_cache_stats", &stats);
             }
-            Err(_) => {
-                debug.field("ad_transform_cache_stats", &"<locked>");
+            Err(err) => {
+                debug.field("ad_transform_cache_stats", &format_args!("{err}"));
             }
         }
         debug.finish_non_exhaustive()
@@ -354,12 +353,6 @@ impl EagerRuntime {
             .map_err(|_| Error::Internal("eager value pointer registry lock poisoned".to_string()))
     }
 
-    pub(crate) fn lock_ad_transform_cache(&self) -> Result<MutexGuard<'_, EagerAdTransformCache>> {
-        self.ad_transform_cache
-            .lock()
-            .map_err(|_| Error::Internal("eager AD transform cache lock poisoned".to_string()))
-    }
-
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_rules(backend, None)
     }
@@ -367,6 +360,18 @@ impl EagerRuntime {
     fn from_backend_with_extension_rules(
         backend: EagerBackend,
         extension_rules: Option<ExtensionRuleSet>,
+    ) -> Self {
+        Self::from_backend_with_extension_rules_and_cache(
+            backend,
+            extension_rules,
+            Arc::new(AdTransformCache::new()),
+        )
+    }
+
+    fn from_backend_with_extension_rules_and_cache(
+        backend: EagerBackend,
+        extension_rules: Option<ExtensionRuleSet>,
+        ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
         Self {
             id: ContextId::fresh(),
@@ -376,7 +381,7 @@ impl EagerRuntime {
             grad_slots: Mutex::new(HashMap::new()),
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
-            ad_transform_cache: Mutex::new(EagerAdTransformCache::new()),
+            ad_transform_cache,
         }
     }
 
@@ -422,9 +427,10 @@ impl EagerRuntime {
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
     pub fn with_cpu_backend_and_ad_context(backend: CpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules(
+        Arc::new(Self::from_backend_with_extension_rules_and_cache(
             EagerBackend::cpu(backend),
             Some(ad.extension_rule_set()),
+            ad.ad_transform_cache(),
         ))
     }
 
@@ -457,9 +463,10 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "cuda")]
     pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules(
+        Arc::new(Self::from_backend_with_extension_rules_and_cache(
             EagerBackend::cuda(backend),
             Some(ad.extension_rule_set()),
+            ad.ad_transform_cache(),
         ))
     }
 
@@ -492,9 +499,10 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "webgpu")]
     pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules(
+        Arc::new(Self::from_backend_with_extension_rules_and_cache(
             EagerBackend::webgpu(backend),
             Some(ad.extension_rule_set()),
+            ad.ad_transform_cache(),
         ))
     }
 
@@ -592,7 +600,7 @@ impl EagerRuntime {
     /// ```
     pub fn clear_caches(&self) -> Result<()> {
         self.clear_extension_caches()?;
-        self.lock_ad_transform_cache()?.clear();
+        self.clear_ad_transform_caches()?;
         Ok(())
     }
 
@@ -613,8 +621,60 @@ impl EagerRuntime {
     pub fn cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
         Ok(EagerRuntimeCacheStats {
             extensions: self.lock_extension_executor()?.cache_stats(),
-            ad_transforms: self.lock_ad_transform_cache()?.stats(),
+            ad_transforms: self.ad_transform_cache.stats()?,
         })
+    }
+
+    /// Return the AD transform cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// assert!(ctx.ad_transform_cache_limits()?.max_entries().get() > 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn ad_transform_cache_limits(&self) -> Result<AdTransformCacheLimits> {
+        self.ad_transform_cache.limits()
+    }
+
+    /// Replace AD transform cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_ad::{AdTransformCacheLimits, EagerRuntime};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let limits = AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap());
+    /// ctx.set_ad_transform_cache_limits(limits)?;
+    /// assert_eq!(ctx.ad_transform_cache_limits()?, limits);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn set_ad_transform_cache_limits(&self, limits: AdTransformCacheLimits) -> Result<()> {
+        self.ad_transform_cache.set_limits(limits)
+    }
+
+    /// Clear AD transform cache entries visible through this eager runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// ctx.clear_ad_transform_caches()?;
+    /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn clear_ad_transform_caches(&self) -> Result<()> {
+        self.ad_transform_cache.clear()
     }
 
     /// Return the extension cache retention limits.
@@ -916,17 +976,17 @@ impl EagerRuntime {
     ) -> tidu::ADRuleResult<Arc<LinearizedGraph<StdTensorOp>>> {
         let key = EagerAdTransformCacheKey::new(graph, output_slots);
         if let Some(linear) = self
-            .lock_ad_transform_cache()
+            .ad_transform_cache
+            .get_eager_linearized(&key)
             .map_err(eager_ad_transform_cache_error)?
-            .get(&key)
         {
             return Ok(linear);
         }
 
         let linear = Arc::new(graph.linearize(output_slots, ctx)?);
-        self.lock_ad_transform_cache()
-            .map_err(eager_ad_transform_cache_error)?
-            .put(key, Arc::clone(&linear));
+        self.ad_transform_cache
+            .put_eager_linearized(key, Arc::clone(&linear))
+            .map_err(eager_ad_transform_cache_error)?;
         Ok(linear)
     }
 

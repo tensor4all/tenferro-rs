@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -29,6 +29,10 @@ mod primal_transpose;
 
 use optimizer::OptimizedLinearGraph;
 use primal_transpose::{try_primal_transpose, PrimalTransposeGraph};
+
+use crate::transform_cache::{
+    AdTransformCache, CachedTracedVjpTransform, TracedAdTransformCacheKey, TracedAdTransformKind,
+};
 
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -91,29 +95,38 @@ fn linearize_active_value_keys(
     Arc::new(active)
 }
 
-pub(crate) fn grad_with_rules(
+pub(crate) fn grad_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
-    grad_with_optional_rules(output, wrt, Some(extension_rules))
+    grad_with_optional_rules(output, wrt, Some(extension_rules), ad_transform_cache)
 }
 
-pub(crate) fn jvp_with_rules(
+pub(crate) fn jvp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    jvp_optional_impl(output, wrt, tangent, Some(extension_rules))?
-        .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
+    jvp_optional_impl(
+        output,
+        wrt,
+        tangent,
+        Some(extension_rules),
+        ad_transform_cache,
+    )?
+    .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
 }
 
-pub(crate) fn grad_optional_with_rules(
+pub(crate) fn grad_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     if output.rank != 0 {
         return Err(Error::NonScalarGrad {
@@ -123,42 +136,73 @@ pub(crate) fn grad_optional_with_rules(
 
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-    vjp_optional_impl(output, wrt, &seed, Some(extension_rules), "grad")
+    vjp_optional_impl(
+        output,
+        wrt,
+        &seed,
+        Some(extension_rules),
+        "grad",
+        ad_transform_cache,
+    )
 }
 
-pub(crate) fn jvp_optional_with_rules(
+pub(crate) fn jvp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
-    jvp_optional_impl(output, wrt, tangent, Some(extension_rules))
+    jvp_optional_impl(
+        output,
+        wrt,
+        tangent,
+        Some(extension_rules),
+        ad_transform_cache,
+    )
 }
 
-pub(crate) fn vjp_with_rules(
+pub(crate) fn vjp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules), "vjp")?
-        .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
+    vjp_optional_impl(
+        output,
+        wrt,
+        cotangent,
+        Some(extension_rules),
+        "vjp",
+        ad_transform_cache,
+    )?
+    .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
 }
 
-pub(crate) fn vjp_optional_with_rules(
+pub(crate) fn vjp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
-    vjp_optional_impl(output, wrt, cotangent, Some(extension_rules), "vjp")
+    vjp_optional_impl(
+        output,
+        wrt,
+        cotangent,
+        Some(extension_rules),
+        "vjp",
+        ad_transform_cache,
+    )
 }
 
 fn grad_with_optional_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     if output.rank != 0 {
         return Err(Error::NonScalarGrad {
@@ -169,8 +213,15 @@ fn grad_with_optional_rules(
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(output, wrt, &seed, extension_rules, "grad")?
-        .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
+    vjp_optional_impl(
+        output,
+        wrt,
+        &seed,
+        extension_rules,
+        "grad",
+        ad_transform_cache,
+    )?
+    .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
 }
 
 /// Automatic differentiation helpers for [`TracedTensor`].
@@ -358,7 +409,7 @@ pub trait TracedTensorAdExt {
 
 impl TracedTensorAdExt for TracedTensor {
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
-        grad_with_optional_rules(self, wrt, None)
+        grad_with_optional_rules(self, wrt, None, None)
     }
 
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
@@ -370,7 +421,7 @@ impl TracedTensorAdExt for TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![])?;
         let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-        vjp_optional_impl(self, wrt, &seed, None, "grad")
+        vjp_optional_impl(self, wrt, &seed, None, "grad", None)
     }
 
     fn checkpoint<B: TensorBackend>(
@@ -400,7 +451,7 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        jvp_optional_impl(self, wrt, tangent, None)
+        jvp_optional_impl(self, wrt, tangent, None, None)
     }
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
@@ -415,7 +466,7 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        vjp_optional_impl(self, wrt, cotangent, None, "vjp")
+        vjp_optional_impl(self, wrt, cotangent, None, "vjp", None)
     }
 }
 
@@ -424,6 +475,7 @@ fn jvp_optional_impl(
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
     let output_key = output.graph().values()[output.val].key.clone();
@@ -441,17 +493,49 @@ fn jvp_optional_impl(
     let view = resolve(roots);
     let active_values =
         linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
-    let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
-    let linear = linearize(
-        &view,
-        std::slice::from_ref(&output_key),
-        std::slice::from_ref(&wrt_input_key),
-        next_pass_id(),
-        &mut ad_ctx,
-        &aliases,
-    )
-    .map_err(|err| ad_rule_error("jvp", err))?;
-    let linear = OptimizedLinearGraph::from_tidu(linear);
+    let cache_key = ad_transform_cache.map(|_| {
+        TracedAdTransformCacheKey::new(
+            TracedAdTransformKind::Jvp,
+            &view.roots,
+            &output_key,
+            &wrt_input_key,
+            &aliases,
+        )
+    });
+    let linear = match (ad_transform_cache, cache_key) {
+        (Some(cache), Some(key)) => {
+            if let Some(linear) = cache.get_traced_linearized(&key)? {
+                linear
+            } else {
+                let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+                let linear = linearize(
+                    &view,
+                    std::slice::from_ref(&output_key),
+                    std::slice::from_ref(&wrt_input_key),
+                    next_pass_id(),
+                    &mut ad_ctx,
+                    &aliases,
+                )
+                .map_err(|err| ad_rule_error("jvp", err))?;
+                let linear = Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached());
+                cache.put_traced_linearized(key, Arc::clone(&linear))?;
+                linear
+            }
+        }
+        _ => {
+            let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+            let linear = linearize(
+                &view,
+                std::slice::from_ref(&output_key),
+                std::slice::from_ref(&wrt_input_key),
+                next_pass_id(),
+                &mut ad_ctx,
+                &aliases,
+            )
+            .map_err(|err| ad_rule_error("jvp", err))?;
+            Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached())
+        }
+    };
     let Some(tangent_output) = linear.tangent_outputs()[0] else {
         return Ok(None);
     };
@@ -485,7 +569,7 @@ fn jvp_optional_impl(
     Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: output.rank,
         dtype: output.dtype,
-        graph: Arc::new(linear.into_graph()),
+        graph: Arc::clone(linear.graph()),
         val: tangent_output,
         data: None,
         shape_hint: tensor_shape_hint(output),
@@ -505,12 +589,11 @@ fn jvp_optional_impl(
 
 enum VjpTransposeGraph {
     Primal(PrimalTransposeGraph),
-    Linear(OptimizedLinearGraph),
+    Linear(Arc<CachedTracedVjpTransform>),
 }
 
 struct ActiveLinearVjp {
-    linear: tidu::LinearizedGraph<StdTensorOp>,
-    transposed: OptimizedLinearGraph,
+    transposed: Arc<CachedTracedVjpTransform>,
     metadata_scope: GlobalMetadataScope,
 }
 
@@ -518,30 +601,80 @@ impl VjpTransposeGraph {
     fn as_graph(&self) -> &computegraph::graph::Graph<StdTensorOp> {
         match self {
             Self::Primal(graph) => graph.as_graph(),
-            Self::Linear(graph) => graph.as_graph(),
+            Self::Linear(graph) => graph.transposed().as_graph(),
         }
     }
 
     fn tangent_inputs(&self) -> &[(TensorInputKey, computegraph::LocalValueId)] {
         match self {
             Self::Primal(graph) => graph.tangent_inputs(),
-            Self::Linear(graph) => graph.tangent_inputs(),
+            Self::Linear(graph) => graph.transposed().tangent_inputs(),
         }
     }
 
     fn tangent_outputs(&self) -> &[Option<computegraph::LocalValueId>] {
         match self {
             Self::Primal(graph) => graph.tangent_outputs(),
-            Self::Linear(graph) => graph.tangent_outputs(),
+            Self::Linear(graph) => graph.transposed().tangent_outputs(),
         }
     }
 
-    fn into_graph(self) -> computegraph::graph::Graph<StdTensorOp> {
+    fn into_graph_arc(self) -> Arc<computegraph::graph::Graph<StdTensorOp>> {
         match self {
-            Self::Primal(graph) => graph.into_graph(),
-            Self::Linear(graph) => graph.into_graph(),
+            Self::Primal(graph) => Arc::new(graph.into_graph()),
+            Self::Linear(graph) => Arc::clone(graph.transposed().graph()),
         }
     }
+}
+
+fn compute_linear_vjp_transform(
+    view: &ResolvedView<StdTensorOp>,
+    output_key: &ValueKey<StdTensorOp>,
+    wrt_input_key: &TensorInputKey,
+    aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
+    extension_rules: Option<&ExtensionRuleSet>,
+    active_values: Arc<HashSet<ValueKey<StdTensorOp>>>,
+    wrt: &TracedTensor,
+) -> Result<tidu::ADRuleResult<Option<ActiveLinearVjp>>> {
+    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+    let linear = match linearize(
+        view,
+        std::slice::from_ref(output_key),
+        std::slice::from_ref(wrt_input_key),
+        next_pass_id(),
+        &mut linear_ad_ctx,
+        aliases,
+    ) {
+        Ok(linear) => linear,
+        Err(err) => return Ok(Err(err)),
+    };
+    if linear.tangent_outputs()[0].is_none() {
+        return Ok(Ok(None));
+    }
+
+    let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
+    let linear_metadata_scope = register_scoped_graph_metadata(
+        linear.as_graph(),
+        vec![(
+            ValueKey::Input(linear_seed_key),
+            registered_meta(&wrt.graph().values()[wrt.val].key)?,
+        )],
+    )?;
+    linear_ad_ctx.refresh_global_metadata();
+    let transposed = match linear_transpose(&linear, &mut linear_ad_ctx) {
+        Ok(transposed) => OptimizedLinearGraph::from_tidu(transposed).into_cached(),
+        Err(err) => return Ok(Err(err)),
+    };
+    let linear_tangent_inputs = linear.tangent_inputs().to_vec();
+    let linear_graph = Arc::new(linear.into_graph());
+    Ok(Ok(Some(ActiveLinearVjp {
+        transposed: Arc::new(CachedTracedVjpTransform::new(
+            linear_graph,
+            linear_tangent_inputs,
+            transposed,
+        )),
+        metadata_scope: linear_metadata_scope,
+    })))
 }
 
 fn vjp_optional_impl(
@@ -550,6 +683,7 @@ fn vjp_optional_impl(
     cotangent: &TracedTensor,
     extension_rules: Option<&ExtensionRuleSet>,
     transform: &'static str,
+    ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
     let output_key = output.graph().values()[output.val].key.clone();
@@ -568,40 +702,58 @@ fn vjp_optional_impl(
 
     let active_values =
         linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
-    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values));
-    let linear_attempt = match linearize(
-        &view,
-        std::slice::from_ref(&output_key),
-        std::slice::from_ref(&wrt_input_key),
-        next_pass_id(),
-        &mut linear_ad_ctx,
-        &aliases,
-    ) {
-        Ok(linear) => {
-            if linear.tangent_outputs()[0].is_none() {
-                Ok(None)
-            } else {
-                let linear_seed_key =
-                    linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
+    let cache_key = ad_transform_cache.map(|_| {
+        TracedAdTransformCacheKey::new(
+            TracedAdTransformKind::Vjp,
+            &view.roots,
+            &output_key,
+            &wrt_input_key,
+            &aliases,
+        )
+    });
+    let linear_attempt = match (ad_transform_cache, cache_key) {
+        (Some(cache), Some(key)) => {
+            if let Some(cached) = cache.get_traced_vjp(&key)? {
+                let linear_seed_key = linear_input_key(
+                    cached.linear_graph().as_ref(),
+                    cached.linear_tangent_inputs()[0].1,
+                )?;
                 let linear_metadata_scope = register_scoped_graph_metadata(
-                    linear.as_graph(),
+                    cached.linear_graph().as_ref(),
                     vec![(
                         ValueKey::Input(linear_seed_key),
                         registered_meta(&wrt.graph().values()[wrt.val].key)?,
                     )],
                 )?;
-                linear_ad_ctx.refresh_global_metadata();
-                linear_transpose(&linear, &mut linear_ad_ctx).map(|transposed| {
-                    let transposed = OptimizedLinearGraph::from_tidu(transposed);
-                    Some(ActiveLinearVjp {
-                        linear,
-                        transposed,
-                        metadata_scope: linear_metadata_scope,
-                    })
-                })
+                Ok(Some(ActiveLinearVjp {
+                    transposed: cached,
+                    metadata_scope: linear_metadata_scope,
+                }))
+            } else {
+                let computed = compute_linear_vjp_transform(
+                    &view,
+                    &output_key,
+                    &wrt_input_key,
+                    &aliases,
+                    extension_rules,
+                    active_values,
+                    wrt,
+                )?;
+                if let Ok(Some(active)) = &computed {
+                    cache.put_traced_vjp(key, Arc::clone(&active.transposed))?;
+                }
+                computed
             }
         }
-        Err(err) => Err(err),
+        _ => compute_linear_vjp_transform(
+            &view,
+            &output_key,
+            &wrt_input_key,
+            &aliases,
+            extension_rules,
+            active_values,
+            wrt,
+        )?,
     };
 
     let (transposed, linear_metadata_scope, linear_graph) = match linear_attempt {
@@ -609,7 +761,7 @@ fn vjp_optional_impl(
         Ok(Some(active)) => (
             VjpTransposeGraph::Linear(active.transposed),
             Some(active.metadata_scope),
-            Some(Arc::new(active.linear.into_graph())),
+            None,
         ),
         Err(linear_err) => {
             let mut primal_ad_ctx = shape_guard_context(extension_rules, None);
@@ -667,13 +819,16 @@ fn vjp_optional_impl(
     if let Some(linear_graph) = linear_graph {
         extra_roots.push(linear_graph);
     }
+    if let VjpTransposeGraph::Linear(cached) = &transposed {
+        extra_roots.push(Arc::clone(cached.linear_graph()));
+    }
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(tensor_extra_roots(output));
 
     Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
         dtype: wrt.dtype,
-        graph: Arc::new(transposed.into_graph()),
+        graph: transposed.into_graph_arc(),
         val: cotangent_output,
         data: None,
         shape_hint: tensor_shape_hint(wrt),

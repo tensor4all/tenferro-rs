@@ -1,11 +1,35 @@
 //! Explicit ownership for automatic-differentiation rule sets.
 
+use std::sync::Arc;
+
 use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
-use tenferro_runtime::{Result, TracedTensor};
+use tenferro_runtime::{CacheStats, Result, TracedTensor};
+
+use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
+
+/// Stats for caches owned by an [`AdContext`].
+///
+/// `retained_bytes` fields are logical payload estimates, not process RSS.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::AdContext;
+///
+/// let ad = AdContext::builder().build().unwrap();
+/// assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdContextCacheStats {
+    /// AD transform graph memoization cache.
+    pub ad_transforms: CacheStats,
+}
 
 /// Explicit automatic-differentiation context.
 ///
 /// `AdContext` owns the extension AD rules used by traced AD transforms.
+/// It also owns the AD transform cache shared by context-driven traced AD and
+/// eager runtimes created from this context.
 ///
 /// # Examples
 ///
@@ -18,6 +42,7 @@ use tenferro_runtime::{Result, TracedTensor};
 #[derive(Clone, Debug)]
 pub struct AdContext {
     extension_rules: ExtensionRuleSet,
+    ad_transform_cache: Arc<AdTransformCache>,
 }
 
 impl AdContext {
@@ -52,6 +77,101 @@ impl AdContext {
         self.extension_rules.clone()
     }
 
+    pub(crate) fn ad_transform_cache(&self) -> Arc<AdTransformCache> {
+        Arc::clone(&self.ad_transform_cache)
+    }
+
+    /// Return AD transform cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert!(ad.ad_transform_cache_limits().unwrap().max_entries().get() > 0);
+    /// ```
+    pub fn ad_transform_cache_limits(&self) -> Result<AdTransformCacheLimits> {
+        self.ad_transform_cache.limits()
+    }
+
+    /// Replace AD transform cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_ad::{AdContext, AdTransformCacheLimits};
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let limits = AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap());
+    /// ad.set_ad_transform_cache_limits(limits).unwrap();
+    /// assert_eq!(ad.ad_transform_cache_limits().unwrap(), limits);
+    /// ```
+    pub fn set_ad_transform_cache_limits(&self, limits: AdTransformCacheLimits) -> Result<()> {
+        self.ad_transform_cache.set_limits(limits)
+    }
+
+    /// Clear AD transform cache entries owned by this context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// ad.clear_ad_transform_caches().unwrap();
+    /// assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+    /// ```
+    pub fn clear_ad_transform_caches(&self) -> Result<()> {
+        self.ad_transform_cache.clear()
+    }
+
+    /// Return AD transform cache-entry and retained-byte stats.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+    /// ```
+    pub fn ad_transform_cache_stats(&self) -> Result<CacheStats> {
+        self.ad_transform_cache.stats()
+    }
+
+    /// Clear every cache owned by this AD context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// ad.clear_caches().unwrap();
+    /// assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 0);
+    /// ```
+    pub fn clear_caches(&self) -> Result<()> {
+        self.clear_ad_transform_caches()
+    }
+
+    /// Return aggregate cache-entry and retained-byte stats for this AD context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert_eq!(ad.cache_stats().unwrap().ad_transforms.retained_bytes, 0);
+    /// ```
+    pub fn cache_stats(&self) -> Result<AdContextCacheStats> {
+        Ok(AdContextCacheStats {
+            ad_transforms: self.ad_transform_cache_stats()?,
+        })
+    }
+
     /// Gradient of a scalar traced output with respect to a traced input.
     ///
     /// For complex scalar outputs, tenferro returns the Hermitian-adjoint
@@ -72,7 +192,12 @@ impl AdContext {
     /// assert_eq!(grad.rank, 0);
     /// ```
     pub fn grad(&self, output: &TracedTensor, wrt: &TracedTensor) -> Result<TracedTensor> {
-        crate::traced::grad_with_rules(output, wrt, &self.extension_rules)
+        crate::traced::grad_with_rules_and_cache(
+            output,
+            wrt,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Gradient that returns `None` when `wrt` is inactive.
@@ -93,7 +218,12 @@ impl AdContext {
         output: &TracedTensor,
         wrt: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::grad_optional_with_rules(output, wrt, &self.extension_rules)
+        crate::traced::grad_optional_with_rules_and_cache(
+            output,
+            wrt,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Forward-mode Jacobian-vector product.
@@ -117,7 +247,13 @@ impl AdContext {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<TracedTensor> {
-        crate::traced::jvp_with_rules(output, wrt, tangent, &self.extension_rules)
+        crate::traced::jvp_with_rules_and_cache(
+            output,
+            wrt,
+            tangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Forward-mode Jacobian-vector product that returns `None` for inactive output.
@@ -140,7 +276,13 @@ impl AdContext {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::jvp_optional_with_rules(output, wrt, tangent, &self.extension_rules)
+        crate::traced::jvp_optional_with_rules_and_cache(
+            output,
+            wrt,
+            tangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Reverse-mode vector-Jacobian product.
@@ -169,7 +311,13 @@ impl AdContext {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<TracedTensor> {
-        crate::traced::vjp_with_rules(output, wrt, cotangent, &self.extension_rules)
+        crate::traced::vjp_with_rules_and_cache(
+            output,
+            wrt,
+            cotangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 
     /// Reverse-mode vector-Jacobian product that returns `None` for inactive input.
@@ -192,7 +340,13 @@ impl AdContext {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::vjp_optional_with_rules(output, wrt, cotangent, &self.extension_rules)
+        crate::traced::vjp_optional_with_rules_and_cache(
+            output,
+            wrt,
+            cotangent,
+            &self.extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
     }
 }
 
@@ -259,6 +413,9 @@ impl AdContextBuilder {
         for rules in self.extension_rule_sets {
             extension_rules.merge(rules)?;
         }
-        Ok(AdContext { extension_rules })
+        Ok(AdContext {
+            extension_rules,
+            ad_transform_cache: Arc::new(AdTransformCache::new()),
+        })
     }
 }
