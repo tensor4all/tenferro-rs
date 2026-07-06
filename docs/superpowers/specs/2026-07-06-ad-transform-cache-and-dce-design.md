@@ -116,17 +116,7 @@ The new pass computes a live-output mask for every retained operation. For an
 operation with more than one output, it asks the operation whether a reduced
 operation is legal for that mask.
 
-The hook shape is:
-
-```rust
-pub struct PrunedOutputs<Op> {
-    pub operation: Op,
-    pub kept_outputs: Vec<usize>,
-}
-```
-
-For standard ops this can be implemented as a helper on `StdTensorOp`. For
-extension ops, `ExtensionOp` can gain a default method returning `None`, so
+For extension ops, `ExtensionOp` gains a default method returning `None`, so
 existing extensions remain source-compatible:
 
 ```rust
@@ -136,7 +126,9 @@ fn prune_outputs(&self, _live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> 
 ```
 
 The optimizer only rewrites when the hook returns a reduced operation whose
-output count matches the number of kept outputs. Unsupported operations stay
+output count matches the number of `true` entries in `live_outputs`. The
+optimizer computes the kept slot list from the same mask and remaps only those
+old slots to the reduced operation's outputs. Unsupported operations stay
 unchanged and remain correct.
 
 ## Documentation Updates
@@ -171,4 +163,3 @@ runtime lowering.
 Rejected because output slots can be semantically coupled. A generic pass can
 identify unused slots, but only the operation family can say whether a smaller
 operation is equivalent.
-
