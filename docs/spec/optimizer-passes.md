@@ -11,6 +11,13 @@
 This document specifies the optimization passes that run while lowering
 computegraph `CompiledProgram` values into tenferro's execution IR.
 
+This is the runtime compiler optimizer, not the AD graph optimizer. Traced AD
+also runs a smaller materialize-pre optimizer on graphs produced by
+`linearize`/`linear_transpose`; see `docs/architecture/ad-pipeline.md` for that
+pipeline. The AD optimizer owns backend-independent derivative graph cleanup
+such as transform-graph DCE and local algebraic identities. The runtime
+compiler still owns execution-IR layout, dot, backend, and last-use passes.
+
 The current compiler entry point is:
 
 - `compile_std_to_exec()`

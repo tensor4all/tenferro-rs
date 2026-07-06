@@ -55,10 +55,11 @@ Typical pipelines:
 
 ```text
 JVP:
-  build -> resolve -> linearize -> materialize_merge -> compile -> eval
+  build -> resolve -> linearize -> optimize AD graph -> materialize_merge -> compile -> eval
 
 VJP:
-  build -> resolve -> linearize -> linear_transpose -> materialize_merge -> compile -> eval
+  build -> resolve -> linearize -> linear_transpose -> optimize AD graph
+        -> materialize_merge -> compile -> eval
 
 2nd directional derivative:
   build -> resolve -> linearize -> resolve -> linearize -> materialize_merge -> compile -> eval
@@ -70,7 +71,8 @@ n-th derivative:
 Current tenferro traced VJP follows the generic VJP pipeline first:
 
 ```text
-build -> resolve -> linearize active outputs -> linear_transpose -> materialize_merge -> compile -> eval
+build -> resolve -> linearize active outputs -> linear_transpose
+      -> optimize AD graph -> materialize_merge -> compile -> eval
 ```
 
 Direct primary-graph transpose is an escape hatch. It is used only when the
@@ -88,6 +90,35 @@ F-matrix chain before `materialize_merge` ever runs. `materialize_merge` and
 the compiler still perform their own deduplication and backend-oriented
 optimization, but AD rules should not rely on late flattening to remove large,
 known-inactive derivative subgraphs.
+
+After traced `linearize` for JVP, and after `linear_transpose` for VJP, tenferro
+runs a small backend-independent AD graph optimizer before materialization. It
+is deliberately metadata-only: it rewrites graph topology and static operation
+payloads, and it never inspects or retains tensor buffers. The current pass set
+is:
+
+- reachable-output DCE on the transform graph;
+- algebraic identity canonicalization for AD-heavy patterns such as
+  `neg(neg(x))`, `conj(conj(x))`, identity `convert`, identity `transpose`,
+  scalar `add(x, 0)`, and scalar `mul(x, 1)`;
+- preservation of explicit cotangent accumulation `Add` nodes emitted by
+  `linear_transpose`, with DCE removing only unreachable accumulation work.
+
+This AD optimizer is separate from the runtime compiler optimizer documented in
+`docs/spec/optimizer-passes.md`. Runtime passes still own layout simplification,
+dot transpose/conjugation folding, dot decomposition, and execution-IR DCE. The
+duplication of simple algebraic identities is intentional: AD graph size and
+compile cost should stay bounded even if a backend compiler is swapped out or a
+runtime pass is disabled.
+
+Symbolic zero flow still uses `None` in tidu transform APIs to mean "no tangent
+or cotangent value is present". When a tenferro rule must instantiate such a
+zero, it carries the abstract value at the instantiation boundary as a
+`SymbolicZero`: dtype, rank, and an anchor value whose shape supplies broadcast
+metadata. Instantiation emits a scalar dtype-aware zero plus a metadata-only
+broadcast when the rank is nonzero. This keeps zero propagation symbolic until a
+primitive such as `Concatenate`, `DynamicUpdateSlice`, or `Scatter` needs a real
+zero input to express the correct linearized operation.
 
 Current tenferro eager AD uses the same primitive rule set through a different
 interpreter:
@@ -114,15 +145,30 @@ slots, so their derivative computations can be traced by later eager
 transforms.
 
 Traced AD transform outputs are not cached in a new persistent AD graph cache.
-The caller-owned traced result keeps the transformed graph and any required
-extra roots alive, while compile-time and runtime caches remain owned by the
-existing compiler, executor, and extension runtime contexts. Eager runtimes do
-own a bounded Tier-1 AD transform cache for `RecordedGraph` linearization,
-keyed by recorded graph structural fingerprint plus requested output slots.
-That cache is a same-tape per-node memoization layer; a future whole-program AD
-optimizer cache would need keys that include the resolved output keys, `wrt`
-inputs, extension rule set identity, shape/dtype guard inputs, and optimizer
-configuration version. Such keys must not live inside semantic op payloads.
+The AD graph optimizer is currently stateless and uses only per-invocation local
+maps for rewrite facts and reachability. The caller-owned traced result keeps
+the transformed graph and any required extra roots alive, while compile-time and
+runtime caches remain owned by the existing compiler, executor, and extension
+runtime contexts.
+
+Eager runtimes own a bounded Tier-1 AD transform cache for `RecordedGraph`
+linearization, keyed by recorded graph structural fingerprint plus requested
+output slots. That cache is a same-tape per-node memoization layer; it has one
+top-level owner (`EagerRuntime`), is cleared by `EagerRuntime::clear_caches()`,
+and reports retained-entry and retained-byte estimates through
+`EagerRuntime::cache_stats()`.
+
+No partial-result AD optimizer cache exists today. If traced or eager AD adds
+one, it must stay under a single long-lived top-level owner for that execution
+surface rather than under individual passes. Candidate entry kinds are local
+rewrite summaries, subgraph DCE summaries, multi-output pruning decisions,
+symbolic-zero instantiation summaries, residual-use summaries, and
+transpose/accumulation normalization summaries. Keys must be structural and
+metadata-only: resolved output keys, `wrt` inputs, active/usage masks, extension
+rule-set identity or fingerprint, symbolic shape/dtype metadata required for
+legality, and AD optimizer configuration version. Entries must not retain tensor
+buffers and must be bounded with explicit clear/configure/stats APIs. Per-pass
+memo tables remain ephemeral per optimizer invocation.
 
 Four crates, strictly layered:
 

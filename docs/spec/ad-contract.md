@@ -155,11 +155,30 @@ rule set. Rules must not read hidden runtime state or environment state to
 decide graph structure. That purity lets runtime owners safely memoize
 recorded-graph linearization through tidu's eager executor hook.
 
+Primitive-local `jvp_rule` / linearization is the required derivative contract.
+`transpose_rule` transposes already-linear graph flow. High-level direct primal
+VJP or primary-transpose rules are optional escape hatches for cases where the
+generic `linearize -> linear_transpose -> optimize` path is incomplete or too
+slow; they are not the default obligation for making a primitive
+reverse-differentiable.
+
+Symbolic zero propagation should remain symbolic until a rule must pass a real
+zero value to another primitive. At that forced-instantiation boundary, tenferro
+rules carry dtype, rank, and an anchor value as a `SymbolicZero` and instantiate
+it as a dtype-aware scalar zero plus shape-restoring broadcast when needed. Do
+not synthesize zeros through analytic operations or tensor buffers.
+
 tenferro's eager runtime owns a bounded Tier-1 AD transform cache keyed by the
 recorded graph structural fingerprint and requested output slots. This cache
 reuses linearization for repeated transforms on the same eager tape node. It is
 not a whole-program backward cache and it does not generalize across
 structurally similar but distinct tapes.
+
+The traced AD graph optimizer is currently stateless and has no persistent
+partial-result cache. Future partial AD optimizer caching must stay under one
+explicit long-lived owner for the relevant execution surface, expose bounded
+capacity/clear/stats controls, use structure and metadata keys, and never retain
+tensor buffers. Pass-local memo tables are per-invocation scratch state.
 
 ## Complex AD convention
 
