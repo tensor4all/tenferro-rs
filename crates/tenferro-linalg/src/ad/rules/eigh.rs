@@ -220,18 +220,3 @@ pub(crate) fn transpose_eigh(
 
     Ok(vec![Some(da)])
 }
-
-pub(crate) fn transpose_eigh_values(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    mode: &OperationRole,
-    eps: f64,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let Some(g_l) = cotangent_out.first().copied().flatten() else {
-        return Ok(vec![None]);
-    };
-    ctx.set_transpose_primal_outputs(None);
-    transpose_eigh(builder, &[Some(g_l), None], inputs, mode, eps, ctx)
-}

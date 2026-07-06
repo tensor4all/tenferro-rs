@@ -293,7 +293,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     LinalgAdSupport {
         kind: LinalgAdOpKind::EighVals,
         linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Supported,
+        transpose: LinalgAdRuleSupport::Unsupported,
         outputs: &EIGH_VALS_OUTPUTS,
     },
     LinalgAdSupport {

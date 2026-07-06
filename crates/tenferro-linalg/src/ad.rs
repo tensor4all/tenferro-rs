@@ -193,9 +193,6 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
             LinalgOp::Eigh { eps } => {
                 rules::transpose_eigh(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
             }
-            LinalgOp::EighVals { eps } => {
-                rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
-            }
             LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, &mode, ctx),
             LinalgOp::Cholesky
             | LinalgOp::Lu
@@ -203,6 +200,7 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
+            | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
             | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
         }
@@ -887,6 +885,33 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("expected two primal outputs"));
+    }
+
+    #[test]
+    fn eigh_values_has_no_handwritten_direct_transpose() {
+        let (mut ctx, a, _primal_outputs) = eigh_context();
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(TensorInputKey::User { id: 85 });
+        let op = LinalgExtensionOp::new(LinalgOp::EighVals {
+            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+        });
+
+        let result = LinalgAdRule
+            .linear_transpose(
+                &op,
+                &mut builder,
+                &[Some(cotangent)],
+                &[ValueRef::External(a)],
+                &[true],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![None]);
+        assert!(
+            builder.build().operations().is_empty(),
+            "EighVals reverse support should come from linearize + generic transpose"
+        );
     }
 
     #[test]

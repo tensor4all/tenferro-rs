@@ -823,6 +823,10 @@ fn qr_sum_loss(input: &TracedTensor) -> TracedTensor {
     (&reduce_all(&q) + &reduce_all(&r)).unwrap()
 }
 
+fn eigvalsh_sum_loss(input: &TracedTensor) -> TracedTensor {
+    reduce_all(&input.eigvalsh().unwrap())
+}
+
 #[derive(Debug)]
 struct GraphOpSummary {
     total_ops: usize,
@@ -1001,6 +1005,53 @@ fn lu_sum_grad_optimized_graph_is_structurally_compact() {
             "{name}: summary total should match counted operations"
         );
     }
+}
+
+#[test]
+fn eigvalsh_sum_grad_optimized_graph_is_structurally_compact() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.2, 0.2, 4.0]))
+            .unwrap();
+    let grad = ad.grad(&eigvalsh_sum_loss(&matrix), &matrix).unwrap();
+    let summary = graph_op_summary(&grad);
+
+    assert_eq!(
+        summary
+            .counts
+            .get("Extension(EighVals)")
+            .copied()
+            .unwrap_or(0),
+        0,
+        "optimized generic VJP should not keep a values-only Eigh transpose carrier"
+    );
+    assert_eq!(
+        summary.counts.get("Extension(Eigh)").copied().unwrap_or(0),
+        0,
+        "DCE should not keep the internal full Eigh carrier in the final VJP graph"
+    );
+    assert_eq!(
+        summary.multi_output_ops, 0,
+        "DCE should prune unused multi-output ops in the final VJP graph"
+    );
+    // This is the same eigenvalue-cotangent structure as the removed handwritten
+    // EighVals transpose path: two matmuls around an embedded diagonal cotangent,
+    // followed by self-adjoint projection for the lower-triangular input contract.
+    assert_eq!(
+        summary.counts,
+        expected_counts(&[
+            ("Add", 2),
+            ("BroadcastInDim", 1),
+            ("DotGeneral", 2),
+            ("EmbedDiag", 2),
+            ("ExtractDiag", 1),
+            ("PadToMatch", 4),
+            ("Reshape", 1),
+            ("Transpose", 1),
+            ("Tril", 1),
+        ])
+    );
+    assert_eq!(summary.total_ops, 15);
 }
 
 #[test]

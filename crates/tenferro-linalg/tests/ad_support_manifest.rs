@@ -122,6 +122,7 @@ fn linalg_ad_support_manifest_marks_values_only_rules_finite_diff_backed() {
         eigh_vals.linearize,
         LinalgAdRuleSupport::SupportedViaLinearize
     );
+    assert_eq!(eigh_vals.transpose, LinalgAdRuleSupport::Unsupported);
     assert_output_status(
         eigh_vals,
         "eigenvalues",
