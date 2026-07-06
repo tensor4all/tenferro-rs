@@ -190,16 +190,14 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
                 transpose_a,
                 ctx,
             ),
-            LinalgOp::Eigh { eps } => {
-                rules::transpose_eigh(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
-            }
-            LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, &mode, ctx),
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
+            | LinalgOp::Qr
+            | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
             | LinalgOp::EigVals { .. } => Ok(vec![None; op.input_count()]),
@@ -794,100 +792,6 @@ mod tests {
     }
 
     #[test]
-    fn eigh_transpose_returns_inactive_without_active_input_or_cotangent() {
-        let (mut ctx, a, primal_outputs) = eigh_context();
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(TensorInputKey::User { id: 60 });
-        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
-        });
-        ctx.set_transpose_primal_outputs(Some(primal_outputs));
-
-        let inactive = LinalgAdRule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent), None],
-                &[ValueRef::External(a.clone())],
-                &[false],
-                &mut ctx,
-            )
-            .unwrap();
-        assert_eq!(inactive, vec![None]);
-
-        let zero_seed = LinalgAdRule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[None, None],
-                &[ValueRef::External(a)],
-                &[true],
-                &mut ctx,
-            )
-            .unwrap();
-        assert_eq!(zero_seed, vec![None]);
-    }
-
-    #[test]
-    fn eigh_transpose_rejects_malformed_inputs_without_panicking() {
-        let mut ctx = ShapeGuardContext::default();
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(TensorInputKey::User { id: 70 });
-        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
-        });
-
-        let err = LinalgAdRule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent), None],
-                &[],
-                &[true],
-                &mut ctx,
-            )
-            .unwrap_err();
-        assert_eq!(err.rule(), ADRuleKind::Transpose);
-
-        let vector = input_key(71);
-        insert_meta(&mut ctx, vector.clone(), &[2]);
-        let inactive = LinalgAdRule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent), None],
-                &[ValueRef::External(vector)],
-                &[true],
-                &mut ctx,
-            )
-            .unwrap();
-        assert_eq!(inactive, vec![None]);
-    }
-
-    #[test]
-    fn eigh_transpose_requires_both_primal_outputs_when_reusing_forward_values() {
-        let (mut ctx, a, primal_outputs) = eigh_context();
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(TensorInputKey::User { id: 80 });
-        let op = LinalgExtensionOp::new(LinalgOp::Eigh {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
-        });
-        ctx.set_transpose_primal_outputs(Some(vec![primal_outputs[0].clone()]));
-
-        let err = LinalgAdRule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent), None],
-                &[ValueRef::External(a)],
-                &[true],
-                &mut ctx,
-            )
-            .unwrap_err();
-        assert!(err.to_string().contains("expected two primal outputs"));
-    }
-
-    #[test]
     fn eigh_values_has_no_handwritten_direct_transpose() {
         let (mut ctx, a, _primal_outputs) = eigh_context();
         let mut builder = GraphBuilder::<StdTensorOp>::new();
@@ -915,71 +819,56 @@ mod tests {
     }
 
     #[test]
-    fn eigh_transpose_reuses_primal_outputs_for_value_and_vector_cotangents() {
+    fn full_eigh_has_no_handwritten_direct_transpose() {
+        let (mut ctx, a, _primal_outputs) = eigh_context();
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let g_w = builder.add_input(TensorInputKey::User { id: 86 });
+        let g_v = builder.add_input(TensorInputKey::User { id: 87 });
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
             eps: DEFAULT_DECOMPOSITION_AD_EPS,
         });
-        for (case, cotangents) in [
-            ("values", (true, false)),
-            ("vectors", (false, true)),
-            ("both", (true, true)),
-        ] {
-            let (mut ctx, a, primal_outputs) = eigh_context();
-            let mut builder = GraphBuilder::<StdTensorOp>::new();
-            let g_l = cotangents
-                .0
-                .then(|| builder.add_input(TensorInputKey::User { id: 90 }));
-            let g_v = cotangents
-                .1
-                .then(|| builder.add_input(TensorInputKey::User { id: 91 }));
-            ctx.set_transpose_primal_outputs(Some(primal_outputs));
 
-            let result = LinalgAdRule
-                .linear_transpose(
-                    &op,
-                    &mut builder,
-                    &[g_l, g_v],
-                    &[ValueRef::External(a)],
-                    &[true],
-                    &mut ctx,
-                )
-                .unwrap();
+        let result = LinalgAdRule
+            .linear_transpose(
+                &op,
+                &mut builder,
+                &[Some(g_w), Some(g_v)],
+                &[ValueRef::External(a)],
+                &[true],
+                &mut ctx,
+            )
+            .unwrap();
 
-            assert!(result[0].is_some(), "{case}");
-            assert!(!builder.build().operations().is_empty(), "{case}");
-        }
+        assert_eq!(result, vec![None]);
+        assert!(
+            builder.build().operations().is_empty(),
+            "Eigh reverse support should come from linearize + generic transpose"
+        );
     }
 
     #[test]
-    fn qr_transpose_reuses_primal_outputs_for_factor_cotangents() {
-        for shape in [&[3, 2][..], &[2, 3][..]] {
-            let (mut ctx, a, primal_outputs) = qr_context(shape);
-            let mut builder = GraphBuilder::<StdTensorOp>::new();
-            let g_q = builder.add_input(TensorInputKey::User { id: 102 });
-            let g_r = builder.add_input(TensorInputKey::User { id: 103 });
-            ctx.set_transpose_primal_outputs(Some(primal_outputs));
+    fn qr_has_no_handwritten_direct_transpose() {
+        let (mut ctx, a, _primal_outputs) = qr_context(&[3, 2]);
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let g_q = builder.add_input(TensorInputKey::User { id: 88 });
+        let g_r = builder.add_input(TensorInputKey::User { id: 89 });
 
-            let result = LinalgAdRule
-                .linear_transpose(
-                    &LinalgExtensionOp::new(LinalgOp::Qr),
-                    &mut builder,
-                    &[Some(g_q), Some(g_r)],
-                    &[ValueRef::External(a)],
-                    &[true],
-                    &mut ctx,
-                )
-                .unwrap();
+        let result = LinalgAdRule
+            .linear_transpose(
+                &LinalgExtensionOp::new(LinalgOp::Qr),
+                &mut builder,
+                &[Some(g_q), Some(g_r)],
+                &[ValueRef::External(a)],
+                &[true],
+                &mut ctx,
+            )
+            .unwrap();
 
-            assert!(result[0].is_some(), "qr shape {shape:?}");
-            assert!(
-                ctx.transpose_primal_outputs_were_used(),
-                "qr shape {shape:?}"
-            );
-            assert!(
-                !builder.build().operations().is_empty(),
-                "qr shape {shape:?}"
-            );
-        }
+        assert_eq!(result, vec![None]);
+        assert!(
+            builder.build().operations().is_empty(),
+            "QR reverse support should come from linearize + generic transpose"
+        );
     }
 
     #[test]

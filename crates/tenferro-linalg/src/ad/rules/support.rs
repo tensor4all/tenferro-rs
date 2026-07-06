@@ -213,26 +213,6 @@ pub(super) fn pad_fixed(
     )
 }
 
-pub(super) fn pad_linear(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: LocalValueId,
-    rank: usize,
-    edge_padding_low: Vec<i64>,
-    edge_padding_high: Vec<i64>,
-) -> LocalValueId {
-    builder.add_operation(
-        StdTensorOp::Pad(PadConfig {
-            edge_padding_low,
-            edge_padding_high,
-            interior_padding: vec![0; rank],
-        }),
-        vec![ValueRef::Local(input)],
-        OperationRole::Linearized {
-            active_mask: vec![true],
-        },
-    )[0]
-}
-
 pub(super) fn fixed_sub(
     builder: &mut dyn PrimitiveRuleBuilder,
     lhs: ValueRef<StdTensorOp>,

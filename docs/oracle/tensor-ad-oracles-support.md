@@ -25,6 +25,7 @@ finite-difference tests until a crate-local replay harness is restored.
 | Lu | finite-difference | `grad(sum(l) + sum(u))` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit lu_qr_sum_grads_match_finite_diff` |
 | Qr | finite-difference | `grad(sum(q) + sum(r))` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit lu_qr_sum_grads_match_finite_diff` |
 | SvdVals | finite-difference | `norm(..., ord=2)` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit spectral_norm_jvp_matches_finite_diff_through_values_only_svd` |
+| Eigh | finite-difference | `grad(sum(values) + sum(vectors))` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit full_eigh_sum_grad_matches_finite_diff` |
 | EighVals | finite-difference | `eigvalsh` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit eigvalsh_jvp_matches_finite_diff_through_values_only_eigh` |
 | EigVals | finite-difference | `eigvals` | `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit eigvals_jvp_matches_finite_diff` |
 

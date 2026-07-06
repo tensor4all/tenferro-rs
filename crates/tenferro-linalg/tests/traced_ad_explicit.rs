@@ -823,6 +823,11 @@ fn qr_sum_loss(input: &TracedTensor) -> TracedTensor {
     (&reduce_all(&q) + &reduce_all(&r)).unwrap()
 }
 
+fn eigh_sum_loss(input: &TracedTensor) -> TracedTensor {
+    let (values, vectors) = input.eigh().unwrap();
+    (&reduce_all(&values) + &reduce_all(&vectors)).unwrap()
+}
+
 fn eigvalsh_sum_loss(input: &TracedTensor) -> TracedTensor {
     reduce_all(&input.eigvalsh().unwrap())
 }
@@ -1055,6 +1060,132 @@ fn eigvalsh_sum_grad_optimized_graph_is_structurally_compact() {
 }
 
 #[test]
+fn full_eigh_sum_grad_optimized_graph_is_structurally_compact() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.2, 0.2, 4.0]))
+            .unwrap();
+    let grad = ad.grad(&eigh_sum_loss(&matrix), &matrix).unwrap();
+    let summary = graph_op_summary(&grad);
+
+    assert_eq!(
+        summary.counts.get("Extension(Eigh)").copied().unwrap_or(0),
+        0,
+        "optimized generic VJP should not keep a full Eigh transpose carrier"
+    );
+    assert_eq!(
+        summary.multi_output_ops, 0,
+        "DCE should prune unused multi-output ops in the final VJP graph"
+    );
+    // This matches the removed handwritten full Eigh transpose rule: three
+    // matmuls around eigenvector cotangents and the same self-adjoint projection,
+    // without keeping a direct decomposition transpose rule.
+    assert_eq!(
+        summary.counts,
+        expected_counts(&[
+            ("Add", 3),
+            ("BroadcastInDim", 2),
+            ("DotGeneral", 3),
+            ("EmbedDiag", 2),
+            ("ExtractDiag", 1),
+            ("Mul", 1),
+            ("PadToMatch", 4),
+            ("Reshape", 2),
+            ("Transpose", 1),
+            ("Tril", 1),
+        ])
+    );
+    assert_eq!(summary.total_ops, 20);
+}
+
+#[test]
+fn qr_sum_grad_optimized_graph_is_structurally_compact() {
+    let ad = ad_context();
+    for (name, shape, data, expected) in [
+        (
+            "square",
+            vec![2, 2],
+            vec![2.0, 0.5, 0.25, 3.0],
+            expected_counts(&[
+                ("Add", 4),
+                ("BroadcastInDim", 2),
+                ("DotGeneral", 3),
+                ("EmbedDiag", 1),
+                ("Extension(TriangularSolve)", 1),
+                ("ExtractDiag", 1),
+                ("Mul", 1),
+                ("Neg", 1),
+                ("PadToMatch", 2),
+                ("Reshape", 2),
+                ("Transpose", 3),
+                ("Triu", 1),
+            ]),
+        ),
+        (
+            "wide",
+            vec![2, 3],
+            vec![2.0, 0.5, 0.25, 3.0, 1.0, -0.4],
+            expected_counts(&[
+                ("Add", 7),
+                ("BroadcastInDim", 2),
+                ("DotGeneral", 9),
+                ("EmbedDiag", 1),
+                ("Extension(TriangularSolve)", 1),
+                ("ExtractDiag", 1),
+                ("Mul", 1),
+                ("Neg", 3),
+                ("PadToMatch", 2),
+                ("Reshape", 2),
+                ("Transpose", 3),
+                ("Triu", 1),
+            ]),
+        ),
+        (
+            "tall",
+            vec![3, 2],
+            vec![2.0, 0.5, 0.1, 0.25, 3.0, -0.4],
+            expected_counts(&[
+                ("Add", 4),
+                ("BroadcastInDim", 2),
+                ("DotGeneral", 3),
+                ("EmbedDiag", 1),
+                ("Extension(TriangularSolve)", 1),
+                ("ExtractDiag", 1),
+                ("Mul", 1),
+                ("Neg", 1),
+                ("PadToMatch", 2),
+                ("Reshape", 2),
+                ("Transpose", 3),
+                ("Triu", 1),
+            ]),
+        ),
+    ] {
+        let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(shape, data)).unwrap();
+        let grad = ad.grad(&qr_sum_loss(&matrix), &matrix).unwrap();
+        let summary = graph_op_summary(&grad);
+
+        assert_eq!(
+            summary.counts.get("Extension(Qr)").copied().unwrap_or(0),
+            0,
+            "{name}: optimized generic VJP should not keep a QR transpose carrier"
+        );
+        assert_eq!(
+            summary.multi_output_ops, 0,
+            "{name}: DCE should prune unused multi-output ops in the final VJP graph"
+        );
+        assert_eq!(
+            summary.counts, expected,
+            "{name}: generic linearize+transpose VJP should stay at the handwritten QR rule structure"
+        );
+        assert_eq!(
+            summary.total_ops,
+            summary.counts.values().sum::<usize>(),
+            "{name}: summary total should match counted operations"
+        );
+    }
+}
+
+#[test]
 fn lu_qr_sum_grads_match_finite_diff() {
     assert_gradient_matches_finite_difference(
         "lu square sum gradient",
@@ -1085,6 +1216,16 @@ fn lu_qr_sum_grads_match_finite_diff() {
         vec![2, 3],
         vec![2.0, 0.5, 0.25, 3.0, 1.0, -0.4],
         qr_sum_loss,
+    );
+}
+
+#[test]
+fn full_eigh_sum_grad_matches_finite_diff() {
+    assert_gradient_matches_finite_difference(
+        "full eigh sum gradient",
+        vec![2, 2],
+        vec![2.0, 0.2, 0.2, 4.0],
+        eigh_sum_loss,
     );
 }
 

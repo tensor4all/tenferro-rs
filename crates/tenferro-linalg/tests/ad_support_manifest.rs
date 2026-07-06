@@ -76,7 +76,7 @@ fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
 fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
     let qr = linalg_ad_support(LinalgAdOpKind::Qr);
     assert_eq!(qr.linearize, LinalgAdRuleSupport::SupportedViaLinearize);
-    assert_eq!(qr.transpose, LinalgAdRuleSupport::Supported);
+    assert_eq!(qr.transpose, LinalgAdRuleSupport::Unsupported);
     assert_output_status(qr, "q", LinalgAdRuleSupport::SupportedViaLinearize);
     assert_output_status(qr, "r", LinalgAdRuleSupport::SupportedViaLinearize);
 
@@ -92,6 +92,7 @@ fn linalg_ad_support_manifest_marks_vector_outputs_explicitly() {
 
     let eigh = linalg_ad_support(LinalgAdOpKind::Eigh);
     assert_eq!(eigh.linearize, LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_eq!(eigh.transpose, LinalgAdRuleSupport::Unsupported);
     assert_output_status(
         eigh,
         "eigenvalues",
@@ -142,7 +143,7 @@ fn linalg_ad_support_manifest_marks_values_only_rules_finite_diff_backed() {
 }
 
 #[test]
-fn linalg_values_only_finite_diff_support_is_documented_next_to_oracle_snapshot() {
+fn linalg_local_finite_diff_support_is_documented_next_to_oracle_snapshot() {
     let docs = fs::read_to_string(
         workspace_root()
             .join("docs")
@@ -155,6 +156,7 @@ fn linalg_values_only_finite_diff_support_is_documented_next_to_oracle_snapshot(
         "| Lu | finite-difference | `grad(sum(l) + sum(u))` |",
         "| Qr | finite-difference | `grad(sum(q) + sum(r))` |",
         "| SvdVals | finite-difference | `norm(..., ord=2)` |",
+        "| Eigh | finite-difference | `grad(sum(values) + sum(vectors))` |",
         "| EighVals | finite-difference | `eigvalsh` |",
         "| EigVals | finite-difference | `eigvals` |",
     ] {

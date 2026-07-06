@@ -33,6 +33,18 @@ The optimized `grad(sum(eigvalsh(a)))` graph is also structurally snapshotted:
 - no internal `Extension(Eigh)` carrier remains in the final VJP graph
 - no multi-output op remains in the final VJP graph
 
+The final cleanup removed the remaining handwritten QR and full Eigh direct
+transpose rules. Their optimized generic VJP graphs were compared against the
+previous handwritten-rule branch (`ca4ba9b8`) with the same structural summary
+tests:
+
+- full Eigh `grad(sum(values) + sum(vectors))`: 20 ops total, including 3
+  matmuls and no `Extension(Eigh)` carrier
+- square/tall QR `grad(sum(q) + sum(r))`: 22 ops total, including 1 triangular
+  solve and 3 matmuls
+- wide QR: 33 ops total, including 1 triangular solve and 9 matmuls
+- no multi-output op remains in the final full Eigh or QR VJP graph
+
 ## Reference Code Consulted
 
 - `cb6aff6c Add LU and QR transpose AD rules`
@@ -51,16 +63,19 @@ The optimized `grad(sum(eigvalsh(a)))` graph is also structurally snapshotted:
 - Delete `transpose_lu` and its LU-only primal-output helper.
 - Delete `transpose_eigh_values`. Values-only Hermitian eigenvalue reverse
   support is compact through generic VJP.
-- Keep QR's and full Eigh's handwritten transpose rules. This change only
-  proves LU and values-only Eigh.
+- Delete `transpose_qr` and `transpose_eigh`. QR and full Eigh reverse support
+  are compact through generic VJP and match the previous handwritten-rule graph
+  summaries.
 - Mark LU direct transpose support as unsupported in the linalg AD manifest.
   LU remains differentiable through its partially supported linearize rule and
   generic VJP.
 - Mark EighVals direct transpose support as unsupported in the linalg AD
   manifest. EighVals remains differentiable through linearize plus generic VJP.
+- Mark QR and full Eigh direct transpose support as unsupported in the linalg AD
+  manifest. Both remain differentiable through linearize plus generic VJP.
 - Keep finite-difference tests for LU/QR gradients, but add a separate
   structural test because value equality is not enough to prove useful graph
-  simplification. Apply the same standard to `eigvalsh`.
+  simplification. Apply the same standard to full Eigh and `eigvalsh`.
 
 ## Rejected Alternatives
 
@@ -69,6 +84,9 @@ The optimized `grad(sum(eigvalsh(a)))` graph is also structurally snapshotted:
 - Do not add an `EighVals`-specific optimizer peephole or special-case
   `sum(eigenvalues) -> identity` rewrite in this PR. The generic VJP matches
   the removed handwritten path's structure and remains small.
+- Do not add QR- or full-Eigh-specific optimizer peepholes. The generic VJP
+  matches the handwritten-rule summaries for the tested square, wide, and tall
+  QR cases and the full Eigh values-plus-vectors observable.
 - If this regresses later, fix it as a generic AD graph optimization problem:
   extend operation legality hooks, value-use DCE, or algebraic canonicalization
   over the transform graph. Do not reintroduce operation-specific shortcuts
@@ -78,7 +96,10 @@ The optimized `grad(sum(eigvalsh(a)))` graph is also structurally snapshotted:
 
 - `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit lu_sum_grad_optimized_graph_is_structurally_compact`
 - `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit eigvalsh_sum_grad_optimized_graph_is_structurally_compact`
+- `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit full_eigh_sum_grad_optimized_graph_is_structurally_compact`
+- `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit qr_sum_grad_optimized_graph_is_structurally_compact`
 - `cargo test -p tenferro-linalg --features autodiff eigvalsh_jvp_matches_finite_diff_through_values_only_eigh`
+- `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit full_eigh_sum_grad_matches_finite_diff`
 - `cargo test -p tenferro-linalg --features autodiff --test traced_ad_explicit lu_qr_sum_grads_match_finite_diff`
 - `cargo test -p tenferro-linalg --features autodiff --test ad_support_manifest`
 - `cargo test -p tenferro-linalg --features autodiff --lib`
@@ -86,11 +107,12 @@ The optimized `grad(sum(eigvalsh(a)))` graph is also structurally snapshotted:
 
 ## Remaining Risks
 
-- The structural snapshot is intentionally scoped to the LU `grad(sum(l) +
-  sum(u))` family for square, wide, and tall matrices, and to the
-  `grad(sum(eigvalsh(a)))` values-only Hermitian eigenvalue family. Other LU,
-  Eigh, or eigenvector observables may need their own structural snapshots if
-  they become public acceptance criteria.
+- The structural snapshots are intentionally scoped to LU and QR
+  `grad(sum(outputs))` families for square, wide, and tall matrices, full Eigh
+  `grad(sum(values) + sum(vectors))`, and the `grad(sum(eigvalsh(a)))`
+  values-only Hermitian eigenvalue family. Other LU, QR, Eigh, or eigenvector
+  observables may need their own structural snapshots if they become public
+  acceptance criteria.
 - The test summarizes the optimized VJP transform graph, not backend-lowered
   execution IR. Runtime compiler regressions should be caught by separate
   compiler/lowering tests.
