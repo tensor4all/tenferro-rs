@@ -56,38 +56,6 @@ fn expected_primal_outputs_error(op: &'static str, expected: usize) -> ADRuleErr
     )
 }
 
-fn lu_primal_outputs(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: ValueRef<StdTensorOp>,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<(
-    ValueRef<StdTensorOp>,
-    ValueRef<StdTensorOp>,
-    ValueRef<StdTensorOp>,
-)> {
-    if let Some(primal_outputs) = ctx.transpose_primal_outputs() {
-        if primal_outputs.len() < 4 {
-            return Err(expected_primal_outputs_error("lu", 4));
-        }
-        return Ok((
-            ValueRef::External(primal_outputs[0].clone()),
-            ValueRef::External(primal_outputs[1].clone()),
-            ValueRef::External(primal_outputs[2].clone()),
-        ));
-    }
-
-    let outputs = builder.add_operation(
-        linalg_std_op(LinalgOp::Lu),
-        vec![input],
-        OperationRole::Primary,
-    );
-    Ok((
-        ValueRef::Local(outputs[0]),
-        ValueRef::Local(outputs[1]),
-        ValueRef::Local(outputs[2]),
-    ))
-}
-
 fn qr_primal_outputs(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
@@ -120,28 +88,6 @@ fn add_optional_linear(
         Some(lhs) => linear_add(builder, lhs, rhs),
         None => rhs,
     }
-}
-
-fn left_solve_lower_adjoint(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    lower: ValueRef<StdTensorOp>,
-    rhs: LocalValueId,
-    unit_diagonal: bool,
-    dtype: DType,
-) -> LocalValueId {
-    let lower = conjugate_primal_if_dtype_complex(builder, lower, dtype);
-    builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: true,
-            unit_diagonal,
-        }),
-        vec![lower, ValueRef::Local(rhs)],
-        OperationRole::Linearized {
-            active_mask: vec![false, true],
-        },
-    )[0]
 }
 
 fn right_solve_upper_adjoint(
@@ -178,127 +124,6 @@ fn tril_im_inv_adj_skew_linear(
     let half_diag = linear_scale(builder, diag, 0.5);
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     linear_add(builder, strict_lower, half_diag_mat)
-}
-
-pub(crate) fn transpose_lu(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    mode: &OperationRole,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    if !transpose_input_active(mode, 0) {
-        return Ok(vec![None]);
-    }
-
-    let g_l = cotangent_out.get(1).copied().flatten();
-    let g_u = cotangent_out.get(2).copied().flatten();
-    if g_l.is_none() && g_u.is_none() {
-        return Ok(vec![None]);
-    }
-
-    let input = inputs.first().ok_or_else(|| {
-        ADRuleError::invalid_input(
-            "tenferro-linalg.lu",
-            ADRuleKind::Transpose,
-            "expected one matrix input",
-        )
-    })?;
-    let Some(input_shape) = matrix_shape_from_input(ctx, input)? else {
-        return Ok(vec![None]);
-    };
-    let input_shape = input_shape.as_slice();
-    let (m, n, batch_shape) = matrix_shape_parts(input_shape, "transpose_lu");
-    let (m_size, n_size) =
-        resolve_and_guard(m, n, ctx).map_err(|err| invalid_transpose_dim_expr("lu", err))?;
-    let k = DimExpr::min(m.clone(), n.clone());
-    let k_size = m_size.min(n_size);
-    let rank = input_shape.len();
-    let dtype = ctx.dtype_of(input)?;
-    let (p, l, u) = lu_primal_outputs(builder, input.clone(), ctx)?;
-    let l_shape = matrix_shape(m, &k, batch_shape);
-    let u_shape = matrix_shape(&k, n, batch_shape);
-    let l_square = augment_unit_lower_to_square_fixed(
-        builder,
-        l.clone(),
-        m_size,
-        k_size,
-        batch_shape,
-        &l_shape,
-        rank,
-    );
-    let u_square = augment_upper_to_square_fixed(
-        builder,
-        u.clone(),
-        k_size,
-        n_size,
-        batch_shape,
-        &u_shape,
-        rank,
-    );
-
-    let mut f_sum = None;
-    if let Some(g_l) = g_l {
-        let g_l = if n_size > k_size {
-            pad_linear(
-                builder,
-                g_l,
-                rank,
-                vec![0; rank],
-                pad_vec(rank, 1, (n_size - k_size) as i64),
-            )
-        } else {
-            g_l
-        };
-        let l_h = adjoint_matrix_fixed(builder, ValueRef::Local(l_square), rank, dtype);
-        let term = matmul_linear(
-            builder,
-            ValueRef::Local(l_h),
-            ValueRef::Local(g_l),
-            vec![false, true],
-            rank,
-        );
-        let term = linear_unary(builder, StdTensorOp::Tril { k: -1 }, term);
-        f_sum = Some(add_optional_linear(builder, f_sum, term));
-    }
-    if let Some(g_u) = g_u {
-        let g_u = if m_size > k_size {
-            pad_linear(
-                builder,
-                g_u,
-                rank,
-                vec![0; rank],
-                pad_vec(rank, 0, (m_size - k_size) as i64),
-            )
-        } else {
-            g_u
-        };
-        let u_h = adjoint_matrix_fixed(builder, ValueRef::Local(u_square), rank, dtype);
-        let term = matmul_linear(
-            builder,
-            ValueRef::Local(g_u),
-            ValueRef::Local(u_h),
-            vec![true, false],
-            rank,
-        );
-        let term = linear_unary(builder, StdTensorOp::Triu { k: 0 }, term);
-        f_sum = Some(add_optional_linear(builder, f_sum, term));
-    }
-
-    let Some(f_sum) = f_sum else {
-        return Ok(vec![None]);
-    };
-    let y = left_solve_lower_adjoint(builder, ValueRef::Local(l_square), f_sum, true, dtype);
-    let z = right_solve_upper_adjoint(builder, ValueRef::Local(u_square), y, dtype);
-    let p_t = transpose_matrix_fixed(builder, p, rank);
-    let da = matmul_linear(
-        builder,
-        ValueRef::Local(p_t),
-        ValueRef::Local(z),
-        vec![false, true],
-        rank,
-    );
-    Ok(vec![Some(da)])
 }
 
 pub(crate) fn transpose_qr(

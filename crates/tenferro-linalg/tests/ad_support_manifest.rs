@@ -50,7 +50,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
 fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
     let lu = linalg_ad_support(LinalgAdOpKind::Lu);
     assert_eq!(lu.linearize, LinalgAdRuleSupport::PartiallySupported);
-    assert_eq!(lu.transpose, LinalgAdRuleSupport::Supported);
+    assert_eq!(lu.transpose, LinalgAdRuleSupport::Unsupported);
     assert_output_status(lu, "p", LinalgAdRuleSupport::NonDifferentiable);
     assert_output_status(lu, "l", LinalgAdRuleSupport::SupportedViaLinearize);
     assert_output_status(lu, "u", LinalgAdRuleSupport::SupportedViaLinearize);

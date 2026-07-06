@@ -196,9 +196,9 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
             LinalgOp::EighVals { eps } => {
                 rules::transpose_eigh_values(&mut builder, cotangent_out, inputs, &mode, eps, ctx)
             }
-            LinalgOp::Lu => rules::transpose_lu(&mut builder, cotangent_out, inputs, &mode, ctx),
             LinalgOp::Qr => rules::transpose_qr(&mut builder, cotangent_out, inputs, &mode, ctx),
             LinalgOp::Cholesky
+            | LinalgOp::Lu
             | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
@@ -926,36 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn lu_qr_transpose_reuses_primal_outputs_for_factor_cotangents() {
-        for shape in [&[2, 2][..], &[2, 3][..], &[3, 2][..]] {
-            let (mut ctx, a, primal_outputs) = lu_context(shape);
-            let mut builder = GraphBuilder::<StdTensorOp>::new();
-            let g_l = builder.add_input(TensorInputKey::User { id: 100 });
-            let g_u = builder.add_input(TensorInputKey::User { id: 101 });
-            ctx.set_transpose_primal_outputs(Some(primal_outputs));
-
-            let result = LinalgAdRule
-                .linear_transpose(
-                    &LinalgExtensionOp::new(LinalgOp::Lu),
-                    &mut builder,
-                    &[None, Some(g_l), Some(g_u), None],
-                    &[ValueRef::External(a)],
-                    &[true],
-                    &mut ctx,
-                )
-                .unwrap();
-
-            assert!(result[0].is_some(), "lu shape {shape:?}");
-            assert!(
-                ctx.transpose_primal_outputs_were_used(),
-                "lu shape {shape:?}"
-            );
-            assert!(
-                !builder.build().operations().is_empty(),
-                "lu shape {shape:?}"
-            );
-        }
-
+    fn qr_transpose_reuses_primal_outputs_for_factor_cotangents() {
         for shape in [&[3, 2][..], &[2, 3][..]] {
             let (mut ctx, a, primal_outputs) = qr_context(shape);
             let mut builder = GraphBuilder::<StdTensorOp>::new();
