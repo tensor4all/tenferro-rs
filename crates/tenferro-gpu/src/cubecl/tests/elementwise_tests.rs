@@ -5,7 +5,8 @@ use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorStructural};
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i32,
+    tensor_i64, upload,
 };
 
 #[test]
@@ -217,6 +218,52 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let gpu_out = gpu.clamp(&gpu_lhs, &gpu_lower, &gpu_upper).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_integer_add_mul_compare_select_match_cpu() {
+    if !gpu_available() {
+        eprintln!(
+            "skipping test_cubecl_integer_add_mul_compare_select_match_cpu — no CUDA device found"
+        );
+        return;
+    }
+
+    let i32_lhs = tensor_i32(vec![2, 3], vec![1, -2, 3, 4, -5, 6]);
+    let i32_rhs = tensor_i32(vec![2, 3], vec![6, 5, -4, 3, 2, -1]);
+    assert_integer_binary_and_select_matches_cpu(&i32_lhs, &i32_rhs);
+
+    let i64_lhs = tensor_i64(vec![2, 3], vec![10, -20, 30, 40, -50, 60]);
+    let i64_rhs = tensor_i64(vec![2, 3], vec![7, 6, -5, 4, 3, -2]);
+    assert_integer_binary_and_select_matches_cpu(&i64_lhs, &i64_rhs);
+}
+
+fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, lhs);
+    let gpu_rhs = upload(&gpu, rhs);
+
+    let expected = cpu.add(lhs, rhs).unwrap();
+    let gpu_out = gpu.add(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.mul(lhs, rhs).unwrap();
+    let gpu_out = gpu.mul(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected_pred = cpu.compare(lhs, rhs, &CompareDir::Ge).unwrap();
+    let gpu_pred = gpu.compare(&gpu_lhs, &gpu_rhs, &CompareDir::Ge).unwrap();
+    let actual_pred = download(&gpu, &gpu_pred);
+    assert_tensor_close(&actual_pred, &expected_pred, 0.0);
+
+    let expected = cpu.select(&expected_pred, lhs, rhs).unwrap();
+    let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
 }
 
 #[test]

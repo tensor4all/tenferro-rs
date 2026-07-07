@@ -4,11 +4,12 @@ use tenferro_core_ops::{descriptor as primitive_descriptor, DTypePolicy, Primiti
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuLaunchKind {
     BinaryFloatComplex,
+    BinaryFloatComplexInt,
     BinaryFloatOnly,
     UnaryFloatComplex,
     UnaryFloatOnly,
-    CompareFloatToBool,
-    SelectBoolFloat,
+    CompareFloatIntToBool,
+    SelectBoolFloatInt,
     ClampFloat,
     Reduction,
 }
@@ -24,9 +25,8 @@ pub(crate) struct GpuOpDescriptor {
 
 pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
     let launch = match kind {
-        PrimitiveOpKind::Add | PrimitiveOpKind::Mul | PrimitiveOpKind::Div => {
-            GpuLaunchKind::BinaryFloatComplex
-        }
+        PrimitiveOpKind::Add | PrimitiveOpKind::Mul => GpuLaunchKind::BinaryFloatComplexInt,
+        PrimitiveOpKind::Div => GpuLaunchKind::BinaryFloatComplex,
         PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum | PrimitiveOpKind::Pow => {
             GpuLaunchKind::BinaryFloatOnly
         }
@@ -42,8 +42,8 @@ pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
         | PrimitiveOpKind::Rsqrt
         | PrimitiveOpKind::Expm1
         | PrimitiveOpKind::Log1p => GpuLaunchKind::UnaryFloatOnly,
-        PrimitiveOpKind::Compare => GpuLaunchKind::CompareFloatToBool,
-        PrimitiveOpKind::Select => GpuLaunchKind::SelectBoolFloat,
+        PrimitiveOpKind::Compare => GpuLaunchKind::CompareFloatIntToBool,
+        PrimitiveOpKind::Select => GpuLaunchKind::SelectBoolFloatInt,
         PrimitiveOpKind::Clamp => GpuLaunchKind::ClampFloat,
         PrimitiveOpKind::ReduceSum
         | PrimitiveOpKind::ReduceProd

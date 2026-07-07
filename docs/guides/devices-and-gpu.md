@@ -217,11 +217,13 @@ Legend:
 | Operation or family | CUDA dtype support | Notes |
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
-| `add`, `mul`, `div` | `F32`, `F64`, `C32`, `C64` | Same dtype inputs only; integer and `Bool` arithmetic are not implemented |
+| `add`, `mul` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same dtype inputs only; `Bool` arithmetic is not implemented |
+| `div` | `F32`, `F64`, `C32`, `C64` | Same dtype inputs only; integer and `Bool` division are not implemented |
 | `neg` | `F32`, `F64`, `C32`, `C64` | Integer and `Bool` negation are not implemented |
 | `conj` | `F32`, `F64`, `C32`, `C64` | Real floating dtypes are identity; integer and `Bool` inputs are not implemented |
 | `abs`, `sign` | `F32`, `F64` | Complex, integer, and `Bool` inputs are not implemented |
-| `maximum`, `minimum`, `compare`, `select`, `clamp` | `F32`, `F64` | Complex ordering is not defined; `compare` returns a `Bool` tensor and `select` takes a `Bool` predicate |
+| `maximum`, `minimum`, `clamp` | `F32`, `F64` | Complex ordering is not defined; integer and `Bool` min/max/clamp are not implemented |
+| `compare`, `select` | `F32`, `F64`, `I32`, `I64` | Same dtype data inputs only; `compare` returns a `Bool` tensor and `select` takes a `Bool` predicate |
 | `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p` | `F32`, `F64` | Complex analytic kernels are not implemented |
 | `pow` | `F32`, `F64` | Same dtype inputs only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |

@@ -992,6 +992,85 @@ macro_rules! dispatch_binary_float_complex {
     }};
 }
 
+macro_rules! dispatch_binary_float_complex_int {
+    ($backend:expr, $lhs:expr, $rhs:expr, $kind:expr, $float_kernel:ident, $int_kernel:ident, $complex_kernel:ident) => {{
+        let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
+            $kind,
+            $crate::cubecl::op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
+        )?;
+        let op = descriptor.name;
+        match ($lhs, $rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f32,
+                    F32
+                )
+            }
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f64,
+                    F64
+                )
+            }
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $int_kernel,
+                    i32,
+                    I32
+                )
+            }
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $int_kernel,
+                    i64,
+                    I64
+                )
+            }
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex32,
+                    C32
+                )
+            }
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex64,
+                    C64
+                )
+            }
+            _ => Err(dtype_mismatch(op, $lhs, $rhs)),
+        }
+    }};
+}
+
 macro_rules! dispatch_binary_float_only {
     ($backend:expr, $lhs:expr, $rhs:expr, $kind:expr, $float_kernel:ident) => {{
         let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
@@ -1121,6 +1200,7 @@ macro_rules! dispatch_unary_float_only {
 }
 
 pub(crate) use dispatch_binary_float_complex;
+pub(crate) use dispatch_binary_float_complex_int;
 pub(crate) use dispatch_binary_float_only;
 pub(crate) use dispatch_unary_float_complex;
 pub(crate) use dispatch_unary_float_only;
