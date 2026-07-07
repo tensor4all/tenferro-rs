@@ -2,7 +2,7 @@ use tenferro_ad::TracedTensorAdExt;
 #[path = "ad/reductions_and_indexing.rs"]
 mod reductions_and_indexing;
 mod support;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use support::{run_many_traced_with, RunTraced};
 
@@ -140,8 +140,29 @@ fn register_graph_metadata_for_test(
 ) -> GlobalMetadataScope {
     let seeded: Vec<_> = seeded.into_iter().collect();
     let mut known: HashMap<_, _> = seeded.iter().cloned().collect();
-
     let mut registrations = seeded;
+    let mut visited = HashSet::new();
+
+    append_graph_metadata_for_test(graph, &mut known, &mut registrations, &mut visited);
+
+    register_scoped_global_metadata_batch(registrations).unwrap()
+}
+
+fn append_graph_metadata_for_test(
+    graph: &Graph<StdTensorOp>,
+    known: &mut HashMap<ValueKey<StdTensorOp>, TensorMeta>,
+    registrations: &mut Vec<(ValueKey<StdTensorOp>, TensorMeta)>,
+    visited: &mut HashSet<*const Graph<StdTensorOp>>,
+) {
+    let graph_ptr: *const Graph<StdTensorOp> = graph;
+    if !visited.insert(graph_ptr) {
+        return;
+    }
+
+    for parent in graph.parents() {
+        append_graph_metadata_for_test(parent, known, registrations, visited);
+    }
+
     for op_node in graph.operations() {
         let input_metas: Vec<_> = op_node
             .inputs
@@ -194,8 +215,6 @@ fn register_graph_metadata_for_test(
             registrations.push((key, meta));
         }
     }
-
-    register_scoped_global_metadata_batch(registrations).unwrap()
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {

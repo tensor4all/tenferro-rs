@@ -269,6 +269,7 @@ pub struct ShapeGuard {
 pub struct ShapeGuardContext {
     guards: Vec<ShapeGuard>,
     metadata: MetadataMap,
+    shape_sources: HashMap<u64, ValueKey<StdTensorOp>>,
     use_global_registry: bool,
     local_keys: Option<Vec<ValueKey<StdTensorOp>>>,
     #[cfg(feature = "autodiff")]
@@ -311,6 +312,16 @@ impl ShapeGuardContext {
     /// also discard metadata inserted directly into this context.
     pub fn refresh_global_metadata(&mut self) {
         self.use_global_registry = true;
+    }
+
+    #[doc(hidden)]
+    pub fn insert_shape_source(&mut self, tensor_id: u64, key: ValueKey<StdTensorOp>) {
+        self.shape_sources.entry(tensor_id).or_insert(key);
+    }
+
+    #[doc(hidden)]
+    pub fn shape_source(&self, tensor_id: u64) -> Option<&ValueKey<StdTensorOp>> {
+        self.shape_sources.get(&tensor_id)
     }
 
     /// Use an explicit extension AD rule set for this context.

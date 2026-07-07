@@ -9,7 +9,7 @@ use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ShapeExtent, SymDim, TensorMeta};
-use tidu::ADRuleError;
+use tidu::{ADRuleError, PrimitiveTransposeInput};
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -116,17 +116,16 @@ fn transpose_reshape_returns_none_for_dynamic_shape_sources() {
     assert_eq!(graph.operations().len(), 1);
     let reshape = &graph.operations()[0];
     assert_eq!(reshape.inputs[0], ValueRef::Local(cotangent));
-    assert_eq!(reshape.inputs[1], inputs[0]);
     assert_eq!(
         reshape.operation,
         StdTensorOp::Reshape {
-            to_shape: DimExpr::input_shape(1, 2),
+            to_shape: vec![DimExpr::Const(2), DimExpr::Const(3)],
         }
     );
     assert_eq!(
         reshape.role,
         OperationRole::Linearized {
-            active_mask: vec![true, false],
+            active_mask: vec![true],
         }
     );
 }
@@ -293,13 +292,25 @@ fn transpose_broadcast_propagates_unresolved_local_shape_error() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input(35));
-    let inputs = vec![ValueRef::Local(999)];
+    let data_key = input_key(36);
+    ctx.insert_metadata(
+        data_key.clone(),
+        TensorMeta::with_extents(
+            DType::F64,
+            vec![ShapeExtent::upper_bound(SymDim::from(1usize))],
+        ),
+    );
+    let inputs = vec![PrimitiveTransposeInput::Linear {
+        key: data_key,
+        primal: None,
+    }];
 
-    let err = StdTensorOp::BroadcastInDim {
+    let op = StdTensorOp::BroadcastInDim {
         shape: vec![DimExpr::Const(3)],
         dims: vec![0],
-    }
-    .transpose_rule(
+    };
+    let err = crate::ad::transpose_rule(
+        &op,
         &mut builder,
         &[Some(cotangent)],
         &inputs,
@@ -308,8 +319,7 @@ fn transpose_broadcast_propagates_unresolved_local_shape_error() {
     )
     .unwrap_err();
 
-    assert!(err.to_string().contains("without an attached graph"));
-    assert!(builder.build().operations().is_empty());
+    assert!(err.to_string().contains("linear-only"));
 }
 
 #[test]
@@ -345,11 +355,10 @@ fn transpose_broadcast_reduces_singleton_input_axes() {
     assert_eq!(
         reshape.operation,
         StdTensorOp::Reshape {
-            to_shape: DimExpr::input_shape(1, 1),
+            to_shape: vec![DimExpr::Const(1)],
         }
     );
     assert_eq!(reshape.inputs[0], ValueRef::Local(reduce.outputs[0]));
-    assert_eq!(reshape.inputs[1], inputs[0]);
     assert!(reshape.outputs.contains(&cotangent_in));
 }
 
@@ -484,6 +493,101 @@ fn transpose_embed_diag_accepts_upper_bound_input_metadata_for_rank_only_perm() 
         graph.operations()[1].operation,
         StdTensorOp::Transpose { perm: vec![1, 0] }
     );
+}
+
+#[test]
+fn transpose_extract_diag_uses_runtime_shape_source_for_symbolic_padding() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(61));
+    let data_key = input_key(62);
+    ctx.insert_metadata(
+        data_key.clone(),
+        TensorMeta::exact(
+            DType::F64,
+            vec![SymDim::tensor_axis(900, 0), SymDim::from(5usize)],
+        ),
+    );
+    ctx.insert_shape_source(900, data_key.clone());
+
+    let result = StdTensorOp::ExtractDiag {
+        axis_a: 0,
+        axis_b: 1,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &[ValueRef::External(data_key.clone())],
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap();
+
+    assert_eq!(result.len(), 1);
+    let cotangent_in = result[0].expect("extract-diag input cotangent must be active");
+    let graph = builder.build();
+    assert_eq!(graph.operations().len(), 3);
+    assert_eq!(
+        graph.operations()[0].operation,
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        }
+    );
+    assert_eq!(
+        graph.operations()[1].operation,
+        StdTensorOp::PadToMatch { axis: 0 }
+    );
+    assert_eq!(
+        graph.operations()[1].inputs,
+        vec![
+            ValueRef::Local(graph.operations()[0].outputs[0]),
+            ValueRef::External(data_key.clone())
+        ]
+    );
+    assert_eq!(
+        graph.operations()[2].operation,
+        StdTensorOp::PadToMatch { axis: 1 }
+    );
+    assert_eq!(
+        graph.operations()[2].inputs,
+        vec![
+            ValueRef::Local(graph.operations()[1].outputs[0]),
+            ValueRef::External(data_key)
+        ]
+    );
+    assert!(graph.operations()[2].outputs.contains(&cotangent_in));
+}
+
+#[test]
+fn transpose_extract_diag_reports_static_padding_axis_errors() {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input(63));
+    let data_key = input_key(64);
+    ctx.insert_metadata(data_key.clone(), meta(&[2, 2]));
+
+    let err = StdTensorOp::ExtractDiag {
+        axis_a: 2,
+        axis_b: 0,
+    }
+    .transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &[ValueRef::External(data_key)],
+        &linear_mode(&[true]),
+        &mut ctx,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ADRuleError::InvalidInput {
+            ref op,
+            ref message,
+            ..
+        } if op == "ExtractDiag" && message.contains("out of bounds")
+    ));
 }
 
 #[test]

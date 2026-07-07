@@ -153,7 +153,12 @@ graph transform artifacts only:
 
 - eager `RecordedGraph` linearization;
 - traced JVP linearized/optimized graphs;
-- traced VJP linearized graphs plus optimized transposed graphs.
+- traced VJP residual graphs plus optimized transposed graphs.
+
+VJP cache entries deliberately do not retain the strictly-linear tangent sweep
+after `linear_transpose` has run. The optimized transposed graph may reference
+residual values, so the residual graph is the graph part that remains live as
+an `extra_roots` input to materialization.
 
 The default limit is 128 entries and 64 MiB of logical retained bytes. Users can
 query, configure, and clear it through
@@ -442,13 +447,17 @@ In practice:
 
 ### `linearize`
 
-`linearize` consumes a resolved view and returns a new linear graph.
+`linearize` consumes a resolved view and returns a split linearized graph.
 
 ```rust
+use std::sync::Arc;
+
 struct LinearizedGraph<Op> {
-    graph: Graph<Op>,
+    linear: Graph<Op>,
+    residual: Arc<Graph<Op>>,
     tangent_inputs: Vec<(InputKey, LocalValueId)>,
     tangent_outputs: Vec<Option<LocalValueId>>,
+    linear_primals: Vec<Option<ValueKey<Op>>>,
 }
 
 fn linearize<Op: Primitive>(
@@ -463,7 +472,8 @@ Important consequences:
 - callers specify **which primal inputs** they linearize with respect to
 - tangent inputs are created **inside the returned graph**
 - those tangent inputs receive fresh `InputKey`s and are returned to the caller
-- primal values are referenced by `External(ValueKey)`, not copied
+- primal and metadata values are held in the residual graph and referenced by
+  `External(ValueKey)`, not copied into the strictly-linear graph
 
 Algorithm sketch:
 
@@ -471,8 +481,9 @@ Algorithm sketch:
 1. Traverse the reachable logical DAG in topological order.
 2. Seed tangent inputs for the requested primal InputKeys.
 3. For each reachable primitive, call its linearization rule.
-4. Emit new local linear nodes into the new graph.
-5. Reference primal values through External(ValueKey).
+4. Emit tangent-flow nodes into the strictly-linear graph.
+5. Put residual values into the residual graph and reference them through
+   External(ValueKey).
 6. Skip unreachable tangent flow with zero propagation.
 ```
 
@@ -506,8 +517,8 @@ The design rule is:
 
 ### `linear_transpose`
 
-`linear_transpose` consumes a linear graph and produces another linear graph with
-active inputs and outputs reversed.
+`linear_transpose` consumes a linearized graph and produces another split
+linearized graph with active inputs and outputs reversed.
 
 ```rust
 fn linear_transpose<Op: Primitive>(
@@ -518,11 +529,17 @@ fn linear_transpose<Op: Primitive>(
 It does not linearize again. It reuses the same local linear rules with
 direction reversed.
 
-`tidu::linear_transpose` is generic. It traverses the linear graph in reverse
-topological order and, for each op node, calls `Op::transpose_rule` to obtain
-the local transposed contribution. `tidu` does not know which primitives
+`tidu::linear_transpose` is generic. It traverses the strictly-linear graph in
+reverse topological order and, for each op node, calls `Op::transpose_rule` to
+obtain the local transposed contribution. `tidu` does not know which primitives
 exist; it only requires that every op in the linear graph implements
 `Primitive::transpose_rule`.
+
+Transpose rules receive `PrimitiveTransposeInput` values. A residual input is
+an ordinary fixed operand. A linear input belongs to tangent flow; if tidu knows
+the primal counterpart, the rule may use that primal only for metadata, runtime
+shape sources, or fixed coefficients. A linear input without a primal must not
+be treated as an ordinary residual operand.
 
 Transpose accumulation must use global identity. When multiple reverse
 contributions flow back to the same original tangent node, bucket by the

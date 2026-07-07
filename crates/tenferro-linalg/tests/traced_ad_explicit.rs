@@ -839,6 +839,29 @@ struct GraphOpSummary {
     multi_output_ops: usize,
 }
 
+#[derive(Debug)]
+struct CompiledProgramSummary {
+    input_count: usize,
+    instruction_count: usize,
+    counts: BTreeMap<&'static str, usize>,
+}
+
+fn compiled_program_summary(output: &TracedTensor) -> CompiledProgramSummary {
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(output).unwrap();
+    let view = program.lowering_view();
+    let mut counts = BTreeMap::new();
+    for instruction in view.instructions() {
+        *counts.entry(instruction.op_name()).or_insert(0) += 1;
+    }
+    let instruction_count = view.instructions().len();
+    CompiledProgramSummary {
+        input_count: program.input_count(),
+        instruction_count,
+        counts,
+    }
+}
+
 fn graph_op_summary(output: &TracedTensor) -> GraphOpSummary {
     let mut counts = BTreeMap::new();
     let mut multi_output_ops = 0;
@@ -935,6 +958,63 @@ fn assert_gradient_matches_finite_difference(
             actual_value
         );
     }
+}
+
+#[test]
+fn lu_sum_grad_compiled_program_does_not_retain_tangent_sweep() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.5, 0.25, 3.0]))
+            .unwrap();
+    let grad = ad.grad(&lu_sum_loss(&matrix), &matrix).unwrap();
+    let summary = compiled_program_summary(&grad);
+
+    assert_eq!(
+        summary.input_count, 2,
+        "compiled LU VJP should bind only the primal input and cotangent: {summary:?}"
+    );
+    assert_eq!(
+        summary.counts.get("DotGeneral").copied().unwrap_or(0),
+        3,
+        "compiled LU VJP should not retain the zero tangent matmul chain: {summary:?}"
+    );
+    assert_eq!(
+        summary.counts.get("Extension").copied().unwrap_or(0),
+        3,
+        "compiled LU VJP should contain primal LU plus two triangular-solve pullback ops: {summary:?}"
+    );
+    assert!(
+        summary.instruction_count <= 21,
+        "compiled LU VJP should stay near the direct transpose baseline: {summary:?}"
+    );
+}
+
+#[test]
+fn eigvalsh_sum_grad_compiled_program_does_not_retain_tangent_sweep() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.2, 0.2, 4.0]))
+            .unwrap();
+    let grad = ad.grad(&eigvalsh_sum_loss(&matrix), &matrix).unwrap();
+    let summary = compiled_program_summary(&grad);
+
+    assert_eq!(
+        summary.input_count, 2,
+        "compiled eigvalsh VJP should bind only the primal input and cotangent: {summary:?}"
+    );
+    assert_eq!(
+        summary.counts.get("DotGeneral").copied().unwrap_or(0),
+        2,
+        "compiled eigvalsh VJP should not retain the zero tangent matmul chain: {summary:?}"
+    );
+    assert!(
+        summary.counts.get("Extension").copied().unwrap_or(0) <= 2,
+        "compiled eigvalsh VJP should not retain extra extension ops from the zero tangent chain: {summary:?}"
+    );
+    assert!(
+        summary.instruction_count <= 16,
+        "compiled eigvalsh VJP should stay compact after linearize+transpose: {summary:?}"
+    );
 }
 
 #[test]
@@ -1050,13 +1130,12 @@ fn eigvalsh_sum_grad_optimized_graph_is_structurally_compact() {
             ("DotGeneral", 2),
             ("EmbedDiag", 2),
             ("ExtractDiag", 1),
-            ("PadToMatch", 4),
             ("Reshape", 1),
             ("Transpose", 1),
             ("Tril", 1),
         ])
     );
-    assert_eq!(summary.total_ops, 15);
+    assert_eq!(summary.total_ops, 11);
 }
 
 #[test]
@@ -1089,13 +1168,12 @@ fn full_eigh_sum_grad_optimized_graph_is_structurally_compact() {
             ("EmbedDiag", 2),
             ("ExtractDiag", 1),
             ("Mul", 1),
-            ("PadToMatch", 4),
             ("Reshape", 2),
             ("Transpose", 1),
             ("Tril", 1),
         ])
     );
-    assert_eq!(summary.total_ops, 20);
+    assert_eq!(summary.total_ops, 16);
 }
 
 #[test]
@@ -1115,7 +1193,6 @@ fn qr_sum_grad_optimized_graph_is_structurally_compact() {
                 ("ExtractDiag", 1),
                 ("Mul", 1),
                 ("Neg", 1),
-                ("PadToMatch", 2),
                 ("Reshape", 2),
                 ("Transpose", 3),
                 ("Triu", 1),
@@ -1134,7 +1211,6 @@ fn qr_sum_grad_optimized_graph_is_structurally_compact() {
                 ("ExtractDiag", 1),
                 ("Mul", 1),
                 ("Neg", 3),
-                ("PadToMatch", 2),
                 ("Reshape", 2),
                 ("Transpose", 3),
                 ("Triu", 1),
@@ -1153,7 +1229,6 @@ fn qr_sum_grad_optimized_graph_is_structurally_compact() {
                 ("ExtractDiag", 1),
                 ("Mul", 1),
                 ("Neg", 1),
-                ("PadToMatch", 2),
                 ("Reshape", 2),
                 ("Transpose", 3),
                 ("Triu", 1),

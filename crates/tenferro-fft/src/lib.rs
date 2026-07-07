@@ -66,7 +66,7 @@ use tenferro_ad::extension::{
 };
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -890,11 +890,19 @@ impl ExtensionLinearTransposeRule for FftAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        transpose_fft_adjoint(op, builder, cotangent_out, inputs, Some(active_mask), ctx)
+        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
+        transpose_fft_adjoint_from_transpose_inputs(
+            op,
+            builder,
+            cotangent_out,
+            &inputs,
+            active_mask,
+            ctx,
+        )
     }
 }
 
@@ -925,6 +933,39 @@ fn transpose_fft_adjoint(
     active_mask: Option<&[bool]>,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, active_mask)? else {
+        return Ok(vec![None]);
+    };
+    let restored = restore_c2c_adjoint_input_length(builder, adjoint, inputs, fft_op, ctx)?;
+    Ok(vec![Some(restored)])
+}
+
+#[cfg(feature = "autodiff")]
+fn transpose_fft_adjoint_from_transpose_inputs(
+    op: &dyn ExtensionOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
+    active_mask: &[bool],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, Some(active_mask))?
+    else {
+        return Ok(vec![None]);
+    };
+    let restored = restore_c2c_adjoint_input_length_from_transpose_input(
+        builder, adjoint, inputs, fft_op, ctx,
+    )?;
+    Ok(vec![Some(restored)])
+}
+
+#[cfg(feature = "autodiff")]
+fn emit_c2c_adjoint<'a>(
+    op: &'a dyn ExtensionOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    active_mask: Option<&[bool]>,
+) -> ADRuleResult<Option<(LocalValueId, &'a FftOp)>> {
     let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
     if !matches!(fft_op.kind, FftKind::C2C { .. }) {
         return Err(ADRuleError::unsupported(
@@ -932,28 +973,24 @@ fn transpose_fft_adjoint(
             ADRuleKind::Transpose,
         ));
     }
-    if active_mask.is_some_and(|mask| !mask.get(0).copied().unwrap_or(false)) {
-        return Ok(vec![None]);
+    if active_mask.is_some_and(|mask| !mask.first().copied().unwrap_or(false)) {
+        return Ok(None);
     }
 
-    match cotangent_out[0] {
-        Some(ct) => {
-            let adjoint_op = fft_op.c2c_adjoint().ok_or_else(|| {
-                ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, ADRuleKind::Transpose)
-            })?;
-            let outputs = builder.add_operation(
-                StdTensorOp::Extension(Arc::new(adjoint_op)),
-                vec![ValueRef::Local(ct)],
-                OperationRole::Linearized {
-                    active_mask: vec![true],
-                },
-            );
-            let restored =
-                restore_c2c_adjoint_input_length(builder, outputs[0], inputs, fft_op, ctx)?;
-            Ok(vec![Some(restored)])
-        }
-        None => Ok(vec![None]),
-    }
+    let Some(ct) = cotangent_out.first().copied().flatten() else {
+        return Ok(None);
+    };
+    let adjoint_op = fft_op
+        .c2c_adjoint()
+        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, ADRuleKind::Transpose))?;
+    let outputs = builder.add_operation(
+        StdTensorOp::Extension(Arc::new(adjoint_op)),
+        vec![ValueRef::Local(ct)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    );
+    Ok(Some((outputs[0], fft_op)))
 }
 
 #[cfg(feature = "autodiff")]
@@ -1000,6 +1037,59 @@ fn restore_c2c_adjoint_input_length(
     let padded = builder.add_operation(
         StdTensorOp::PadToMatch { axis: fft_op.axis },
         vec![ValueRef::Local(truncated), input.clone()],
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        },
+    )[0];
+    Ok(padded)
+}
+
+#[cfg(feature = "autodiff")]
+fn restore_c2c_adjoint_input_length_from_transpose_input(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    adjoint: LocalValueId,
+    inputs: &[TransposeInputRef<'_>],
+    fft_op: &FftOp,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<LocalValueId> {
+    let Some(transform_len) = fft_op.n else {
+        return Ok(adjoint);
+    };
+    let Some(input) = inputs.first() else {
+        return Err(ADRuleError::invalid_input(
+            FFT_EXTENSION_FAMILY_ID,
+            ADRuleKind::Transpose,
+            "FFT transpose rule expected one primal input",
+        ));
+    };
+    let metadata = input.metadata_value();
+    if ctx
+        .shape_of(&metadata)
+        .ok()
+        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
+        == Some(transform_len)
+    {
+        return Ok(adjoint);
+    }
+
+    let shape_source = input.shape_source_value(FFT_EXTENSION_FAMILY_ID, 0)?;
+    let size = builder.add_operation(
+        StdTensorOp::ShapeOf { axis: fft_op.axis },
+        vec![shape_source.clone()],
+        OperationRole::Linearized {
+            active_mask: vec![false],
+        },
+    )[0];
+    let truncated = builder.add_operation(
+        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
+        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
+        OperationRole::Linearized {
+            active_mask: vec![true, false],
+        },
+    )[0];
+    let padded = builder.add_operation(
+        StdTensorOp::PadToMatch { axis: fft_op.axis },
+        vec![ValueRef::Local(truncated), shape_source],
         OperationRole::Linearized {
             active_mask: vec![true, false],
         },
@@ -1898,5 +1988,56 @@ mod tests {
 
         assert_eq!(result, vec![None]);
         assert!(builder.build().operations().is_empty());
+    }
+
+    #[cfg(feature = "autodiff")]
+    #[test]
+    fn fft_transpose_rule_uses_metadata_for_linear_only_matching_length() {
+        let rule = FftAdRule;
+        let op = FftOp::new(
+            FftKind::C2C { forward: true },
+            0,
+            Some(4),
+            FftNorm::Backward,
+        );
+        let active_key = ValueKey::Input(tenferro_ops::input_key::TensorInputKey::User { id: 1 });
+        let mut ctx = ShapeGuardContext::default();
+        ctx.insert_metadata(
+            active_key.clone(),
+            tenferro_ops::TensorMeta::exact(DType::C64, vec![SymDim::from(4usize)]),
+        );
+
+        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
+        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
+        let result = rule
+            .linear_transpose(
+                &op,
+                &mut builder,
+                &[Some(cotangent)],
+                &[tidu::PrimitiveTransposeInput::Linear {
+                    key: active_key.clone(),
+                    primal: None,
+                }],
+                &[true],
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_some());
+        let active_ref = ValueRef::External(active_key);
+        let graph = builder.build();
+        assert!(graph
+            .operations()
+            .iter()
+            .all(|node| !node.inputs.iter().any(|input| input == &active_ref)));
+        assert!(graph.operations().iter().all(|node| {
+            !matches!(
+                node.operation,
+                StdTensorOp::ShapeOf { .. }
+                    | StdTensorOp::DynamicTruncate { .. }
+                    | StdTensorOp::PadToMatch { .. }
+            )
+        }));
     }
 }

@@ -62,6 +62,104 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             self.deferred_error = Some(err);
         }
     }
+
+    pub(super) fn execute_forward_graph(
+        &mut self,
+        graph: &Graph<StdTensorOp>,
+        initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
+        if self.deferred_error.is_some() {
+            return initial_data.clone();
+        }
+        let mut all_values = initial_data.clone();
+        let live_values = live_graph_values(graph);
+        let mut input_metadata = Vec::with_capacity(graph.inputs().len());
+        for &input_id in graph.inputs() {
+            let key = graph.values()[input_id].key.clone();
+            match eager_forward_input_metadata(&key, initial_data) {
+                Ok(meta) => input_metadata.push((key, meta)),
+                Err(err) => {
+                    self.record_error(err);
+                    return all_values;
+                }
+            }
+        }
+
+        for op_node in graph.operations() {
+            if linear_op_depends_on_tangents(&op_node.role) {
+                continue;
+            }
+            if !op_node
+                .outputs
+                .iter()
+                .any(|output_id| live_values.contains(output_id))
+            {
+                continue;
+            }
+
+            let mut resolved_values = Vec::with_capacity(op_node.inputs.len());
+            for input in &op_node.inputs {
+                let resolved = match input {
+                    ValueRef::Local(local_id) => {
+                        let key = &graph.values()[*local_id].key;
+                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
+                    }
+                    ValueRef::External(key) => {
+                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
+                    }
+                };
+                match resolved {
+                    Ok(value) => resolved_values.push(value),
+                    Err(err) => {
+                        self.record_error(err);
+                        return all_values;
+                    }
+                }
+            }
+            let resolved_inputs: Vec<&Tensor> =
+                resolved_values.iter().map(|value| value.as_ref()).collect();
+            let outputs_result =
+                if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+                    exec_op_on_tensors_with_extension_executor(
+                        &op_node.operation,
+                        &resolved_inputs,
+                        self.backend,
+                        Some(extension_executor),
+                    )
+                } else {
+                    exec_op_on_tensors(&op_node.operation, &resolved_inputs, self.backend)
+                };
+            let outputs = match outputs_result {
+                Ok(outputs) => outputs,
+                Err(err) => {
+                    self.record_error(eager_ad_invalid_input(format!(
+                        "eager forward exec failed for {:?}: {err}",
+                        op_node.operation
+                    )));
+                    return all_values;
+                }
+            };
+
+            for (output_id, output) in op_node.outputs.iter().zip(outputs) {
+                let key = graph.values()[*output_id].key.clone();
+                all_values.insert(key, Arc::new(output));
+            }
+        }
+
+        let metadata_scope =
+            match register_scoped_live_graph_metadata(graph, &live_values, input_metadata) {
+                Ok(scope) => scope,
+                Err(err) => {
+                    self.record_error(eager_ad_invalid_input(format!(
+                        "eager replay metadata registration failed: {err}"
+                    )));
+                    return all_values;
+                }
+            };
+        push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
+
+        all_values
+    }
 }
 
 pub(super) fn missing_tangent_base_key(
@@ -219,6 +317,109 @@ pub(super) fn prefill_missing_linear_zero_values<B: TensorBackend>(
     Ok(())
 }
 
+pub(super) fn prefill_linear_residual_values<B: TensorBackend + 'static>(
+    linear: &LinearizedGraph<StdTensorOp>,
+    external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    backend: &mut B,
+    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+) -> ADRuleResult<()> {
+    let mut visited = HashSet::new();
+    prefill_residual_graph_values(
+        linear.residual_graph(),
+        external_data,
+        backend,
+        &mut extension_executor,
+        &mut visited,
+    )
+}
+
+fn prefill_residual_graph_values<B: TensorBackend + 'static>(
+    graph: &Graph<StdTensorOp>,
+    external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    backend: &mut B,
+    extension_executor: &mut Option<&mut ExtensionExecutor<B>>,
+    visited: &mut HashSet<*const Graph<StdTensorOp>>,
+) -> ADRuleResult<()> {
+    let graph_ptr: *const Graph<StdTensorOp> = graph;
+    if !visited.insert(graph_ptr) {
+        return Ok(());
+    }
+
+    for parent in graph.parents() {
+        prefill_residual_graph_values(parent, external_data, backend, extension_executor, visited)?;
+    }
+
+    for op_node in graph.operations() {
+        if op_node
+            .outputs
+            .iter()
+            .all(|output_id| external_data.contains_key(&graph.values()[*output_id].key))
+        {
+            continue;
+        }
+
+        let mut resolved_values = Vec::with_capacity(op_node.inputs.len());
+        for input in &op_node.inputs {
+            let key = match input {
+                ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                ValueRef::External(key) => key,
+            };
+            resolved_values.push(eager_residual_value(external_data, key, backend)?);
+        }
+
+        let resolved_inputs: Vec<&Tensor> =
+            resolved_values.iter().map(|value| value.as_ref()).collect();
+        let outputs = match extension_executor.as_deref_mut() {
+            Some(executor) => exec_op_on_tensors_with_extension_executor(
+                &op_node.operation,
+                &resolved_inputs,
+                backend,
+                Some(executor),
+            ),
+            None => exec_op_on_tensors(&op_node.operation, &resolved_inputs, backend),
+        }
+        .map_err(|err| {
+            eager_ad_invalid_input(format!(
+                "eager residual exec failed for {:?}: {err}",
+                op_node.operation
+            ))
+        })?;
+
+        for (output_id, output) in op_node.outputs.iter().zip(outputs) {
+            let key = graph.values()[*output_id].key.clone();
+            external_data.insert(key, Arc::new(output));
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn eager_residual_value<B: TensorBackend>(
+    all_values: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+    key: &ValueKey<StdTensorOp>,
+    backend: &mut B,
+) -> ADRuleResult<Arc<Tensor>> {
+    if let Some(value) = all_values.get(key) {
+        return Ok(Arc::clone(value));
+    }
+
+    let base_key = missing_tangent_base_key(key).ok_or_else(|| {
+        eager_ad_invalid_input(format!("missing concrete eager residual value for {key:?}"))
+    })?;
+    let base = all_values.get(&base_key).ok_or_else(|| {
+        eager_ad_invalid_input(format!(
+            "missing base eager residual value for {base_key:?}"
+        ))
+    })?;
+    let value = Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(|err| {
+        eager_ad_invalid_input(format!(
+            "failed to create eager residual tangent zero: {err}"
+        ))
+    })?);
+    all_values.insert(key.clone(), Arc::clone(&value));
+    Ok(value)
+}
+
 fn checked_zero_element_count(shape: &[usize]) -> ADRuleResult<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
@@ -253,98 +454,7 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
         graph: PrimitiveGraph<'_, StdTensorOp>,
         initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
-        if self.deferred_error.is_some() {
-            return initial_data.clone();
-        }
-        let graph = graph.as_graph();
-        let mut all_values = initial_data.clone();
-        let live_values = live_graph_values(graph);
-        let mut input_metadata = Vec::with_capacity(graph.inputs().len());
-        for &input_id in graph.inputs() {
-            let key = graph.values()[input_id].key.clone();
-            match eager_forward_input_metadata(&key, initial_data) {
-                Ok(meta) => input_metadata.push((key, meta)),
-                Err(err) => {
-                    self.record_error(err);
-                    return all_values;
-                }
-            }
-        }
-
-        for op_node in graph.operations() {
-            if linear_op_depends_on_tangents(&op_node.role) {
-                continue;
-            }
-            if !op_node
-                .outputs
-                .iter()
-                .any(|output_id| live_values.contains(output_id))
-            {
-                continue;
-            }
-
-            let mut resolved_values = Vec::with_capacity(op_node.inputs.len());
-            for input in &op_node.inputs {
-                let resolved = match input {
-                    ValueRef::Local(local_id) => {
-                        let key = &graph.values()[*local_id].key;
-                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
-                    }
-                    ValueRef::External(key) => {
-                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
-                    }
-                };
-                match resolved {
-                    Ok(value) => resolved_values.push(value),
-                    Err(err) => {
-                        self.record_error(err);
-                        return all_values;
-                    }
-                }
-            }
-            let resolved_inputs: Vec<&Tensor> =
-                resolved_values.iter().map(|value| value.as_ref()).collect();
-            let outputs_result =
-                if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-                    exec_op_on_tensors_with_extension_executor(
-                        &op_node.operation,
-                        &resolved_inputs,
-                        self.backend,
-                        Some(extension_executor),
-                    )
-                } else {
-                    exec_op_on_tensors(&op_node.operation, &resolved_inputs, self.backend)
-                };
-            let outputs = match outputs_result {
-                Ok(outputs) => outputs,
-                Err(err) => {
-                    self.record_error(eager_ad_invalid_input(format!(
-                        "eager forward exec failed for {:?}: {err}",
-                        op_node.operation
-                    )));
-                    return all_values;
-                }
-            };
-
-            for (output_id, output) in op_node.outputs.iter().zip(outputs) {
-                let key = graph.values()[*output_id].key.clone();
-                all_values.insert(key, Arc::new(output));
-            }
-        }
-
-        let metadata_scope =
-            match register_scoped_live_graph_metadata(graph, &live_values, input_metadata) {
-                Ok(scope) => scope,
-                Err(err) => {
-                    self.record_error(eager_ad_invalid_input(format!(
-                        "eager replay metadata registration failed: {err}"
-                    )));
-                    return all_values;
-                }
-            };
-        push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
-
-        all_values
+        self.execute_forward_graph(graph.as_graph(), initial_data)
     }
 
     fn run_transposed_linear(
@@ -358,6 +468,12 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             return Err(err);
         }
         let mut external_data = external_data.clone();
+        prefill_linear_residual_values(
+            linear,
+            &mut external_data,
+            self.backend,
+            self.extension_executor.as_deref_mut(),
+        )?;
         ctx.refresh_global_metadata();
         prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
 

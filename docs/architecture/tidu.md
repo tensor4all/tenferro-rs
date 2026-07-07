@@ -24,16 +24,21 @@ the same downstream primitive vocabulary.
 
 ### `linearize`
 
-Consumes a resolved view and returns a new linear graph (JVP).
+Consumes a resolved view and returns a new linearized graph (JVP). The returned
+value separates the strictly-linear tangent sweep from residual values
+referenced by that sweep.
 
 ```rust
 use computegraph::{ResolvedView, ValueKey, LocalValueId, Graph};
+use std::sync::Arc;
 use tidu::Primitive;
 
 struct LinearizedGraph<Op> {
-    graph: Graph<Op>,
+    linear: Graph<Op>,
+    residual: Arc<Graph<Op>>,
     tangent_inputs: Vec<(Op::InputKey, LocalValueId)>,
     tangent_outputs: Vec<Option<LocalValueId>>,
+    linear_primals: Vec<Option<ValueKey<Op>>>,
 }
 
 fn linearize<Op: Primitive>(
@@ -53,8 +58,9 @@ Algorithm:
 2. Seed tangent inputs for the requested primal `InputKey`s
    (keys generated via `ADKey::tangent_of`).
 3. For each reachable primitive, call `Op::linearize`.
-4. Emit new local linear nodes into the new graph.
-5. Reference primal values through `External(ValueKey)`.
+4. Emit tangent-flow nodes into the strictly-linear graph.
+5. Put residual values into the residual graph and reference them through
+   `External(ValueKey)`.
 6. Skip unreachable tangent flow with zero propagation.
 
 This is the graph-level analogue of JAX building a jaxpr whose linearized
@@ -62,8 +68,8 @@ body is itself a composition of primitives.
 
 ### `linear_transpose`
 
-Consumes a linear graph and produces another with active inputs and outputs
-reversed.
+Consumes a linearized graph and produces another with active inputs and
+outputs reversed.
 
 ```rust
 fn linear_transpose<Op: Primitive>(
@@ -71,8 +77,25 @@ fn linear_transpose<Op: Primitive>(
 ) -> LinearizedGraph<Op>;
 ```
 
-Traverses the linear graph in reverse topological order and, for each op
-node, calls `Op::transpose_rule` to obtain the local transposed contribution.
+Traverses the strictly-linear graph in reverse topological order and, for each
+op node, calls `Op::transpose_rule` to obtain the local transposed
+contribution.
+
+`transpose_rule` receives typed inputs:
+
+```rust
+enum PrimitiveTransposeInput<Op> {
+    Residual(ValueKey<Op>),
+    Linear { key: ValueKey<Op>, primal: Option<ValueKey<Op>> },
+}
+```
+
+Residual inputs are ordinary fixed operands. Linear inputs belong to tangent
+flow and must not be retained as tensor operands in the transposed graph. When
+`primal` is available, downstream primitive sets may use it for metadata,
+runtime shape sources, or fixed coefficients that are independent of the
+tangent flow. A `Linear { primal: None, .. }` input must not be collapsed into
+a residual `ValueRef`.
 
 Transpose accumulation must use global identity: when multiple reverse
 contributions flow back to the same original tangent node, bucket by the
@@ -90,7 +113,7 @@ primitive implementors do not need to implement `Dup`.
 
 ```rust
 fn linear_transpose<Op: Primitive>(linear: &LinearizedGraph<Op>) -> LinearizedGraph<Op> {
-    let mut builder = GraphBuilder::new();
+    let mut builder = SplitGraphBuilder::new();
     let mut ct_env: HashMap<ValueKey<Op>, LocalValueId> = HashMap::new();
 
     // 1. Seed cotangent outputs
@@ -105,15 +128,19 @@ fn linear_transpose<Op: Primitive>(linear: &LinearizedGraph<Op>) -> LinearizedGr
             .map(|out_id| ct_env.get(&global_key(out_id)).copied())
             .collect();
 
+        let rule_inputs = op_node.inputs.iter()
+            .map(|input| classify_transpose_input(linear, input))
+            .collect::<Vec<_>>();
+
         // Delegate to per-op linear_transpose rule
         let ct_ins = op_node.operation.transpose_rule(
-            &mut builder, &ct_outs, &op_node.inputs, &op_node.role,
+            &mut builder, &ct_outs, &rule_inputs, &op_node.role,
         );
 
         // 3. Accumulate cotangents by ValueKey
-        for (input, ct_in) in op_node.inputs.iter().zip(ct_ins) {
+        for (input, ct_in) in rule_inputs.iter().zip(ct_ins) {
             if let Some(ct) = ct_in {
-                let key = global_key_of(input);
+                let key = input.key();
                 match ct_env.entry(key) {
                     Vacant(e)  => { e.insert(ct); }
                     Occupied(e) => {
@@ -130,7 +157,7 @@ fn linear_transpose<Op: Primitive>(linear: &LinearizedGraph<Op>) -> LinearizedGr
             }
         }
     }
-    // Build transposed LinearizedGraph from builder + ct_env
+    // Build transposed LinearizedGraph from split builder + ct_env
 }
 ```
 
@@ -319,7 +346,7 @@ tidu-rs owns:
   - Primitive trait
   - linearize (JVP transform)
   - linear_transpose (reverse linear flow)
-  - LinearizedGraph data structure
+  - LinearizedGraph split between strictly-linear and residual graphs
 
 tidu-rs does NOT own:
   - graph infrastructure → computegraph-rs

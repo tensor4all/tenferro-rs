@@ -3,10 +3,22 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::optimize::EinsumPlanSpec;
+#[cfg(feature = "autodiff")]
+use computegraph::graph::GraphBuilder;
+#[cfg(feature = "autodiff")]
+use computegraph::types::OperationRole;
 use tenferro_cpu::CpuBackend;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ext_op::ExtensionLinearTransposeRule;
 use tenferro_ops::ext_op::ExtensionOp;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::input_key::TensorInputKey;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::TensorMeta;
 use tenferro_runtime::ExtensionCacheStore;
 use tenferro_tensor::{TensorOwnedView, TensorRead};
+#[cfg(feature = "autodiff")]
+use tidu::PrimitiveTransposeInput;
 
 #[test]
 fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
@@ -305,8 +317,17 @@ fn vjp_broadcast_remap_failure_returns_error() {
         0,
         &[0, 2],
         &[0, 1],
-        ValueRef::Local(1),
-        &[SymDim::from(2usize), SymDim::from(3usize)],
+        vec![
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            },
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 1,
+            },
+        ],
+        vec![ValueRef::Local(1)],
     )
     .expect_err("unmappable VJP labels should be an AD rule error");
 
@@ -314,6 +335,120 @@ fn vjp_broadcast_remap_failure_returns_error() {
     assert!(message.contains("einsum VJP broadcast remap"));
     assert!(message.contains("cotangent"));
     assert!(builder.ops.is_empty());
+}
+
+#[cfg(feature = "autodiff")]
+fn ad_input_key(id: u64) -> TensorInputKey {
+    TensorInputKey::User { id }
+}
+
+#[cfg(feature = "autodiff")]
+fn ad_value_key(id: u64) -> ValueKey<StdTensorOp> {
+    ValueKey::Input(ad_input_key(id))
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn linear_transpose_broadcasts_linear_only_active_input_from_metadata() {
+    let rule = EinsumAdRule;
+    let op = EinsumExtensionOp::with_output_shape_hint(
+        EinsumSubscripts {
+            inputs: vec![vec![b'i' as u32]],
+            output: vec![],
+        },
+        vec![],
+        EinsumPlanSpec::LeftToRight,
+    );
+    let active_key = ad_value_key(10);
+    let mut ctx = ShapeGuardContext::default();
+    ctx.insert_metadata(
+        active_key.clone(),
+        TensorMeta::exact(DType::F64, vec![SymDim::from(3usize)]),
+    );
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let cotangent = builder.add_input(ad_input_key(0));
+    let result = rule
+        .linear_transpose(
+            &op,
+            &mut builder,
+            &[Some(cotangent)],
+            &[PrimitiveTransposeInput::Linear {
+                key: active_key.clone(),
+                primal: None,
+            }],
+            &[true],
+            &mut ctx,
+        )
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].is_some());
+    let active_ref = ValueRef::External(active_key);
+    let graph = builder.build();
+    assert!(graph
+        .operations()
+        .iter()
+        .all(|node| !node.inputs.iter().any(|input| input == &active_ref)));
+    assert!(graph.operations().iter().any(|node| {
+        matches!(
+            (&node.operation, &node.role, node.inputs.len()),
+            (
+                StdTensorOp::BroadcastInDim { shape, dims },
+                OperationRole::Linearized { active_mask },
+                1
+            ) if shape == &[DimExpr::Const(3)] && dims.is_empty() && active_mask == &[true]
+        )
+    }));
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn linear_transpose_rejects_linear_only_coefficient_input() {
+    let rule = EinsumAdRule;
+    let op = EinsumExtensionOp::with_output_shape_hint(
+        EinsumSubscripts {
+            inputs: vec![vec![b'i' as u32], vec![b'i' as u32]],
+            output: vec![],
+        },
+        vec![],
+        EinsumPlanSpec::LeftToRight,
+    );
+    let active_key = ad_value_key(10);
+    let coefficient_key = ad_value_key(11);
+    let mut ctx = ShapeGuardContext::default();
+    for key in [&active_key, &coefficient_key] {
+        ctx.insert_metadata(
+            key.clone(),
+            TensorMeta::exact(DType::F64, vec![SymDim::from(3usize)]),
+        );
+    }
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let cotangent = builder.add_input(ad_input_key(0));
+    let err = rule
+        .linear_transpose(
+            &op,
+            &mut builder,
+            &[Some(cotangent)],
+            &[
+                PrimitiveTransposeInput::Linear {
+                    key: active_key,
+                    primal: None,
+                },
+                PrimitiveTransposeInput::Linear {
+                    key: coefficient_key,
+                    primal: None,
+                },
+            ],
+            &[true, false],
+            &mut ctx,
+        )
+        .unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("linear-only"), "{message}");
+    assert!(message.contains("einsum VJP"), "{message}");
 }
 
 #[cfg(feature = "autodiff")]

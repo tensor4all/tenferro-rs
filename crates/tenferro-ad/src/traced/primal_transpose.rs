@@ -9,7 +9,7 @@ use tenferro_ops::ad::transpose_rule;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
-use tidu::{ADKey, ADRuleError, ADRuleKind, ADRuleResult, PrimitiveValue};
+use tidu::{ADKey, ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 /// Reverse-mode graph built from primary transpose rules on the forward graph.
 pub(super) struct PrimalTransposeGraph {
@@ -232,19 +232,10 @@ pub(super) fn try_primal_transpose(
             continue;
         }
 
-        let rule_inputs: Vec<PrimitiveValue<StdTensorOp>> = op_key
+        let rule_inputs: Vec<PrimitiveTransposeInput<StdTensorOp>> = op_key
             .inputs()
             .iter()
-            .map(|key| PrimitiveValue::External(key.clone()))
-            .collect();
-        let inputs: Vec<ValueRef<StdTensorOp>> = rule_inputs
-            .iter()
-            .map(|value| match value {
-                PrimitiveValue::External(key) => ValueRef::External(key.clone()),
-                PrimitiveValue::Local(_) => {
-                    unreachable!("primal transpose rule inputs are external refs")
-                }
-            })
+            .map(|key| PrimitiveTransposeInput::Residual(key.clone()))
             .collect();
 
         let active_mask = transpose_active_mask(
@@ -267,7 +258,7 @@ pub(super) fn try_primal_transpose(
             op_key.operation(),
             &mut builder,
             &cotangent_out,
-            &inputs,
+            &rule_inputs,
             &transpose_mode,
             ctx,
         );
@@ -299,9 +290,7 @@ pub(super) fn try_primal_transpose(
             let Some(cotangent_id) = maybe_cotangent else {
                 continue;
             };
-            let PrimitiveValue::External(input_key) = input else {
-                continue;
-            };
+            let input_key = input.key();
 
             match cotangent_env.get(input_key).copied() {
                 Some(existing_id) => {

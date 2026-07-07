@@ -48,7 +48,7 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "998dbac4ca24442433ab9a52a182040dda2d8eea", version = "0.1.0" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "57a2e7ebe7738ca2f8b5c96f4c6ce4e467b20495", version = "0.1.0" }
 strided-view = "0.3.0"
 strided-traits = "0.3.0"
 strided-perm = { version = "0.3.0", features = ["parallel"] }

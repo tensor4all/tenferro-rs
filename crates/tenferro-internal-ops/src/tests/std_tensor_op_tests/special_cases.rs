@@ -111,7 +111,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(
         reshape_transpose_graph.operations()[0].operation,
         StdTensorOp::Reshape {
-            to_shape: DimExpr::input_shape(1, 1),
+            to_shape: shape![4],
         }
     );
 
@@ -411,22 +411,12 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
         run_transpose_case_with_input_shapes(reduce.clone(), 1, &[true], true, &[&[2, 3]]);
     assert!(reduce_transpose_result[0].is_some());
     assert_eq!(reduce_transpose_graph.operations().len(), 1);
-    // The transpose rule reads input shape via `ctx.shape_of` and emits
-    // `BroadcastInDim` with `InputDim` references into the primal input
-    // (which sits at op input index 1 after the cotangent at index 0).
+    // Exact metadata is enough here, so the transpose rule does not retain a
+    // runtime shape source input.
     assert_eq!(
         reduce_transpose_graph.operations()[0].operation,
         StdTensorOp::BroadcastInDim {
-            shape: vec![
-                DimExpr::InputDim {
-                    input_idx: 1,
-                    axis: 0,
-                },
-                DimExpr::InputDim {
-                    input_idx: 1,
-                    axis: 1,
-                },
-            ],
+            shape: shape![2, 3],
             dims: vec![0],
         }
     );
@@ -580,7 +570,7 @@ impl ExtensionLinearTransposeRule for RuleOnlyIdentityAd {
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
+        _inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
         _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {

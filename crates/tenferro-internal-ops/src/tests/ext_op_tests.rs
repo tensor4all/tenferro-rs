@@ -236,7 +236,7 @@ impl ExtensionLinearTransposeRule for CoverageLinearTransposeRule {
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
+        _inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {

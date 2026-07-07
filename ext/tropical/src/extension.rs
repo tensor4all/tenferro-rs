@@ -7,7 +7,7 @@ use std::sync::Arc;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_einsum::Subscripts;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
 use tenferro_ops::ext_op::{ExtensionOp, HostReference};
@@ -23,7 +23,7 @@ use tenferro_tensor::{DType, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::TensorScalar;
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
 #[cfg(feature = "autodiff")]
@@ -498,15 +498,18 @@ impl ExtensionLinearTransposeRule for TropicalEinsumJvpAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
         validate_ad_supported(&op.subscripts, ADRuleKind::Transpose)?;
+        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
         let Some(ct) = cotangent_out.first().copied().flatten() else {
             return Ok(vec![None; op.input_count()]);
         };
+        let lhs = inputs[0].fixed_value("tropical einsum VJP", 0)?;
+        let rhs = inputs[1].fixed_value("tropical einsum VJP", 1)?;
 
         let mut result = vec![None; op.input_count()];
         for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
@@ -520,7 +523,7 @@ impl ExtensionLinearTransposeRule for TropicalEinsumJvpAdRule {
                     op.subscripts.clone(),
                     active_input,
                 ))),
-                vec![inputs[0].clone(), inputs[1].clone(), ValueRef::Local(ct)],
+                vec![lhs.clone(), rhs.clone(), ValueRef::Local(ct)],
                 OperationRole::Linearized {
                     active_mask: vec![false, false, true],
                 },
@@ -678,7 +681,7 @@ where
             *out_value += *tangent_value;
         }
     }
-    Ok(Tensor::from_vec_col_major(output_shape, out)?)
+    Tensor::from_vec_col_major(output_shape, out)
 }
 
 #[cfg(feature = "autodiff")]
@@ -718,7 +721,7 @@ where
         })?;
         *slot += ct;
     }
-    Ok(Tensor::from_vec_col_major(active_shape, out)?)
+    Tensor::from_vec_col_major(active_shape, out)
 }
 
 #[cfg(feature = "autodiff")]
