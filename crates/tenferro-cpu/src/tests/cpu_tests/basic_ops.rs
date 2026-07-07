@@ -93,6 +93,55 @@ fn test_add_mul_i64() {
 }
 
 #[test]
+fn test_integer_add_mul_wrap_on_overflow() {
+    let i32_lhs = Tensor::from_vec_col_major(vec![3], vec![i32::MAX, i32::MIN, 50_i32]).unwrap();
+    let i32_rhs = Tensor::from_vec_col_major(vec![3], vec![1_i32, -1, i32::MAX]).unwrap();
+    let sum = add(&i32_lhs, &i32_rhs).unwrap();
+    let prod = mul(&i32_lhs, &i32_rhs).unwrap();
+
+    assert_eq!(
+        sum.as_slice::<i32>().unwrap(),
+        &[i32::MIN, i32::MAX, -2_147_483_599]
+    );
+    assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MAX, i32::MIN, -50]);
+
+    let i64_lhs = Tensor::from_vec_col_major(vec![2], vec![i64::MAX, i64::MIN]).unwrap();
+    let i64_rhs = Tensor::from_vec_col_major(vec![2], vec![1_i64, -1]).unwrap();
+    let sum = add(&i64_lhs, &i64_rhs).unwrap();
+    let prod = mul(&i64_lhs, &i64_rhs).unwrap();
+
+    assert_eq!(sum.as_slice::<i64>().unwrap(), &[i64::MIN, i64::MAX]);
+    assert_eq!(prod.as_slice::<i64>().unwrap(), &[i64::MAX, i64::MIN]);
+}
+
+#[test]
+fn test_integer_add_mul_read_views_wrap_on_overflow() {
+    let lhs =
+        TypedTensor::<i32>::from_vec_col_major(vec![3], vec![i32::MAX, i32::MIN, 50]).unwrap();
+    let rhs = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, -1, i32::MAX]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let sum = backend
+        .add_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+    let prod = backend
+        .mul_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+
+    assert_eq!(
+        sum.as_slice::<i32>().unwrap(),
+        &[i32::MIN, i32::MAX, -2_147_483_599]
+    );
+    assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MAX, i32::MIN, -50]);
+}
+
+#[test]
 fn test_add_mul_rank0_broadcast() {
     let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
     let tensor =
@@ -213,6 +262,54 @@ fn test_reduce_prod() {
     let all = reduce_prod(&t, &[0, 1]).unwrap();
     assert!(all.shape().is_empty());
     assert_eq!(get_f64(&all, &[]), 720.0);
+}
+
+#[test]
+fn test_integer_reduce_sum_prod_wrap_on_overflow() {
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]).unwrap();
+    let sum = reduce_sum(&input, &[0]).unwrap();
+    assert_eq!(
+        sum.as_slice::<i32>().unwrap(),
+        &[i32::MIN, i32::MAX.wrapping_add(2)]
+    );
+
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2]).unwrap();
+    let prod = reduce_prod(&input, &[0]).unwrap();
+    assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MIN, -2]);
+
+    let input = Tensor::from_vec_col_major(vec![2], vec![i64::MAX, 2]).unwrap();
+    let sum = reduce_sum(&input, &[0]).unwrap();
+    let prod = reduce_prod(&input, &[0]).unwrap();
+    assert_eq!(sum.as_slice::<i64>().unwrap(), &[i64::MIN.wrapping_add(1)]);
+    assert_eq!(prod.as_slice::<i64>().unwrap(), &[-2]);
+}
+
+#[test]
+fn test_integer_reduce_read_views_wrap_on_overflow() {
+    let input =
+        TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let sum = backend
+        .reduce_sum_read(
+            TensorRead::from_view(TensorView::I32(input.as_view())),
+            &[0],
+        )
+        .unwrap();
+    assert_eq!(
+        sum.as_slice::<i32>().unwrap(),
+        &[i32::MIN, i32::MAX.wrapping_add(2)]
+    );
+
+    let input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2])
+        .unwrap();
+    let prod = backend
+        .reduce_prod_read(
+            TensorRead::from_view(TensorView::I32(input.as_view())),
+            &[0],
+        )
+        .unwrap();
+    assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MIN, -2]);
 }
 
 #[test]

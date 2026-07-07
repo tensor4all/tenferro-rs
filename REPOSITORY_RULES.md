@@ -88,6 +88,16 @@ rules from `tensor4all-agent-rules`.
   specified under `docs/spec/` before implementation. Keep checked `convert`
   separate from explicit `cast`, and keep CPU/GPU/eager/traced behavior aligned
   unless the owning spec names a backend limitation and its typed error.
+- Public integer tensor arithmetic is a CPU/CUDA parity contract, not a
+  debug-build Rust overflow contract. Supported `I32` and `I64` add, sub, mul,
+  neg, abs, pow, `reduce_sum`, and `reduce_prod` paths must use explicit
+  two's-complement wrapping semantics in CPU code and matching CUDA kernels.
+  Do not use bare `+`, `-`, `*`, unary negation, or unchecked integer folds on
+  user data in these paths unless the surrounding helper proves wrapping
+  semantics. Integer div/rem/pow domain failures such as division by zero or
+  negative exponents must return typed errors, and CUDA support must include
+  CPU-vs-CUDA edge-case tests before the capability descriptor marks it
+  supported.
 - AD cotangent seed helpers must use dtype-aware tensor constructors such as
   shared zero/one helpers, not backend analytic operations like `exp`, `log`,
   or `sin` as a shortcut for constants. Seed construction is dtype plumbing,

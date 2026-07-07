@@ -108,6 +108,28 @@ fn nan_propagating_min<T: Float>(a: T, b: T) -> T {
     }
 }
 
+trait WrappingReductionElem: Copy + Clone + Send + Sync + Zero + One + 'static {
+    fn wrapping_add_elem(self, other: Self) -> Self;
+    fn wrapping_mul_elem(self, other: Self) -> Self;
+}
+
+macro_rules! impl_wrapping_reduction_elem {
+    ($ty:ty) => {
+        impl WrappingReductionElem for $ty {
+            fn wrapping_add_elem(self, other: Self) -> Self {
+                self.wrapping_add(other)
+            }
+
+            fn wrapping_mul_elem(self, other: Self) -> Self {
+                self.wrapping_mul(other)
+            }
+        }
+    };
+}
+
+impl_wrapping_reduction_elem!(i32);
+impl_wrapping_reduction_elem!(i64);
+
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_sum", input, axes)? {
         return Ok(output);
@@ -116,8 +138,8 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum(t, axes)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum(t, axes)?)),
+        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum_wrapping(t, axes)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum_wrapping(t, axes)?)),
         Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "reduce_sum",
             "unsupported dtype Bool",
@@ -157,7 +179,7 @@ pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
             &t,
             axes,
             |x| x,
-            |a, b| a + b,
+            |a, b| a.wrapping_add(b),
             i32::zero(),
             "reduce_sum",
         )?)),
@@ -165,7 +187,7 @@ pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::R
             &t,
             axes,
             |x| x,
-            |a, b| a + b,
+            |a, b| a.wrapping_add(b),
             i64::zero(),
             "reduce_sum",
         )?)),
@@ -200,8 +222,8 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_prod(t, axes)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod(t, axes)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod(t, axes)?)),
+        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod_wrapping(t, axes)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod_wrapping(t, axes)?)),
         Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "reduce_prod",
             "unsupported dtype Bool",
@@ -241,7 +263,7 @@ pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::
             &t,
             axes,
             |x| x,
-            |a, b| a * b,
+            |a, b| a.wrapping_mul(b),
             i32::one(),
             "reduce_prod",
         )?)),
@@ -249,7 +271,7 @@ pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::
             &t,
             axes,
             |x| x,
-            |a, b| a * b,
+            |a, b| a.wrapping_mul(b),
             i64::one(),
             "reduce_prod",
         )?)),
@@ -510,11 +532,45 @@ where
     typed_reduce(input, axes, |x| x, |a, b| a + b, T::zero(), "reduce_sum")
 }
 
+fn typed_reduce_sum_wrapping<T>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingReductionElem,
+{
+    typed_reduce(
+        input,
+        axes,
+        |x| x,
+        |a, b| a.wrapping_add_elem(b),
+        T::zero(),
+        "reduce_sum",
+    )
+}
+
 pub fn typed_reduce_prod<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + One + Mul<Output = T>,
 {
     typed_reduce(input, axes, |x| x, |a, b| a * b, T::one(), "reduce_prod")
+}
+
+fn typed_reduce_prod_wrapping<T>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingReductionElem,
+{
+    typed_reduce(
+        input,
+        axes,
+        |x| x,
+        |a, b| a.wrapping_mul_elem(b),
+        T::one(),
+        "reduce_prod",
+    )
 }
 
 pub fn typed_reduce_max<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>

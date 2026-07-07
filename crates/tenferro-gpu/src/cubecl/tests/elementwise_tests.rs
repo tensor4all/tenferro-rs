@@ -237,6 +237,14 @@ fn test_cubecl_integer_add_mul_compare_select_match_cpu() {
     let i64_lhs = tensor_i64(vec![2, 3], vec![10, -20, 30, 40, -50, 60]);
     let i64_rhs = tensor_i64(vec![2, 3], vec![7, 6, -5, 4, 3, -2]);
     assert_integer_binary_and_select_matches_cpu(&i64_lhs, &i64_rhs);
+
+    let i32_lhs = tensor_i32(vec![3], vec![i32::MAX, i32::MIN, 50]);
+    let i32_rhs = tensor_i32(vec![3], vec![1, -1, i32::MAX]);
+    assert_integer_binary_and_select_matches_cpu(&i32_lhs, &i32_rhs);
+
+    let i64_lhs = tensor_i64(vec![2], vec![i64::MAX, i64::MIN]);
+    let i64_rhs = tensor_i64(vec![2], vec![1, -1]);
+    assert_integer_binary_and_select_matches_cpu(&i64_lhs, &i64_rhs);
 }
 
 fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
