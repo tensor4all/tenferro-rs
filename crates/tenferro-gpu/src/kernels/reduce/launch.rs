@@ -505,6 +505,50 @@ pub(crate) fn launch_max_float<R: Runtime, F: Float + CubeElement>(
     Ok(())
 }
 
+/// Launch an integer maximum reduction.
+pub(crate) fn launch_max_int<R: Runtime, I: Int + CubeElement>(
+    client: &ComputeClient<R>,
+    input: TensorBinding<R>,
+    output: TensorBinding<R>,
+    axis: usize,
+    strategy: ReduceStrategy,
+) -> Result<()> {
+    let problem = validate_launch(&input, &output, axis)?;
+    let launch = resolve_launch_settings(client, problem, strategy)?;
+
+    unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `resolve_launch_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_max_int::launch_unchecked::<I, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_max_int_plane::launch_unchecked::<I, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Launch a floating-point minimum reduction.
 pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
@@ -534,6 +578,50 @@ pub(crate) fn launch_min_float<R: Runtime, F: Float + CubeElement>(
             ),
             ResolvedReduceStrategy::Plane => {
                 kernels::reduce_min_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Launch an integer minimum reduction.
+pub(crate) fn launch_min_int<R: Runtime, I: Int + CubeElement>(
+    client: &ComputeClient<R>,
+    input: TensorBinding<R>,
+    output: TensorBinding<R>,
+    axis: usize,
+    strategy: ReduceStrategy,
+) -> Result<()> {
+    let problem = validate_launch(&input, &output, axis)?;
+    let launch = resolve_launch_settings(client, problem, strategy)?;
+
+    unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `resolve_launch_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_min_int::launch_unchecked::<I, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_min_int_plane::launch_unchecked::<I, R>(
                     client,
                     launch.cube_count,
                     launch.cube_dim,

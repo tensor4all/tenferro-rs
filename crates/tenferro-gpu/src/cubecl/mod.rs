@@ -1325,7 +1325,7 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_max_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_max_float_typed<F: CubeElement + CubeFloat + Clone>(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -1347,7 +1347,29 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_min_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_max_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMax,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_max_int::<CubeclCudaRuntime, I>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
+        })
+    }
+
+    fn reduce_min_float_typed<F: CubeElement + CubeFloat + Clone>(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -1359,6 +1381,28 @@ impl CudaBackend {
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
                 cubecl_reduce::launch_min_float::<CubeclCudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
+        })
+    }
+
+    fn reduce_min_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMin,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_min_int::<CubeclCudaRuntime, I>(
                     client,
                     input,
                     output,
@@ -1753,11 +1797,12 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_complex!(
+        dispatch::dispatch_unary_float_complex_int!(
             self,
             input,
             PrimitiveOpKind::Neg,
             neg_float,
+            neg_int,
             neg_complex
         )
     }
@@ -1818,30 +1863,38 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Abs, abs_float)
+        dispatch::dispatch_unary_float_int!(self, input, PrimitiveOpKind::Abs, abs_float, abs_int)
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sign, sign_float)
+        dispatch::dispatch_unary_float_int!(
+            self,
+            input,
+            PrimitiveOpKind::Sign,
+            sign_float,
+            sign_int
+        )
     }
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_only!(
+        dispatch::dispatch_binary_float_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Maximum,
-            maximum_float
+            maximum_float,
+            maximum_int
         )
     }
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_only!(
+        dispatch::dispatch_binary_float_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Minimum,
-            minimum_float
+            minimum_float,
+            minimum_int
         )
     }
 
@@ -2354,14 +2407,13 @@ impl TensorReduction for CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         match input {
-            Tensor::F32(t) => self.reduce_max_typed(t, axes).map(Tensor::F32),
-            Tensor::F64(t) => self.reduce_max_typed(t, axes).map(Tensor::F64),
-            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::backend_failure(
-                    op,
-                    format!("unsupported dtype {:?}", input.dtype()),
-                ))
-            }
+            Tensor::F32(t) => self.reduce_max_float_typed(t, axes).map(Tensor::F32),
+            Tensor::F64(t) => self.reduce_max_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I32(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I32),
+            Tensor::I64(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I64),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
+            ),
         }
     }
 
@@ -2371,14 +2423,13 @@ impl TensorReduction for CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         match input {
-            Tensor::F32(t) => self.reduce_min_typed(t, axes).map(Tensor::F32),
-            Tensor::F64(t) => self.reduce_min_typed(t, axes).map(Tensor::F64),
-            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::backend_failure(
-                    op,
-                    format!("unsupported dtype {:?}", input.dtype()),
-                ))
-            }
+            Tensor::F32(t) => self.reduce_min_float_typed(t, axes).map(Tensor::F32),
+            Tensor::F64(t) => self.reduce_min_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I32(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I32),
+            Tensor::I64(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I64),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
+            ),
         }
     }
 }

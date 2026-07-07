@@ -142,6 +142,108 @@ fn test_integer_add_mul_read_views_wrap_on_overflow() {
 }
 
 #[test]
+fn test_integer_unary_ops_use_wrapping_semantics() {
+    let i32_input = Tensor::from_vec_col_major(vec![4], vec![i32::MIN, -3, 0, 5]).unwrap();
+    let neg_out = neg(&i32_input).unwrap();
+    let abs_out = abs(&i32_input).unwrap();
+    let sign_out = sign(&i32_input).unwrap();
+    assert_eq!(neg_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, -5]);
+    assert_eq!(abs_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, 5]);
+    assert_eq!(sign_out.as_slice::<i32>().unwrap(), &[-1, -1, 0, 1]);
+
+    let i64_input = Tensor::from_vec_col_major(vec![4], vec![i64::MIN, -2, 0, 7]).unwrap();
+    let neg_out = neg(&i64_input).unwrap();
+    let abs_out = abs(&i64_input).unwrap();
+    let sign_out = sign(&i64_input).unwrap();
+    assert_eq!(neg_out.as_slice::<i64>().unwrap(), &[i64::MIN, 2, 0, -7]);
+    assert_eq!(abs_out.as_slice::<i64>().unwrap(), &[i64::MIN, 2, 0, 7]);
+    assert_eq!(sign_out.as_slice::<i64>().unwrap(), &[-1, -1, 0, 1]);
+}
+
+#[test]
+fn test_integer_unary_read_views_use_wrapping_semantics() {
+    let input = TypedTensor::<i32>::from_vec_col_major(vec![4], vec![i32::MIN, -3, 0, 5]).unwrap();
+    let read = || TensorRead::from_view(TensorView::I32(input.as_view()));
+    let mut backend = CpuBackend::new();
+
+    let neg_out = backend.neg_read(read()).unwrap();
+    let abs_out = backend.abs_read(read()).unwrap();
+    let sign_out = backend.sign_read(read()).unwrap();
+
+    assert_eq!(neg_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, -5]);
+    assert_eq!(abs_out.as_slice::<i32>().unwrap(), &[i32::MIN, 3, 0, 5]);
+    assert_eq!(sign_out.as_slice::<i32>().unwrap(), &[-1, -1, 0, 1]);
+}
+
+#[test]
+fn test_integer_maximum_minimum_and_reductions() {
+    let lhs = Tensor::from_vec_col_major(vec![4], vec![i32::MIN, -1, 7, i32::MAX]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![4], vec![0, -2, 8, i32::MIN]).unwrap();
+    let max_out = maximum(&lhs, &rhs).unwrap();
+    let min_out = minimum(&lhs, &rhs).unwrap();
+    assert_eq!(max_out.as_slice::<i32>().unwrap(), &[0, -1, 8, i32::MAX]);
+    assert_eq!(
+        min_out.as_slice::<i32>().unwrap(),
+        &[i32::MIN, -2, 7, i32::MIN]
+    );
+
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5]).unwrap();
+    let max_cols = reduce_max(&input, &[0]).unwrap();
+    let min_cols = reduce_min(&input, &[0]).unwrap();
+    assert_eq!(max_cols.as_slice::<i32>().unwrap(), &[1, i32::MAX]);
+    assert_eq!(min_cols.as_slice::<i32>().unwrap(), &[i32::MIN, -5]);
+
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![i64::MIN, 4, i64::MAX, -7]).unwrap();
+    let max_cols = reduce_max(&input, &[0]).unwrap();
+    let min_cols = reduce_min(&input, &[0]).unwrap();
+    assert_eq!(max_cols.as_slice::<i64>().unwrap(), &[4, i64::MAX]);
+    assert_eq!(min_cols.as_slice::<i64>().unwrap(), &[i64::MIN, -7]);
+}
+
+#[test]
+fn test_integer_maximum_minimum_and_reduction_read_views() {
+    let lhs =
+        TypedTensor::<i32>::from_vec_col_major(vec![4], vec![i32::MIN, -1, 7, i32::MAX]).unwrap();
+    let rhs = TypedTensor::<i32>::from_vec_col_major(vec![4], vec![0, -2, 8, i32::MIN]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let max_out = backend
+        .maximum_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+    let min_out = backend
+        .minimum_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+    assert_eq!(max_out.as_slice::<i32>().unwrap(), &[0, -1, 8, i32::MAX]);
+    assert_eq!(
+        min_out.as_slice::<i32>().unwrap(),
+        &[i32::MIN, -2, 7, i32::MIN]
+    );
+
+    let input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5])
+        .unwrap();
+    let max_cols = backend
+        .reduce_max_read(
+            TensorRead::from_view(TensorView::I32(input.as_view())),
+            &[0],
+        )
+        .unwrap();
+    let min_cols = backend
+        .reduce_min_read(
+            TensorRead::from_view(TensorView::I32(input.as_view())),
+            &[0],
+        )
+        .unwrap();
+    assert_eq!(max_cols.as_slice::<i32>().unwrap(), &[1, i32::MAX]);
+    assert_eq!(min_cols.as_slice::<i32>().unwrap(), &[i32::MIN, -5]);
+}
+
+#[test]
 fn test_add_mul_rank0_broadcast() {
     let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
     let tensor =

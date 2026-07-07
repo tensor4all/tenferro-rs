@@ -263,21 +263,35 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
+    let expected = cpu.maximum(lhs, rhs).unwrap();
+    let gpu_out = gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.minimum(lhs, rhs).unwrap();
+    let gpu_out = gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.neg(lhs).unwrap();
+    let gpu_out = gpu.neg(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.abs(lhs).unwrap();
+    let gpu_out = gpu.abs(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.sign(lhs).unwrap();
+    let gpu_out = gpu.sign(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
     let expected_pred = cpu.compare(lhs, rhs, &CompareDir::Ge).unwrap();
     let gpu_pred = gpu.compare(&gpu_lhs, &gpu_rhs, &CompareDir::Ge).unwrap();
     let actual_pred = download(&gpu, &gpu_pred);
     assert_tensor_close(&actual_pred, &expected_pred, 0.0);
-
-    let err = gpu.neg(&gpu_lhs).unwrap_err();
-    let dtype = lhs.dtype();
-    assert!(matches!(
-        err,
-        crate::Error::UnsupportedOpDType {
-            op: "neg",
-            dtype: actual,
-            backend: tenferro_tensor::BackendId::Cuda,
-        } if actual == dtype
-    ));
 
     let expected = cpu.select(&expected_pred, lhs, rhs).unwrap();
     let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();

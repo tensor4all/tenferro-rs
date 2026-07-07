@@ -185,6 +185,9 @@ pub(crate) trait CompareElem: Copy + Send + Sync {
 trait WrappingIntegerElem: Copy + PoolScalar + 'static {
     fn wrapping_add_elem(self, other: Self) -> Self;
     fn wrapping_mul_elem(self, other: Self) -> Self;
+    fn wrapping_neg_elem(self) -> Self;
+    fn wrapping_abs_elem(self) -> Self;
+    fn signum_elem(self) -> Self;
 }
 
 macro_rules! impl_tier2_elem_real {
@@ -282,6 +285,23 @@ impl_compare_elem_ord!(i32);
 impl_compare_elem_ord!(i64);
 impl_compare_elem_ord!(bool);
 
+macro_rules! impl_ordered_elem_ord {
+    ($ty:ty) => {
+        impl OrderedElem for $ty {
+            fn max_elem(self, other: Self) -> Self {
+                self.max(other)
+            }
+
+            fn min_elem(self, other: Self) -> Self {
+                self.min(other)
+            }
+        }
+    };
+}
+
+impl_ordered_elem_ord!(i32);
+impl_ordered_elem_ord!(i64);
+
 macro_rules! impl_wrapping_integer_elem {
     ($ty:ty) => {
         impl WrappingIntegerElem for $ty {
@@ -291,6 +311,18 @@ macro_rules! impl_wrapping_integer_elem {
 
             fn wrapping_mul_elem(self, other: Self) -> Self {
                 self.wrapping_mul(other)
+            }
+
+            fn wrapping_neg_elem(self) -> Self {
+                self.wrapping_neg()
+            }
+
+            fn wrapping_abs_elem(self) -> Self {
+                self.wrapping_abs()
+            }
+
+            fn signum_elem(self) -> Self {
+                self.signum()
             }
         }
     };
@@ -2060,7 +2092,9 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "neg",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2086,6 +2120,18 @@ pub(crate) fn neg_read_with_pool(
             buffers,
             &t,
             |x| -x,
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| x.wrapping_neg_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| x.wrapping_neg_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "neg",
@@ -2197,7 +2243,9 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "abs",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2223,6 +2271,18 @@ pub(crate) fn abs_read_with_pool(
             buffers,
             &t,
             |x| x.abs_elem(),
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.wrapping_abs_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.wrapping_abs_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
@@ -2254,7 +2314,9 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "sign",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2280,6 +2342,18 @@ pub(crate) fn sign_read_with_pool(
             buffers,
             &t,
             |x| x.sign_elem(),
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.signum_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.signum_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "sign",
@@ -2332,6 +2406,12 @@ pub(crate) fn maximum_with_pool(
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_maximum_with_pool(buffers, a, b)?))
         }
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_maximum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_maximum_with_pool(buffers, a, b)?))
+        }
         _ => Err(tensor_pair_error("maximum", lhs, rhs)),
     }
 }
@@ -2352,6 +2432,16 @@ pub(crate) fn maximum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
             typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
                 x.max_elem(y)
             })?,
@@ -2392,6 +2482,12 @@ pub(crate) fn minimum_with_pool(
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_minimum_with_pool(buffers, a, b)?))
         }
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_minimum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_minimum_with_pool(buffers, a, b)?))
+        }
         _ => Err(tensor_pair_error("minimum", lhs, rhs)),
     }
 }
@@ -2412,6 +2508,16 @@ pub(crate) fn minimum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
             typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
                 x.min_elem(y)
             })?,
@@ -3030,6 +3136,42 @@ where
     Ok(tensor_from_array(out))
 }
 
+fn typed_wrapping_unary_with_pool<T>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    f: impl Fn(T) -> T + Copy + Sync,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_wrapping_neg_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("neg", buffers, input, |x| x.wrapping_neg_elem())
+}
+
+fn typed_wrapping_abs_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("abs", buffers, input, |x| x.wrapping_abs_elem())
+}
+
 pub(crate) fn typed_conj_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -3111,6 +3253,16 @@ where
     })
     .map_err(|err| crate::Error::backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
+}
+
+fn typed_integer_sign_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("sign", buffers, input, |x| x.signum_elem())
 }
 
 pub(crate) fn typed_maximum_with_pool<T>(

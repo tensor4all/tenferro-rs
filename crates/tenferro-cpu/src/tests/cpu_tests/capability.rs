@@ -1,6 +1,6 @@
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    BackendId, CapabilityAxis, CapabilityQuery, DType, Error, SupportLevel, TensorBackendCapability,
+    BackendId, CapabilityAxis, CapabilityQuery, DType, SupportLevel, TensorBackendCapability,
 };
 
 use crate::CpuBackend;
@@ -51,23 +51,16 @@ fn cpu_capability_table_reports_core_elementwise_reduction_and_dot_support() {
 
     let neg_i32 = backend
         .capability(CapabilityQuery::new(PrimitiveOpKind::Neg, DType::I32))
-        .expect("CPU neg/i32 unsupported entry should be described");
-    assert_eq!(neg_i32.result, SupportLevel::Unsupported);
+        .expect("CPU neg/i32 should be described");
+    assert_eq!(neg_i32.result, SupportLevel::Native);
 
-    let err = backend
+    let neg_i32 = backend
         .require_capability(
             CapabilityQuery::new(PrimitiveOpKind::Neg, DType::I32),
             CapabilityAxis::OwnedResult,
         )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::UnsupportedOpDType {
-            op: "neg",
-            dtype: DType::I32,
-            backend: BackendId::Cpu,
-        }
-    ));
+        .unwrap();
+    assert_eq!(neg_i32.result, SupportLevel::Native);
 
     assert!(
         backend

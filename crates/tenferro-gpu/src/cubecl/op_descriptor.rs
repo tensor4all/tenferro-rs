@@ -5,8 +5,11 @@ use tenferro_core_ops::{descriptor as primitive_descriptor, DTypePolicy, Primiti
 pub(crate) enum GpuLaunchKind {
     BinaryFloatComplex,
     BinaryFloatComplexInt,
+    BinaryFloatInt,
     BinaryFloatOnly,
     UnaryFloatComplex,
+    UnaryFloatComplexInt,
+    UnaryFloatInt,
     UnaryFloatOnly,
     CompareFloatIntToBool,
     SelectBoolFloatInt,
@@ -27,13 +30,12 @@ pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
     let launch = match kind {
         PrimitiveOpKind::Add | PrimitiveOpKind::Mul => GpuLaunchKind::BinaryFloatComplexInt,
         PrimitiveOpKind::Div => GpuLaunchKind::BinaryFloatComplex,
-        PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum | PrimitiveOpKind::Pow => {
-            GpuLaunchKind::BinaryFloatOnly
-        }
-        PrimitiveOpKind::Neg | PrimitiveOpKind::Conj => GpuLaunchKind::UnaryFloatComplex,
-        PrimitiveOpKind::Abs
-        | PrimitiveOpKind::Sign
-        | PrimitiveOpKind::Exp
+        PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum => GpuLaunchKind::BinaryFloatInt,
+        PrimitiveOpKind::Pow => GpuLaunchKind::BinaryFloatOnly,
+        PrimitiveOpKind::Neg => GpuLaunchKind::UnaryFloatComplexInt,
+        PrimitiveOpKind::Conj => GpuLaunchKind::UnaryFloatComplex,
+        PrimitiveOpKind::Abs | PrimitiveOpKind::Sign => GpuLaunchKind::UnaryFloatInt,
+        PrimitiveOpKind::Exp
         | PrimitiveOpKind::Log
         | PrimitiveOpKind::Sin
         | PrimitiveOpKind::Cos

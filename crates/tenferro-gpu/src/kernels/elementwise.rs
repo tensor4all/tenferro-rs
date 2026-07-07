@@ -76,6 +76,12 @@ binary_float_int_complex_kernel!(add_float, add_int, add_complex, +);
 binary_float_int_complex_kernel!(mul_float, mul_int, mul_complex, *);
 binary_float_complex_kernel!(div_float, div_complex, /);
 unary_both_kernel!(neg_float, neg_complex, |value| -value);
+#[cube(launch_unchecked)]
+pub fn neg_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = I::new(0) - input[ABSOLUTE_POS];
+    }
+}
 unary_float_kernel!(exp_float, exp);
 unary_float_kernel!(log_float, ln);
 unary_float_kernel!(sin_float, sin);
@@ -114,6 +120,15 @@ pub fn abs_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 }
 
 #[cube(launch_unchecked)]
+pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        let zero = I::new(0);
+        out[ABSOLUTE_POS] = if value < zero { zero - value } else { value };
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
@@ -129,6 +144,21 @@ pub fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 }
 
 #[cube(launch_unchecked)]
+pub fn sign_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        let zero = I::new(0);
+        out[ABSOLUTE_POS] = if value == zero {
+            zero
+        } else if value > zero {
+            I::new(1)
+        } else {
+            zero - I::new(1)
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn maximum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].max(rhs[ABSOLUTE_POS]);
@@ -136,9 +166,27 @@ pub fn maximum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F
 }
 
 #[cube(launch_unchecked)]
+pub fn maximum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = if x >= y { x } else { y };
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn minimum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].min(rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn minimum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = if x <= y { x } else { y };
     }
 }
 
