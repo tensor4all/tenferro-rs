@@ -46,6 +46,7 @@ pub use tenferro_tensor_core::{ShapeVec, SliceSpec, StrideVec, TensorRef};
 
 pub mod backend;
 pub mod cache;
+pub mod capability;
 pub mod config;
 pub mod error;
 pub mod types;
@@ -59,6 +60,10 @@ pub use backend::{
     TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
+pub use capability::{
+    capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery, OperationCapability,
+    SupportLevel, TensorBackendCapability,
+};
 pub use config::*;
 pub use error::*;
 pub use types::*;

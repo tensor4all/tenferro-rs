@@ -113,6 +113,7 @@ use crate::{
     TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
+mod capability;
 mod dispatch;
 mod ffi;
 mod fusion;
@@ -132,6 +133,7 @@ use dispatch::{
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
 
+pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime};
 

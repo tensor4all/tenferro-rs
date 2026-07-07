@@ -68,6 +68,12 @@ pub enum Error {
         to: crate::DType,
         message: String,
     },
+    #[error("{backend} backend does not support {op} for dtype {dtype:?}")]
+    UnsupportedOpDType {
+        op: &'static str,
+        dtype: crate::DType,
+        backend: crate::BackendId,
+    },
     #[error("{op}: invalid config: {message}")]
     InvalidConfig { op: &'static str, message: String },
     #[error("extension family {family_id:?} has no host reference implementation")]
@@ -100,6 +106,24 @@ impl Error {
             op,
             message: message.to_string(),
         }
+    }
+
+    /// Construct a structured unsupported operation/dtype error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendId, DType, Error};
+    ///
+    /// let err = Error::unsupported_op_dtype("add", DType::Bool, BackendId::Cuda);
+    /// assert!(matches!(err, Error::UnsupportedOpDType { backend: BackendId::Cuda, .. }));
+    /// ```
+    pub fn unsupported_op_dtype(
+        op: &'static str,
+        dtype: crate::DType,
+        backend: crate::BackendId,
+    ) -> Self {
+        Self::UnsupportedOpDType { op, dtype, backend }
     }
 }
 

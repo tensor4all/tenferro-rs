@@ -13,6 +13,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
+| [backend-capability.md](./backend-capability.md) | Runtime backend capability descriptor for typed/erased tensor support and generated CUDA coverage |
 | [output-modes.md](./output-modes.md) | Output-update vocabulary for `_read`, `_into`, `_add_to`, and dot `_into_accum` surfaces |
 | [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |

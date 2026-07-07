@@ -45,6 +45,7 @@ pub mod affinity;
 mod analytic;
 pub mod backend;
 mod buffer_pool;
+mod capability;
 pub mod context;
 mod elementwise;
 mod exec_session;
@@ -75,6 +76,7 @@ extern crate lapack_src as _;
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::{CpuBackend, CpuBackendKind};
 pub use buffer_pool::BufferPoolStats;
+pub use capability::cpu_capabilities;
 pub use context::CpuContext;
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,

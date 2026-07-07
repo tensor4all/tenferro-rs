@@ -645,6 +645,8 @@ fn diagonal_scatter_config() -> ScatterConfig {
 mod backend_misc;
 #[path = "tests/cpu_tests/basic_ops.rs"]
 mod basic_ops;
+#[path = "tests/cpu_tests/capability.rs"]
+mod capability;
 #[path = "tests/cpu_tests/context.rs"]
 mod context;
 #[path = "tests/cpu_tests/dot_structural_analytic.rs"]
