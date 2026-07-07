@@ -51,6 +51,8 @@ impl TensorElementwise for CpuExecSession<'_> {
         elementwise::add_read_with_pool(self.buffers, lhs, rhs)
     }
 
+    delegate_with_pool!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
+    delegate_with_pool!(sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::sub_read_with_pool);
     delegate_with_pool!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
     delegate_with_pool!(mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::mul_read_with_pool);
     delegate_with_pool!(neg(input: &Tensor) => elementwise::neg_with_pool);

@@ -159,8 +159,7 @@ impl EagerTensor {
     /// Elementwise subtraction.
     pub fn sub(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("sub", self, other)?;
-        let rhs = rhs.neg()?;
-        lhs.binary_op(&rhs, StdTensorOp::Add)
+        lhs.binary_op(&rhs, StdTensorOp::Sub)
     }
 
     /// Elementwise multiplication.

@@ -88,6 +88,8 @@ impl TensorElementwise for EagerBackend {
     delegate_tensor_backend_methods! {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
+        fn sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;

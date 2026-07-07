@@ -229,6 +229,7 @@ fn run_supported_case(
 ) {
     match entry.op {
         PrimitiveOpKind::Add => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.add(l, r)),
+        PrimitiveOpKind::Sub => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.sub(l, r)),
         PrimitiveOpKind::Mul => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.mul(l, r)),
         PrimitiveOpKind::Neg => assert_unary_matches(cpu, gpu, entry, |b, x| b.neg(x)),
         PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| b.conj(x)),
@@ -420,6 +421,7 @@ fn run_cpu_binary(
 ) -> Tensor {
     match op {
         PrimitiveOpKind::Add => cpu.add(lhs, rhs),
+        PrimitiveOpKind::Sub => cpu.sub(lhs, rhs),
         PrimitiveOpKind::Mul => cpu.mul(lhs, rhs),
         PrimitiveOpKind::Div => cpu.div(lhs, rhs),
         PrimitiveOpKind::Maximum => cpu.maximum(lhs, rhs),

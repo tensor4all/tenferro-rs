@@ -44,6 +44,7 @@ impl BackendRuntimeCache for WrongDTypeBackend {
 impl TensorElementwise for WrongDTypeBackend {
     panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
+        sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;

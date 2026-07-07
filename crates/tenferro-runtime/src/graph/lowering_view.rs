@@ -533,6 +533,7 @@ fn exec_op_name(op: &ExecOp) -> &'static str {
         ExecOp::Tril { .. } => "Tril",
         ExecOp::Triu { .. } => "Triu",
         ExecOp::Add => "Add",
+        ExecOp::Subtract => "Subtract",
         ExecOp::Multiply => "Multiply",
         ExecOp::Negate => "Negate",
         ExecOp::Conj => "Conj",

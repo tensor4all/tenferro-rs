@@ -347,6 +347,10 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
             vec![exec.add_read(a.tensor_read(), b.tensor_read())?]
         }
+        StdTensorOp::Sub => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.sub_read(a.tensor_read(), b.tensor_read())?]
+        }
         StdTensorOp::Mul => {
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
             vec![exec.mul_read(a.tensor_read(), b.tensor_read())?]
@@ -600,6 +604,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Add => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.add(a.tensor(), b.tensor())?]
+            }
+            StdTensorOp::Sub => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.sub(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Mul => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

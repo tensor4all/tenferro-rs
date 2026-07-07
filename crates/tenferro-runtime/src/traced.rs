@@ -913,9 +913,8 @@ impl TracedTensor {
     /// Prefer using the `-` operator when it reads naturally.
     pub fn sub(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        let rhs = rhs.neg();
         Ok(apply_binary(
-            StdTensorOp::Add,
+            StdTensorOp::Sub,
             &lhs,
             &rhs,
             lhs.rank,

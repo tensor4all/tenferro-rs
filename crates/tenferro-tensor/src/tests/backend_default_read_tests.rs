@@ -29,6 +29,11 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
+    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+        self.calls.push("sub");
+        Ok(marker())
+    }
+
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("mul");
         Ok(marker())

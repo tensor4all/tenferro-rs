@@ -122,6 +122,11 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
         transpose_rule: transpose_add,
     },
     &FunctionPrimitiveAdRule {
+        kind: PrimitiveOpKind::Sub,
+        linearize: linearize_sub,
+        transpose_rule: transpose_sub,
+    },
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Mul,
         linearize: linearize_mul,
         transpose_rule: transpose_mul,
@@ -379,6 +384,29 @@ fn transpose_add(
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let inputs = metadata_value_refs(inputs);
     semiring::transpose_add(builder, cotangent_out, &inputs, mode, ctx)
+}
+
+fn linearize_sub(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    Ok(semiring::linearize_sub(builder, primal_in, tangent_in, ctx))
+}
+
+fn transpose_sub(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let inputs = metadata_value_refs(inputs);
+    semiring::transpose_sub(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_mul(

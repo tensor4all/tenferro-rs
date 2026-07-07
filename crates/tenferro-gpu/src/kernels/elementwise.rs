@@ -73,6 +73,7 @@ macro_rules! unary_both_kernel {
 }
 
 binary_float_int_complex_kernel!(add_float, add_int, add_complex, +);
+binary_float_int_complex_kernel!(sub_float, sub_int, sub_complex, -);
 binary_float_int_complex_kernel!(mul_float, mul_int, mul_complex, *);
 binary_float_complex_kernel!(div_float, div_complex, /);
 unary_both_kernel!(neg_float, neg_complex, |value| -value);

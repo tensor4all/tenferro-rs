@@ -1,4 +1,5 @@
 use super::*;
+use crate::sub;
 
 #[test]
 fn test_zeros_ones() {
@@ -97,20 +98,30 @@ fn test_integer_add_mul_wrap_on_overflow() {
     let i32_lhs = Tensor::from_vec_col_major(vec![3], vec![i32::MAX, i32::MIN, 50_i32]).unwrap();
     let i32_rhs = Tensor::from_vec_col_major(vec![3], vec![1_i32, -1, i32::MAX]).unwrap();
     let sum = add(&i32_lhs, &i32_rhs).unwrap();
+    let diff = sub(&i32_lhs, &i32_rhs).unwrap();
     let prod = mul(&i32_lhs, &i32_rhs).unwrap();
 
     assert_eq!(
         sum.as_slice::<i32>().unwrap(),
         &[i32::MIN, i32::MAX, -2_147_483_599]
     );
+    assert_eq!(
+        diff.as_slice::<i32>().unwrap(),
+        &[2_147_483_646, -2_147_483_647, -2_147_483_597]
+    );
     assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MAX, i32::MIN, -50]);
 
     let i64_lhs = Tensor::from_vec_col_major(vec![2], vec![i64::MAX, i64::MIN]).unwrap();
     let i64_rhs = Tensor::from_vec_col_major(vec![2], vec![1_i64, -1]).unwrap();
     let sum = add(&i64_lhs, &i64_rhs).unwrap();
+    let diff = sub(&i64_lhs, &i64_rhs).unwrap();
     let prod = mul(&i64_lhs, &i64_rhs).unwrap();
 
     assert_eq!(sum.as_slice::<i64>().unwrap(), &[i64::MIN, i64::MAX]);
+    assert_eq!(
+        diff.as_slice::<i64>().unwrap(),
+        &[9_223_372_036_854_775_806, -9_223_372_036_854_775_807]
+    );
     assert_eq!(prod.as_slice::<i64>().unwrap(), &[i64::MAX, i64::MIN]);
 }
 
@@ -127,6 +138,12 @@ fn test_integer_add_mul_read_views_wrap_on_overflow() {
             TensorRead::from_view(TensorView::I32(rhs.as_view())),
         )
         .unwrap();
+    let diff = backend
+        .sub_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
     let prod = backend
         .mul_read(
             TensorRead::from_view(TensorView::I32(lhs.as_view())),
@@ -137,6 +154,10 @@ fn test_integer_add_mul_read_views_wrap_on_overflow() {
     assert_eq!(
         sum.as_slice::<i32>().unwrap(),
         &[i32::MIN, i32::MAX, -2_147_483_599]
+    );
+    assert_eq!(
+        diff.as_slice::<i32>().unwrap(),
+        &[2_147_483_646, -2_147_483_647, -2_147_483_597]
     );
     assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MAX, i32::MIN, -50]);
 }

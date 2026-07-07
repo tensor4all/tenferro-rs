@@ -299,8 +299,7 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// ```
 fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    let neg_rhs = backend.with_backend_session(|exec| exec.neg(&rhs))?;
-    backend.with_backend_session(|exec| exec.add(&lhs, &neg_rhs))
+    backend.with_backend_session(|exec| exec.sub(&lhs, &rhs))
 }
 
 /// Elementwise comparison with NumPy-style broadcasting.

@@ -112,6 +112,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
+        | StdTensorOp::Sub
         | StdTensorOp::Mul
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
@@ -197,6 +198,10 @@ pub fn infer_output_shapes(
 ) -> Result<Vec<Vec<DimExpr>>> {
     let shapes = match op {
         StdTensorOp::Add => vec![same_or_scalar_broadcast_shape(
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
+        )?],
+        StdTensorOp::Sub => vec![same_or_scalar_broadcast_shape(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
         )?],

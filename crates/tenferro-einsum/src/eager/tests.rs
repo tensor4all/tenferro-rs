@@ -166,6 +166,10 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
         Err(unexpected("add"))
     }
 
+    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
+        Err(unexpected("sub"))
+    }
+
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Result<Tensor> {
         Err(unexpected("mul"))
     }

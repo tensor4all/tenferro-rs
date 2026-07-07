@@ -321,10 +321,8 @@ fn sub<T: TensorScalar>(
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
     let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
-    let neg_rhs = backend.with_backend_session(|exec| exec.neg_read(rhs.tensor_read()))?;
-    let out = backend.with_backend_session(|exec| {
-        exec.add_read(lhs.tensor_read(), TensorRead::from_tensor(&neg_rhs))
-    })?;
+    let out =
+        backend.with_backend_session(|exec| exec.sub_read(lhs.tensor_read(), rhs.tensor_read()))?;
     into_typed_result("sub", out)
 }
 

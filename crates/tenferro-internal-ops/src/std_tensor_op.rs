@@ -131,6 +131,7 @@ impl PartialEq for StdTensorOp {
         }
         match (self, other) {
             (Self::Add, Self::Add)
+            | (Self::Sub, Self::Sub)
             | (Self::Mul, Self::Mul)
             | (Self::Neg, Self::Neg)
             | (Self::Conj, Self::Conj)
@@ -255,6 +256,7 @@ impl Hash for StdTensorOp {
         std::mem::discriminant(self).hash(state);
         match self {
             Self::Add
+            | Self::Sub
             | Self::Mul
             | Self::Neg
             | Self::Conj
@@ -355,7 +357,7 @@ impl GraphOperation for StdTensorOp {
 
     fn input_count(&self) -> usize {
         match self {
-            Self::Add | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
+            Self::Add | Self::Sub | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
             Self::GatherDynamicSliceSizes { slice_sizes, .. } => {
                 n_inputs_from_dim_exprs(2, &[slice_sizes])
             }
@@ -402,6 +404,7 @@ impl GraphOperation for StdTensorOp {
     fn output_count(&self) -> usize {
         match self {
             Self::Add
+            | Self::Sub
             | Self::Mul
             | Self::Neg
             | Self::Conj

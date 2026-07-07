@@ -258,6 +258,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
+    let expected = cpu.sub(lhs, rhs).unwrap();
+    let gpu_out = gpu.sub(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
     let expected = cpu.mul(lhs, rhs).unwrap();
     let gpu_out = gpu.mul(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -326,6 +331,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
 
     let expected = cpu.add(&lhs, &rhs).unwrap();
     let gpu_out = gpu.add(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
+
+    let expected = cpu.sub(&lhs, &rhs).unwrap();
+    let gpu_out = gpu.sub(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 

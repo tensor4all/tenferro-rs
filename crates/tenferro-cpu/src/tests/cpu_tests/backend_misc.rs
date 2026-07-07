@@ -502,6 +502,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyBackend {
         panic_backend_methods! {
+        sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -609,6 +610,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyExec {
         panic_backend_methods! {
+        sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;

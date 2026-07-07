@@ -173,6 +173,7 @@ enum ExecOpKey {
         k: i64,
     },
     Add,
+    Subtract,
     Multiply,
     Negate,
     Conj,
@@ -307,6 +308,7 @@ fn exec_op_key(op: &ExecOp, extensions: &mut Vec<Arc<dyn ExtensionOp>>) -> ExecO
         ExecOp::Tril { k } => ExecOpKey::Tril { k: *k },
         ExecOp::Triu { k } => ExecOpKey::Triu { k: *k },
         ExecOp::Add => ExecOpKey::Add,
+        ExecOp::Subtract => ExecOpKey::Subtract,
         ExecOp::Multiply => ExecOpKey::Multiply,
         ExecOp::Negate => ExecOpKey::Negate,
         ExecOp::Conj => ExecOpKey::Conj,
@@ -470,6 +472,7 @@ fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
             | ExecOpKey::Tril { .. }
             | ExecOpKey::Triu { .. }
             | ExecOpKey::Add
+            | ExecOpKey::Subtract
             | ExecOpKey::Multiply
             | ExecOpKey::Negate
             | ExecOpKey::Conj

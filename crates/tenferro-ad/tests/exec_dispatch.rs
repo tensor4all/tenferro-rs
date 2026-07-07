@@ -114,6 +114,9 @@ impl TensorElementwise for FakeTensorBackend {
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("add", 1.0)
     }
+    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        self.result("sub", 1.5)
+    }
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("mul", 2.0)
     }
@@ -389,6 +392,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Tril { k: -1 }, 1, "tril", 27.5),
         (ExecOp::Triu { k: 1 }, 1, "triu", 27.75),
         (ExecOp::Add, 2, "add", 1.0),
+        (ExecOp::Subtract, 2, "sub", 1.5),
         (ExecOp::Multiply, 2, "mul", 2.0),
         (ExecOp::Negate, 1, "neg", 3.0),
         (ExecOp::Conj, 1, "conj", 4.0),

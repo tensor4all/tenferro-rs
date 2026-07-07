@@ -28,7 +28,9 @@ pub(crate) struct GpuOpDescriptor {
 
 pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
     let launch = match kind {
-        PrimitiveOpKind::Add | PrimitiveOpKind::Mul => GpuLaunchKind::BinaryFloatComplexInt,
+        PrimitiveOpKind::Add | PrimitiveOpKind::Sub | PrimitiveOpKind::Mul => {
+            GpuLaunchKind::BinaryFloatComplexInt
+        }
         PrimitiveOpKind::Div => GpuLaunchKind::BinaryFloatComplex,
         PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum => GpuLaunchKind::BinaryFloatInt,
         PrimitiveOpKind::Pow => GpuLaunchKind::BinaryFloatOnly,

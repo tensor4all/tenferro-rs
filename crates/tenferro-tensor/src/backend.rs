@@ -1278,6 +1278,27 @@ pub trait TensorElementwise {
         self.add(read_tensor("add", lhs)?, read_tensor("add", rhs)?)
     }
 
+    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+
+    /// Elementwise subtraction accepting either owned tensors or borrowed views.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
+    ///
+    /// fn sub_owned<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: &Tensor,
+    ///     rhs: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+    /// }
+    /// ```
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sub(read_tensor("sub", lhs)?, read_tensor("sub", rhs)?)
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.mul(read_tensor("mul", lhs)?, read_tensor("mul", rhs)?)

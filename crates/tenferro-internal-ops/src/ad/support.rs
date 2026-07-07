@@ -81,6 +81,7 @@ macro_rules! nondiff_support {
 /// ```
 pub static PRIMITIVE_AD_SUPPORT: [PrimitiveAdSupport; PrimitiveOpKind::COUNT] = [
     direct_support!(Add),
+    direct_support!(Sub),
     direct_support!(Mul),
     direct_support!(Neg),
     direct_support!(Conj),

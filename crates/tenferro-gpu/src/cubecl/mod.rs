@@ -1784,6 +1784,18 @@ impl TensorElementwise for CudaBackend {
         )
     }
 
+    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        dispatch::dispatch_binary_float_complex_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Sub,
+            sub_float,
+            sub_int,
+            sub_complex
+        )
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_binary_float_complex_int!(
             self,

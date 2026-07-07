@@ -412,6 +412,10 @@ impl TensorElementwise for WebGpuBackend {
         unsupported!("webgpu_add")
     }
 
+    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+        unsupported!("webgpu_sub")
+    }
+
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         unsupported!("webgpu_mul")
     }
