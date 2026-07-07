@@ -673,6 +673,13 @@ Tests follow implementation ownership.
   clear and aggregate stats APIs in addition to cache-specific controls.
 - Backend resource pools such as buffer pools may live on the backend, but they
   still need explicit limit/clear controls, stats APIs, and documentation.
+- Backends that own resource pools or runtime contexts, including
+  `CpuBackend`'s buffer pool and `Arc<CpuContext>` and CUDA backends' runtime
+  client/context, are construct-once-and-reuse values. Examples should bind the
+  backend once and reuse it across related operations; they must not present
+  per-call `CpuBackend::new()` or GPU backend construction chained directly
+  into an operation as the normal idiom. A genuinely standalone single-op
+  example does not need to invent an unrelated long-lived backend variable.
 - Do not add a new cache without documenting its owner, lifetime, default
   capacity, memory behavior, entry/byte accounting, and
   clear/configuration/stats path.
@@ -768,6 +775,9 @@ Tests follow implementation ownership.
 - Every example must compile AND run as a doctest.
 - Use `compile_fail` only for examples that intentionally demonstrate compile errors.
 - If an example cannot run as a doctest, refactor it until it can.
+- Examples that call CPU or GPU backend operations should bind the backend to a
+  local variable and reuse it for related operations instead of chaining
+  `Backend::new().op(...)` beyond a single trivial construction example.
 
 ## Generic Over Scalar Type
 
