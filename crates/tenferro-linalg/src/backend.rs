@@ -105,7 +105,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
-    /// let outputs = CpuBackend::new().svd_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.svd_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -138,7 +139,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
-    /// let outputs = CpuBackend::new().qr_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.qr_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -172,7 +174,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
-    /// let outputs = CpuBackend::new().eigh_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.eigh_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -200,7 +203,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![4.0, 2.0, 2.0, 3.0],
     /// )?;
-    /// let output = CpuBackend::new().cholesky_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let output = backend.cholesky_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(output.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -227,7 +231,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
-    /// let outputs = CpuBackend::new().lu_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.lu_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs.len(), 4);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -254,7 +259,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
-    /// let outputs = CpuBackend::new().full_piv_lu_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.full_piv_lu_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs.len(), 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -281,7 +287,8 @@ pub trait LinalgBackend: TensorBackend {
     ///     vec![2, 2],
     ///     vec![2.0, 0.0, 0.0, 3.0],
     /// )?;
-    /// let outputs = CpuBackend::new().eig_read(TensorView::F64(input.as_view()))?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.eig_read(TensorView::F64(input.as_view()))?;
     /// assert_eq!(outputs.len(), 2);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```

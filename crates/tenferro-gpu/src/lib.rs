@@ -3,6 +3,7 @@
 //! # Examples
 //!
 //! ```rust
+//! # fn main() -> tenferro_tensor::Result<()> {
 //! #[cfg(feature = "cuda")]
 //! {
 //!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
@@ -10,8 +11,8 @@
 //!
 //!     if gpu_available() {
 //!         let mut backend = CudaBackend::new(0).unwrap();
-//!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-//!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+//!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+//!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 //!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
 //!         let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
 //!         let gpu_sum = backend.add(&gpu_a, &gpu_b).unwrap();
@@ -19,6 +20,8 @@
 //!         assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 //!     }
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 #[cfg(feature = "cuda")]

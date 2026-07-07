@@ -48,8 +48,8 @@
 //! let mut backend = CudaBackend::new(0)?;
 //!
 //! // 2. Create tensors on the CPU
-//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
-//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
+//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])?);
+//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])?);
 //!
 //! // 3. Upload to GPU
 //! let gpu_a = upload_tensor(backend.runtime(), &a)?;
@@ -333,7 +333,8 @@ impl CudaExtensionCache {
     /// use tenferro_gpu::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
-    /// assert!(cache.is_empty());
+    /// assert!(cache.is_empty()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn new() -> Self {
         let max_entries = NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
@@ -356,7 +357,7 @@ impl CudaExtensionCache {
     /// use tenferro_gpu::CudaExtensionCache;
     ///
     /// assert!(CudaExtensionCache::new().is_empty()?);
-    /// # Ok::<(), tenferro_gpu::Error>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn is_empty(&self) -> crate::Result<bool> {
         Ok(self.lock_inner()?.entries.is_empty())
@@ -1726,23 +1727,25 @@ impl BackendRuntimeCache for CudaBackend {
 
 impl TensorElementwise for CudaBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_complex!(
+        dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Add,
             add_float,
+            add_int,
             add_complex
         )
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_complex!(
+        dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Mul,
             mul_float,
+            mul_int,
             mul_complex
         )
     }
@@ -1843,7 +1846,7 @@ impl TensorElementwise for CudaBackend {
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
         let op = op_name(
             PrimitiveOpKind::Compare,
-            op_descriptor::GpuLaunchKind::CompareFloatToBool,
+            op_descriptor::GpuLaunchKind::CompareFloatIntToBool,
         )?;
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_compare_bool(
@@ -1884,6 +1887,44 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_compare_bool(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_int_bool::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::Bool),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_compare_bool(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_int_bool::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::Bool),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => Err(
                 crate::Error::backend_failure(op, format!("unsupported dtype {:?}", lhs.dtype())),
             ),
@@ -1899,7 +1940,7 @@ impl TensorElementwise for CudaBackend {
     ) -> crate::Result<Tensor> {
         let op = op_name(
             PrimitiveOpKind::Select,
-            op_descriptor::GpuLaunchKind::SelectBoolFloat,
+            op_descriptor::GpuLaunchKind::SelectBoolFloatInt,
         )?;
         match (pred, on_true, on_false) {
             (Tensor::Bool(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => {
@@ -1933,6 +1974,38 @@ impl TensorElementwise for CudaBackend {
                     },
                 )
                 .map(Tensor::F64)
+            }
+            (Tensor::Bool(pred), Tensor::I32(on_true), Tensor::I32(on_false)) => {
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_int::launch_unchecked::<i32, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::I32)
+            }
+            (Tensor::Bool(pred), Tensor::I64(on_true), Tensor::I64(on_false)) => {
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    pred.shape(),
+                    op,
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_int::launch_unchecked::<i64, CubeclCudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::I64)
             }
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
             | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => Err(

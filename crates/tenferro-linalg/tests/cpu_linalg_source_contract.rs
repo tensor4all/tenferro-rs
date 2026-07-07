@@ -69,6 +69,15 @@ fn cpu_backend_source() -> String {
     .unwrap_or_else(|err| panic!("CPU linalg backend source should be readable: {err}"))
 }
 
+fn linalg_backend_trait_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("backend.rs"),
+    )
+    .unwrap_or_else(|err| panic!("linalg backend trait source should be readable: {err}"))
+}
+
 fn assert_unsafe_blocks_have_safety_comments(path: &str, source: &str) {
     let lines: Vec<_> = source.lines().collect();
     let mut missing = Vec::new();
@@ -101,6 +110,16 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start_idx + offset)
         .unwrap_or(source.len());
     &source[start_idx..end_idx]
+}
+
+#[test]
+fn linalg_rustdoc_reuses_backend_in_read_examples() {
+    let source = linalg_backend_trait_source();
+
+    assert!(
+        !source.contains("CpuBackend::new()."),
+        "LinalgBackend rustdoc examples should bind and reuse CpuBackend instead of constructing it inline"
+    );
 }
 
 #[test]
