@@ -2,6 +2,7 @@
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
+use tenferro_tensor::BackendId;
 use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorStructural};
 
 use super::{
@@ -90,6 +91,11 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
 
     let expected = cpu.div(&lhs, &rhs).unwrap();
     let gpu_out = gpu.div(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
+
+    let expected = cpu.rem(&lhs, &rhs).unwrap();
+    let gpu_out = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
@@ -237,6 +243,14 @@ fn test_cubecl_integer_add_mul_compare_select_match_cpu() {
     let i64_lhs = tensor_i64(vec![2, 3], vec![10, -20, 30, 40, -50, 60]);
     let i64_rhs = tensor_i64(vec![2, 3], vec![7, 6, -5, 4, 3, -2]);
     assert_integer_binary_and_select_matches_cpu(&i64_lhs, &i64_rhs);
+
+    let i32_lhs = tensor_i32(vec![3], vec![i32::MAX, i32::MIN, 50]);
+    let i32_rhs = tensor_i32(vec![3], vec![1, -1, i32::MAX]);
+    assert_integer_binary_and_select_matches_cpu(&i32_lhs, &i32_rhs);
+
+    let i64_lhs = tensor_i64(vec![2], vec![i64::MAX, i64::MIN]);
+    let i64_rhs = tensor_i64(vec![2], vec![1, -1]);
+    assert_integer_binary_and_select_matches_cpu(&i64_lhs, &i64_rhs);
 }
 
 fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
@@ -250,8 +264,55 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
+    let expected = cpu.sub(lhs, rhs).unwrap();
+    let gpu_out = gpu.sub(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
     let expected = cpu.mul(lhs, rhs).unwrap();
     let gpu_out = gpu.mul(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.div(lhs, rhs).unwrap();
+    let gpu_out = gpu.div(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.rem(lhs, rhs).unwrap();
+    let gpu_out = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let pow_rhs = nonnegative_integer_exponents_like(rhs);
+    let gpu_pow_rhs = upload(&gpu, &pow_rhs);
+    let expected = cpu.pow(lhs, &pow_rhs).unwrap();
+    let gpu_out = gpu.pow(&gpu_lhs, &gpu_pow_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.maximum(lhs, rhs).unwrap();
+    let gpu_out = gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.minimum(lhs, rhs).unwrap();
+    let gpu_out = gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.neg(lhs).unwrap();
+    let gpu_out = gpu.neg(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.abs(lhs).unwrap();
+    let gpu_out = gpu.abs(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.sign(lhs).unwrap();
+    let gpu_out = gpu.sign(&gpu_lhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
@@ -264,6 +325,68 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
+}
+
+fn nonnegative_integer_exponents_like(tensor: &Tensor) -> Tensor {
+    match tensor {
+        Tensor::I32(tensor) => tensor_i32(
+            tensor.shape().to_vec(),
+            (0..tensor.n_elements())
+                .map(|idx| (idx % 5) as i32)
+                .collect(),
+        ),
+        Tensor::I64(tensor) => tensor_i64(
+            tensor.shape().to_vec(),
+            (0..tensor.n_elements())
+                .map(|idx| (idx % 5) as i64)
+                .collect(),
+        ),
+        _ => panic!("expected integer tensor"),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_integer_domain_errors_match_cpu() {
+    if !gpu_available() {
+        eprintln!("skipping test_cubecl_integer_domain_errors_match_cpu — no CUDA device found");
+        return;
+    }
+
+    let mut gpu = gpu_backend();
+    let lhs = tensor_i32(vec![2], vec![1, 2]);
+    let zero_rhs = tensor_i32(vec![2], vec![1, 0]);
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_zero_rhs = upload(&gpu, &zero_rhs);
+
+    let err = gpu.div(&gpu_lhs, &gpu_zero_rhs).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DivisionByZero {
+            op: "div",
+            dtype: DType::I32
+        }
+    ));
+
+    let err = gpu.rem(&gpu_lhs, &gpu_zero_rhs).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DivisionByZero {
+            op: "rem",
+            dtype: DType::I32
+        }
+    ));
+
+    let exp = tensor_i32(vec![2], vec![2, -1]);
+    let gpu_exp = upload(&gpu, &exp);
+    let err = gpu.pow(&gpu_lhs, &gpu_exp).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::NegativeIntegerExponent {
+            op: "pow",
+            dtype: DType::I32
+        }
+    ));
 }
 
 #[test]
@@ -296,6 +419,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
+    let expected = cpu.sub(&lhs, &rhs).unwrap();
+    let gpu_out = gpu.sub(&gpu_lhs, &gpu_rhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
+
     let expected = cpu.mul(&lhs, &rhs).unwrap();
     let gpu_out = gpu.mul(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -305,6 +433,16 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let gpu_out = gpu.div(&gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+
+    let err = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::UnsupportedOpDType {
+            op: "rem",
+            dtype: DType::C64,
+            backend: BackendId::Cuda,
+        }
+    ));
 
     let expected = cpu.neg(&lhs).unwrap();
     let gpu_out = gpu.neg(&gpu_lhs).unwrap();
@@ -319,13 +457,21 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let err = gpu.abs(&gpu_lhs).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::BackendFailure { op: "abs", .. }
+        crate::Error::UnsupportedOpDType {
+            op: "abs",
+            dtype: DType::C64,
+            backend: tenferro_tensor::BackendId::Cuda,
+        }
     ));
 
     let err = gpu.exp(&gpu_lhs).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::BackendFailure { op: "exp", .. }
+        crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::C64,
+            backend: tenferro_tensor::BackendId::Cuda,
+        }
     ));
 
     let err = gpu

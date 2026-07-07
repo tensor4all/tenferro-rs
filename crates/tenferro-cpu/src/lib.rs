@@ -45,6 +45,7 @@ pub mod affinity;
 mod analytic;
 pub mod backend;
 mod buffer_pool;
+mod capability;
 pub mod context;
 mod elementwise;
 mod exec_session;
@@ -73,11 +74,13 @@ extern crate lapack_inject as _;
 extern crate lapack_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
+pub use analytic::pow;
 pub use backend::{CpuBackend, CpuBackendKind};
 pub use buffer_pool::BufferPoolStats;
+pub use capability::cpu_capabilities;
 pub use context::CpuContext;
 pub use elementwise::{
-    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
+    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
 };
 pub use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};

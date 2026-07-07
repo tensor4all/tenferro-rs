@@ -88,6 +88,16 @@ rules from `tensor4all-agent-rules`.
   specified under `docs/spec/` before implementation. Keep checked `convert`
   separate from explicit `cast`, and keep CPU/GPU/eager/traced behavior aligned
   unless the owning spec names a backend limitation and its typed error.
+- Public integer tensor arithmetic is a CPU/CUDA parity contract, not a
+  debug-build Rust overflow contract. Supported `I32` and `I64` add, sub, mul,
+  neg, abs, pow, `reduce_sum`, and `reduce_prod` paths must use explicit
+  two's-complement wrapping semantics in CPU code and matching CUDA kernels.
+  Do not use bare `+`, `-`, `*`, unary negation, or unchecked integer folds on
+  user data in these paths unless the surrounding helper proves wrapping
+  semantics. Integer div/rem/pow domain failures such as division by zero or
+  negative exponents must return typed errors, and CUDA support must include
+  CPU-vs-CUDA edge-case tests before the capability descriptor marks it
+  supported.
 - AD cotangent seed helpers must use dtype-aware tensor constructors such as
   shared zero/one helpers, not backend analytic operations like `exp`, `log`,
   or `sin` as a shortcut for constants. Seed construction is dtype plumbing,
@@ -816,3 +826,28 @@ Tests follow implementation ownership.
   of keeping wrappers beside the canonical method/associated-function or
   extension-trait surface.
 - No `traced_` prefix on methods. `TracedTensor` methods are inherently traced.
+
+### Output And Write Surface Vocabulary
+
+- Operation suffixes describe ownership and output-update semantics. Do not
+  use a suffix only to avoid a naming conflict.
+- Unsuffixed operation names allocate and return a fresh result tensor.
+- `_read` means one or more inputs are `TensorRead`/borrowed views; the output
+  is still backend-allocated unless another suffix also names an output.
+- Bare `_into` means overwrite a caller-provided output. The operation must
+  validate dtype and shape, must not resize the destination, and must not read
+  the previous output value as part of the semantic update.
+- `_read_into` is the main backend hook shape for borrowed inputs plus an
+  overwritten `TensorWrite` output.
+- `_in_place` means destructive update of an input tensor and is distinct from
+  `_into`. Do not implement in-place elementwise variants by passing aliased
+  input/output views into generic `*_into` kernels unless the kernel's aliasing
+  contract has been proven and tested.
+- `_add_to` means read-modify-write accumulation, `out += op(...)`. Do not hide
+  accumulation behind a bare `_into` method.
+- Dot/GEMM read-modify-write uses the existing `_into_accum` vocabulary with a
+  `DotGeneralAccumulation` argument. This is the dot-specific accumulation
+  surface; do not introduce `_linear_into` as a second spelling.
+- Typed-face preallocated methods may take `&mut TypedTensor<T>` when the dtype
+  is statically known. Erased-face methods should take `TensorWrite<'_>` so
+  dynamic dtype and view outputs are validated at the backend boundary.

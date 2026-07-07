@@ -1,58 +1,139 @@
 # tenferro-rs
 
-**A Rust-native tensor & autodiff stack for scientific computing.**
+**A Rust-native tensor computation stack with opt-in autodiff for scientific workloads.**
 
 [![CI](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/tenferro-runtime.svg)](https://crates.io/crates/tenferro-runtime)
 [![docs](https://img.shields.io/badge/docs-tensor4all.org-blue)](https://tensor4all.org/tenferro-rs/)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 
-tenferro-rs provides dense tensors, linear algebra, einsum, FFT, and
-extensible automatic differentiation — eager like PyTorch, traced like JAX —
-natively in Rust, with explicit CPU, CUDA, and experimental WebGPU backend
-control. It is built for scientific workloads rather than deep learning:
-storage is column-major, aligned with LAPACK, Fortran, and Julia conventions;
-traced programs compile once and are reused while concrete sizes resolve at
-runtime; and operation families and AD rules can be extended from external
-crates.
+tenferro-rs provides typed and dynamic dense tensors, explicit backend
+dispatch, linear algebra, einsum, FFT, and extensible automatic differentiation
+native to Rust. Use it as an ordinary tensor library first: direct
+`TypedTensor` and `Tensor` APIs run through a chosen CPU, CUDA, or experimental
+WebGPU backend, while `EagerTensor` and `TracedTensor` add PyTorch-style
+`backward()` or JAX-style graph transforms when a workflow needs AD.
+
+Positioning: tenferro-rs sits between low-level array crates and full
+deep-learning frameworks for Rust scientific code that needs column-major
+storage, LAPACK/Fortran/Julia-friendly layouts, dynamic-shape traced programs,
+explicit device control, and operation families whose AD rules can live outside
+the core tensor type.
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
-## Quick Example
+## Quickstart A: Direct Tensor Compute
 
-Add the runtime and CPU backend crates:
+Add the runtime, CPU backend, and linear algebra extension crates:
 
 ```toml
 [dependencies]
 tenferro-runtime = "0.2"
 tenferro-cpu = "0.2"
+tenferro-linalg = "0.2"
 ```
 
-<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
+<!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_linalg::LinalgBackend;
+use tenferro_runtime::{TensorView, TypedTensor, TypedTensorOpsExt};
+
+fn assert_close(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs();
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, error={error}"
+        );
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
+    let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
 
-    let c = a.matmul(&b, &mut backend)?;
+    let product = a.matmul(&identity, &mut backend)?;
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    let svd = backend.svd_read(TensorView::F64(product.as_view()))?;
+    assert_eq!(svd.len(), 3);
+    assert_eq!(svd[0].shape(), &[2, 2]);
+    assert_eq!(svd[1].shape(), &[2]);
+    assert_eq!(svd[2].shape(), &[2, 2]);
+    assert_close(svd[1].as_slice::<f64>().unwrap(), &[3.0, 1.0]);
 
     Ok(())
 }
 ```
 <!-- end-snippet-source -->
 
-The same stack scales up to PyTorch-style eager autodiff with `backward()`
-([tutorial](https://tensor4all.org/tenferro-rs/tutorials/eager-autodiff-pytorch-style.html))
-and JAX-style traced `grad`/`vjp`/`jvp`
-([tutorial](https://tensor4all.org/tenferro-rs/tutorials/traced-autodiff-jax-style.html)).
+## Quickstart B: Traced AD
+
+Add `tenferro-ad` when the same tensor stack needs graph-based `grad`, `vjp`,
+or `jvp`:
+
+```toml
+[dependencies]
+tenferro-runtime = "0.2"
+tenferro-cpu = "0.2"
+tenferro-ad = "0.2"
+```
+
+<!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
+```rust
+use tenferro_ad::TracedTensorAdExt;
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+
+fn assert_close(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs();
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, error={error}"
+        );
+    }
+}
+
+fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runtime::Error> {
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(tensor)?;
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor.run(&program)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    let y = (&x * &x)?.reduce_sum(&[0])?;
+
+    let y_value = run(&y)?;
+    assert_eq!(y_value.shape(), &[]);
+    assert_close(y_value.as_slice::<f64>().unwrap(), &[14.0]);
+
+    let grad = y.grad(&x)?;
+    let grad_value = run(&grad)?;
+    assert_eq!(grad_value.shape(), &[3]);
+    assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+
+    let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
+    let directional = y.jvp(&x, &tangent)?;
+    let directional_value = run(&directional)?;
+    assert_eq!(directional_value.shape(), &[]);
+    assert_close(directional_value.as_slice::<f64>().unwrap(), &[-7.8]);
+
+    Ok(())
+}
+```
+<!-- end-snippet-source -->
+
+For PyTorch-style eager autodiff with `backward()`, see the
+[eager autodiff tutorial](https://tensor4all.org/tenferro-rs/tutorials/eager-autodiff-pytorch-style.html).
 Setup notes, including local-checkout builds and BLAS provider selection, are
 in [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/index.html).
 
@@ -107,9 +188,11 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 
 ## Crates
 
-tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro`
-facade crate; depend directly on the crates you need, starting with the
-smallest API that solves your problem.
+tenferro-rs is a multi-crate workspace. There is intentionally no `tenferro` facade crate;
+depend directly on the crates you need, starting with the smallest API that
+solves your problem.
+
+![tenferro-rs dependency footprint](docs/assets/dependency-footprint.svg)
 
 ### Core User Crates
 
@@ -130,10 +213,13 @@ smallest API that solves your problem.
 | `tenferro-einsum` | Einsum and contraction planning |
 | `tenferro-fft` | FFT operations |
 
-The implementation crates `tenferro-tensor-core`, `tenferro-core-ops`,
-`tenferro-internal-ops`, and `tenferro-internal-extension-macros` are
-published building blocks for the crates above; most users never depend on
-them directly.
+### Implementation Crates
+
+The crates `tenferro-tensor-core`, `tenferro-core-ops`,
+`tenferro-internal-ops`, and `tenferro-internal-extension-macros` are published
+building blocks for the crates above; most users never depend on them directly.
+For current backend operation coverage, start with the hand-written
+[Devices and GPU coverage table](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html#coverage).
 
 ## Documentation
 

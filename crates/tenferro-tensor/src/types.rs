@@ -1881,6 +1881,20 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor>;
 
+    /// Wrap a typed tensor into its dynamic [`Tensor`] enum variant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
+    ///
+    /// let typed = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0])?;
+    /// let tensor = <f64 as TensorScalar>::typed_tensor_into_tensor(typed);
+    /// assert!(matches!(tensor, Tensor::F64(_)));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn typed_tensor_into_tensor(tensor: TypedTensor<Self>) -> Tensor;
+
     /// Borrow a typed tensor as a dtype-erased [`TensorRead`] view.
     ///
     /// This keeps the typed tensor borrowed instead of copying host data into
@@ -1985,6 +1999,10 @@ macro_rules! impl_tensor_scalar {
 
             fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor> {
                 TypedTensor::from_vec_col_major(shape, data).map(Tensor::$variant)
+            }
+
+            fn typed_tensor_into_tensor(tensor: TypedTensor<Self>) -> Tensor {
+                Tensor::$variant(tensor)
             }
 
             fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {

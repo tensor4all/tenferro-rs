@@ -3,10 +3,11 @@ use tenferro_core_ops::{descriptor as primitive_descriptor, DTypePolicy, Primiti
 /// Host-side launch family used by the CubeCL primitive dispatcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuLaunchKind {
-    BinaryFloatComplex,
     BinaryFloatComplexInt,
-    BinaryFloatOnly,
+    BinaryFloatInt,
     UnaryFloatComplex,
+    UnaryFloatComplexInt,
+    UnaryFloatInt,
     UnaryFloatOnly,
     CompareFloatIntToBool,
     SelectBoolFloatInt,
@@ -25,15 +26,18 @@ pub(crate) struct GpuOpDescriptor {
 
 pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
     let launch = match kind {
-        PrimitiveOpKind::Add | PrimitiveOpKind::Mul => GpuLaunchKind::BinaryFloatComplexInt,
-        PrimitiveOpKind::Div => GpuLaunchKind::BinaryFloatComplex,
-        PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum | PrimitiveOpKind::Pow => {
-            GpuLaunchKind::BinaryFloatOnly
+        PrimitiveOpKind::Add | PrimitiveOpKind::Sub | PrimitiveOpKind::Mul => {
+            GpuLaunchKind::BinaryFloatComplexInt
         }
-        PrimitiveOpKind::Neg | PrimitiveOpKind::Conj => GpuLaunchKind::UnaryFloatComplex,
-        PrimitiveOpKind::Abs
-        | PrimitiveOpKind::Sign
-        | PrimitiveOpKind::Exp
+        PrimitiveOpKind::Div => GpuLaunchKind::BinaryFloatComplexInt,
+        PrimitiveOpKind::Maximum | PrimitiveOpKind::Minimum | PrimitiveOpKind::Rem => {
+            GpuLaunchKind::BinaryFloatInt
+        }
+        PrimitiveOpKind::Pow => GpuLaunchKind::BinaryFloatInt,
+        PrimitiveOpKind::Neg => GpuLaunchKind::UnaryFloatComplexInt,
+        PrimitiveOpKind::Conj => GpuLaunchKind::UnaryFloatComplex,
+        PrimitiveOpKind::Abs | PrimitiveOpKind::Sign => GpuLaunchKind::UnaryFloatInt,
+        PrimitiveOpKind::Exp
         | PrimitiveOpKind::Log
         | PrimitiveOpKind::Sin
         | PrimitiveOpKind::Cos

@@ -21,6 +21,42 @@ fn test_add_preserves_c32() {
 }
 
 #[test]
+fn test_sub_preserves_integer_dtype() {
+    let op = StdTensorOp::Sub;
+    assert_eq!(
+        infer_output_dtype(&op, &[DType::I32, DType::I32]).unwrap(),
+        DType::I32
+    );
+}
+
+#[test]
+fn test_integer_div_rem_pow_preserve_integer_dtype() {
+    for op in [StdTensorOp::Div, StdTensorOp::Rem, StdTensorOp::Pow] {
+        assert_eq!(
+            infer_output_dtype(&op, &[DType::I64, DType::I64]).unwrap(),
+            DType::I64,
+            "{op:?}"
+        );
+    }
+}
+
+#[test]
+fn test_integer_order_and_sign_ops_preserve_dtype() {
+    assert_eq!(
+        infer_output_dtype(&StdTensorOp::Sign, &[DType::I64]).unwrap(),
+        DType::I64
+    );
+    assert_eq!(
+        infer_output_dtype(&StdTensorOp::Maximum, &[DType::I64, DType::I64]).unwrap(),
+        DType::I64
+    );
+    assert_eq!(
+        infer_output_dtype(&StdTensorOp::ReduceMax { axes: vec![0] }, &[DType::I64]).unwrap(),
+        DType::I64
+    );
+}
+
+#[test]
 fn test_convert_uses_target_dtype() {
     let op = StdTensorOp::Convert {
         from: DType::F32,

@@ -68,6 +68,22 @@ pub enum Error {
         to: crate::DType,
         message: String,
     },
+    #[error("{backend} backend does not support {op} for dtype {dtype:?}")]
+    UnsupportedOpDType {
+        op: &'static str,
+        dtype: crate::DType,
+        backend: crate::BackendId,
+    },
+    #[error("{op}: division by zero for dtype {dtype:?}")]
+    DivisionByZero {
+        op: &'static str,
+        dtype: crate::DType,
+    },
+    #[error("{op}: negative integer exponent for dtype {dtype:?}")]
+    NegativeIntegerExponent {
+        op: &'static str,
+        dtype: crate::DType,
+    },
     #[error("{op}: invalid config: {message}")]
     InvalidConfig { op: &'static str, message: String },
     #[error("extension family {family_id:?} has no host reference implementation")]
@@ -100,6 +116,52 @@ impl Error {
             op,
             message: message.to_string(),
         }
+    }
+
+    /// Construct a structured unsupported operation/dtype error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendId, DType, Error};
+    ///
+    /// let err = Error::unsupported_op_dtype("add", DType::Bool, BackendId::Cuda);
+    /// assert!(matches!(err, Error::UnsupportedOpDType { backend: BackendId::Cuda, .. }));
+    /// ```
+    pub fn unsupported_op_dtype(
+        op: &'static str,
+        dtype: crate::DType,
+        backend: crate::BackendId,
+    ) -> Self {
+        Self::UnsupportedOpDType { op, dtype, backend }
+    }
+
+    /// Construct a structured division-by-zero domain error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Error};
+    ///
+    /// let err = Error::division_by_zero("div", DType::I32);
+    /// assert!(matches!(err, Error::DivisionByZero { op: "div", .. }));
+    /// ```
+    pub fn division_by_zero(op: &'static str, dtype: crate::DType) -> Self {
+        Self::DivisionByZero { op, dtype }
+    }
+
+    /// Construct a structured negative-integer-exponent domain error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Error};
+    ///
+    /// let err = Error::negative_integer_exponent("pow", DType::I64);
+    /// assert!(matches!(err, Error::NegativeIntegerExponent { op: "pow", .. }));
+    /// ```
+    pub fn negative_integer_exponent(op: &'static str, dtype: crate::DType) -> Self {
+        Self::NegativeIntegerExponent { op, dtype }
     }
 }
 

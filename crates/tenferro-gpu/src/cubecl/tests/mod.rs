@@ -5,6 +5,7 @@ use crate::cubecl::{download_tensor, upload_tensor, CudaBackend};
 use crate::{Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 
+mod capability_tests;
 mod elementwise_tests;
 mod fusion_tests;
 mod gemm_accum_tests;

@@ -1,11 +1,11 @@
-use std::ops::{Add, Div, Mul, Neg};
+use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
 use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
     batched_outer_product_into, broadcast_mul_into, fused_elementwise_into, map_into, mul_into,
-    zip_map2_into, zip_map3_into, FusedInst, FusedOp, FusedPlan, FusedScalar, StridedView,
+    reduce, zip_map2_into, zip_map3_into, FusedInst, FusedOp, FusedPlan, FusedScalar, StridedView,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -15,7 +15,7 @@ use tenferro_tensor::backend::{
 };
 use tenferro_tensor::{
     col_major_strides, CompareDir, DType, Tensor, TensorOwnedView, TensorRank, TensorRead,
-    TensorValue, TensorView, TypedTensor, TypedTensorView,
+    TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{
@@ -130,7 +130,16 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
+        ElementwiseFusionOp::Remainder => {
+            unreachable!("remainder must be filtered before CPU elementwise fusion")
+        }
     }
+}
+
+fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
+    plan.ops()
+        .iter()
+        .any(|inst| inst.op() == ElementwiseFusionOp::Remainder)
 }
 
 fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {
@@ -180,6 +189,19 @@ pub(crate) trait OrderedElem: Copy + Clone + Send + Sync {
 
 pub(crate) trait CompareElem: Copy + Send + Sync {
     fn compare_elem(self, other: Self, dir: &CompareDir) -> bool;
+}
+
+trait WrappingIntegerElem:
+    Copy + PoolScalar + TensorScalar + Zero + PartialEq + Eq + Send + Sync + 'static
+{
+    fn wrapping_add_elem(self, other: Self) -> Self;
+    fn wrapping_sub_elem(self, other: Self) -> Self;
+    fn wrapping_mul_elem(self, other: Self) -> Self;
+    fn wrapping_div_elem(self, other: Self) -> Self;
+    fn wrapping_rem_elem(self, other: Self) -> Self;
+    fn wrapping_neg_elem(self) -> Self;
+    fn wrapping_abs_elem(self) -> Self;
+    fn signum_elem(self) -> Self;
 }
 
 macro_rules! impl_tier2_elem_real {
@@ -277,6 +299,86 @@ impl_compare_elem_ord!(i32);
 impl_compare_elem_ord!(i64);
 impl_compare_elem_ord!(bool);
 
+macro_rules! impl_ordered_elem_ord {
+    ($ty:ty) => {
+        impl OrderedElem for $ty {
+            fn max_elem(self, other: Self) -> Self {
+                self.max(other)
+            }
+
+            fn min_elem(self, other: Self) -> Self {
+                self.min(other)
+            }
+        }
+    };
+}
+
+impl_ordered_elem_ord!(i32);
+impl_ordered_elem_ord!(i64);
+
+macro_rules! impl_wrapping_integer_elem {
+    ($ty:ty) => {
+        impl WrappingIntegerElem for $ty {
+            fn wrapping_add_elem(self, other: Self) -> Self {
+                self.wrapping_add(other)
+            }
+
+            fn wrapping_sub_elem(self, other: Self) -> Self {
+                self.wrapping_sub(other)
+            }
+
+            fn wrapping_mul_elem(self, other: Self) -> Self {
+                self.wrapping_mul(other)
+            }
+
+            fn wrapping_div_elem(self, other: Self) -> Self {
+                self.wrapping_div(other)
+            }
+
+            fn wrapping_rem_elem(self, other: Self) -> Self {
+                self.wrapping_rem(other)
+            }
+
+            fn wrapping_neg_elem(self) -> Self {
+                self.wrapping_neg()
+            }
+
+            fn wrapping_abs_elem(self) -> Self {
+                self.wrapping_abs()
+            }
+
+            fn signum_elem(self) -> Self {
+                self.signum()
+            }
+        }
+    };
+}
+
+impl_wrapping_integer_elem!(i32);
+impl_wrapping_integer_elem!(i64);
+
+fn strided_view_contains<T>(
+    op: &'static str,
+    view: &StridedView<'_, T>,
+    pred: impl Fn(T) -> bool + Copy + Sync,
+) -> crate::Result<bool>
+where
+    T: Copy + Send + Sync,
+{
+    reduce(view, pred, |lhs, rhs| lhs || rhs, false)
+        .map_err(|err| crate::Error::backend_failure(op, err))
+}
+
+fn ensure_no_zero_divisor<T>(op: &'static str, rhs: &StridedView<'_, T>) -> crate::Result<()>
+where
+    T: WrappingIntegerElem,
+{
+    if strided_view_contains(op, rhs, |value| value == T::zero())? {
+        return Err(crate::Error::division_by_zero(op, T::dtype()));
+    }
+    Ok(())
+}
+
 fn complex_scalar_tensor<T>(scalar: T) -> crate::Result<TypedTensor<Complex<T>>>
 where
     T: Copy + Clone + Zero,
@@ -334,8 +436,12 @@ pub(crate) fn add_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_add_with_pool(buffers, a, b)?)),
-        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::I32(typed_add_with_pool(buffers, a, b)?)),
-        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_wrapping_add_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_wrapping_add_with_pool(buffers, a, b)?))
+        }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
@@ -368,27 +474,27 @@ pub(crate) fn add_read_with_pool(
     }
 
     macro_rules! dispatch {
-        ($variant:ident) => {
+        ($variant:ident, $func:ident) => {
             match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(Tensor::$variant(a)),
                     TensorRead::View(TensorView::$variant(b)),
                 ) => {
                     let a = a.as_view();
-                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, &a, b)?));
+                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
                     TensorRead::Tensor(Tensor::$variant(b)),
                 ) => {
                     let b = b.as_view();
-                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, a, &b)?));
+                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
                     TensorRead::View(TensorView::$variant(b)),
                 ) => {
-                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, a, b)?));
+                    return Ok(Tensor::$variant($func(buffers, a, b)?));
                 }
                 _ => {}
             }
@@ -468,14 +574,188 @@ pub(crate) fn add_read_with_pool(
     dispatch_real_complex_scalar!(F32, C32);
     dispatch_real_complex_scalar!(F64, C64);
 
-    dispatch!(F32);
-    dispatch!(F64);
-    dispatch!(I32);
-    dispatch!(I64);
-    dispatch!(C32);
-    dispatch!(C64);
+    dispatch!(F32, typed_add_view_with_pool);
+    dispatch!(F64, typed_add_view_with_pool);
+    dispatch!(I32, typed_wrapping_add_view_with_pool);
+    dispatch!(I64, typed_wrapping_add_view_with_pool);
+    dispatch!(C32, typed_add_view_with_pool);
+    dispatch!(C64, typed_add_view_with_pool);
 
     Err(read_pair_error("add", lhs, rhs))
+}
+
+/// Subtract two CPU tensors elementwise.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::sub;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 2.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+/// let out = sub(&a, &b)?;
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, -2.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| sub_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn sub_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_sub_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_sub_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_wrapping_sub_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_wrapping_sub_with_pool(buffers, a, b)?))
+        }
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_sub_with_pool(buffers, a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_sub_with_pool(buffers, a, b)?)),
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
+            let scalar = complex_scalar_tensor(typed_host_data("sub", a)?[0])?;
+            Ok(Tensor::C32(typed_sub_with_pool(buffers, &scalar, b)?))
+        }
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
+            let scalar = complex_scalar_tensor(typed_host_data("sub", b)?[0])?;
+            Ok(Tensor::C32(typed_sub_with_pool(buffers, a, &scalar)?))
+        }
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
+            let scalar = complex_scalar_tensor(typed_host_data("sub", a)?[0])?;
+            Ok(Tensor::C64(typed_sub_with_pool(buffers, &scalar, b)?))
+        }
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
+            let scalar = complex_scalar_tensor(typed_host_data("sub", b)?[0])?;
+            Ok(Tensor::C64(typed_sub_with_pool(buffers, a, &scalar)?))
+        }
+        _ => Err(tensor_pair_error("sub", lhs, rhs)),
+    }
+}
+
+pub(crate) fn sub_read_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    if let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) {
+        return sub_with_pool(buffers, lhs, rhs);
+    }
+
+    macro_rules! dispatch {
+        ($variant:ident, $func:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    let a = a.as_view();
+                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                ) => {
+                    let b = b.as_view();
+                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    return Ok(Tensor::$variant($func(buffers, a, b)?));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    macro_rules! dispatch_real_complex_scalar {
+        ($real_variant:ident, $complex_variant:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(Tensor::$real_variant(real)),
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_tensor(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, &scalar, complex,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$real_variant(real)),
+                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    let complex = complex.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, &scalar, &complex,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$real_variant(real)),
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, &scalar, complex,
+                    )?));
+                }
+                (
+                    TensorRead::Tensor(Tensor::$complex_variant(complex)),
+                    TensorRead::View(TensorView::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let complex = complex.as_view();
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, &complex, &scalar,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                    TensorRead::Tensor(Tensor::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_tensor(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, complex, &scalar,
+                    )?));
+                }
+                (
+                    TensorRead::View(TensorView::$complex_variant(complex)),
+                    TensorRead::View(TensorView::$real_variant(real)),
+                ) if real.shape().is_empty() => {
+                    let scalar = complex_scalar_tensor_from_view(real)?;
+                    let scalar = scalar.as_view();
+                    return Ok(Tensor::$complex_variant(typed_sub_view_with_pool(
+                        buffers, complex, &scalar,
+                    )?));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch_real_complex_scalar!(F32, C32);
+    dispatch_real_complex_scalar!(F64, C64);
+
+    dispatch!(F32, typed_sub_view_with_pool);
+    dispatch!(F64, typed_sub_view_with_pool);
+    dispatch!(I32, typed_wrapping_sub_view_with_pool);
+    dispatch!(I64, typed_wrapping_sub_view_with_pool);
+    dispatch!(C32, typed_sub_view_with_pool);
+    dispatch!(C64, typed_sub_view_with_pool);
+
+    Err(read_pair_error("sub", lhs, rhs))
 }
 
 /// Multiply two CPU tensors elementwise.
@@ -518,8 +798,12 @@ pub(crate) fn mul_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_mul_with_pool(buffers, a, b)?)),
-        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::I32(typed_mul_with_pool(buffers, a, b)?)),
-        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_wrapping_mul_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_wrapping_mul_with_pool(buffers, a, b)?))
+        }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
@@ -552,27 +836,27 @@ pub(crate) fn mul_read_with_pool(
     }
 
     macro_rules! dispatch {
-        ($variant:ident) => {
+        ($variant:ident, $func:ident) => {
             match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(Tensor::$variant(a)),
                     TensorRead::View(TensorView::$variant(b)),
                 ) => {
                     let a = a.as_view();
-                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, &a, b)?));
+                    return Ok(Tensor::$variant($func(buffers, &a, b)?));
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
                     TensorRead::Tensor(Tensor::$variant(b)),
                 ) => {
                     let b = b.as_view();
-                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, a, &b)?));
+                    return Ok(Tensor::$variant($func(buffers, a, &b)?));
                 }
                 (
                     TensorRead::View(TensorView::$variant(a)),
                     TensorRead::View(TensorView::$variant(b)),
                 ) => {
-                    return Ok(Tensor::$variant(typed_mul_view_with_pool(buffers, a, b)?));
+                    return Ok(Tensor::$variant($func(buffers, a, b)?));
                 }
                 _ => {}
             }
@@ -652,12 +936,12 @@ pub(crate) fn mul_read_with_pool(
     dispatch_real_complex_scalar!(F32, C32);
     dispatch_real_complex_scalar!(F64, C64);
 
-    dispatch!(F32);
-    dispatch!(F64);
-    dispatch!(I32);
-    dispatch!(I64);
-    dispatch!(C32);
-    dispatch!(C64);
+    dispatch!(F32, typed_mul_view_with_pool);
+    dispatch!(F64, typed_mul_view_with_pool);
+    dispatch!(I32, typed_wrapping_mul_view_with_pool);
+    dispatch!(I64, typed_wrapping_mul_view_with_pool);
+    dispatch!(C32, typed_mul_view_with_pool);
+    dispatch!(C64, typed_mul_view_with_pool);
 
     binary_read_with_pool("mul", buffers, lhs, rhs, mul_with_pool)
 }
@@ -700,6 +984,9 @@ pub(crate) fn elementwise_fusion_with_pool(
         return Ok(None);
     }
     if inputs.is_empty() {
+        return Ok(None);
+    }
+    if plan_uses_unfused_op(plan) {
         return Ok(None);
     }
 
@@ -1895,6 +2182,12 @@ pub(crate) fn div_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_integer_div_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_integer_div_with_pool(buffers, a, b)?))
+        }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
@@ -1943,6 +2236,12 @@ pub(crate) fn div_read_with_pool(
             &b,
             |x, y| x / y,
         )?)),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_integer_div_view_with_pool(buffers, &a, &b)?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
+            typed_integer_div_view_with_pool(buffers, &a, &b)?,
+        )),
         (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(typed_binary_view_with_pool(
             "div",
             buffers,
@@ -2009,6 +2308,77 @@ pub(crate) fn div_read_with_pool(
     }
 }
 
+/// Compute elementwise remainders on CPU tensors.
+///
+/// Integer remainders use wrapping two's-complement arithmetic for the
+/// `MIN % -1` edge and return a structured error on zero divisors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::rem;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![7_i32, -7])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3_i32, 3])?;
+/// let out = rem(&a, &b)?;
+/// assert_eq!(out.as_slice::<i32>().unwrap(), &[1, -1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| rem_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn rem_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_rem_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_rem_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_integer_rem_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_integer_rem_with_pool(buffers, a, b)?))
+        }
+        _ => Err(tensor_pair_error("rem", lhs, rhs)),
+    }
+}
+
+pub(crate) fn rem_read_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(typed_binary_view_with_pool(
+            "rem",
+            buffers,
+            &a,
+            &b,
+            |x, y| x % y,
+        )?)),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(typed_binary_view_with_pool(
+            "rem",
+            buffers,
+            &a,
+            &b,
+            |x, y| x % y,
+        )?)),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_integer_rem_view_with_pool(buffers, &a, &b)?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
+            typed_integer_rem_view_with_pool(buffers, &a, &b)?,
+        )),
+        _ => Err(dtype_pair_error("rem", lhs_dtype, rhs_dtype)),
+    }
+}
+
 /// Negate a CPU tensor elementwise.
 ///
 /// # Examples
@@ -2030,7 +2400,9 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "neg",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2056,6 +2428,18 @@ pub(crate) fn neg_read_with_pool(
             buffers,
             &t,
             |x| -x,
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| x.wrapping_neg_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "neg",
+            buffers,
+            &t,
+            |x| x.wrapping_neg_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "neg",
@@ -2167,7 +2551,9 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "abs",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2193,6 +2579,18 @@ pub(crate) fn abs_read_with_pool(
             buffers,
             &t,
             |x| x.abs_elem(),
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.wrapping_abs_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "abs",
+            buffers,
+            &t,
+            |x| x.wrapping_abs_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
@@ -2224,7 +2622,9 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
             "sign",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2250,6 +2650,18 @@ pub(crate) fn sign_read_with_pool(
             buffers,
             &t,
             |x| x.sign_elem(),
+        )?)),
+        CpuReadView::I32(t) => Ok(Tensor::I32(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.signum_elem(),
+        )?)),
+        CpuReadView::I64(t) => Ok(Tensor::I64(typed_unary_view_with_pool(
+            "sign",
+            buffers,
+            &t,
+            |x| x.signum_elem(),
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
             "sign",
@@ -2302,6 +2714,12 @@ pub(crate) fn maximum_with_pool(
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_maximum_with_pool(buffers, a, b)?))
         }
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_maximum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_maximum_with_pool(buffers, a, b)?))
+        }
         _ => Err(tensor_pair_error("maximum", lhs, rhs)),
     }
 }
@@ -2322,6 +2740,16 @@ pub(crate) fn maximum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
+                x.max_elem(y)
+            })?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
             typed_same_shape_binary_view_with_pool("maximum", buffers, &a, &b, |x, y| {
                 x.max_elem(y)
             })?,
@@ -2362,6 +2790,12 @@ pub(crate) fn minimum_with_pool(
         (Tensor::F64(a), Tensor::F64(b)) => {
             Ok(Tensor::F64(typed_minimum_with_pool(buffers, a, b)?))
         }
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_minimum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_minimum_with_pool(buffers, a, b)?))
+        }
         _ => Err(tensor_pair_error("minimum", lhs, rhs)),
     }
 }
@@ -2382,6 +2816,16 @@ pub(crate) fn minimum_read_with_pool(
             })?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
+                x.min_elem(y)
+            })?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
             typed_same_shape_binary_view_with_pool("minimum", buffers, &a, &b, |x, y| {
                 x.min_elem(y)
             })?,
@@ -2700,6 +3144,74 @@ where
     }
 }
 
+fn typed_binary_with_pool<T>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    f: impl Fn(T, T) -> T + Copy + Sync,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + 'static,
+{
+    if lhs.shape() == rhs.shape() {
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view(op, lhs)?,
+            &typed_view(op, rhs)?,
+            f,
+        )
+        .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_host_data(op, lhs)?[0];
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
+        map_into(&mut out.view_mut(), &typed_view(op, rhs)?, |x| f(scalar, x))
+            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else if rhs.shape().is_empty() {
+        let scalar = typed_host_data(op, rhs)?[0];
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        map_into(&mut out.view_mut(), &typed_view(op, lhs)?, |x| f(x, scalar))
+            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else {
+        Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        })
+    }
+}
+
+fn typed_wrapping_add_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_binary_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
+}
+
+fn typed_wrapping_add_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    typed_binary_view_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
+}
+
 pub(crate) fn typed_add_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
@@ -2752,6 +3264,54 @@ where
     }
 }
 
+pub(crate) fn typed_sub_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + Sub<Output = T> + 'static,
+{
+    typed_binary_with_pool("sub", buffers, lhs, rhs, |x, y| x - y)
+}
+
+fn typed_wrapping_sub_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_binary_with_pool("sub", buffers, lhs, rhs, |x, y| x.wrapping_sub_elem(y))
+}
+
+fn typed_wrapping_sub_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x.wrapping_sub_elem(y))
+}
+
+pub(crate) fn typed_sub_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + Sub<Output = T> + 'static,
+    L: TensorRank,
+    R: TensorRank,
+{
+    typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x - y)
+}
+
 pub(crate) fn typed_mul_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -2795,6 +3355,30 @@ where
             rhs: rhs.shape().to_vec(),
         })
     }
+}
+
+fn typed_wrapping_mul_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+}
+
+fn typed_wrapping_mul_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
 }
 
 pub(crate) fn typed_mul_view_with_pool<T, L, R>(
@@ -2894,6 +3478,73 @@ where
     }
 }
 
+fn typed_integer_div_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    let rhs_view = typed_view("div", rhs)?;
+    ensure_no_zero_divisor("div", &rhs_view)?;
+    typed_binary_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+}
+
+fn typed_integer_div_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    let rhs_view = typed_view_from_view("div", rhs)?;
+    ensure_no_zero_divisor("div", &rhs_view)?;
+    typed_binary_view_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+}
+
+fn typed_rem_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + StdRem<Output = T> + PoolScalar + 'static,
+{
+    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x % y)
+}
+
+fn typed_integer_rem_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    let rhs_view = typed_view("rem", rhs)?;
+    ensure_no_zero_divisor("rem", &rhs_view)?;
+    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
+}
+
+fn typed_integer_rem_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    let rhs_view = typed_view_from_view("rem", rhs)?;
+    ensure_no_zero_divisor("rem", &rhs_view)?;
+    typed_binary_view_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
+}
+
 pub(crate) fn typed_neg_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -2906,6 +3557,42 @@ where
     map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
         .map_err(|err| crate::Error::backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
+}
+
+fn typed_wrapping_unary_with_pool<T>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    f: impl Fn(T) -> T + Copy + Sync,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_wrapping_neg_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("neg", buffers, input, |x| x.wrapping_neg_elem())
+}
+
+fn typed_wrapping_abs_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("abs", buffers, input, |x| x.wrapping_abs_elem())
 }
 
 pub(crate) fn typed_conj_with_pool<T>(
@@ -2989,6 +3676,16 @@ where
     })
     .map_err(|err| crate::Error::backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
+}
+
+fn typed_integer_sign_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    typed_wrapping_unary_with_pool("sign", buffers, input, |x| x.signum_elem())
 }
 
 pub(crate) fn typed_maximum_with_pool<T>(

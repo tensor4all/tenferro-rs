@@ -20,6 +20,10 @@ fn tutorial_binaries_run_successfully() {
         env!("CARGO_BIN_EXE_typed_tensor_non_ad"),
     );
     run_tutorial(
+        "direct_linalg_quickstart",
+        env!("CARGO_BIN_EXE_direct_linalg_quickstart"),
+    );
+    run_tutorial(
         "eager_autodiff_pytorch_style",
         env!("CARGO_BIN_EXE_eager_autodiff_pytorch_style"),
     );

@@ -204,34 +204,63 @@ CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 ## Coverage
 
 The CUDA backend uses the same concrete, eager, and traced tensor APIs as
-the CPU backend. The table below describes the current CUDA backend dispatch
-coverage for CUDA-resident `Tensor` values. It is not an autodiff coverage table.
+the CPU backend. The generated table below describes the current first-scope
+core primitive descriptor for CUDA-resident `Tensor` values. It is not an
+autodiff coverage table.
 
 Legend:
 
 - `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64` are the current public `Tensor` dtypes.
-- Listed dtypes have CUDA implementations for that operation.
-- Missing dtypes or rows marked "No CUDA implementation" return an error
-  rather than silently falling back to CPU.
+- Native CUDA dtypes have CUDA implementations for that operation.
+- Unsupported descriptor dtypes are semantically valid for the core op catalog
+  but currently return an error on CUDA.
+- Dtypes absent from the row are outside the current semantic dtype policy for
+  that operation.
+
+<!-- cuda-core-capability:start -->
+| Primitive op | Native CUDA dtypes | Unsupported descriptor dtypes | Output dtype | Native axes |
+| --- | --- | --- | --- | --- |
+| `add` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `sub` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `mul` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `neg` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `conj` | `F32`, `F64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `div` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `rem` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `abs` | `F32`, `F64`, `I32`, `I64` | `C32`, `C64` | `F32->F32`, `F64->F64`, `I32->I32`, `I64->I64`, `C32->F32`, `C64->F64` | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `sign` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `maximum` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `minimum` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `compare` | `F32`, `F64`, `I32`, `I64` | `Bool` | `Bool` | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `select` | `F32`, `F64`, `I32`, `I64` | `Bool`, `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `clamp` | `F32`, `F64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `exp` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `log` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `sin` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `cos` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `tanh` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `sqrt` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `rsqrt` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `pow` | `F32`, `F64`, `I32`, `I64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `expm1` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `log1p` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `dot_general` | `F32`, `F64`, `C32`, `C64` | none | same as input | result Native; read Native; write Native; strided Native; accumulation Native |
+| `reduce_sum` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `reduce_prod` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `reduce_max` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `reduce_min` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+<!-- cuda-core-capability:end -->
+
+Additional CUDA coverage outside the first-scope core descriptor is tracked
+below until those operation families are modeled by the backend capability
+descriptor.
 
 | Operation or family | CUDA dtype support | Notes |
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
-| `add`, `mul` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same dtype inputs only; `Bool` arithmetic is not implemented |
-| `div` | `F32`, `F64`, `C32`, `C64` | Same dtype inputs only; integer and `Bool` division are not implemented |
-| `neg` | `F32`, `F64`, `C32`, `C64` | Integer and `Bool` negation are not implemented |
-| `conj` | `F32`, `F64`, `C32`, `C64` | Real floating dtypes are identity; integer and `Bool` inputs are not implemented |
-| `abs`, `sign` | `F32`, `F64` | Complex, integer, and `Bool` inputs are not implemented |
-| `maximum`, `minimum`, `clamp` | `F32`, `F64` | Complex ordering is not defined; integer and `Bool` min/max/clamp are not implemented |
-| `compare`, `select` | `F32`, `F64`, `I32`, `I64` | Same dtype data inputs only; `compare` returns a `Bool` tensor and `select` takes a `Bool` predicate |
-| `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p` | `F32`, `F64` | Complex analytic kernels are not implemented |
-| `pow` | `F32`, `F64` | Same dtype inputs only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
 | `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Structural tensor operations; `Bool` is not implemented |
 | checked `convert`, explicit `cast` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I32`, `I64`, and `Bool` identity only | `convert` applies the public checked conversion contract before backend dispatch; `cast` is explicit dtype projection. Conversion to or from integer or `Bool` dtypes is not implemented on CUDA except identity |
-| `reduce_sum`, `reduce_prod` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Multi-axis reductions are composed from single-axis kernels; `Bool` is not implemented |
-| `reduce_max`, `reduce_min` | `F32`, `F64` | Complex ordering is not defined; integer and `Bool` min/max are not implemented |
-| `dot_general` | `F32`, `F64`, `C32`, `C64` | cuTENSOR-backed contraction; same dtype inputs only |
 | `gather` | operand `F32`, `F64`, `I32`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` and `Bool` operands are not implemented |
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
 | `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Dense structural/indexing operations; `Bool` is not implemented |

@@ -124,6 +124,63 @@ fn test_cubecl_i32_sum_and_prod_match_cpu() {
 
 #[test]
 #[ignore]
+fn test_cubecl_integer_reductions_wrap_on_overflow() {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+
+    let input = tensor_i32(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.reduce_sum(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_sum(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let input = tensor_i32(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.reduce_prod(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_prod(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let input = tensor_i64(vec![2, 1], vec![i64::MAX, 2]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.reduce_sum(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_sum(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.reduce_prod(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_prod(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let input = tensor_i32(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.reduce_max(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_max(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.reduce_min(&input, &[1]).unwrap();
+    let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let input = tensor_i64(vec![2, 2], vec![i64::MIN, 7, i64::MAX, -9]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.reduce_max(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_max(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.reduce_min(&input, &[1]).unwrap();
+    let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+}
+
+#[test]
+#[ignore]
 fn test_cubecl_bool_reductions_are_unsupported() {
     let input = tensor_bool(vec![2, 3], vec![true, false, true, true, false, false]);
 

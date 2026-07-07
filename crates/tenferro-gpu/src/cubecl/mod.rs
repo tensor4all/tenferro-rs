@@ -88,10 +88,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
 use cubecl::prelude::{
-    ArrayArg, ComplexCore as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat,
+    ArrayArg, ComplexCore as CubeComplex, CubeDim, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
-use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
+use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
@@ -113,6 +113,7 @@ use crate::{
     TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
+mod capability;
 mod dispatch;
 mod ffi;
 mod fusion;
@@ -132,6 +133,7 @@ use dispatch::{
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
 
+pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime};
 
@@ -1323,7 +1325,7 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_max_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_max_float_typed<F: CubeElement + CubeFloat + Clone>(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -1345,7 +1347,29 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_min_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_max_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMax,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_max_int::<CubeclCudaRuntime, I>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
+        })
+    }
+
+    fn reduce_min_float_typed<F: CubeElement + CubeFloat + Clone>(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -1357,6 +1381,28 @@ impl CudaBackend {
         self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
             backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
                 cubecl_reduce::launch_min_float::<CubeclCudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
+        })
+    }
+
+    fn reduce_min_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMin,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_min_int::<CubeclCudaRuntime, I>(
                     client,
                     input,
                     output,
@@ -1725,6 +1771,103 @@ impl BackendRuntimeCache for CudaBackend {
     type RuntimeCache = ();
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CheckedIntegerDomain {
+    DivisionByZero,
+    NegativeExponent,
+}
+
+fn checked_integer_domain_error(
+    domain: CheckedIntegerDomain,
+    op: &'static str,
+    dtype: crate::DType,
+) -> crate::Error {
+    match domain {
+        CheckedIntegerDomain::DivisionByZero => crate::Error::division_by_zero(op, dtype),
+        CheckedIntegerDomain::NegativeExponent => {
+            crate::Error::negative_integer_exponent(op, dtype)
+        }
+    }
+}
+
+fn read_checked_integer_flag(
+    backend: &CudaBackend,
+    flag: &TypedTensor<i32>,
+    op: &'static str,
+) -> crate::Result<i32> {
+    let host = download_tensor(backend.runtime(), &Tensor::I32(flag.clone()))?;
+    match host {
+        Tensor::I32(flag) => Ok(flag.as_slice()?.first().copied().unwrap_or_default()),
+        _ => Err(crate::Error::backend_failure(
+            op,
+            "integer domain flag download returned unexpected dtype",
+        )),
+    }
+}
+
+fn launch_checked_integer_binary<I>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<I>,
+    rhs: &TypedTensor<I>,
+    op: &'static str,
+    dtype: crate::DType,
+    domain: CheckedIntegerDomain,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<I>>
+where
+    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
+    ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
+
+    let output = alloc_output::<I>(backend.runtime(), lhs.shape())?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+
+    let flag = alloc_output::<i32>(backend.runtime(), &[1])?;
+    launch_nullary_into(
+        backend.runtime(),
+        &flag,
+        op,
+        cube_count_for_len(flag.n_elements())?,
+        cube_dim_1d(),
+        |client, count, dim, out| unsafe {
+            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
+                client, count, dim, out,
+            );
+        },
+    )?;
+
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    let flag_arg = typed_tensor_array_arg(&flag, op)?;
+    launch(
+        backend.runtime().client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+        flag_arg,
+    );
+
+    if read_checked_integer_flag(backend, &flag, op)? != 0 {
+        return Err(checked_integer_domain_error(domain, op, dtype));
+    }
+    Ok(output)
+}
+
 impl TensorElementwise for CudaBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_binary_float_complex_int!(
@@ -1735,6 +1878,18 @@ impl TensorElementwise for CudaBackend {
             add_float,
             add_int,
             add_complex
+        )
+    }
+
+    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        dispatch::dispatch_binary_float_complex_int!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Sub,
+            sub_float,
+            sub_int,
+            sub_complex
         )
     }
 
@@ -1751,11 +1906,12 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_complex!(
+        dispatch::dispatch_unary_float_complex_int!(
             self,
             input,
             PrimitiveOpKind::Neg,
             neg_float,
+            neg_int,
             neg_complex
         )
     }
@@ -1805,41 +1961,199 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_complex!(
-            self,
-            lhs,
-            rhs,
+        let op = op_name(
             PrimitiveOpKind::Div,
-            div_float,
-            div_complex
-        )
+            op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
+        )?;
+        match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I32,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::div_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I64,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::div_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I64),
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C32),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C64),
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
+        }
+    }
+
+    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::Rem,
+            op_descriptor::GpuLaunchKind::BinaryFloatInt,
+        )?;
+        match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::rem_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::rem_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I32,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::rem_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I64,
+                CheckedIntegerDomain::DivisionByZero,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::rem_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I64),
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+                Err(crate::Error::unsupported_op_dtype(
+                    op,
+                    lhs.dtype(),
+                    tenferro_tensor::BackendId::Cuda,
+                ))
+            }
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
+        }
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Abs, abs_float)
+        dispatch::dispatch_unary_float_int!(self, input, PrimitiveOpKind::Abs, abs_float, abs_int)
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sign, sign_float)
+        dispatch::dispatch_unary_float_int!(
+            self,
+            input,
+            PrimitiveOpKind::Sign,
+            sign_float,
+            sign_int
+        )
     }
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_only!(
+        dispatch::dispatch_binary_float_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Maximum,
-            maximum_float
+            maximum_float,
+            maximum_int
         )
     }
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_only!(
+        dispatch::dispatch_binary_float_int!(
             self,
             lhs,
             rhs,
             PrimitiveOpKind::Minimum,
-            minimum_float
+            minimum_float,
+            minimum_int
         )
     }
 
@@ -2088,7 +2402,74 @@ impl TensorAnalytic for CudaBackend {
     }
 
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_binary_float_only!(self, lhs, rhs, PrimitiveOpKind::Pow, pow_float)
+        let op = op_name(
+            PrimitiveOpKind::Pow,
+            op_descriptor::GpuLaunchKind::BinaryFloatInt,
+        )?;
+        match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::pow_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                lhs.shape(),
+                op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::pow_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I32,
+                CheckedIntegerDomain::NegativeExponent,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::pow_int_checked::launch_unchecked::<i32, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
+                self,
+                lhs,
+                rhs,
+                op,
+                crate::DType::I64,
+                CheckedIntegerDomain::NegativeExponent,
+                |client, count, dim, out, lhs_arg, rhs_arg, err_arg| unsafe {
+                    elementwise::pow_int_checked::launch_unchecked::<i64, CubeclCudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg, err_arg,
+                    );
+                },
+            )
+            .map(Tensor::I64),
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+                Err(crate::Error::unsupported_op_dtype(
+                    op,
+                    lhs.dtype(),
+                    tenferro_tensor::BackendId::Cuda,
+                ))
+            }
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
+        }
     }
 
     fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -2352,14 +2733,13 @@ impl TensorReduction for CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         match input {
-            Tensor::F32(t) => self.reduce_max_typed(t, axes).map(Tensor::F32),
-            Tensor::F64(t) => self.reduce_max_typed(t, axes).map(Tensor::F64),
-            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::backend_failure(
-                    op,
-                    format!("unsupported dtype {:?}", input.dtype()),
-                ))
-            }
+            Tensor::F32(t) => self.reduce_max_float_typed(t, axes).map(Tensor::F32),
+            Tensor::F64(t) => self.reduce_max_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I32(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I32),
+            Tensor::I64(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I64),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
+            ),
         }
     }
 
@@ -2369,14 +2749,13 @@ impl TensorReduction for CudaBackend {
             op_descriptor::GpuLaunchKind::Reduction,
         )?;
         match input {
-            Tensor::F32(t) => self.reduce_min_typed(t, axes).map(Tensor::F32),
-            Tensor::F64(t) => self.reduce_min_typed(t, axes).map(Tensor::F64),
-            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::backend_failure(
-                    op,
-                    format!("unsupported dtype {:?}", input.dtype()),
-                ))
-            }
+            Tensor::F32(t) => self.reduce_min_float_typed(t, axes).map(Tensor::F32),
+            Tensor::F64(t) => self.reduce_min_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I32(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I32),
+            Tensor::I64(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I64),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
+            ),
         }
     }
 }

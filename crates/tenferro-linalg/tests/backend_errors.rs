@@ -115,6 +115,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     impl TensorElementwise for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
             add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
+            sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
             neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
             conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;

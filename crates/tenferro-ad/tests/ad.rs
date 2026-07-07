@@ -222,6 +222,24 @@ fn eval_tensor(traced: TracedTensor) -> Tensor {
     traced.run_with(&mut engine).unwrap().clone()
 }
 
+#[test]
+fn sub_vjp_negates_rhs_cotangent() {
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![2.0, 4.0])).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 8.0])).unwrap();
+    let cotangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, -5.0])).unwrap();
+
+    let z = x.sub(&y).unwrap();
+    let dx = z.vjp(&x, &cotangent).unwrap();
+    let dy = z.vjp(&y, &cotangent).unwrap();
+
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&dx, &dy]).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_close_slice(get_f64_data(&results[0]), &[3.0, -5.0]);
+    assert_close_slice(get_f64_data(&results[1]), &[-3.0, 5.0]);
+}
+
 fn eval_scalar(traced: TracedTensor) -> f64 {
     get_f64_data(&eval_tensor(traced))[0]
 }

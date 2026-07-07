@@ -131,10 +131,12 @@ impl PartialEq for StdTensorOp {
         }
         match (self, other) {
             (Self::Add, Self::Add)
+            | (Self::Sub, Self::Sub)
             | (Self::Mul, Self::Mul)
             | (Self::Neg, Self::Neg)
             | (Self::Conj, Self::Conj)
             | (Self::Div, Self::Div)
+            | (Self::Rem, Self::Rem)
             | (Self::Abs, Self::Abs)
             | (Self::Sign, Self::Sign)
             | (Self::Maximum, Self::Maximum)
@@ -255,10 +257,12 @@ impl Hash for StdTensorOp {
         std::mem::discriminant(self).hash(state);
         match self {
             Self::Add
+            | Self::Sub
             | Self::Mul
             | Self::Neg
             | Self::Conj
             | Self::Div
+            | Self::Rem
             | Self::Abs
             | Self::Sign
             | Self::Maximum
@@ -355,7 +359,7 @@ impl GraphOperation for StdTensorOp {
 
     fn input_count(&self) -> usize {
         match self {
-            Self::Add | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
+            Self::Add | Self::Sub | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
             Self::GatherDynamicSliceSizes { slice_sizes, .. } => {
                 n_inputs_from_dim_exprs(2, &[slice_sizes])
             }
@@ -378,7 +382,12 @@ impl GraphOperation for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
+            Self::Div
+            | Self::Rem
+            | Self::Maximum
+            | Self::Minimum
+            | Self::Pow
+            | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
             Self::Concatenate { input_count, .. } => *input_count,
@@ -402,6 +411,7 @@ impl GraphOperation for StdTensorOp {
     fn output_count(&self) -> usize {
         match self {
             Self::Add
+            | Self::Sub
             | Self::Mul
             | Self::Neg
             | Self::Conj
@@ -412,6 +422,7 @@ impl GraphOperation for StdTensorOp {
             | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::Div
+            | Self::Rem
             | Self::Abs
             | Self::Sign
             | Self::Maximum

@@ -25,6 +25,10 @@ name = "typed_tensor_non_ad"
 path = "src/bin/typed_tensor_non_ad.rs"
 
 [[bin]]
+name = "direct_linalg_quickstart"
+path = "src/bin/direct_linalg_quickstart.rs"
+
+[[bin]]
 name = "eager_autodiff_pytorch_style"
 path = "src/bin/eager_autodiff_pytorch_style.rs"
 

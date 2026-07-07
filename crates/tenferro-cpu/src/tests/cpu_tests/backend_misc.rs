@@ -502,6 +502,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyBackend {
         panic_backend_methods! {
+        sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -609,6 +610,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyExec {
         panic_backend_methods! {
+        sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -997,15 +999,28 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         Complex64::new(0.0, 0.5),
     );
 
-    assert!(
+    assert_eq!(
         neg(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap())
-            .unwrap_err()
-            .to_string()
-            .contains("I64")
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[-1]
     );
     assert!(conj(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
-    assert!(abs(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
-    assert!(sign(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
+    assert_eq!(
+        abs(&Tensor::from_vec_col_major(vec![1], vec![-1_i64]).unwrap())
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[1]
+    );
+    assert_eq!(
+        sign(&Tensor::from_vec_col_major(vec![1], vec![-1_i64]).unwrap())
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[-1]
+    );
 
     let a = Tensor::C64(
         TypedTensor::from_vec_col_major(
@@ -1118,9 +1133,26 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             .unwrap(),
         &[8.0, 9.0]
     );
-    assert!(
-        crate::analytic::exp(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err()
-    );
+    let int_tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+    assert!(matches!(
+        crate::analytic::exp(&int_tensor),
+        Err(crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::I64,
+            backend: tenferro_tensor::BackendId::Cpu,
+        })
+    ));
+    assert!(matches!(
+        crate::analytic::exp_read_with_pool(
+            &mut crate::buffer_pool::BufferPool::new(),
+            TensorRead::from_tensor(&int_tensor),
+        ),
+        Err(crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::I64,
+            backend: tenferro_tensor::BackendId::Cpu,
+        })
+    ));
     assert!(crate::analytic::pow(&real, &base).is_err());
 }
 

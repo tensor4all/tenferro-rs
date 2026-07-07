@@ -41,6 +41,7 @@ impl BackendRuntimeCache for UploadRejectingBackend {
 impl TensorElementwise for UploadRejectingBackend {
     unreachable_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
+        sub(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;

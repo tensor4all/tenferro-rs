@@ -42,6 +42,46 @@ pub fn linearize_add(
     }
 }
 
+pub fn linearize_sub(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValueId>> {
+    let lhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[0].clone()));
+    let rhs_dtype = dtype_of_or_real(ctx, &ValueRef::External(primal_in[1].clone()));
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
+    let lhs_tangent =
+        tangent_in[0].map(|dx| convert_linear_to_dtype(builder, dx, lhs_dtype, output_dtype));
+    let rhs_tangent =
+        tangent_in[1].map(|dy| convert_linear_to_dtype(builder, dy, rhs_dtype, output_dtype));
+
+    match (lhs_tangent, rhs_tangent) {
+        (Some(dx), Some(dy)) => {
+            let out = builder.add_operation(
+                StdTensorOp::Sub,
+                vec![ValueRef::Local(dx), ValueRef::Local(dy)],
+                OperationRole::Linearized {
+                    active_mask: vec![true, true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        (Some(dx), None) => vec![Some(dx)],
+        (None, Some(dy)) => {
+            let out = builder.add_operation(
+                StdTensorOp::Neg,
+                vec![ValueRef::Local(dy)],
+                OperationRole::Linearized {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        (None, None) => vec![None],
+    }
+}
+
 pub fn linearize_mul(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
@@ -162,6 +202,39 @@ pub fn transpose_add(
         }
         None => Ok(vec![None, None]),
     }
+}
+
+pub fn transpose_sub(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let ct = match cotangent_out[0] {
+        Some(ct) => ct,
+        None => return Ok(vec![None, None]),
+    };
+
+    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
+    let lhs = linear_transpose_input_active(mode, 0)
+        .then(|| project_linear_to_dtype(builder, ct, output_dtype, lhs_dtype));
+    let rhs = if linear_transpose_input_active(mode, 1) {
+        let rhs_ct = project_linear_to_dtype(builder, ct, output_dtype, rhs_dtype);
+        let out = builder.add_operation(
+            StdTensorOp::Neg,
+            vec![ValueRef::Local(rhs_ct)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        );
+        Some(out[0])
+    } else {
+        None
+    };
+    Ok(vec![lhs, rhs])
 }
 
 pub fn transpose_mul(

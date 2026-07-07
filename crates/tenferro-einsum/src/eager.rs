@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use tenferro_tensor::{
-    BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRank, TensorRead,
-    TensorView, TensorWrite, TypedTensorView,
+    BackendSession, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorBackend,
+    TensorRank, TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
 use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
@@ -849,6 +849,48 @@ pub(crate) fn eager_einsum_exec_read_into(
 
     let result = eager_einsum_exec_read(exec, inputs, tree)?;
     out.copy_from_tensor(&result)
+}
+
+pub(crate) fn eager_einsum_exec_read_into_accum(
+    exec: &mut dyn BackendSession,
+    inputs: &[TensorRead<'_>],
+    tree: &ContractionTree,
+    accumulation: DotGeneralAccumulation,
+    mut out: TensorWrite<'_>,
+) -> Result<()> {
+    record_eager_einsum_profile("exec_read_into_accum.enter", Duration::ZERO);
+    let subscripts = &tree.subscripts;
+    if inputs.len() == 2
+        && subscripts.inputs.len() == 2
+        && inputs[0].shape().len() == subscripts.inputs[0].len()
+        && inputs[1].shape().len() == subscripts.inputs[1].len()
+    {
+        if let Some(plan) = try_build_binary_dot_plan(
+            &subscripts.inputs[0],
+            &subscripts.inputs[1],
+            &subscripts.output,
+        ) {
+            if plan.result_labels == plan.target_labels {
+                return profile_eager_einsum_section("binary.fast_dot_general_into_accum", || {
+                    exec.dot_general_read_into_accum(
+                        inputs[0].clone(),
+                        inputs[1].clone(),
+                        &plan.config,
+                        accumulation,
+                        out,
+                    )
+                });
+            }
+        }
+    }
+
+    let result = eager_einsum_exec_read(exec, inputs, tree)?;
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: false,
+        ..accumulation
+    };
+    tenferro_tensor::backend::accumulate_dot_result_into(&result, accumulation, &mut out)
 }
 
 fn tensor_value_from_read(input: TensorRead<'_>) -> TensorValue<'_> {

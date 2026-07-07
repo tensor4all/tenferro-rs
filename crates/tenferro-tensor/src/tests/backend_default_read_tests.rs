@@ -29,6 +29,11 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(marker())
     }
 
+    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+        self.calls.push("sub");
+        Ok(marker())
+    }
+
     fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
         self.calls.push("mul");
         Ok(marker())
@@ -469,6 +474,65 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
 }
 
 #[test]
+fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
+    let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let mut backend = DefaultReadBackend::default();
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .add_into(&a, &b, TensorWrite::from_tensor(&mut out))
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .sub_into(&a, &b, TensorWrite::from_tensor(&mut out))
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .mul_into(&a, &b, TensorWrite::from_tensor(&mut out))
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .neg_into(&a, TensorWrite::from_tensor(&mut out))
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .conj_into(&a, TensorWrite::from_tensor(&mut out))
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    backend
+        .div_read_into(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&b),
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+
+    let mut wrong_shape = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let err = backend
+        .add_into(&a, &b, TensorWrite::from_tensor(&mut wrong_shape))
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::ShapeMismatch { .. }));
+
+    let mut wrong_dtype = Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap();
+    let err = backend
+        .add_into(&a, &b, TensorWrite::from_tensor(&mut wrong_dtype))
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::DTypeMismatch { .. }));
+}
+
+#[test]
 fn contraction_scalar_helpers_cover_supported_and_rejected_dtypes() {
     assert_eq!(ContractionScalar::F32(1.0).dtype(), DType::F32);
     assert_eq!(ContractionScalar::F64(1.0).dtype(), DType::F64);
@@ -495,6 +559,19 @@ fn contraction_scalar_helpers_cover_supported_and_rejected_dtypes() {
     let overwrite = DotGeneralAccumulation::overwrite(DType::F32).unwrap();
     assert_eq!(overwrite.alpha, ContractionScalar::F32(1.0));
     assert_eq!(overwrite.beta, ContractionScalar::F32(0.0));
+    let add_to = DotGeneralAccumulation::add_to(DType::F64).unwrap();
+    assert_eq!(add_to.alpha, ContractionScalar::F64(1.0));
+    assert_eq!(add_to.beta, ContractionScalar::F64(1.0));
+    let scaled =
+        DotGeneralAccumulation::scaled(ContractionScalar::F64(0.5), ContractionScalar::F64(2.0))
+            .unwrap();
+    assert_eq!(scaled.alpha, ContractionScalar::F64(0.5));
+    assert_eq!(scaled.beta, ContractionScalar::F64(2.0));
+    assert!(DotGeneralAccumulation::scaled(
+        ContractionScalar::F32(1.0),
+        ContractionScalar::F64(1.0)
+    )
+    .is_err());
     assert!(DotGeneralAccumulation::overwrite(DType::I32).is_err());
 }
 

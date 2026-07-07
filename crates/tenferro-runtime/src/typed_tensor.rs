@@ -43,6 +43,14 @@ impl<T: TensorScalar> TypedTensorOpsExt<T> for TypedTensor<T> {
         div(self, rhs, backend)
     }
 
+    fn rem<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        rem(self, rhs, backend)
+    }
+
     fn pow<B: TensorBackend>(
         &self,
         rhs: &TypedTensor<T>,
@@ -274,6 +282,11 @@ binary_fn!(
     "Elementwise division with NumPy-style broadcasting."
 );
 binary_fn!(
+    rem,
+    rem_read,
+    "Elementwise remainder with NumPy-style broadcasting."
+);
+binary_fn!(
     pow,
     pow_read,
     "Elementwise power with NumPy-style broadcasting."
@@ -321,10 +334,8 @@ fn sub<T: TensorScalar>(
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
     let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
-    let neg_rhs = backend.with_backend_session(|exec| exec.neg_read(rhs.tensor_read()))?;
-    let out = backend.with_backend_session(|exec| {
-        exec.add_read(lhs.tensor_read(), TensorRead::from_tensor(&neg_rhs))
-    })?;
+    let out =
+        backend.with_backend_session(|exec| exec.sub_read(lhs.tensor_read(), rhs.tensor_read()))?;
     into_typed_result("sub", out)
 }
 

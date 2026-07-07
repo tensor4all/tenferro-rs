@@ -1,8 +1,8 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    ContractionScalar, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorView,
+    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 use crate::{
@@ -384,6 +384,41 @@ fn concrete_einsum_plan_execute_into_writes_reused_outputs() {
     )
     .unwrap();
     assert_f64_tensor(&out, &[2, 2], &[7.0, 10.0, 40.0, 52.0]);
+}
+
+#[test]
+fn concrete_einsum_plan_execute_read_into_accum_updates_outputs() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    plan.execute_read_into_accum(
+        [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+        &mut backend,
+        DotGeneralAccumulation::add_to(DType::F64).unwrap(),
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+    assert_f64_tensor(&out, &[2, 2], &[23.0, 29.0, 50.0, 65.0]);
+
+    let fallback_plan = ConcreteEinsumPlan::prepare([&lhs], "ij->").unwrap();
+    let mut scalar_out = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let accumulation =
+        DotGeneralAccumulation::scaled(ContractionScalar::F64(0.5), ContractionScalar::F64(2.0))
+            .unwrap();
+    fallback_plan
+        .execute_read_into_accum(
+            [TensorRead::from_tensor(&lhs)],
+            &mut backend,
+            accumulation,
+            TensorWrite::from_tensor(&mut scalar_out),
+        )
+        .unwrap();
+    assert_f64_tensor(&scalar_out, &[], &[14.5]);
 }
 
 #[test]

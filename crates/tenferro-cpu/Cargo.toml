@@ -45,6 +45,7 @@ blas-mkl = [
 ]
 
 [dependencies]
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.2.0" }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0" }
 num-complex.workspace = true
 num-traits.workspace = true

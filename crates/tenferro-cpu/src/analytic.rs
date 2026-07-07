@@ -1,10 +1,14 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
-use strided_kernel::{map_into, zip_map2_into};
+use strided_kernel::{map_into, reduce, zip_map2_into, StridedView};
+use tenferro_core_ops::PrimitiveOpKind;
 
 use super::{tensor_from_array, typed_array_uninit_from_pool, typed_view, typed_view_from_view};
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
+use tenferro_tensor::{
+    BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
+    TypedTensor, TypedTensorView,
+};
 
 trait UnaryAnalyticElem: Copy + Clone + One + Zero {
     fn exp_elem(self) -> Self;
@@ -20,6 +24,11 @@ trait UnaryAnalyticElem: Copy + Clone + One + Zero {
 
 trait PowElem: Copy + Clone + Zero {
     fn pow_elem(self, exponent: Self) -> Self;
+}
+
+trait IntegerPowElem: PowElem + TensorScalar + PoolScalar + Send + Sync + 'static {
+    fn is_negative_exponent(self) -> bool;
+    fn wrapping_pow_nonnegative(self, exponent: Self) -> Self;
 }
 
 macro_rules! impl_real_analytic_elem {
@@ -123,7 +132,41 @@ impl_real_analytic_elem!(f64);
 impl_complex_analytic_elem!(Complex32);
 impl_complex_analytic_elem!(Complex64);
 
-#[cfg(test)]
+macro_rules! impl_integer_pow_elem {
+    ($ty:ty) => {
+        impl PowElem for $ty {
+            fn pow_elem(self, exponent: Self) -> Self {
+                self.wrapping_pow_nonnegative(exponent)
+            }
+        }
+
+        impl IntegerPowElem for $ty {
+            fn is_negative_exponent(self) -> bool {
+                self < 0
+            }
+
+            fn wrapping_pow_nonnegative(self, exponent: Self) -> Self {
+                let mut base = self;
+                let mut exp = exponent as u64;
+                let mut acc: Self = 1;
+                while exp != 0 {
+                    if exp & 1 == 1 {
+                        acc = acc.wrapping_mul(base);
+                    }
+                    exp >>= 1;
+                    if exp != 0 {
+                        base = base.wrapping_mul(base);
+                    }
+                }
+                acc
+            }
+        }
+    };
+}
+
+impl_integer_pow_elem!(i32);
+impl_integer_pow_elem!(i64);
+
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
@@ -132,8 +175,8 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
 enum AnalyticReadView<'a> {
     F32(TypedTensorView<'a, f32>),
     F64(TypedTensorView<'a, f64>),
-    I32,
-    I64,
+    I32(TypedTensorView<'a, i32>),
+    I64(TypedTensorView<'a, i64>),
     Bool,
     C32(TypedTensorView<'a, Complex32>),
     C64(TypedTensorView<'a, Complex64>),
@@ -143,19 +186,35 @@ fn read_as_analytic_view(input: TensorRead<'_>) -> AnalyticReadView<'_> {
     match input {
         TensorRead::Tensor(Tensor::F32(tensor)) => AnalyticReadView::F32(tensor.as_view()),
         TensorRead::Tensor(Tensor::F64(tensor)) => AnalyticReadView::F64(tensor.as_view()),
-        TensorRead::Tensor(Tensor::I32(_)) => AnalyticReadView::I32,
-        TensorRead::Tensor(Tensor::I64(_)) => AnalyticReadView::I64,
+        TensorRead::Tensor(Tensor::I32(tensor)) => AnalyticReadView::I32(tensor.as_view()),
+        TensorRead::Tensor(Tensor::I64(tensor)) => AnalyticReadView::I64(tensor.as_view()),
         TensorRead::Tensor(Tensor::Bool(_)) => AnalyticReadView::Bool,
         TensorRead::Tensor(Tensor::C32(tensor)) => AnalyticReadView::C32(tensor.as_view()),
         TensorRead::Tensor(Tensor::C64(tensor)) => AnalyticReadView::C64(tensor.as_view()),
         TensorRead::View(TensorView::F32(view)) => AnalyticReadView::F32(view),
         TensorRead::View(TensorView::F64(view)) => AnalyticReadView::F64(view),
-        TensorRead::View(TensorView::I32(_)) => AnalyticReadView::I32,
-        TensorRead::View(TensorView::I64(_)) => AnalyticReadView::I64,
+        TensorRead::View(TensorView::I32(view)) => AnalyticReadView::I32(view),
+        TensorRead::View(TensorView::I64(view)) => AnalyticReadView::I64(view),
         TensorRead::View(TensorView::Bool(_)) => AnalyticReadView::Bool,
         TensorRead::View(TensorView::C32(view)) => AnalyticReadView::C32(view),
         TensorRead::View(TensorView::C64(view)) => AnalyticReadView::C64(view),
     }
+}
+
+fn typed_unary_with_pool<T>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    f: impl Fn(T) -> T + Copy + Sync,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + PoolScalar + 'static,
+{
+    // SAFETY: the following kernel overwrites every output element before any read.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
 }
 
 fn typed_unary_view_with_pool<T, R>(
@@ -173,6 +232,80 @@ where
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
         .map_err(|err| crate::Error::backend_failure(op, err))?;
     Ok(tensor_from_array(out))
+}
+
+fn typed_unary_tensor_with_pool<T>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    f: impl Fn(T) -> T + Copy + Sync,
+) -> crate::Result<Tensor>
+where
+    T: Copy + PoolScalar + TensorScalar + 'static,
+{
+    let out = typed_unary_with_pool(op, buffers, input, f)?;
+    Ok(T::typed_tensor_into_tensor(out))
+}
+
+fn typed_unary_view_tensor_with_pool<T, R>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensorView<'_, T, R>,
+    f: impl Fn(T) -> T + Copy + Sync,
+) -> crate::Result<Tensor>
+where
+    T: Copy + PoolScalar + TensorScalar + 'static,
+    R: TensorRank,
+{
+    let out = typed_unary_view_with_pool(op, buffers, input, f)?;
+    Ok(T::typed_tensor_into_tensor(out))
+}
+
+fn require_cpu_capability(
+    op_kind: PrimitiveOpKind,
+    op: &'static str,
+    dtype: DType,
+    axis: CapabilityAxis,
+) -> crate::Result<()> {
+    let supported = crate::cpu_capabilities()
+        .iter()
+        .copied()
+        .find(|entry| entry.op == op_kind && entry.dtype == dtype)
+        .is_some_and(|entry| entry.axis(axis).is_supported());
+    if supported {
+        Ok(())
+    } else {
+        Err(crate::Error::unsupported_op_dtype(
+            op,
+            dtype,
+            BackendId::Cpu,
+        ))
+    }
+}
+
+fn strided_view_contains<T>(
+    op: &'static str,
+    view: &StridedView<'_, T>,
+    pred: impl Fn(T) -> bool + Copy + Sync,
+) -> crate::Result<bool>
+where
+    T: Copy + Send + Sync,
+{
+    reduce(view, pred, |lhs, rhs| lhs || rhs, false)
+        .map_err(|err| crate::Error::backend_failure(op, err))
+}
+
+fn ensure_nonnegative_integer_exponents<T>(
+    op: &'static str,
+    rhs: &StridedView<'_, T>,
+) -> crate::Result<()>
+where
+    T: IntegerPowElem,
+{
+    if strided_view_contains(op, rhs, |value| value.is_negative_exponent())? {
+        return Err(crate::Error::negative_integer_exponent(op, T::dtype()));
+    }
+    Ok(())
 }
 
 fn typed_pow_view_with_pool<T, L, R>(
@@ -205,8 +338,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-macro_rules! define_unary_analytic_op {
-    ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $dispatch_read_with_pool_fn:ident, $typed_fn:ident, $typed_with_pool_fn:ident, $elem_fn:ident) => {
+macro_rules! define_unary_analytic_dispatch {
+    ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
             with_local_pool(|buffers| $dispatch_with_pool_fn(buffers, input))
@@ -216,18 +349,23 @@ macro_rules! define_unary_analytic_op {
             buffers: &mut BufferPool,
             input: &Tensor,
         ) -> crate::Result<Tensor> {
-            match input {
-                Tensor::F32(t) => Ok(Tensor::F32($typed_with_pool_fn(buffers, t)?)),
-                Tensor::F64(t) => Ok(Tensor::F64($typed_with_pool_fn(buffers, t)?)),
-                Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-                    Err(crate::Error::backend_failure(
-                        stringify!($dispatch_fn),
-                        format!("unsupported dtype {:?}", input.dtype()),
-                    ))
+            require_cpu_capability(
+                PrimitiveOpKind::$op_kind,
+                stringify!($dispatch_fn),
+                input.dtype(),
+                CapabilityAxis::OwnedResult,
+            )?;
+            tenferro_tensor::with_scalar!(
+                input,
+                float_complex,
+                backend = BackendId::Cpu,
+                op = stringify!($dispatch_fn),
+                |tensor| -> crate::Result<Tensor> {
+                    typed_unary_tensor_with_pool(stringify!($dispatch_fn), buffers, tensor, |x| {
+                        x.$elem_fn()
+                    })
                 }
-                Tensor::C32(t) => Ok(Tensor::C32($typed_with_pool_fn(buffers, t)?)),
-                Tensor::C64(t) => Ok(Tensor::C64($typed_with_pool_fn(buffers, t)?)),
-            }
+            )
         }
 
         pub(crate) fn $dispatch_read_with_pool_fn(
@@ -235,133 +373,59 @@ macro_rules! define_unary_analytic_op {
             input: TensorRead<'_>,
         ) -> crate::Result<Tensor> {
             let dtype = input.dtype();
-            match read_as_analytic_view(input) {
-                AnalyticReadView::F32(t) => Ok(Tensor::F32(typed_unary_view_with_pool(
-                    stringify!($dispatch_fn),
-                    buffers,
-                    &t,
-                    |x| x.$elem_fn(),
-                )?)),
-                AnalyticReadView::F64(t) => Ok(Tensor::F64(typed_unary_view_with_pool(
-                    stringify!($dispatch_fn),
-                    buffers,
-                    &t,
-                    |x| x.$elem_fn(),
-                )?)),
-                AnalyticReadView::C32(t) => Ok(Tensor::C32(typed_unary_view_with_pool(
-                    stringify!($dispatch_fn),
-                    buffers,
-                    &t,
-                    |x| x.$elem_fn(),
-                )?)),
-                AnalyticReadView::C64(t) => Ok(Tensor::C64(typed_unary_view_with_pool(
-                    stringify!($dispatch_fn),
-                    buffers,
-                    &t,
-                    |x| x.$elem_fn(),
-                )?)),
-                _ => Err(crate::Error::backend_failure(
-                    stringify!($dispatch_fn),
-                    format!("unsupported dtype {dtype:?}"),
-                )),
-            }
-        }
-
-        fn $typed_with_pool_fn<T>(
-            buffers: &mut BufferPool,
-            input: &TypedTensor<T>,
-        ) -> crate::Result<TypedTensor<T>>
-        where
-            T: UnaryAnalyticElem + PoolScalar,
-        {
-            // SAFETY: the following kernel overwrites every output element before any read.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-            map_into(
-                &mut out.view_mut(),
-                &typed_view(stringify!($typed_fn), input)?,
-                |x| x.$elem_fn(),
+            require_cpu_capability(
+                PrimitiveOpKind::$op_kind,
+                stringify!($dispatch_fn),
+                dtype,
+                CapabilityAxis::ReadInputs,
+            )?;
+            tenferro_tensor::with_scalar_read!(
+                input,
+                float_complex,
+                backend = BackendId::Cpu,
+                op = stringify!($dispatch_fn),
+                |view| -> crate::Result<Tensor> {
+                    typed_unary_view_tensor_with_pool(
+                        stringify!($dispatch_fn),
+                        buffers,
+                        &view,
+                        |x| x.$elem_fn(),
+                    )
+                }
             )
-            .map_err(|err| crate::Error::backend_failure(stringify!($typed_fn), err))?;
-            Ok(tensor_from_array(out))
         }
     };
 }
 
-define_unary_analytic_op!(
-    exp,
-    exp_with_pool,
-    exp_read_with_pool,
-    typed_exp,
-    typed_exp_with_pool,
-    exp_elem
-);
-define_unary_analytic_op!(
-    log,
-    log_with_pool,
-    log_read_with_pool,
-    typed_log,
-    typed_log_with_pool,
-    log_elem
-);
-define_unary_analytic_op!(
-    sin,
-    sin_with_pool,
-    sin_read_with_pool,
-    typed_sin,
-    typed_sin_with_pool,
-    sin_elem
-);
-define_unary_analytic_op!(
-    cos,
-    cos_with_pool,
-    cos_read_with_pool,
-    typed_cos,
-    typed_cos_with_pool,
-    cos_elem
-);
-define_unary_analytic_op!(
-    tanh,
-    tanh_with_pool,
-    tanh_read_with_pool,
-    typed_tanh,
-    typed_tanh_with_pool,
-    tanh_elem
-);
-define_unary_analytic_op!(
-    sqrt,
-    sqrt_with_pool,
-    sqrt_read_with_pool,
-    typed_sqrt,
-    typed_sqrt_with_pool,
-    sqrt_elem
-);
-define_unary_analytic_op!(
+define_unary_analytic_dispatch!(exp, exp_with_pool, exp_read_with_pool, Exp, exp_elem);
+define_unary_analytic_dispatch!(log, log_with_pool, log_read_with_pool, Log, log_elem);
+define_unary_analytic_dispatch!(sin, sin_with_pool, sin_read_with_pool, Sin, sin_elem);
+define_unary_analytic_dispatch!(cos, cos_with_pool, cos_read_with_pool, Cos, cos_elem);
+define_unary_analytic_dispatch!(tanh, tanh_with_pool, tanh_read_with_pool, Tanh, tanh_elem);
+define_unary_analytic_dispatch!(sqrt, sqrt_with_pool, sqrt_read_with_pool, Sqrt, sqrt_elem);
+define_unary_analytic_dispatch!(
     rsqrt,
     rsqrt_with_pool,
     rsqrt_read_with_pool,
-    typed_rsqrt,
-    typed_rsqrt_with_pool,
+    Rsqrt,
     rsqrt_elem
 );
-define_unary_analytic_op!(
+define_unary_analytic_dispatch!(
     expm1,
     expm1_with_pool,
     expm1_read_with_pool,
-    typed_expm1,
-    typed_expm1_with_pool,
+    Expm1,
     expm1_elem
 );
-define_unary_analytic_op!(
+define_unary_analytic_dispatch!(
     log1p,
     log1p_with_pool,
     log1p_read_with_pool,
-    typed_log1p,
-    typed_log1p_with_pool,
+    Log1p,
     log1p_elem
 );
 
-#[cfg(test)]
-pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+pub fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_local_pool(|buffers| pow_with_pool(buffers, lhs, rhs))
 }
 
@@ -373,6 +437,12 @@ pub(crate) fn pow_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_pow_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_pow_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_integer_pow_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_integer_pow_with_pool(buffers, a, b)?))
+        }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow_with_pool(buffers, a, b)?)),
         _ => Err(crate::Error::DTypeMismatch {
@@ -396,6 +466,12 @@ pub(crate) fn pow_read_with_pool(
         )),
         (AnalyticReadView::F64(a), AnalyticReadView::F64(b)) => Ok(Tensor::F64(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
+        )),
+        (AnalyticReadView::I32(a), AnalyticReadView::I32(b)) => Ok(Tensor::I32(
+            typed_integer_pow_view_with_pool(buffers, &a, &b)?,
+        )),
+        (AnalyticReadView::I64(a), AnalyticReadView::I64(b)) => Ok(Tensor::I64(
+            typed_integer_pow_view_with_pool(buffers, &a, &b)?,
         )),
         (AnalyticReadView::C32(a), AnalyticReadView::C32(b)) => Ok(Tensor::C32(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
@@ -436,4 +512,32 @@ where
     )
     .map_err(|err| crate::Error::backend_failure("pow", err))?;
     Ok(tensor_from_array(out))
+}
+
+fn typed_integer_pow_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: IntegerPowElem,
+{
+    let rhs_view = typed_view("pow", rhs)?;
+    ensure_nonnegative_integer_exponents("pow", &rhs_view)?;
+    typed_pow_with_pool(buffers, lhs, rhs)
+}
+
+fn typed_integer_pow_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: IntegerPowElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    let rhs_view = typed_view_from_view("pow", rhs)?;
+    ensure_nonnegative_integer_exponents("pow", &rhs_view)?;
+    typed_pow_view_with_pool("pow", buffers, lhs, rhs)
 }

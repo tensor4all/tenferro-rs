@@ -63,6 +63,11 @@ Preallocated-output APIs use `TensorWrite` when the output may be either an
 owned tensor or a mutable view. These APIs validate output dtype and shape
 before writing and do not resize the destination.
 
+Bare `_into` methods overwrite caller-provided outputs. Read-modify-write
+updates use `_add_to` for elementwise-style accumulation or `_into_accum` for
+dot/GEMM accumulation with an explicit `DotGeneralAccumulation` argument. See
+[Output Modes And Write Surfaces](./output-modes.md).
+
 Dot-general accumulation keeps contraction axes and output-update semantics in
 separate contracts. `DotGeneralConfig` describes only dimension roles. Output
 updates such as `out = alpha * op(lhs) * op(rhs) + beta * out` use

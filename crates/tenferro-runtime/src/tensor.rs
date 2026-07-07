@@ -35,6 +35,10 @@ impl TensorOpsExt for Tensor {
         div(self, rhs, backend)
     }
 
+    fn rem<B: TensorBackend>(&self, rhs: &Tensor, backend: &mut B) -> Result<Tensor> {
+        rem(self, rhs, backend)
+    }
+
     fn pow<B: TensorBackend>(&self, rhs: &Tensor, backend: &mut B) -> Result<Tensor> {
         pow(self, rhs, backend)
     }
@@ -259,6 +263,11 @@ binary_fn!(
     div,
     "Elementwise division with NumPy-style broadcasting."
 );
+binary_fn!(
+    rem,
+    rem,
+    "Elementwise remainder with NumPy-style broadcasting."
+);
 binary_fn!(pow, pow, "Elementwise power with NumPy-style broadcasting.");
 binary_fn!(
     maximum,
@@ -299,8 +308,7 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// ```
 fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    let neg_rhs = backend.with_backend_session(|exec| exec.neg(&rhs))?;
-    backend.with_backend_session(|exec| exec.add(&lhs, &neg_rhs))
+    backend.with_backend_session(|exec| exec.sub(&lhs, &rhs))
 }
 
 /// Elementwise comparison with NumPy-style broadcasting.

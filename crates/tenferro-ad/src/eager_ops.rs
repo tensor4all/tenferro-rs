@@ -127,6 +127,14 @@ impl std::ops::Div for &EagerTensor {
     }
 }
 
+impl std::ops::Rem for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn rem(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::rem(self, rhs)
+    }
+}
+
 impl std::ops::Neg for &EagerTensor {
     type Output = Result<EagerTensor>;
 
@@ -159,8 +167,7 @@ impl EagerTensor {
     /// Elementwise subtraction.
     pub fn sub(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("sub", self, other)?;
-        let rhs = rhs.neg()?;
-        lhs.binary_op(&rhs, StdTensorOp::Add)
+        lhs.binary_op(&rhs, StdTensorOp::Sub)
     }
 
     /// Elementwise multiplication.

@@ -45,7 +45,7 @@ pub fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {
 /// Convenience wrapper that picks the right promotion rule for a binary op.
 pub fn promote_dtype_for_binary_op(op: &StdTensorOp, lhs: DType, rhs: DType) -> DType {
     match op {
-        StdTensorOp::Div | StdTensorOp::Pow => promote_dtype_div_like(lhs, rhs),
+        StdTensorOp::Pow => promote_dtype_pow_like(lhs, rhs),
         _ => promote_dtype(lhs, rhs),
     }
 }
@@ -56,6 +56,12 @@ pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
     if matches!(lhs, DType::I32 | DType::I64) && matches!(rhs, DType::I32 | DType::I64) {
         return DType::F64;
     }
+    promote_dtype(lhs, rhs)
+}
+
+/// Like [`promote_dtype`], but integer powers preserve integer dtype because
+/// integer `pow` is defined as wrapping arithmetic with non-negative exponents.
+pub fn promote_dtype_pow_like(lhs: DType, rhs: DType) -> DType {
     promote_dtype(lhs, rhs)
 }
 
@@ -70,6 +76,7 @@ fn ordered_dtype_op_name(op: &StdTensorOp) -> Option<&'static str> {
         StdTensorOp::Compare(_) => Some("Compare"),
         StdTensorOp::Maximum => Some("Maximum"),
         StdTensorOp::Minimum => Some("Minimum"),
+        StdTensorOp::Rem => Some("Rem"),
         StdTensorOp::Clamp => Some("Clamp"),
         StdTensorOp::ReduceMax { axes } if !axes.is_empty() => Some("ReduceMax"),
         StdTensorOp::ReduceMin { axes } if !axes.is_empty() => Some("ReduceMin"),
@@ -112,7 +119,10 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
+        | StdTensorOp::Sub
         | StdTensorOp::Mul
+        | StdTensorOp::Div
+        | StdTensorOp::Rem
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
         | StdTensorOp::DotGeneral { .. }
@@ -120,7 +130,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
             dtype_input(op, input_dtypes, 0)?,
             dtype_input(op, input_dtypes, 1)?,
         ),
-        StdTensorOp::Div | StdTensorOp::Pow => promote_dtype_div_like(
+        StdTensorOp::Pow => promote_dtype_pow_like(
             dtype_input(op, input_dtypes, 0)?,
             dtype_input(op, input_dtypes, 1)?,
         ),
@@ -200,6 +210,10 @@ pub fn infer_output_shapes(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
         )?],
+        StdTensorOp::Sub => vec![same_or_scalar_broadcast_shape(
+            require_input(op, input_shapes, 0)?,
+            require_input(op, input_shapes, 1)?,
+        )?],
         StdTensorOp::Mul => vec![same_or_scalar_broadcast_shape(
             require_input(op, input_shapes, 0)?,
             require_input(op, input_shapes, 1)?,
@@ -207,6 +221,7 @@ pub fn infer_output_shapes(
         StdTensorOp::Neg
         | StdTensorOp::Conj
         | StdTensorOp::Div
+        | StdTensorOp::Rem
         | StdTensorOp::Abs
         | StdTensorOp::Sign
         | StdTensorOp::Maximum

@@ -680,6 +680,14 @@ impl TensorElementwise for CpuBackend {
         self.install_with_pool(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
     }
 
+    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::sub_with_pool(buffers, lhs, rhs))
+    }
+
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::sub_read_with_pool(buffers, lhs, rhs))
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::mul_with_pool(buffers, lhs, rhs))
     }
@@ -710,6 +718,14 @@ impl TensorElementwise for CpuBackend {
 
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::div_read_with_pool(buffers, lhs, rhs))
+    }
+
+    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::rem_with_pool(buffers, lhs, rhs))
+    }
+
+    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::rem_read_with_pool(buffers, lhs, rhs))
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {

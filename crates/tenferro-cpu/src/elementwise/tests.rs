@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let input = Tensor::F32(TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]).unwrap());
+
+    let wrong_input_count = ElementwiseFusionPlan::new(
+        DType::F32,
+        2,
+        vec![2],
+        vec![ElementwiseFusionInst::new(
+            ElementwiseFusionOp::Add,
+            vec![0, 1],
+        )],
+    );
+    assert!(matches!(
+        validate_elementwise_fusion_inputs(&[&input], &wrong_input_count),
+        Err(crate::Error::BackendFailure {
+            op: ELEMENTWISE_FUSION_OP,
+            ..
+        })
+    ));
+
+    let empty_outputs = ElementwiseFusionPlan::new(DType::F32, 1, Vec::new(), Vec::new());
+    assert!(!validate_elementwise_fusion_inputs(&[&input], &empty_outputs).unwrap());
+
+    let dtype_mismatch = ElementwiseFusionPlan::new(DType::F64, 1, vec![0], Vec::new());
+    assert!(matches!(
+        validate_elementwise_fusion_inputs(&[&input], &dtype_mismatch),
+        Err(crate::Error::DTypeMismatch {
+            op: ELEMENTWISE_FUSION_OP,
+            lhs: DType::F32,
+            rhs: DType::F64,
+        })
+    ));
+
+    let remainder_plan = ElementwiseFusionPlan::new(
+        DType::F32,
+        2,
+        vec![2],
+        vec![ElementwiseFusionInst::new(
+            ElementwiseFusionOp::Remainder,
+            vec![0, 1],
+        )],
+    );
+    assert!(plan_uses_unfused_op(&remainder_plan));
+    assert!(!plan_uses_ordered_op(&remainder_plan));
+
+    let maximum_plan = ElementwiseFusionPlan::new(
+        DType::F32,
+        2,
+        vec![2],
+        vec![ElementwiseFusionInst::new(
+            ElementwiseFusionOp::Maximum,
+            vec![0, 1],
+        )],
+    );
+    assert!(plan_uses_ordered_op(&maximum_plan));
+    assert!(reject_complex_ordered_dtypes("maximum", &[DType::F32]).is_ok());
+    assert!(matches!(
+        reject_complex_ordered_dtypes("maximum", &[DType::C64]),
+        Err(crate::Error::InvalidConfig { op: "maximum", .. })
+    ));
+}
+
+#[test]
 fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
     let mut buffers = BufferPool::default();
     let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -755,13 +820,12 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     )
     .unwrap();
     assert_c64_close(neg.as_slice::<Complex<f64>>().unwrap()[0], c64(-3.0, -4.0));
-    assert_backend_failure(
-        neg_read_with_pool(
-            &mut buffers,
-            TensorRead::from_view(TensorView::I32(i32_a.as_view())),
-        ),
-        "neg",
-    );
+    let neg_i32 = neg_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::I32(i32_a.as_view())),
+    )
+    .unwrap();
+    assert_eq!(neg_i32.as_slice::<i32>().unwrap(), &[-1, -4]);
 
     let conj = conj_read_with_pool(
         &mut buffers,

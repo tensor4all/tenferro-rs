@@ -39,7 +39,7 @@ pub enum DTypePolicy {
     SameAny,
     SameNumeric,
     SameFloat,
-    /// Preserve real float dtype and map complex magnitude to the matching real dtype.
+    /// Preserve real numeric dtype and map complex magnitude to the matching real dtype.
     AbsToReal,
     SameFloatOrComplex,
     CompareToBool,
@@ -82,14 +82,16 @@ macro_rules! primitive_ops {
     ($macro:ident) => {
         $macro! {
             Add, "add", Elementwise, SameNumeric, 2, 2, false;
+            Sub, "sub", Elementwise, SameNumeric, 2, 2, false;
             Mul, "mul", Elementwise, SameNumeric, 2, 2, false;
             Neg, "neg", Elementwise, SameNumeric, 1, 1, false;
             Conj, "conj", Elementwise, SameFloatOrComplex, 1, 1, false;
-            Div, "div", Elementwise, SameFloatOrComplex, 2, 2, false;
+            Div, "div", Elementwise, SameNumeric, 2, 2, false;
+            Rem, "rem", Elementwise, SameNumeric, 2, 2, false;
             Abs, "abs", Elementwise, AbsToReal, 1, 1, false;
-            Sign, "sign", Elementwise, SameFloat, 1, 1, false;
-            Maximum, "maximum", Elementwise, SameFloat, 2, 2, false;
-            Minimum, "minimum", Elementwise, SameFloat, 2, 2, false;
+            Sign, "sign", Elementwise, SameNumeric, 1, 1, false;
+            Maximum, "maximum", Elementwise, SameNumeric, 2, 2, false;
+            Minimum, "minimum", Elementwise, SameNumeric, 2, 2, false;
             Compare, "compare", Elementwise, CompareToBool, 2, 2, false;
             Select, "select", Elementwise, BoolSelect, 3, 3, false;
             Clamp, "clamp", Elementwise, SameFloat, 3, 3, false;
@@ -100,14 +102,14 @@ macro_rules! primitive_ops {
             Tanh, "tanh", Analytic, SameFloatOrComplex, 1, 1, false;
             Sqrt, "sqrt", Analytic, SameFloatOrComplex, 1, 1, false;
             Rsqrt, "rsqrt", Analytic, SameFloatOrComplex, 1, 1, false;
-            Pow, "pow", Analytic, SameFloatOrComplex, 2, 2, false;
+            Pow, "pow", Analytic, SameNumeric, 2, 2, false;
             Expm1, "expm1", Analytic, SameFloatOrComplex, 1, 1, false;
             Log1p, "log1p", Analytic, SameFloatOrComplex, 1, 1, false;
             DotGeneral, "dot_general", Contraction, SameFloatOrComplex, 2, 2, false;
             ReduceSum, "reduce_sum", Reduction, SameNumeric, 1, 1, false;
             ReduceProd, "reduce_prod", Reduction, SameNumeric, 1, 1, false;
-            ReduceMax, "reduce_max", Reduction, SameFloat, 1, 1, false;
-            ReduceMin, "reduce_min", Reduction, SameFloat, 1, 1, false;
+            ReduceMax, "reduce_max", Reduction, SameNumeric, 1, 1, false;
+            ReduceMin, "reduce_min", Reduction, SameNumeric, 1, 1, false;
             Transpose, "transpose", Structural, SameAny, 1, 1, false;
             Reshape, "reshape", Structural, SameAny, 1, 1, false;
             BroadcastInDim, "broadcast_in_dim", Structural, SameAny, 1, 1, false;
@@ -239,6 +241,7 @@ macro_rules! define_std_tensor_op {
         pub enum StdTensorOp {
             // Semiring arithmetic core
             Add,
+            Sub,
             Mul,
             Neg,
             Conj,
@@ -269,6 +272,7 @@ macro_rules! define_std_tensor_op {
 
             // Elementwise (non-semiring)
             Div,
+            Rem,
             Abs,
             Sign,
             Maximum,
@@ -374,6 +378,7 @@ macro_rules! define_std_tensor_op {
             pub fn primitive_kind(&self) -> Option<$crate::PrimitiveOpKind> {
                 let kind = match self {
                     Self::Add => $crate::PrimitiveOpKind::Add,
+                    Self::Sub => $crate::PrimitiveOpKind::Sub,
                     Self::Mul => $crate::PrimitiveOpKind::Mul,
                     Self::Neg => $crate::PrimitiveOpKind::Neg,
                     Self::Conj => $crate::PrimitiveOpKind::Conj,
@@ -385,6 +390,7 @@ macro_rules! define_std_tensor_op {
                     Self::Constant { .. } => $crate::PrimitiveOpKind::Constant,
                     Self::ReduceSum { .. } => $crate::PrimitiveOpKind::ReduceSum,
                     Self::Div => $crate::PrimitiveOpKind::Div,
+                    Self::Rem => $crate::PrimitiveOpKind::Rem,
                     Self::Abs => $crate::PrimitiveOpKind::Abs,
                     Self::Sign => $crate::PrimitiveOpKind::Sign,
                     Self::Maximum => $crate::PrimitiveOpKind::Maximum,
@@ -432,6 +438,7 @@ macro_rules! define_std_tensor_op {
             pub(crate) fn sample_from_kind(kind: $crate::PrimitiveOpKind) -> Self {
                 match kind {
                     $crate::PrimitiveOpKind::Add => Self::Add,
+                    $crate::PrimitiveOpKind::Sub => Self::Sub,
                     $crate::PrimitiveOpKind::Mul => Self::Mul,
                     $crate::PrimitiveOpKind::Neg => Self::Neg,
                     $crate::PrimitiveOpKind::Conj => Self::Conj,
@@ -461,6 +468,7 @@ macro_rules! define_std_tensor_op {
                     },
                     $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
                     $crate::PrimitiveOpKind::Div => Self::Div,
+                    $crate::PrimitiveOpKind::Rem => Self::Rem,
                     $crate::PrimitiveOpKind::Abs => Self::Abs,
                     $crate::PrimitiveOpKind::Sign => Self::Sign,
                     $crate::PrimitiveOpKind::Maximum => Self::Maximum,
@@ -554,6 +562,7 @@ macro_rules! define_elementwise_fusion_op {
             Negate,
             Conj,
             Divide,
+            Remainder,
             Abs,
             Maximum,
             Minimum,
@@ -579,6 +588,7 @@ macro_rules! define_elementwise_fusion_op {
                     Self::Negate,
                     Self::Conj,
                     Self::Divide,
+                    Self::Remainder,
                     Self::Abs,
                     Self::Maximum,
                     Self::Minimum,
@@ -604,6 +614,7 @@ macro_rules! define_elementwise_fusion_op {
                     $crate::PrimitiveOpKind::Neg => Some(Self::Negate),
                     $crate::PrimitiveOpKind::Conj => Some(Self::Conj),
                     $crate::PrimitiveOpKind::Div => Some(Self::Divide),
+                    $crate::PrimitiveOpKind::Rem => Some(Self::Remainder),
                     $crate::PrimitiveOpKind::Abs => Some(Self::Abs),
                     $crate::PrimitiveOpKind::Maximum => Some(Self::Maximum),
                     $crate::PrimitiveOpKind::Minimum => Some(Self::Minimum),
@@ -629,6 +640,7 @@ macro_rules! define_elementwise_fusion_op {
                     Self::Negate => $crate::PrimitiveOpKind::Neg,
                     Self::Conj => $crate::PrimitiveOpKind::Conj,
                     Self::Divide => $crate::PrimitiveOpKind::Div,
+                    Self::Remainder => $crate::PrimitiveOpKind::Rem,
                     Self::Abs => $crate::PrimitiveOpKind::Abs,
                     Self::Maximum => $crate::PrimitiveOpKind::Maximum,
                     Self::Minimum => $crate::PrimitiveOpKind::Minimum,
@@ -696,10 +708,12 @@ macro_rules! define_exec_op {
                 k: i64,
             },
             Add,
+            Subtract,
             Multiply,
             Negate,
             Conj,
             Divide,
+            Remainder,
             Abs,
             Sign,
             Maximum,
@@ -782,10 +796,12 @@ macro_rules! define_exec_op {
                     Self::Tril { .. } => $crate::PrimitiveOpKind::Tril,
                     Self::Triu { .. } => $crate::PrimitiveOpKind::Triu,
                     Self::Add => $crate::PrimitiveOpKind::Add,
+                    Self::Subtract => $crate::PrimitiveOpKind::Sub,
                     Self::Multiply => $crate::PrimitiveOpKind::Mul,
                     Self::Negate => $crate::PrimitiveOpKind::Neg,
                     Self::Conj => $crate::PrimitiveOpKind::Conj,
                     Self::Divide => $crate::PrimitiveOpKind::Div,
+                    Self::Remainder => $crate::PrimitiveOpKind::Rem,
                     Self::Abs => $crate::PrimitiveOpKind::Abs,
                     Self::Sign => $crate::PrimitiveOpKind::Sign,
                     Self::Maximum => $crate::PrimitiveOpKind::Maximum,
@@ -830,10 +846,12 @@ macro_rules! define_exec_op {
             ) -> Self {
                 match op {
                     tenferro_ops::std_tensor_op::StdTensorOp::Add => Self::Add,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Sub => Self::Subtract,
                     tenferro_ops::std_tensor_op::StdTensorOp::Mul => Self::Multiply,
                     tenferro_ops::std_tensor_op::StdTensorOp::Neg => Self::Negate,
                     tenferro_ops::std_tensor_op::StdTensorOp::Conj => Self::Conj,
                     tenferro_ops::std_tensor_op::StdTensorOp::Div => Self::Divide,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Rem => Self::Remainder,
                     tenferro_ops::std_tensor_op::StdTensorOp::Abs => Self::Abs,
                     tenferro_ops::std_tensor_op::StdTensorOp::Sign => Self::Sign,
                     tenferro_ops::std_tensor_op::StdTensorOp::Maximum => Self::Maximum,
@@ -1026,10 +1044,12 @@ macro_rules! define_exec_op {
                     $crate::PrimitiveOpKind::Tril => Self::Tril { k: 0 },
                     $crate::PrimitiveOpKind::Triu => Self::Triu { k: 0 },
                     $crate::PrimitiveOpKind::Add => Self::Add,
+                    $crate::PrimitiveOpKind::Sub => Self::Subtract,
                     $crate::PrimitiveOpKind::Mul => Self::Multiply,
                     $crate::PrimitiveOpKind::Neg => Self::Negate,
                     $crate::PrimitiveOpKind::Conj => Self::Conj,
                     $crate::PrimitiveOpKind::Div => Self::Divide,
+                    $crate::PrimitiveOpKind::Rem => Self::Remainder,
                     $crate::PrimitiveOpKind::Abs => Self::Abs,
                     $crate::PrimitiveOpKind::Sign => Self::Sign,
                     $crate::PrimitiveOpKind::Maximum => Self::Maximum,
