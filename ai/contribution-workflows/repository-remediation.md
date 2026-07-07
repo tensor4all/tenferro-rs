@@ -157,6 +157,10 @@ Search at least:
 - the same trait or generated wrapper family;
 - adjacent docs section or guide;
 - equivalent CPU/GPU/eager/traced wrappers when the pattern is shared.
+- when landing a canonical constructor, helper, backend capability, AD
+  transform contract, or other replacement path, grep for workaround patterns
+  it obsoletes and either remove them in the same PR or file a concrete
+  follow-up issue linked from the PR body.
 
 Fix nearby same-root-cause instances in the same batch when they have the same
 contract and verification path. Stop expanding when the search reaches another

@@ -117,31 +117,21 @@ pub(crate) fn linearize_lu(
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
     let (m_size, n_size) =
         resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_lu", err))?;
-    let k = DimExpr::min(m.clone(), n.clone());
     let k_size = m_size.min(n_size);
     let rank = input_shape.len();
-    let l_shape = matrix_shape(m, &k, batch_shape);
-    let u_shape = matrix_shape(&k, n, batch_shape);
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let p = ValueRef::External(primal_out[0].clone());
     let l = ValueRef::External(primal_out[1].clone());
     let u = ValueRef::External(primal_out[2].clone());
     let l_square = augment_unit_lower_to_square_fixed(
         builder,
         l.clone(),
-        m_size,
-        k_size,
-        batch_shape,
-        &l_shape,
-        rank,
+        SquareAugmentSpec::new(dtype, m_size, k_size, batch_shape, rank),
     );
     let u_square = augment_upper_to_square_fixed(
         builder,
         u.clone(),
-        k_size,
-        n_size,
-        batch_shape,
-        &u_shape,
-        rank,
+        SquareAugmentSpec::new(dtype, k_size, n_size, batch_shape, rank),
     );
 
     let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
@@ -183,7 +173,7 @@ pub(crate) fn linearize_lu(
             take_leading_cols_linear(
                 builder,
                 dl_full,
-                LeadingMatrixSlice::new(k_size, n_size, batch_shape, l.clone(), &l_shape, rank),
+                LeadingMatrixSlice::new(k_size, n_size, dtype, batch_shape, l.clone(), rank),
             )
         } else {
             dl_full
@@ -204,7 +194,7 @@ pub(crate) fn linearize_lu(
             take_leading_rows_linear(
                 builder,
                 du_full,
-                LeadingMatrixSlice::new(k_size, m_size, batch_shape, u.clone(), &u_shape, rank),
+                LeadingMatrixSlice::new(k_size, m_size, dtype, batch_shape, u.clone(), rank),
             )
         } else {
             du_full
@@ -448,6 +438,7 @@ pub(crate) fn linearize_svd(
     let u = ValueRef::External(primal_out[0].clone());
     let s = ValueRef::External(primal_out[1].clone());
     let vt = ValueRef::External(primal_out[2].clone());
+    let s_dtype = ctx.dtype_of(&s)?;
 
     let uh = adjoint_matrix_fixed(builder, u.clone(), matrix_rank, dtype);
     let v = adjoint_matrix_fixed(builder, vt.clone(), matrix_rank, dtype);
@@ -472,7 +463,7 @@ pub(crate) fn linearize_svd(
     }
 
     let diag_s = embed_diag_fixed(builder, s.clone());
-    let ones_mat = one_like_fixed(builder, ValueRef::Local(diag_s));
+    let ones_mat = one_like_fixed(builder, s_dtype, ValueRef::Local(diag_s), matrix_rank);
     let s_dim = matmul_fixed(
         builder,
         ValueRef::Local(ones_mat),
@@ -494,7 +485,7 @@ pub(crate) fn linearize_svd(
     let f = fixed_div(builder, ValueRef::Local(s_gap), ValueRef::Local(safe_gap));
 
     let du = if u_active {
-        let s_ones = one_like_fixed(builder, s.clone());
+        let s_ones = one_like_fixed(builder, s_dtype, s.clone(), matrix_rank - 1);
         let s_sq = fixed_mul(builder, s.clone(), s.clone());
         let s_eps_sq = fixed_scale(builder, ValueRef::Local(s_ones), eps * eps);
         let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
@@ -711,7 +702,7 @@ pub(crate) fn linearize_eigh(
     }
 
     let diag_w = embed_diag_fixed(builder, w.clone());
-    let ones_mat = one_like_fixed(builder, ValueRef::Local(diag_w));
+    let ones_mat = one_like_fixed(builder, w_dtype, ValueRef::Local(diag_w), matrix_rank);
     let w_col = matmul_fixed(
         builder,
         ValueRef::Local(diag_w),
@@ -884,14 +875,8 @@ pub(crate) fn linearize_qr(
 
     if n_size > m_size {
         let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
-        let leading_selector = leading_column_selector_fixed(
-            builder,
-            m_size,
-            n_size,
-            batch_shape,
-            r.clone(),
-            input_shape,
-        );
+        let leading_selector =
+            leading_column_selector_fixed(builder, dtype, m_size, n_size, batch_shape, r.clone());
         let leading_selector_t =
             transpose_matrix_fixed(builder, ValueRef::Local(leading_selector), matrix_rank);
         let da_leading = matmul_linear(
@@ -980,11 +965,11 @@ pub(crate) fn linearize_qr(
         if r_active && trailing_cols > 0 {
             let trailing_selector = trailing_column_selector_fixed(
                 builder,
+                dtype,
                 m_size,
                 trailing_cols,
                 batch_shape,
                 r.clone(),
-                input_shape,
             );
             let trailing_selector_t =
                 transpose_matrix_fixed(builder, ValueRef::Local(trailing_selector), matrix_rank);

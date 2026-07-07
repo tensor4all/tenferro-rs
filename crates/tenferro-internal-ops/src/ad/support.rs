@@ -5,6 +5,7 @@ use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 /// AD rule support status for a core primitive operation.
@@ -169,6 +170,99 @@ pub fn primitive_ad_support(kind: PrimitiveOpKind) -> &'static PrimitiveAdSuppor
 /// ```
 pub fn is_real_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64)
+}
+
+fn dim_expr_uses_only_input(expr: &DimExpr, expected_input_idx: usize) -> bool {
+    match expr {
+        DimExpr::Const(_) => true,
+        DimExpr::InputDim { input_idx, .. } => *input_idx == expected_input_idx,
+        DimExpr::Add(a, b)
+        | DimExpr::Sub(a, b)
+        | DimExpr::Mul(a, b)
+        | DimExpr::FloorDiv(a, b)
+        | DimExpr::Min(a, b)
+        | DimExpr::Max(a, b) => {
+            dim_expr_uses_only_input(a, expected_input_idx)
+                && dim_expr_uses_only_input(b, expected_input_idx)
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn constant_scalar(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    bytes: Vec<u8>,
+) -> LocalValueId {
+    builder.add_operation(
+        StdTensorOp::Constant { dtype, bytes },
+        vec![],
+        OperationRole::Primary,
+    )[0]
+}
+
+#[doc(hidden)]
+pub fn zero_like(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> LocalValueId {
+    super::zeros::build_zero_like(builder, dtype, anchor, anchor_rank)
+}
+
+#[doc(hidden)]
+pub fn one_like(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> LocalValueId {
+    super::zeros::build_one_like(builder, dtype, anchor, anchor_rank)
+}
+
+#[doc(hidden)]
+pub fn identity_matrix(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    size: usize,
+    batch_shape: &[DimExpr],
+    shape_source: ValueRef<StdTensorOp>,
+    shape_source_idx: usize,
+) -> LocalValueId {
+    let one = one_like(builder, dtype, shape_source.clone(), 0);
+    let mut shape = Vec::with_capacity(1 + batch_shape.len());
+    shape.push(DimExpr::Const(size));
+    shape.extend_from_slice(batch_shape);
+
+    let mut inputs = vec![ValueRef::Local(one)];
+    if DimExpr::max_input_idx_all(&shape).is_some() {
+        assert!(
+            shape
+                .iter()
+                .all(|expr| dim_expr_uses_only_input(expr, shape_source_idx)),
+            "identity_matrix shape expressions must reference only the provided shape_source_idx"
+        );
+        shape = DimExpr::remap_all(&shape, shape_source_idx, 1);
+        inputs.push(shape_source);
+    }
+
+    let ones = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape,
+            dims: vec![],
+        },
+        inputs,
+        OperationRole::Primary,
+    )[0];
+    builder.add_operation(
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        vec![ValueRef::Local(ones)],
+        OperationRole::Primary,
+    )[0]
 }
 
 pub(crate) fn is_differentiable_dtype(dtype: DType) -> bool {
