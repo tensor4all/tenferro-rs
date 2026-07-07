@@ -159,6 +159,7 @@ define_backend_dispatch! {
     PrimitiveOpKind::Neg => execute_negate,
     PrimitiveOpKind::Conj => execute_conj,
     PrimitiveOpKind::Div => execute_divide,
+    PrimitiveOpKind::Rem => execute_remainder,
     PrimitiveOpKind::Abs => execute_abs,
     PrimitiveOpKind::Sign => execute_sign,
     PrimitiveOpKind::Maximum => execute_maximum,
@@ -633,6 +634,17 @@ fn execute_divide(
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     Ok(exec.div_read(
+        get_read(slots, &inst.input_slots, 0)?,
+        get_read(slots, &inst.input_slots, 1)?,
+    )?)
+}
+
+fn execute_remainder(
+    exec: &mut dyn BackendSession,
+    slots: &[Option<ExecSlot<'_>>],
+    inst: &ExecInstruction,
+) -> Result<Tensor> {
+    Ok(exec.rem_read(
         get_read(slots, &inst.input_slots, 0)?,
         get_read(slots, &inst.input_slots, 1)?,
     )?)

@@ -43,6 +43,14 @@ impl<T: TensorScalar> TypedTensorOpsExt<T> for TypedTensor<T> {
         div(self, rhs, backend)
     }
 
+    fn rem<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        rem(self, rhs, backend)
+    }
+
     fn pow<B: TensorBackend>(
         &self,
         rhs: &TypedTensor<T>,
@@ -272,6 +280,11 @@ binary_fn!(
     div,
     div_read,
     "Elementwise division with NumPy-style broadcasting."
+);
+binary_fn!(
+    rem,
+    rem_read,
+    "Elementwise remainder with NumPy-style broadcasting."
 );
 binary_fn!(
     pow,

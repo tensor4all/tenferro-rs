@@ -76,6 +76,62 @@ binary_float_int_complex_kernel!(add_float, add_int, add_complex, +);
 binary_float_int_complex_kernel!(sub_float, sub_int, sub_complex, -);
 binary_float_int_complex_kernel!(mul_float, mul_int, mul_complex, *);
 binary_float_complex_kernel!(div_float, div_complex, /);
+
+#[cube(launch_unchecked)]
+pub fn div_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        let zero = I::new(0);
+        let minus_one = zero - I::new(1);
+        if y == zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else if y == minus_one {
+            out[ABSOLUTE_POS] = zero - x;
+        } else {
+            out[ABSOLUTE_POS] = x / y;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn rem_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = x - (x / y).trunc() * y;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn rem_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        let zero = I::new(0);
+        let minus_one = zero - I::new(1);
+        if y == zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else if y == minus_one {
+            out[ABSOLUTE_POS] = zero;
+        } else {
+            let quotient = x / y;
+            out[ABSOLUTE_POS] = x - quotient * y;
+        }
+    }
+}
 unary_both_kernel!(neg_float, neg_complex, |value| -value);
 #[cube(launch_unchecked)]
 pub fn neg_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
@@ -195,6 +251,40 @@ pub fn minimum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
 pub fn pow_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].powf(rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn pow_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let zero = I::new(0);
+        let one = I::new(1);
+        let two = I::new(2);
+        let mut exp = rhs[ABSOLUTE_POS];
+        if exp < zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else {
+            let mut base = lhs[ABSOLUTE_POS];
+            let mut acc = one;
+            while exp > zero {
+                let quotient = exp / two;
+                let remainder = exp - quotient * two;
+                if remainder != zero {
+                    acc = acc * base;
+                }
+                exp = quotient;
+                if exp > zero {
+                    base = base * base;
+                }
+            }
+            out[ABSOLUTE_POS] = acc;
+        }
     }
 }
 

@@ -568,6 +568,14 @@ impl std::ops::Div for &TracedTensor {
     }
 }
 
+impl std::ops::Rem for &TracedTensor {
+    type Output = Result<TracedTensor>;
+
+    fn rem(self, rhs: &TracedTensor) -> Result<TracedTensor> {
+        TracedTensor::rem(self, rhs)
+    }
+}
+
 impl TracedTensor {
     /// Return the graph that owns this traced tensor's current value.
     ///
@@ -963,6 +971,20 @@ impl TracedTensor {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         Ok(apply_binary(
             StdTensorOp::Div,
+            &lhs,
+            &rhs,
+            lhs.rank,
+            lhs.shape_hint.clone(),
+        ))
+    }
+
+    /// Elementwise remainder with NumPy-style broadcasting.
+    ///
+    /// Prefer using the `%` operator when it reads naturally.
+    pub fn rem(&self, other: &TracedTensor) -> Result<TracedTensor> {
+        let (lhs, rhs) = broadcast_binary(self, other)?;
+        Ok(apply_binary(
+            StdTensorOp::Rem,
             &lhs,
             &rhs,
             lhs.rank,

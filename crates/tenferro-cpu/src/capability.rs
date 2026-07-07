@@ -6,6 +6,7 @@ use tenferro_tensor::{
 use crate::CpuBackend;
 
 const U: SupportLevel = SupportLevel::Unsupported;
+const F: SupportLevel = SupportLevel::FallbackCopy;
 const N: SupportLevel = SupportLevel::Native;
 
 /// Return the CPU backend operation capability descriptor table.
@@ -61,6 +62,35 @@ const fn same_dtype(op: PrimitiveOpKind, dtype: DType, level: SupportLevel) -> O
     owned_read(op, dtype, dtype, level)
 }
 
+const fn owned_read_write(
+    op: PrimitiveOpKind,
+    dtype: DType,
+    output_dtype: DType,
+    level: SupportLevel,
+    write_output: SupportLevel,
+) -> OperationCapability {
+    OperationCapability {
+        backend: BackendId::Cpu,
+        op,
+        dtype,
+        output_dtype,
+        result: level,
+        read_inputs: level,
+        write_output,
+        strided_output: U,
+        accumulation: U,
+    }
+}
+
+const fn same_dtype_write(
+    op: PrimitiveOpKind,
+    dtype: DType,
+    level: SupportLevel,
+    write_output: SupportLevel,
+) -> OperationCapability {
+    owned_read_write(op, dtype, dtype, level, write_output)
+}
+
 const fn dot_native(dtype: DType) -> OperationCapability {
     OperationCapability {
         backend: BackendId::Cpu,
@@ -76,38 +106,44 @@ const fn dot_native(dtype: DType) -> OperationCapability {
 }
 
 const CPU_CAPABILITIES: &[OperationCapability] = &[
-    same_dtype(PrimitiveOpKind::Add, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Add, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Add, DType::I32, N),
-    same_dtype(PrimitiveOpKind::Add, DType::I64, N),
-    same_dtype(PrimitiveOpKind::Add, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Add, DType::C64, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::I32, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::I64, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Sub, DType::C64, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::I32, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::I64, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Mul, DType::C64, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::I32, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::I64, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Neg, DType::C64, N),
-    same_dtype(PrimitiveOpKind::Conj, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Conj, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Conj, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Conj, DType::C64, N),
-    same_dtype(PrimitiveOpKind::Div, DType::F32, N),
-    same_dtype(PrimitiveOpKind::Div, DType::F64, N),
-    same_dtype(PrimitiveOpKind::Div, DType::C32, N),
-    same_dtype(PrimitiveOpKind::Div, DType::C64, N),
+    same_dtype_write(PrimitiveOpKind::Add, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Add, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Add, DType::I32, N, F),
+    same_dtype_write(PrimitiveOpKind::Add, DType::I64, N, F),
+    same_dtype_write(PrimitiveOpKind::Add, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Add, DType::C64, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::I32, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::I64, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Sub, DType::C64, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::I32, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::I64, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Mul, DType::C64, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::I32, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::I64, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Neg, DType::C64, N, F),
+    same_dtype_write(PrimitiveOpKind::Conj, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Conj, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Conj, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Conj, DType::C64, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::F32, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::F64, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::I32, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::I64, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::C32, N, F),
+    same_dtype_write(PrimitiveOpKind::Div, DType::C64, N, F),
+    same_dtype(PrimitiveOpKind::Rem, DType::F32, N),
+    same_dtype(PrimitiveOpKind::Rem, DType::F64, N),
+    same_dtype(PrimitiveOpKind::Rem, DType::I32, N),
+    same_dtype(PrimitiveOpKind::Rem, DType::I64, N),
     same_dtype(PrimitiveOpKind::Abs, DType::F32, N),
     same_dtype(PrimitiveOpKind::Abs, DType::F64, N),
     same_dtype(PrimitiveOpKind::Abs, DType::I32, N),
@@ -170,6 +206,8 @@ const CPU_CAPABILITIES: &[OperationCapability] = &[
     same_dtype(PrimitiveOpKind::Rsqrt, DType::C64, N),
     same_dtype(PrimitiveOpKind::Pow, DType::F32, N),
     same_dtype(PrimitiveOpKind::Pow, DType::F64, N),
+    same_dtype(PrimitiveOpKind::Pow, DType::I32, N),
+    same_dtype(PrimitiveOpKind::Pow, DType::I64, N),
     same_dtype(PrimitiveOpKind::Pow, DType::C32, N),
     same_dtype(PrimitiveOpKind::Pow, DType::C64, N),
     same_dtype(PrimitiveOpKind::Expm1, DType::F32, N),
@@ -205,3 +243,6 @@ const CPU_CAPABILITIES: &[OperationCapability] = &[
     dot_native(DType::C32),
     dot_native(DType::C64),
 ];
+
+#[cfg(test)]
+mod tests;

@@ -383,7 +383,10 @@ pub trait TensorBackendCapability {
 ///     capability_output_dtype(PrimitiveOpKind::Abs, DType::C64),
 ///     Some(DType::F64)
 /// );
-/// assert_eq!(capability_output_dtype(PrimitiveOpKind::Pow, DType::I32), None);
+/// assert_eq!(
+///     capability_output_dtype(PrimitiveOpKind::Pow, DType::I32),
+///     Some(DType::I32)
+/// );
 /// ```
 #[must_use]
 pub fn capability_output_dtype(op: PrimitiveOpKind, dtype: DType) -> Option<DType> {
@@ -395,9 +398,11 @@ pub fn capability_output_dtype(op: PrimitiveOpKind, dtype: DType) -> Option<DTyp
         DTypePolicy::AbsToReal => match dtype {
             DType::F32 => Some(DType::F32),
             DType::F64 => Some(DType::F64),
+            DType::I32 => Some(DType::I32),
+            DType::I64 => Some(DType::I64),
             DType::C32 => Some(DType::F32),
             DType::C64 => Some(DType::F64),
-            DType::I32 | DType::I64 | DType::Bool => None,
+            DType::Bool => None,
         },
         DTypePolicy::SameFloatOrComplex => float_or_complex_dtype(dtype).then_some(dtype),
         DTypePolicy::CompareToBool => comparable_dtype(dtype).then_some(DType::Bool),

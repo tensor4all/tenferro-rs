@@ -360,6 +360,10 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
             vec![exec.div_read(a.tensor_read(), b.tensor_read())?]
         }
+        StdTensorOp::Rem => {
+            let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
+            vec![exec.rem_read(a.tensor_read(), b.tensor_read())?]
+        }
         StdTensorOp::Exp => vec![exec.exp_read(inputs[0].clone())?],
         StdTensorOp::Log => vec![exec.log_read(inputs[0].clone())?],
         StdTensorOp::Sin => vec![exec.sin_read(inputs[0].clone())?],
@@ -617,6 +621,10 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Div => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.div(a.tensor(), b.tensor())?]
+            }
+            StdTensorOp::Rem => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.rem(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Exp => vec![exec.exp(inputs[0])?],
             StdTensorOp::Log => vec![exec.log(inputs[0])?],

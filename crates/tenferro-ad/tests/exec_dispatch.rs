@@ -129,6 +129,9 @@ impl TensorElementwise for FakeTensorBackend {
     fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("div", 5.0)
     }
+    fn rem(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        self.result("rem", 5.5)
+    }
     fn abs(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("abs", 6.0)
     }
@@ -397,6 +400,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Negate, 1, "neg", 3.0),
         (ExecOp::Conj, 1, "conj", 4.0),
         (ExecOp::Divide, 2, "div", 5.0),
+        (ExecOp::Remainder, 2, "rem", 5.5),
         (ExecOp::Abs, 1, "abs", 6.0),
         (ExecOp::Sign, 1, "sign", 7.0),
         (ExecOp::Maximum, 2, "maximum", 8.0),

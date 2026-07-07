@@ -1,9 +1,9 @@
 # tenferro
 
-tenferro is a Rust-native tensor & autodiff stack for scientific computing:
-typed tensors, PyTorch-style immediate execution with `backward()`, JAX-style
-traced graphs, einsum, linear algebra, FFT, and explicit CPU, CUDA, and
-experimental WebGPU backend control.
+tenferro is a Rust-native tensor computation stack with opt-in autodiff for
+scientific workloads: typed tensors, dynamic tensors, PyTorch-style immediate
+execution with `backward()`, JAX-style traced graphs, einsum, linear algebra,
+FFT, and explicit CPU, CUDA, and experimental WebGPU backend control.
 
 The project covers both ordinary tensor computation and autodiff workflows.
 Start with the smallest API that solves your problem, then add autodiff, graph
@@ -26,28 +26,53 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |
 
-## First CPU Example
+## First Direct Tensor Example
 
-<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
+<!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_linalg::LinalgBackend;
+use tenferro_runtime::{TensorView, TypedTensor, TypedTensorOpsExt};
+
+fn assert_close(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs();
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, error={error}"
+        );
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
+    let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
 
-    let c = a.matmul(&b, &mut backend)?;
+    let product = a.matmul(&identity, &mut backend)?;
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    let svd = backend.svd_read(TensorView::F64(product.as_view()))?;
+    assert_eq!(svd.len(), 3);
+    assert_eq!(svd[0].shape(), &[2, 2]);
+    assert_eq!(svd[1].shape(), &[2]);
+    assert_eq!(svd[2].shape(), &[2, 2]);
+    assert_close(svd[1].as_slice::<f64>().unwrap(), &[3.0, 1.0]);
 
     Ok(())
 }
 ```
 <!-- end-snippet-source -->
+
+## Dependency Footprint
+
+![tenferro-rs dependency footprint](assets/dependency-footprint.svg)
+
+The diagram is a transitive-reduced view of workspace crates generated from
+the same dependency metadata read by `scripts/gen_dep_graph.py`.
 
 ## Mental Model
 

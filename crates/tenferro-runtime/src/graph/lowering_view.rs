@@ -538,6 +538,7 @@ fn exec_op_name(op: &ExecOp) -> &'static str {
         ExecOp::Negate => "Negate",
         ExecOp::Conj => "Conj",
         ExecOp::Divide => "Divide",
+        ExecOp::Remainder => "Remainder",
         ExecOp::Abs => "Abs",
         ExecOp::Sign => "Sign",
         ExecOp::Maximum => "Maximum",

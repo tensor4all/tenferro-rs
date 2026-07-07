@@ -1,13 +1,14 @@
 //! Public concrete tensor einsum extension API.
 
 use tenferro_tensor::{
-    DType, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar, TensorWrite,
-    TypedTensor, TypedTensorView,
+    DType, DotGeneralAccumulation, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
+    TensorWrite, TypedTensor, TypedTensorView,
 };
 
 use crate::eager::{
     eager_einsum_exec, eager_einsum_exec_read, eager_einsum_exec_read_into,
-    eager_einsum_read_subscripts, eager_einsum_subscripts, plan_subscripts,
+    eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts, eager_einsum_subscripts,
+    plan_subscripts,
 };
 use crate::{ContractionTree, EinsumSubscripts, Subscripts};
 
@@ -708,6 +709,54 @@ impl ConcreteEinsumPlan {
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
         backend
             .with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &self.tree, out))
+    }
+
+    /// Execute this plan on read-only inputs with scaled output accumulation.
+    ///
+    /// `accumulation` follows the dot-general contract:
+    /// `out = alpha * einsum(inputs) + beta * out`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{
+    ///     DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
+    /// };
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
+    /// let mut out = Tensor::from_vec_col_major(vec![], vec![1.0_f64])?;
+    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
+    /// let mut backend = CpuBackend::new();
+    /// plan.execute_read_into_accum(
+    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+    ///     &mut backend,
+    ///     DotGeneralAccumulation::add_to(DType::F64)?,
+    ///     TensorWrite::from_tensor(&mut out),
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn execute_read_into_accum<'a, I, B>(
+        &self,
+        inputs: I,
+        backend: &mut B,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> Result<()>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+        B: TensorBackend,
+    {
+        let inputs = inputs.as_ref();
+        let specs = read_input_specs(inputs);
+        self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
+        validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
+        backend.with_backend_session(|exec| {
+            eager_einsum_exec_read_into_accum(exec, inputs, &self.tree, accumulation, out)
+        })
     }
 
     fn prepare_subscripts_internal(

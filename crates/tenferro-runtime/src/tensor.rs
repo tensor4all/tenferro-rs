@@ -35,6 +35,10 @@ impl TensorOpsExt for Tensor {
         div(self, rhs, backend)
     }
 
+    fn rem<B: TensorBackend>(&self, rhs: &Tensor, backend: &mut B) -> Result<Tensor> {
+        rem(self, rhs, backend)
+    }
+
     fn pow<B: TensorBackend>(&self, rhs: &Tensor, backend: &mut B) -> Result<Tensor> {
         pow(self, rhs, backend)
     }
@@ -258,6 +262,11 @@ binary_fn!(
     div,
     div,
     "Elementwise division with NumPy-style broadcasting."
+);
+binary_fn!(
+    rem,
+    rem,
+    "Elementwise remainder with NumPy-style broadcasting."
 );
 binary_fn!(pow, pow, "Elementwise power with NumPy-style broadcasting.");
 binary_fn!(

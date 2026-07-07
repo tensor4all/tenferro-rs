@@ -1,11 +1,11 @@
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
 use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
     batched_outer_product_into, broadcast_mul_into, fused_elementwise_into, map_into, mul_into,
-    zip_map2_into, zip_map3_into, FusedInst, FusedOp, FusedPlan, FusedScalar, StridedView,
+    reduce, zip_map2_into, zip_map3_into, FusedInst, FusedOp, FusedPlan, FusedScalar, StridedView,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -15,7 +15,7 @@ use tenferro_tensor::backend::{
 };
 use tenferro_tensor::{
     col_major_strides, CompareDir, DType, Tensor, TensorOwnedView, TensorRank, TensorRead,
-    TensorValue, TensorView, TypedTensor, TypedTensorView,
+    TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{
@@ -130,7 +130,16 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
+        ElementwiseFusionOp::Remainder => {
+            unreachable!("remainder must be filtered before CPU elementwise fusion")
+        }
     }
+}
+
+fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
+    plan.ops()
+        .iter()
+        .any(|inst| inst.op() == ElementwiseFusionOp::Remainder)
 }
 
 fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {
@@ -182,10 +191,14 @@ pub(crate) trait CompareElem: Copy + Send + Sync {
     fn compare_elem(self, other: Self, dir: &CompareDir) -> bool;
 }
 
-trait WrappingIntegerElem: Copy + PoolScalar + 'static {
+trait WrappingIntegerElem:
+    Copy + PoolScalar + TensorScalar + Zero + PartialEq + Eq + Send + Sync + 'static
+{
     fn wrapping_add_elem(self, other: Self) -> Self;
     fn wrapping_sub_elem(self, other: Self) -> Self;
     fn wrapping_mul_elem(self, other: Self) -> Self;
+    fn wrapping_div_elem(self, other: Self) -> Self;
+    fn wrapping_rem_elem(self, other: Self) -> Self;
     fn wrapping_neg_elem(self) -> Self;
     fn wrapping_abs_elem(self) -> Self;
     fn signum_elem(self) -> Self;
@@ -318,6 +331,14 @@ macro_rules! impl_wrapping_integer_elem {
                 self.wrapping_mul(other)
             }
 
+            fn wrapping_div_elem(self, other: Self) -> Self {
+                self.wrapping_div(other)
+            }
+
+            fn wrapping_rem_elem(self, other: Self) -> Self {
+                self.wrapping_rem(other)
+            }
+
             fn wrapping_neg_elem(self) -> Self {
                 self.wrapping_neg()
             }
@@ -335,6 +356,28 @@ macro_rules! impl_wrapping_integer_elem {
 
 impl_wrapping_integer_elem!(i32);
 impl_wrapping_integer_elem!(i64);
+
+fn strided_view_contains<T>(
+    op: &'static str,
+    view: &StridedView<'_, T>,
+    pred: impl Fn(T) -> bool + Copy + Sync,
+) -> crate::Result<bool>
+where
+    T: Copy + Send + Sync,
+{
+    reduce(view, pred, |lhs, rhs| lhs || rhs, false)
+        .map_err(|err| crate::Error::backend_failure(op, err))
+}
+
+fn ensure_no_zero_divisor<T>(op: &'static str, rhs: &StridedView<'_, T>) -> crate::Result<()>
+where
+    T: WrappingIntegerElem,
+{
+    if strided_view_contains(op, rhs, |value| value == T::zero())? {
+        return Err(crate::Error::division_by_zero(op, T::dtype()));
+    }
+    Ok(())
+}
 
 fn complex_scalar_tensor<T>(scalar: T) -> crate::Result<TypedTensor<Complex<T>>>
 where
@@ -941,6 +984,9 @@ pub(crate) fn elementwise_fusion_with_pool(
         return Ok(None);
     }
     if inputs.is_empty() {
+        return Ok(None);
+    }
+    if plan_uses_unfused_op(plan) {
         return Ok(None);
     }
 
@@ -2136,6 +2182,12 @@ pub(crate) fn div_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_integer_div_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_integer_div_with_pool(buffers, a, b)?))
+        }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
@@ -2184,6 +2236,12 @@ pub(crate) fn div_read_with_pool(
             &b,
             |x, y| x / y,
         )?)),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_integer_div_view_with_pool(buffers, &a, &b)?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
+            typed_integer_div_view_with_pool(buffers, &a, &b)?,
+        )),
         (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::C32(typed_binary_view_with_pool(
             "div",
             buffers,
@@ -2247,6 +2305,77 @@ pub(crate) fn div_read_with_pool(
             lhs: lhs_dtype,
             rhs: rhs_dtype,
         }),
+    }
+}
+
+/// Compute elementwise remainders on CPU tensors.
+///
+/// Integer remainders use wrapping two's-complement arithmetic for the
+/// `MIN % -1` edge and return a structured error on zero divisors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::rem;
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![2], vec![7_i32, -7])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3_i32, 3])?;
+/// let out = rem(&a, &b)?;
+/// assert_eq!(out.as_slice::<i32>().unwrap(), &[1, -1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| rem_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn rem_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_rem_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_rem_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::I32(typed_integer_rem_with_pool(buffers, a, b)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::I64(typed_integer_rem_with_pool(buffers, a, b)?))
+        }
+        _ => Err(tensor_pair_error("rem", lhs, rhs)),
+    }
+}
+
+pub(crate) fn rem_read_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    let lhs_dtype = lhs.dtype();
+    let rhs_dtype = rhs.dtype();
+    match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
+        (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::F32(typed_binary_view_with_pool(
+            "rem",
+            buffers,
+            &a,
+            &b,
+            |x, y| x % y,
+        )?)),
+        (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::F64(typed_binary_view_with_pool(
+            "rem",
+            buffers,
+            &a,
+            &b,
+            |x, y| x % y,
+        )?)),
+        (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::I32(
+            typed_integer_rem_view_with_pool(buffers, &a, &b)?,
+        )),
+        (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::I64(
+            typed_integer_rem_view_with_pool(buffers, &a, &b)?,
+        )),
+        _ => Err(dtype_pair_error("rem", lhs_dtype, rhs_dtype)),
     }
 }
 
@@ -3347,6 +3476,73 @@ where
             rhs: rhs.shape().to_vec(),
         })
     }
+}
+
+fn typed_integer_div_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    let rhs_view = typed_view("div", rhs)?;
+    ensure_no_zero_divisor("div", &rhs_view)?;
+    typed_binary_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+}
+
+fn typed_integer_div_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    let rhs_view = typed_view_from_view("div", rhs)?;
+    ensure_no_zero_divisor("div", &rhs_view)?;
+    typed_binary_view_with_pool("div", buffers, lhs, rhs, |x, y| x.wrapping_div_elem(y))
+}
+
+fn typed_rem_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + StdRem<Output = T> + PoolScalar + 'static,
+{
+    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x % y)
+}
+
+fn typed_integer_rem_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+{
+    let rhs_view = typed_view("rem", rhs)?;
+    ensure_no_zero_divisor("rem", &rhs_view)?;
+    typed_binary_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
+}
+
+fn typed_integer_rem_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: WrappingIntegerElem,
+    L: TensorRank,
+    R: TensorRank,
+{
+    let rhs_view = typed_view_from_view("rem", rhs)?;
+    ensure_no_zero_divisor("rem", &rhs_view)?;
+    typed_binary_view_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
 }
 
 pub(crate) fn typed_neg_with_pool<T>(

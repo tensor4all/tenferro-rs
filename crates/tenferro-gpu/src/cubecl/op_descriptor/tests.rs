@@ -7,7 +7,13 @@ fn gpu_descriptors_have_catalog_dtype_policy() {
     assert_eq!(add.launch, GpuLaunchKind::BinaryFloatComplexInt);
 
     let div = gpu_descriptor(PrimitiveOpKind::Div).unwrap();
-    assert_eq!(div.launch, GpuLaunchKind::BinaryFloatComplex);
+    assert_eq!(div.launch, GpuLaunchKind::BinaryFloatComplexInt);
+
+    let rem = gpu_descriptor(PrimitiveOpKind::Rem).unwrap();
+    assert_eq!(rem.launch, GpuLaunchKind::BinaryFloatInt);
+
+    let pow = gpu_descriptor(PrimitiveOpKind::Pow).unwrap();
+    assert_eq!(pow.launch, GpuLaunchKind::BinaryFloatInt);
 
     let compare = gpu_descriptor(PrimitiveOpKind::Compare).unwrap();
     assert_eq!(compare.dtype_policy, DTypePolicy::CompareToBool);

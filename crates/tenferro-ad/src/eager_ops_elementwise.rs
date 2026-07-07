@@ -224,6 +224,12 @@ impl EagerTensor {
         lhs.binary_op(&rhs, StdTensorOp::Div)
     }
 
+    /// Elementwise remainder.
+    pub fn rem(&self, other: &Self) -> Result<Self> {
+        let (lhs, rhs) = broadcast_binary("rem", self, other)?;
+        lhs.binary_op(&rhs, StdTensorOp::Rem)
+    }
+
     /// Elementwise power.
     ///
     /// # Examples

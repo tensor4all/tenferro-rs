@@ -147,6 +147,11 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
         transpose_rule: transpose_div,
     },
     &FunctionPrimitiveAdRule {
+        kind: PrimitiveOpKind::Rem,
+        linearize: linearize_compare,
+        transpose_rule: transpose_compare,
+    },
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Abs,
         linearize: linearize_abs,
         transpose_rule: transpose_abs,

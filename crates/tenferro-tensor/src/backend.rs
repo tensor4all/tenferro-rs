@@ -389,6 +389,57 @@ impl DotGeneralAccumulation {
         })
     }
 
+    /// Return additive update semantics, `out += lhs dot rhs`, for `dtype`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DType, DotGeneralAccumulation};
+    ///
+    /// let accum = DotGeneralAccumulation::add_to(DType::F64)?;
+    /// assert_eq!(accum.alpha, ContractionScalar::F64(1.0));
+    /// assert_eq!(accum.beta, ContractionScalar::F64(1.0));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn add_to(dtype: DType) -> crate::Result<Self> {
+        Ok(Self {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::one(dtype)?,
+            beta: ContractionScalar::one(dtype)?,
+        })
+    }
+
+    /// Return scaled update semantics, `out = alpha * lhs dot rhs + beta * out`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation};
+    ///
+    /// let accum = DotGeneralAccumulation::scaled(
+    ///     ContractionScalar::F32(0.5),
+    ///     ContractionScalar::F32(2.0),
+    /// )?;
+    /// assert_eq!(accum.alpha, ContractionScalar::F32(0.5));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn scaled(alpha: ContractionScalar, beta: ContractionScalar) -> crate::Result<Self> {
+        if alpha.dtype() != beta.dtype() {
+            return Err(crate::Error::DTypeMismatch {
+                op: "dot_general",
+                lhs: alpha.dtype(),
+                rhs: beta.dtype(),
+            });
+        }
+        Ok(Self {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha,
+            beta,
+        })
+    }
+
     fn validate_for_dtype(self, dtype: DType) -> crate::Result<()> {
         for scalar in [self.alpha, self.beta] {
             if scalar.dtype() != dtype {
@@ -892,7 +943,8 @@ where
     grouped_gemm_via_sequential(backend, lhs, rhs, config, out)
 }
 
-fn accumulate_dot_result_into(
+#[doc(hidden)]
+pub fn accumulate_dot_result_into(
     dot: &Tensor,
     accumulation: DotGeneralAccumulation,
     out: &mut TensorWrite<'_>,
@@ -1278,6 +1330,59 @@ pub trait TensorElementwise {
         self.add(read_tensor("add", lhs)?, read_tensor("add", rhs)?)
     }
 
+    /// Overwrite caller-provided output with elementwise addition.
+    ///
+    /// `_into` methods never accumulate into the previous output value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorElementwise, TensorWrite};
+    ///
+    /// fn add_into<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: &Tensor,
+    ///     rhs: &Tensor,
+    ///     mut out: Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.add_into(lhs, rhs, TensorWrite::from_tensor(&mut out))?;
+    ///     Ok(out)
+    /// }
+    /// ```
+    fn add_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.add_read_into(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            out,
+        )
+    }
+
+    /// Overwrite caller-provided output with elementwise addition from reads.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{TensorElementwise, TensorRead, TensorWrite};
+    ///
+    /// fn add_read_into<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: TensorRead<'_>,
+    ///     rhs: TensorRead<'_>,
+    ///     out: TensorWrite<'_>,
+    /// ) -> tenferro_tensor::Result<()> {
+    ///     backend.add_read_into(lhs, rhs, out)
+    /// }
+    /// ```
+    fn add_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.add_read(lhs, rhs)?;
+        out.copy_from_tensor(&result)
+    }
+
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
 
     /// Elementwise subtraction accepting either owned tensors or borrowed views.
@@ -1299,9 +1404,49 @@ pub trait TensorElementwise {
         self.sub(read_tensor("sub", lhs)?, read_tensor("sub", rhs)?)
     }
 
+    /// Overwrite caller-provided output with elementwise subtraction.
+    fn sub_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.sub_read_into(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            out,
+        )
+    }
+
+    /// Overwrite caller-provided output with elementwise subtraction from reads.
+    fn sub_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.sub_read(lhs, rhs)?;
+        out.copy_from_tensor(&result)
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.mul(read_tensor("mul", lhs)?, read_tensor("mul", rhs)?)
+    }
+
+    /// Overwrite caller-provided output with elementwise multiplication.
+    fn mul_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.mul_read_into(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            out,
+        )
+    }
+
+    /// Overwrite caller-provided output with elementwise multiplication from reads.
+    fn mul_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.mul_read(lhs, rhs)?;
+        out.copy_from_tensor(&result)
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -1309,14 +1454,108 @@ pub trait TensorElementwise {
         self.neg(read_tensor("neg", input)?)
     }
 
+    /// Overwrite caller-provided output with elementwise negation.
+    fn neg_into(&mut self, input: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.neg_read_into(TensorRead::from_tensor(input), out)
+    }
+
+    /// Overwrite caller-provided output with elementwise negation from a read.
+    fn neg_read_into(
+        &mut self,
+        input: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.neg_read(input)?;
+        out.copy_from_tensor(&result)
+    }
+
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.conj(read_tensor("conj", input)?)
     }
 
+    /// Overwrite caller-provided output with elementwise conjugation.
+    fn conj_into(&mut self, input: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.conj_read_into(TensorRead::from_tensor(input), out)
+    }
+
+    /// Overwrite caller-provided output with elementwise conjugation from a read.
+    fn conj_read_into(
+        &mut self,
+        input: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.conj_read(input)?;
+        out.copy_from_tensor(&result)
+    }
+
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.div(read_tensor("div", lhs)?, read_tensor("div", rhs)?)
+    }
+
+    /// Overwrite caller-provided output with elementwise division.
+    fn div_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
+        self.div_read_into(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            out,
+        )
+    }
+
+    /// Overwrite caller-provided output with elementwise division from reads.
+    fn div_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let result = self.div_read(lhs, rhs)?;
+        out.copy_from_tensor(&result)
+    }
+
+    /// Elementwise remainder.
+    ///
+    /// The default is an explicit unsupported error so backend implementors can
+    /// opt in without silent fallback.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    ///
+    /// fn rem_owned<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: &Tensor,
+    ///     rhs: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.rem(lhs, rhs)
+    /// }
+    /// ```
+    fn rem(&mut self, lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+        Err(crate::Error::backend_failure(
+            "rem",
+            format!("backend does not implement rem for dtype {:?}", lhs.dtype()),
+        ))
+    }
+
+    /// Elementwise remainder accepting owned tensors or borrowed views.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
+    ///
+    /// fn rem_read<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: &Tensor,
+    ///     rhs: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.rem_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+    /// }
+    /// ```
+    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.rem(read_tensor("rem", lhs)?, read_tensor("rem", rhs)?)
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -1693,7 +1932,27 @@ pub trait TensorDot: TensorElementwise {
         }
     }
 
-    #[doc(hidden)]
+    /// Overwrite caller-provided output with dot-general from read inputs.
+    ///
+    /// This is the dot/GEMM spelling of `_into`: the previous output value is
+    /// not read. Use [`TensorDot::dot_general_read_into_accum`] for explicit
+    /// read-modify-write accumulation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DotGeneralConfig, TensorDot, TensorRead, TensorWrite};
+    ///
+    /// fn dot_into<B: TensorDot>(
+    ///     backend: &mut B,
+    ///     lhs: TensorRead<'_>,
+    ///     rhs: TensorRead<'_>,
+    ///     config: &DotGeneralConfig,
+    ///     out: TensorWrite<'_>,
+    /// ) -> tenferro_tensor::Result<()> {
+    ///     backend.dot_general_read_into(lhs, rhs, config, out)
+    /// }
+    /// ```
     fn dot_general_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1766,7 +2025,29 @@ pub trait TensorDot: TensorElementwise {
         self.dot_general_with_conj(lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
     }
 
-    #[doc(hidden)]
+    /// Apply scaled dot-general accumulation into caller-provided output.
+    ///
+    /// This is explicitly read-modify-write when `accumulation.beta` is nonzero:
+    /// `out = alpha * dot_general(lhs, rhs) + beta * out`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     DotGeneralAccumulation, DotGeneralConfig, TensorDot, TensorRead, TensorWrite,
+    /// };
+    ///
+    /// fn dot_add_to<B: TensorDot>(
+    ///     backend: &mut B,
+    ///     lhs: TensorRead<'_>,
+    ///     rhs: TensorRead<'_>,
+    ///     config: &DotGeneralConfig,
+    ///     out: TensorWrite<'_>,
+    /// ) -> tenferro_tensor::Result<()> {
+    ///     let accumulation = DotGeneralAccumulation::add_to(lhs.dtype())?;
+    ///     backend.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
+    /// }
+    /// ```
     fn dot_general_read_into_accum(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1866,7 +2147,36 @@ pub trait SessionCachedDot: TensorDot {
         self.dot_general_with_conj_cached(cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
     }
 
-    #[doc(hidden)]
+    /// Apply session-cached scaled dot-general accumulation into output.
+    ///
+    /// The cache slot is session-local metadata; `accumulation` still controls
+    /// overwrite versus read-modify-write semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     DotGeneralAccumulation, DotGeneralConfig, SessionCachedDot, TensorRead, TensorWrite,
+    /// };
+    ///
+    /// fn session_cached_dot_add_to<S: SessionCachedDot + ?Sized>(
+    ///     session: &mut S,
+    ///     lhs: TensorRead<'_>,
+    ///     rhs: TensorRead<'_>,
+    ///     config: &DotGeneralConfig,
+    ///     out: TensorWrite<'_>,
+    /// ) -> tenferro_tensor::Result<()> {
+    ///     let accumulation = DotGeneralAccumulation::add_to(lhs.dtype())?;
+    ///     session.dot_general_read_into_accum_cached(
+    ///         Some(0),
+    ///         lhs,
+    ///         rhs,
+    ///         config,
+    ///         accumulation,
+    ///         out,
+    ///     )
+    /// }
+    /// ```
     fn dot_general_read_into_accum_cached(
         &mut self,
         _cache_slot: Option<usize>,
@@ -2157,10 +2467,43 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         )
     }
 
-    // INVARIANT: cached backend accumulation must carry cache owner metadata
-    // and the full dot-general output-update contract in one dispatch call.
+    /// Apply cached scaled dot-general accumulation into caller-provided output.
+    ///
+    /// The cache slot identifies backend-local analysis metadata only; output
+    /// semantics are still fully described by `accumulation`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     BackendCachedDot, BackendRuntimeCache, DotGeneralAccumulation, DotGeneralConfig,
+    ///     TensorRead, TensorWrite,
+    /// };
+    ///
+    /// fn cached_dot_add_to<B: BackendCachedDot>(
+    ///     backend: &mut B,
+    ///     cache: &mut B::RuntimeCache,
+    ///     lhs: TensorRead<'_>,
+    ///     rhs: TensorRead<'_>,
+    ///     config: &DotGeneralConfig,
+    ///     out: TensorWrite<'_>,
+    /// ) -> tenferro_tensor::Result<()>
+    /// where
+    ///     B: BackendRuntimeCache,
+    /// {
+    ///     let accumulation = DotGeneralAccumulation::add_to(lhs.dtype())?;
+    ///     backend.dot_general_read_into_accum_cached(
+    ///         cache,
+    ///         Some(0),
+    ///         lhs,
+    ///         rhs,
+    ///         config,
+    ///         accumulation,
+    ///         out,
+    ///     )
+    /// }
+    /// ```
     #[allow(clippy::too_many_arguments)]
-    #[doc(hidden)]
     fn dot_general_read_into_accum_cached(
         &mut self,
         _cache: &mut Self::RuntimeCache,

@@ -86,6 +86,7 @@ pub static PRIMITIVE_AD_SUPPORT: [PrimitiveAdSupport; PrimitiveOpKind::COUNT] = 
     direct_support!(Neg),
     direct_support!(Conj),
     direct_support!(Div),
+    nondiff_support!(Rem),
     direct_support!(Abs),
     direct_support!(Sign),
     direct_support!(Maximum),

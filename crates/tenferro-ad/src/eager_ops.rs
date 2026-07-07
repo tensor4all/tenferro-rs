@@ -127,6 +127,14 @@ impl std::ops::Div for &EagerTensor {
     }
 }
 
+impl std::ops::Rem for &EagerTensor {
+    type Output = Result<EagerTensor>;
+
+    fn rem(self, rhs: &EagerTensor) -> Result<EagerTensor> {
+        EagerTensor::rem(self, rhs)
+    }
+}
+
 impl std::ops::Neg for &EagerTensor {
     type Output = Result<EagerTensor>;
 

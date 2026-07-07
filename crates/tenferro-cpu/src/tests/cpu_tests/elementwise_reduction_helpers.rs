@@ -196,13 +196,14 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             ..
         })
     ));
-    assert!(matches!(
-        backend.reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]),
-        Err(crate::Error::BackendFailure {
-            op: "reduce_max",
-            ..
-        })
-    ));
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<i32>()
+            .unwrap(),
+        &[2, 4]
+    );
     assert!(matches!(
         backend.reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]),
         Err(crate::Error::BackendFailure {
@@ -364,13 +365,14 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
             .unwrap(),
         &[6]
     );
-    assert!(matches!(
-        backend.reduce_max_read(TensorRead::from_tensor(&i32s), &[0]),
-        Err(crate::Error::BackendFailure {
-            op: "reduce_max",
-            ..
-        })
-    ));
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_tensor(&i32s), &[0])
+            .unwrap()
+            .as_slice::<i32>()
+            .unwrap(),
+        &[3]
+    );
 
     let i64s = Tensor::I64(TypedTensor::<i64>::from_vec_col_major(vec![2], vec![2, 3]).unwrap());
     assert_eq!(
@@ -381,13 +383,14 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
             .unwrap(),
         &[5]
     );
-    assert!(matches!(
-        backend.reduce_min_read(TensorRead::from_tensor(&i64s), &[0]),
-        Err(crate::Error::BackendFailure {
-            op: "reduce_min",
-            ..
-        })
-    ));
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_tensor(&i64s), &[0])
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[2]
+    );
 
     let bools =
         Tensor::Bool(TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap());

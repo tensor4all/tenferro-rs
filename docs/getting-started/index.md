@@ -23,12 +23,14 @@ runtime crate and CPU backend.
 
 ## Setup
 
-Start with the runtime crate and CPU backend crate from crates.io:
+Start with the runtime crate, CPU backend crate, and standard linear algebra
+extension from crates.io:
 
 ```toml
 [dependencies]
 tenferro-runtime = "0.2"
 tenferro-cpu = "0.2"
+tenferro-linalg = "0.2"
 ```
 
 For development against a local checkout of this repository, use path
@@ -38,6 +40,7 @@ dependencies instead:
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime" }
 tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu" }
+tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg" }
 ```
 
 If you create a scratch binary crate inside the `tenferro-rs` checkout, add an
@@ -54,6 +57,7 @@ error-prone:
 [dependencies]
 tenferro-runtime = { path = "../crates/tenferro-runtime" }
 tenferro-cpu = { path = "../crates/tenferro-cpu" }
+tenferro-linalg = { path = "../crates/tenferro-linalg" }
 ```
 
 The first build still needs network access unless dependencies are already
@@ -70,6 +74,7 @@ With default features, this compiles the `cpu-faer` provider, so
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
 tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["cpu-blas"] }
+tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["cpu-blas"] }
 ```
 
 CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
@@ -85,6 +90,7 @@ BLAS, LAPACK, and strided einsum:
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas-openblas"] }
 tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas-openblas"] }
+tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["blas-openblas"] }
 ```
 
 The explicit provider features are `blas-openblas`, `blas-accelerate`, and
@@ -116,23 +122,41 @@ tenferro-gpu = { path = "/path/to/tenferro-rs/crates/tenferro-gpu", features = [
 tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", features = ["autodiff", "cuda"] }
 ```
 
-## First CPU Program
+## Quickstart A: Direct Tensor And Linalg
 
-<!-- snippet-source: crates/tenferro-runtime/examples/cpu_quickstart.rs -->
+<!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_linalg::LinalgBackend;
+use tenferro_runtime::{TensorView, TypedTensor, TypedTensorOpsExt};
+
+fn assert_close(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs();
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, error={error}"
+        );
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
+    let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
 
-    let c = a.matmul(&b, &mut backend)?;
+    let product = a.matmul(&identity, &mut backend)?;
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    let svd = backend.svd_read(TensorView::F64(product.as_view()))?;
+    assert_eq!(svd.len(), 3);
+    assert_eq!(svd[0].shape(), &[2, 2]);
+    assert_eq!(svd[1].shape(), &[2]);
+    assert_eq!(svd[2].shape(), &[2, 2]);
+    assert_close(svd[1].as_slice::<f64>().unwrap(), &[3.0, 1.0]);
 
     Ok(())
 }
@@ -140,8 +164,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <!-- end-snippet-source -->
 
 Expected output: the program exits silently because the shape and value
-assertions pass. The `from_vec_col_major` buffer is column-major: the leftmost
-axis varies fastest in memory.
+assertions pass. The same explicit `CpuBackend` instance is reused for ordinary
+tensor operations and `svd_read`. The `from_vec_col_major` buffer is
+column-major: the leftmost axis varies fastest in memory.
+
+## Quickstart B: Traced AD
+
+Add `tenferro-ad` when the same tensor stack needs graph-based derivatives:
+
+```toml
+[dependencies]
+tenferro-runtime = "0.2"
+tenferro-cpu = "0.2"
+tenferro-ad = "0.2"
+```
+
+<!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
+```rust
+use tenferro_ad::TracedTensorAdExt;
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+
+fn assert_close(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs();
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, error={error}"
+        );
+    }
+}
+
+fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runtime::Error> {
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(tensor)?;
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor.run(&program)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    let y = (&x * &x)?.reduce_sum(&[0])?;
+
+    let y_value = run(&y)?;
+    assert_eq!(y_value.shape(), &[]);
+    assert_close(y_value.as_slice::<f64>().unwrap(), &[14.0]);
+
+    let grad = y.grad(&x)?;
+    let grad_value = run(&grad)?;
+    assert_eq!(grad_value.shape(), &[3]);
+    assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+
+    let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
+    let directional = y.jvp(&x, &tangent)?;
+    let directional_value = run(&directional)?;
+    assert_eq!(directional_value.shape(), &[]);
+    assert_close(directional_value.as_slice::<f64>().unwrap(), &[-7.8]);
+
+    Ok(())
+}
+```
+<!-- end-snippet-source -->
 
 ## Next Steps
 

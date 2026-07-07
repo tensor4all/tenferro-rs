@@ -265,6 +265,138 @@ fn test_integer_maximum_minimum_and_reduction_read_views() {
 }
 
 #[test]
+fn test_integer_div_rem_pow_contract() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![6], vec![7_i32, -7, 7, -7, i32::MIN, i32::MAX]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![6], vec![3_i32, 3, -3, -3, -1, 2]).unwrap();
+
+    let quotient = div(&lhs, &rhs).unwrap();
+    let remainder = rem(&lhs, &rhs).unwrap();
+    assert_eq!(
+        quotient.as_slice::<i32>().unwrap(),
+        &[2, -2, -2, 2, i32::MIN, i32::MAX / 2]
+    );
+    assert_eq!(
+        remainder.as_slice::<i32>().unwrap(),
+        &[1, -1, 1, -1, 0, i32::MAX % 2]
+    );
+
+    let base = Tensor::from_vec_col_major(vec![4], vec![2_i32, -2, i32::MAX, i32::MIN]).unwrap();
+    let exp = Tensor::from_vec_col_major(vec![4], vec![3_i32, 3, 2, 1]).unwrap();
+    let out = pow(&base, &exp).unwrap();
+    assert_eq!(
+        out.as_slice::<i32>().unwrap(),
+        &[8, -8, i32::MAX.wrapping_pow(2), i32::MIN]
+    );
+
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![i64::MIN, -9_i64, 9]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![-1_i64, 4, -4]).unwrap();
+    let quotient = div(&lhs, &rhs).unwrap();
+    let remainder = rem(&lhs, &rhs).unwrap();
+    assert_eq!(quotient.as_slice::<i64>().unwrap(), &[i64::MIN, -2, -2]);
+    assert_eq!(remainder.as_slice::<i64>().unwrap(), &[0, -1, 1]);
+
+    let base = Tensor::from_vec_col_major(vec![3], vec![2_i64, -2, i64::MAX]).unwrap();
+    let exp = Tensor::from_vec_col_major(vec![3], vec![63_i64, 63, 2]).unwrap();
+    let out = pow(&base, &exp).unwrap();
+    assert_eq!(
+        out.as_slice::<i64>().unwrap(),
+        &[i64::MIN, i64::MIN, i64::MAX.wrapping_pow(2)]
+    );
+}
+
+#[test]
+fn test_integer_div_rem_pow_read_views_contract() {
+    let lhs =
+        TypedTensor::<i32>::from_vec_col_major(vec![6], vec![7_i32, -7, 7, -7, i32::MIN, i32::MAX])
+            .unwrap();
+    let rhs =
+        TypedTensor::<i32>::from_vec_col_major(vec![6], vec![3_i32, 3, -3, -3, -1, 2]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let quotient = backend
+        .div_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+    let remainder = backend
+        .rem_read(
+            TensorRead::from_view(TensorView::I32(lhs.as_view())),
+            TensorRead::from_view(TensorView::I32(rhs.as_view())),
+        )
+        .unwrap();
+    assert_eq!(
+        quotient.as_slice::<i32>().unwrap(),
+        &[2, -2, -2, 2, i32::MIN, i32::MAX / 2]
+    );
+    assert_eq!(
+        remainder.as_slice::<i32>().unwrap(),
+        &[1, -1, 1, -1, 0, i32::MAX % 2]
+    );
+
+    let base = TypedTensor::<i32>::from_vec_col_major(vec![4], vec![2_i32, -2, i32::MAX, i32::MIN])
+        .unwrap();
+    let exp = TypedTensor::<i32>::from_vec_col_major(vec![4], vec![3_i32, 3, 2, 1]).unwrap();
+    let out = backend
+        .pow_read(
+            TensorRead::from_view(TensorView::I32(base.as_view())),
+            TensorRead::from_view(TensorView::I32(exp.as_view())),
+        )
+        .unwrap();
+    assert_eq!(
+        out.as_slice::<i32>().unwrap(),
+        &[8, -8, i32::MAX.wrapping_pow(2), i32::MIN]
+    );
+}
+
+#[test]
+fn test_integer_div_rem_pow_domain_errors_are_structured() {
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let zero_rhs = Tensor::from_vec_col_major(vec![2], vec![1_i32, 0]).unwrap();
+
+    let err = div(&lhs, &zero_rhs).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DivisionByZero {
+            op: "div",
+            dtype: DType::I32
+        }
+    ));
+
+    let err = rem(&lhs, &zero_rhs).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DivisionByZero {
+            op: "rem",
+            dtype: DType::I32
+        }
+    ));
+
+    let base = Tensor::from_vec_col_major(vec![2], vec![2_i32, 3]).unwrap();
+    let exp = Tensor::from_vec_col_major(vec![2], vec![2_i32, -1]).unwrap();
+    let err = pow(&base, &exp).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::NegativeIntegerExponent {
+            op: "pow",
+            dtype: DType::I32
+        }
+    ));
+}
+
+#[test]
+fn test_float_rem_matches_rust_remainder_sign() {
+    let lhs =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![7.0, -7.0, 7.0, -7.0]).unwrap());
+    let rhs =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![3.0, 3.0, -3.0, -3.0]).unwrap());
+
+    let out = rem(&lhs, &rhs).unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, -1.0, 1.0, -1.0]);
+}
+
+#[test]
 fn test_add_mul_rank0_broadcast() {
     let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
     let tensor =

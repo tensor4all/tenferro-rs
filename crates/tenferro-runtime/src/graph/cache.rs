@@ -178,6 +178,7 @@ enum ExecOpKey {
     Negate,
     Conj,
     Divide,
+    Remainder,
     Abs,
     Sign,
     Maximum,
@@ -313,6 +314,7 @@ fn exec_op_key(op: &ExecOp, extensions: &mut Vec<Arc<dyn ExtensionOp>>) -> ExecO
         ExecOp::Negate => ExecOpKey::Negate,
         ExecOp::Conj => ExecOpKey::Conj,
         ExecOp::Divide => ExecOpKey::Divide,
+        ExecOp::Remainder => ExecOpKey::Remainder,
         ExecOp::Abs => ExecOpKey::Abs,
         ExecOp::Sign => ExecOpKey::Sign,
         ExecOp::Maximum => ExecOpKey::Maximum,
@@ -477,6 +479,7 @@ fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
             | ExecOpKey::Negate
             | ExecOpKey::Conj
             | ExecOpKey::Divide
+            | ExecOpKey::Remainder
             | ExecOpKey::Abs
             | ExecOpKey::Sign
             | ExecOpKey::Maximum

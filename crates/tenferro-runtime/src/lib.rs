@@ -133,6 +133,12 @@ pub trait TensorOpsExt {
         rhs: &Tensor,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Elementwise remainder with NumPy-style broadcasting.
+    fn rem<B: TensorBackend>(
+        &self,
+        rhs: &Tensor,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise power with NumPy-style broadcasting.
     fn pow<B: TensorBackend>(
         &self,
@@ -271,6 +277,12 @@ pub trait TypedTensorOpsExt<T: TensorScalar> {
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Elementwise division with NumPy-style broadcasting.
     fn div<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Elementwise remainder with NumPy-style broadcasting.
+    fn rem<B: TensorBackend>(
         &self,
         rhs: &TypedTensor<T>,
         backend: &mut B,

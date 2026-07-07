@@ -136,6 +136,7 @@ impl PartialEq for StdTensorOp {
             | (Self::Neg, Self::Neg)
             | (Self::Conj, Self::Conj)
             | (Self::Div, Self::Div)
+            | (Self::Rem, Self::Rem)
             | (Self::Abs, Self::Abs)
             | (Self::Sign, Self::Sign)
             | (Self::Maximum, Self::Maximum)
@@ -261,6 +262,7 @@ impl Hash for StdTensorOp {
             | Self::Neg
             | Self::Conj
             | Self::Div
+            | Self::Rem
             | Self::Abs
             | Self::Sign
             | Self::Maximum
@@ -380,7 +382,12 @@ impl GraphOperation for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
+            Self::Div
+            | Self::Rem
+            | Self::Maximum
+            | Self::Minimum
+            | Self::Pow
+            | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
             Self::Concatenate { input_count, .. } => *input_count,
@@ -415,6 +422,7 @@ impl GraphOperation for StdTensorOp {
             | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::Div
+            | Self::Rem
             | Self::Abs
             | Self::Sign
             | Self::Maximum

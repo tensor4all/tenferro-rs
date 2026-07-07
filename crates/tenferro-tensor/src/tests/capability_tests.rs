@@ -61,6 +61,11 @@ fn backend_capability_query_reports_axis_specific_support() {
     assert_eq!(add.backend, BackendId::Cpu);
     assert_eq!(add.axis(CapabilityAxis::OwnedResult), SupportLevel::Native);
     assert_eq!(add.axis(CapabilityAxis::ReadInputs), SupportLevel::Native);
+    assert_eq!(add.axis(CapabilityAxis::WriteOutput), SupportLevel::Native);
+    assert_eq!(
+        add.axis(CapabilityAxis::StridedOutput),
+        SupportLevel::Native
+    );
     assert_eq!(
         add.axis(CapabilityAxis::Accumulation),
         SupportLevel::Unsupported
@@ -113,6 +118,30 @@ fn backend_require_capability_reports_structured_unsupported_errors() {
             backend: BackendId::Cpu,
         }
     ));
+
+    let err = backend
+        .require_capability(
+            CapabilityQuery::new(PrimitiveOpKind::Add, DType::I32),
+            CapabilityAxis::Accumulation,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::UnsupportedOpDType {
+            op: "add",
+            dtype: DType::I32,
+            backend: BackendId::Cpu,
+        }
+    ));
+}
+
+#[test]
+fn backend_ids_report_stable_names() {
+    assert_eq!(BackendId::Cpu.as_str(), "cpu");
+    assert_eq!(BackendId::Cuda.as_str(), "cuda");
+    assert_eq!(BackendId::WebGpu.as_str(), "webgpu");
+    assert_eq!(BackendId::Other("custom").as_str(), "custom");
+    assert_eq!(BackendId::Other("custom").to_string(), "custom");
 }
 
 #[test]
@@ -135,6 +164,74 @@ fn capability_output_dtype_reuses_catalog_dtype_policy() {
     );
     assert_eq!(
         capability_output_dtype(PrimitiveOpKind::Div, DType::I32),
+        Some(DType::I32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Rem, DType::I64),
+        Some(DType::I64)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Pow, DType::I32),
+        Some(DType::I32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Add, DType::Bool),
         None
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Sqrt, DType::F32),
+        Some(DType::F32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Sqrt, DType::I32),
+        None
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Exp, DType::C64),
+        Some(DType::C64)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Exp, DType::I64),
+        None
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::F32),
+        Some(DType::F32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::F64),
+        Some(DType::F64)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::I32),
+        Some(DType::I32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::I64),
+        Some(DType::I64)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::C64),
+        Some(DType::F64)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Abs, DType::Bool),
+        None
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Compare, DType::C64),
+        None
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Select, DType::C32),
+        Some(DType::C32)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Convert, DType::Bool),
+        Some(DType::Bool)
+    );
+    assert_eq!(
+        capability_output_dtype(PrimitiveOpKind::Constant, DType::I64),
+        Some(DType::I64)
     );
 }

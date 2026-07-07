@@ -45,12 +45,17 @@ fn cuda_capability_table_reports_current_core_coverage() {
         .expect("CUDA dot_general/c64 should be described");
     assert_eq!(dot_c64.accumulation, SupportLevel::Native);
 
-    assert!(
-        capabilities
-            .iter()
-            .all(|entry| !(entry.op == PrimitiveOpKind::Div && entry.dtype == DType::I32)),
-        "descriptor should not claim CUDA integer div before #1320 lands"
-    );
+    let div_i32 = capabilities
+        .iter()
+        .find(|entry| entry.op == PrimitiveOpKind::Div && entry.dtype == DType::I32)
+        .expect("CUDA div/i32 should be described after #1320");
+    assert_eq!(div_i32.result, SupportLevel::Native);
+
+    let rem_i64 = capabilities
+        .iter()
+        .find(|entry| entry.op == PrimitiveOpKind::Rem && entry.dtype == DType::I64)
+        .expect("CUDA rem/i64 should be described after #1320");
+    assert_eq!(rem_i64.result, SupportLevel::Native);
 }
 
 #[test]
@@ -234,6 +239,7 @@ fn run_supported_case(
         PrimitiveOpKind::Neg => assert_unary_matches(cpu, gpu, entry, |b, x| b.neg(x)),
         PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| b.conj(x)),
         PrimitiveOpKind::Div => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.div(l, r)),
+        PrimitiveOpKind::Rem => assert_binary_matches(cpu, gpu, entry, |b, l, r| b.rem(l, r)),
         PrimitiveOpKind::Abs => assert_unary_matches(cpu, gpu, entry, |b, x| b.abs(x)),
         PrimitiveOpKind::Sign => assert_unary_matches(cpu, gpu, entry, |b, x| b.sign(x)),
         PrimitiveOpKind::Maximum => {
@@ -424,6 +430,7 @@ fn run_cpu_binary(
         PrimitiveOpKind::Sub => cpu.sub(lhs, rhs),
         PrimitiveOpKind::Mul => cpu.mul(lhs, rhs),
         PrimitiveOpKind::Div => cpu.div(lhs, rhs),
+        PrimitiveOpKind::Rem => cpu.rem(lhs, rhs),
         PrimitiveOpKind::Maximum => cpu.maximum(lhs, rhs),
         PrimitiveOpKind::Minimum => cpu.minimum(lhs, rhs),
         PrimitiveOpKind::Pow => cpu.pow(lhs, rhs),

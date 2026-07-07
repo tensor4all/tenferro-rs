@@ -999,15 +999,28 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         Complex64::new(0.0, 0.5),
     );
 
-    assert!(
+    assert_eq!(
         neg(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap())
-            .unwrap_err()
-            .to_string()
-            .contains("I64")
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[-1]
     );
     assert!(conj(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
-    assert!(abs(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
-    assert!(sign(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err());
+    assert_eq!(
+        abs(&Tensor::from_vec_col_major(vec![1], vec![-1_i64]).unwrap())
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[1]
+    );
+    assert_eq!(
+        sign(&Tensor::from_vec_col_major(vec![1], vec![-1_i64]).unwrap())
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[-1]
+    );
 
     let a = Tensor::C64(
         TypedTensor::from_vec_col_major(
