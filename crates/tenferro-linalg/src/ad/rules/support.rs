@@ -1,5 +1,5 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
-use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{support as ad_support, PrimitiveRuleBuilder};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
@@ -187,14 +187,6 @@ pub(super) fn broadcast_in_dim_fixed(
     fixed_unary(builder, StdTensorOp::BroadcastInDim { shape, dims }, input)
 }
 
-pub(super) fn reduce_sum_fixed(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: ValueRef<StdTensorOp>,
-    axes: Vec<usize>,
-) -> LocalValueId {
-    fixed_unary(builder, StdTensorOp::ReduceSum { axes }, input)
-}
-
 pub(super) fn pad_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
@@ -313,10 +305,11 @@ pub(super) fn hadamard_fixed_linear(
 
 pub(super) fn one_like_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
     anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
 ) -> LocalValueId {
-    let zero = fixed_sub(builder, anchor.clone(), anchor);
-    fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(zero))
+    ad_support::one_like(builder, dtype, anchor, anchor_rank)
 }
 
 pub(super) fn extract_diag_linear(
@@ -542,12 +535,6 @@ pub(super) fn matrix_shape(
     shape
 }
 
-pub(super) fn vector_shape(len: impl Into<DimExpr>, batch_shape: &[DimExpr]) -> Vec<DimExpr> {
-    let mut shape = vec![len.into()];
-    shape.extend_from_slice(batch_shape);
-    shape
-}
-
 pub(super) fn vector_to_matrix_broadcast_dims(batch_ndim: usize) -> Vec<usize> {
     let mut dims = Vec::with_capacity(1 + batch_ndim);
     dims.push(1);
@@ -557,13 +544,13 @@ pub(super) fn vector_to_matrix_broadcast_dims(batch_ndim: usize) -> Vec<usize> {
 
 pub(super) fn leading_column_selector_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
     leading_cols: usize,
     total_cols: usize,
     batch_shape: &[DimExpr],
     anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
 ) -> LocalValueId {
-    let eye = identity_matrix_fixed(builder, leading_cols, batch_shape, anchor, anchor_shape);
+    let eye = identity_matrix_fixed(builder, dtype, leading_cols, batch_shape, anchor);
     let rank = 2 + batch_shape.len();
     pad_fixed(
         builder,
@@ -576,13 +563,13 @@ pub(super) fn leading_column_selector_fixed(
 
 pub(super) fn trailing_column_selector_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
     leading_cols: usize,
     trailing_cols: usize,
     batch_shape: &[DimExpr],
     anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
 ) -> LocalValueId {
-    let eye = identity_matrix_fixed(builder, trailing_cols, batch_shape, anchor, anchor_shape);
+    let eye = identity_matrix_fixed(builder, dtype, trailing_cols, batch_shape, anchor);
     let rank = 2 + batch_shape.len();
     pad_fixed(
         builder,
@@ -595,37 +582,12 @@ pub(super) fn trailing_column_selector_fixed(
 
 pub(super) fn identity_matrix_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
     size: usize,
     batch_shape: &[DimExpr],
     anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
 ) -> LocalValueId {
-    let one_scalar = scalar_one_fixed(builder, anchor, anchor_shape);
-    let ones = broadcast_in_dim_fixed(
-        builder,
-        ValueRef::Local(one_scalar),
-        vector_shape(size, batch_shape),
-        vec![],
-    );
-    embed_diag_fixed(builder, ValueRef::Local(ones))
-}
-
-pub(super) fn scalar_one_fixed(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &[DimExpr],
-) -> LocalValueId {
-    let zero = fixed_sub(builder, anchor.clone(), anchor);
-    let zero_scalar = if anchor_shape.is_empty() {
-        zero
-    } else {
-        reduce_sum_fixed(
-            builder,
-            ValueRef::Local(zero),
-            (0..anchor_shape.len()).collect(),
-        )
-    };
-    fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(zero_scalar))
+    ad_support::identity_matrix(builder, dtype, size, batch_shape, anchor, 0)
 }
 
 pub(super) fn pad_vec(rank: usize, axis: usize, amount: i64) -> Vec<i64> {
@@ -641,28 +603,50 @@ pub(super) fn pad_matrix_low(rank: usize, row_amount: i64, col_amount: i64) -> V
     padding
 }
 
+pub(super) struct SquareAugmentSpec<'a> {
+    dtype: DType,
+    rows: usize,
+    cols: usize,
+    batch_shape: &'a [DimExpr],
+    rank: usize,
+}
+
+impl<'a> SquareAugmentSpec<'a> {
+    pub(super) fn new(
+        dtype: DType,
+        rows: usize,
+        cols: usize,
+        batch_shape: &'a [DimExpr],
+        rank: usize,
+    ) -> Self {
+        Self {
+            dtype,
+            rows,
+            cols,
+            batch_shape,
+            rank,
+        }
+    }
+}
+
 pub(super) fn augment_unit_lower_to_square_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
     l: ValueRef<StdTensorOp>,
-    rows: usize,
-    cols: usize,
-    batch_shape: &[DimExpr],
-    l_shape: &[DimExpr],
-    rank: usize,
+    spec: SquareAugmentSpec<'_>,
 ) -> LocalValueId {
     let strict_lower = fixed_unary(builder, StdTensorOp::Tril { k: -1 }, l.clone());
-    let strict_lower_square = if cols < rows {
+    let strict_lower_square = if spec.cols < spec.rows {
         pad_fixed(
             builder,
             ValueRef::Local(strict_lower),
-            rank,
-            vec![0; rank],
-            pad_vec(rank, 1, (rows - cols) as i64),
+            spec.rank,
+            vec![0; spec.rank],
+            pad_vec(spec.rank, 1, (spec.rows - spec.cols) as i64),
         )
     } else {
         strict_lower
     };
-    let identity = identity_matrix_fixed(builder, rows, batch_shape, l, l_shape);
+    let identity = identity_matrix_fixed(builder, spec.dtype, spec.rows, spec.batch_shape, l);
     fixed_add(
         builder,
         ValueRef::Local(strict_lower_square),
@@ -673,31 +657,33 @@ pub(super) fn augment_unit_lower_to_square_fixed(
 pub(super) fn augment_upper_to_square_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
     u: ValueRef<StdTensorOp>,
-    rows: usize,
-    cols: usize,
-    batch_shape: &[DimExpr],
-    u_shape: &[DimExpr],
-    rank: usize,
+    spec: SquareAugmentSpec<'_>,
 ) -> LocalValueId {
     let upper = fixed_unary(builder, StdTensorOp::Triu { k: 0 }, u.clone());
-    if rows == cols {
+    if spec.rows == spec.cols {
         return upper;
     }
 
     let upper_square = pad_fixed(
         builder,
         ValueRef::Local(upper),
-        rank,
-        vec![0; rank],
-        pad_vec(rank, 0, (cols - rows) as i64),
+        spec.rank,
+        vec![0; spec.rank],
+        pad_vec(spec.rank, 0, (spec.cols - spec.rows) as i64),
     );
-    let trailing_eye = identity_matrix_fixed(builder, cols - rows, batch_shape, u, u_shape);
+    let trailing_eye = identity_matrix_fixed(
+        builder,
+        spec.dtype,
+        spec.cols - spec.rows,
+        spec.batch_shape,
+        u,
+    );
     let trailing_eye = pad_fixed(
         builder,
         ValueRef::Local(trailing_eye),
-        rank,
-        pad_matrix_low(rank, rows as i64, rows as i64),
-        vec![0; rank],
+        spec.rank,
+        pad_matrix_low(spec.rank, spec.rows as i64, spec.rows as i64),
+        vec![0; spec.rank],
     );
     fixed_add(
         builder,
@@ -709,9 +695,9 @@ pub(super) fn augment_upper_to_square_fixed(
 pub(super) struct LeadingMatrixSlice<'a> {
     leading: usize,
     total: usize,
+    dtype: DType,
     batch_shape: &'a [DimExpr],
     anchor: ValueRef<StdTensorOp>,
-    anchor_shape: &'a [DimExpr],
     rank: usize,
 }
 
@@ -719,17 +705,17 @@ impl<'a> LeadingMatrixSlice<'a> {
     pub(super) fn new(
         leading: usize,
         total: usize,
+        dtype: DType,
         batch_shape: &'a [DimExpr],
         anchor: ValueRef<StdTensorOp>,
-        anchor_shape: &'a [DimExpr],
         rank: usize,
     ) -> Self {
         Self {
             leading,
             total,
+            dtype,
             batch_shape,
             anchor,
-            anchor_shape,
             rank,
         }
     }
@@ -742,11 +728,11 @@ pub(super) fn take_leading_cols_linear(
 ) -> LocalValueId {
     let selector = leading_column_selector_fixed(
         builder,
+        spec.dtype,
         spec.leading,
         spec.total,
         spec.batch_shape,
         spec.anchor,
-        spec.anchor_shape,
     );
     let selector_t = transpose_matrix_fixed(builder, ValueRef::Local(selector), spec.rank);
     matmul_linear(
@@ -765,11 +751,11 @@ pub(super) fn take_leading_rows_linear(
 ) -> LocalValueId {
     let selector = leading_column_selector_fixed(
         builder,
+        spec.dtype,
         spec.leading,
         spec.total,
         spec.batch_shape,
         spec.anchor,
-        spec.anchor_shape,
     );
     matmul_linear(
         builder,
@@ -778,4 +764,97 @@ pub(super) fn take_leading_rows_linear(
         vec![false, true],
         spec.rank,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use computegraph::graph::{Graph, GraphBuilder};
+    use computegraph::types::ValueRef;
+    use tenferro_ops::input_key::TensorInputKey;
+    use tenferro_ops::std_tensor_op::StdTensorOp;
+    use tenferro_tensor::DType;
+
+    use super::{identity_matrix_fixed, one_like_fixed};
+
+    fn op_kind_name(op: &StdTensorOp) -> &'static str {
+        match op {
+            StdTensorOp::Constant { .. } => "Constant",
+            StdTensorOp::BroadcastInDim { .. } => "BroadcastInDim",
+            StdTensorOp::EmbedDiag { .. } => "EmbedDiag",
+            StdTensorOp::Exp => "Exp",
+            StdTensorOp::Log => "Log",
+            StdTensorOp::Sin => "Sin",
+            StdTensorOp::Cos => "Cos",
+            StdTensorOp::Tanh => "Tanh",
+            StdTensorOp::Sqrt => "Sqrt",
+            StdTensorOp::Rsqrt => "Rsqrt",
+            StdTensorOp::Expm1 => "Expm1",
+            StdTensorOp::Log1p => "Log1p",
+            _ => "Other",
+        }
+    }
+
+    fn op_kind_histogram(graph: &Graph<StdTensorOp>) -> BTreeMap<&'static str, usize> {
+        let mut counts = BTreeMap::new();
+        for op in graph.operations() {
+            *counts.entry(op_kind_name(&op.operation)).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    fn assert_no_analytic_constant_shortcuts(graph: &computegraph::graph::Graph<StdTensorOp>) {
+        for op in graph.operations() {
+            assert!(
+                !matches!(
+                    op.operation,
+                    StdTensorOp::Exp
+                        | StdTensorOp::Log
+                        | StdTensorOp::Sin
+                        | StdTensorOp::Cos
+                        | StdTensorOp::Tanh
+                        | StdTensorOp::Sqrt
+                        | StdTensorOp::Rsqrt
+                        | StdTensorOp::Expm1
+                        | StdTensorOp::Log1p
+                ),
+                "constant and identity rule helpers must use semantic constant emission, not analytic shortcuts; saw {:?}",
+                op.operation
+            );
+        }
+    }
+
+    #[test]
+    fn one_like_fixed_uses_semantic_constant_not_analytic_shortcut() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User { id: 2 });
+
+        let one = one_like_fixed(&mut builder, DType::F64, ValueRef::Local(anchor), 2);
+        let graph = builder.build();
+
+        assert!(graph.values()[one].producer.is_some());
+        assert_no_analytic_constant_shortcuts(&graph);
+        assert_eq!(
+            op_kind_histogram(&graph),
+            BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1)])
+        );
+    }
+
+    #[test]
+    fn identity_matrix_fixed_uses_semantic_constant_not_analytic_shortcut() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User { id: 1 });
+
+        let identity =
+            identity_matrix_fixed(&mut builder, DType::F64, 2, &[], ValueRef::Local(anchor));
+        let graph = builder.build();
+
+        assert!(graph.values()[identity].producer.is_some());
+        assert_no_analytic_constant_shortcuts(&graph);
+        assert_eq!(
+            op_kind_histogram(&graph),
+            BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1), ("EmbedDiag", 1)])
+        );
+    }
 }

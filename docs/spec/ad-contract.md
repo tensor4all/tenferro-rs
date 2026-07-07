@@ -222,6 +222,14 @@ rules carry dtype, rank, and an anchor value as a `SymbolicZero` and instantiate
 it as a dtype-aware scalar zero plus shape-restoring broadcast when needed. Do
 not synthesize zeros through analytic operations or tensor buffers.
 
+The same rule applies to AD-emitted scalar constants, one-like tensors, and
+identity matrices. Rule implementations must use semantic graph-emission
+helpers such as `tenferro_ops::ad::support::{constant_scalar, zero_like,
+one_like, identity_matrix}` rather than analytic identities. Graph-shape
+invariants discovered during AD-rule work must be guarded by CI-checkable
+structural tests, for example tests that reject analytic ops in constant or
+identity helper emission.
+
 `AdContext` is the explicit owner for shared AD transform memoization. It owns
 the extension AD rules and a bounded AD transform cache used by
 context-driven traced transforms. Eager runtimes created with

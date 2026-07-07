@@ -121,6 +121,14 @@ broadcast when the rank is nonzero. This keeps zero propagation symbolic until a
 primitive such as `Concatenate`, `DynamicUpdateSlice`, or `Scatter` needs a real
 zero input to express the correct linearized operation.
 
+The same semantic-emission rule applies to constants, ones, and identity
+matrices inside AD rules. Rule code should call the helper surface in
+`tenferro_ops::ad::support` so it emits `Constant` plus structural ops directly
+instead of reconstructing constants through analytic identities such as
+`exp(sum(x - x))`. Each discovered graph-emission invariant must become either
+unrepresentable through that helper API or covered by a structural test; prose
+rules alone are not treated as sufficient protection.
+
 Current tenferro eager AD uses the same primitive rule set through a different
 interpreter:
 

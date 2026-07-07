@@ -319,6 +319,12 @@ rules from `tensor4all-agent-rules`.
   Exact-shape requirements are appropriate only when constructing a concrete
   op payload that cannot represent runtime dimensions; handle non-exact
   metadata conservatively instead of reinterpreting bounds as sizes.
+- AD graph-emission invariants must be enforced by API shape or structural
+  tests, not prose alone. Constant, zero, one, and identity construction in AD
+  rules should use the semantic helpers in `tenferro_ops::ad::support`; tests
+  such as `identity_matrix_helper_emits_semantic_constant_and_remaps_shape_source`
+  and `identity_matrix_fixed_uses_semantic_constant_not_analytic_shortcut`
+  guard against analytic constant shortcuts reappearing.
 - Reference JAX's implementations (`jax/_src/lax/lax.py`, `jax/_src/lax/linalg.py`)
   when implementing new AD rules.
 
