@@ -260,6 +260,17 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual_pred = download(&gpu, &gpu_pred);
     assert_tensor_close(&actual_pred, &expected_pred, 0.0);
 
+    let err = gpu.neg(&gpu_lhs).unwrap_err();
+    let dtype = lhs.dtype();
+    assert!(matches!(
+        err,
+        crate::Error::UnsupportedOpDType {
+            op: "neg",
+            dtype: actual,
+            backend: tenferro_tensor::BackendId::Cuda,
+        } if actual == dtype
+    ));
+
     let expected = cpu.select(&expected_pred, lhs, rhs).unwrap();
     let gpu_out = gpu.select(&gpu_pred, &gpu_lhs, &gpu_rhs).unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -319,13 +330,21 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let err = gpu.abs(&gpu_lhs).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::BackendFailure { op: "abs", .. }
+        crate::Error::UnsupportedOpDType {
+            op: "abs",
+            dtype: DType::C64,
+            backend: tenferro_tensor::BackendId::Cuda,
+        }
     ));
 
     let err = gpu.exp(&gpu_lhs).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::BackendFailure { op: "exp", .. }
+        crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::C64,
+            backend: tenferro_tensor::BackendId::Cuda,
+        }
     ));
 
     let err = gpu

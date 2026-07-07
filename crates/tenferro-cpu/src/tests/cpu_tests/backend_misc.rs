@@ -1118,9 +1118,26 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             .unwrap(),
         &[8.0, 9.0]
     );
-    assert!(
-        crate::analytic::exp(&Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap()).is_err()
-    );
+    let int_tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+    assert!(matches!(
+        crate::analytic::exp(&int_tensor),
+        Err(crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::I64,
+            backend: tenferro_tensor::BackendId::Cpu,
+        })
+    ));
+    assert!(matches!(
+        crate::analytic::exp_read_with_pool(
+            &mut crate::buffer_pool::BufferPool::new(),
+            TensorRead::from_tensor(&int_tensor),
+        ),
+        Err(crate::Error::UnsupportedOpDType {
+            op: "exp",
+            dtype: DType::I64,
+            backend: tenferro_tensor::BackendId::Cpu,
+        })
+    ));
     assert!(crate::analytic::pow(&real, &base).is_err());
 }
 

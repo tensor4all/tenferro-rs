@@ -63,6 +63,14 @@ query `TensorBackendCapability::capability` or
 The latter returns the structured `UnsupportedOpDType` error when an entry is
 missing or a requested axis is unsupported.
 
+Runtime-dtype dispatch should keep the descriptor check at the dtype-stripping
+seam. Backend code performs the descriptor check there, and the shared
+`with_scalar!`-style macros centralize the O(1) dtype match and structured
+rejection before backend kernels run; they do not add tensor materialization. For
+eager execution this adds one small descriptor/table lookup to the existing
+per-operation dispatch cost, so it is acceptable for ordinary eager paths but
+should not be repeated inside element loops or kernel launch inner loops.
+
 Parity tests should derive cases from descriptor entries. Supported CPU and CUDA
 entries run smoke cases and compare results; unsupported descriptor entries
 must remain explicit so future support additions update the descriptor and the

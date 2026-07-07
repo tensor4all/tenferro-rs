@@ -9,6 +9,9 @@ use crate::types::{
     Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
     TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
+use tenferro_tensor::{
+    CapabilityAxis, CapabilityQuery, DType, TensorBackendCapability as TensorBackendCapabilityTrait,
+};
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
@@ -873,6 +876,22 @@ pub(crate) fn ensure_axis(op: &'static str, axis: usize, rank: usize) -> crate::
     Ok(())
 }
 
+pub(crate) fn require_owned_capability<B>(
+    backend: &B,
+    kind: tenferro_core_ops::PrimitiveOpKind,
+    dtype: DType,
+) -> crate::Result<()>
+where
+    B: TensorBackendCapabilityTrait + ?Sized,
+{
+    backend
+        .require_capability(
+            CapabilityQuery::new(kind, dtype),
+            CapabilityAxis::OwnedResult,
+        )
+        .map(|_| ())
+}
+
 pub(crate) fn ensure_axes_unique(
     op: &'static str,
     role: &'static str,
@@ -1116,7 +1135,9 @@ macro_rules! dispatch_unary_float_complex {
             $crate::cubecl::op_descriptor::GpuLaunchKind::UnaryFloatComplex,
         )?;
         let op = descriptor.name;
-        match $input {
+        let input = $input;
+        $crate::cubecl::dispatch::require_owned_capability($backend, $kind, input.dtype())?;
+        match input {
             Tensor::F32(tensor) => {
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
@@ -1154,9 +1175,10 @@ macro_rules! dispatch_unary_float_complex {
                 C64
             ),
             Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-                Err(crate::Error::backend_failure(
+                Err(crate::Error::unsupported_op_dtype(
                     op,
-                    format!("unsupported dtype {:?}", $input.dtype()),
+                    input.dtype(),
+                    tenferro_tensor::BackendId::Cuda,
                 ))
             }
         }
@@ -1170,7 +1192,9 @@ macro_rules! dispatch_unary_float_only {
             $crate::cubecl::op_descriptor::GpuLaunchKind::UnaryFloatOnly,
         )?;
         let op = descriptor.name;
-        match $input {
+        let input = $input;
+        $crate::cubecl::dispatch::require_owned_capability($backend, $kind, input.dtype())?;
+        match input {
             Tensor::F32(tensor) => {
                 $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
                     $backend,
@@ -1191,9 +1215,10 @@ macro_rules! dispatch_unary_float_only {
                     F64
                 )
             }
-            _ => Err(crate::Error::backend_failure(
+            _ => Err(crate::Error::unsupported_op_dtype(
                 op,
-                format!("unsupported dtype {:?}", $input.dtype()),
+                input.dtype(),
+                tenferro_tensor::BackendId::Cuda,
             )),
         }
     }};

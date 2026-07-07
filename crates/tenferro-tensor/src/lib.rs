@@ -48,6 +48,7 @@ pub mod backend;
 pub mod cache;
 pub mod capability;
 pub mod config;
+pub mod dispatch;
 pub mod error;
 pub mod types;
 pub mod validate;
