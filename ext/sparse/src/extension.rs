@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::{
     ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionRegistryError,
@@ -24,7 +24,7 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
 use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend};
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::sparse::{
     coordinates_tensor, validate_traced_values, validate_value_tensor, SparseCooTracedTensor,
@@ -502,14 +502,17 @@ impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
+        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
         let Some(ct) = cotangent_out.first().copied().flatten() else {
             return Ok(vec![None; op.input_count()]);
         };
+        let lhs = inputs[0].fixed_value("sparse matmul VJP", 0)?;
+        let rhs = inputs[1].fixed_value("sparse matmul VJP", 1)?;
         let mut result = vec![None; op.input_count()];
         for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
             let tangent_input_idx = 2 + active_pos;
@@ -521,7 +524,7 @@ impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
                     plan: op.plan.clone(),
                     active_input,
                 })),
-                vec![inputs[0].clone(), inputs[1].clone(), ValueRef::Local(ct)],
+                vec![lhs.clone(), rhs.clone(), ValueRef::Local(ct)],
                 OperationRole::Linearized {
                     active_mask: vec![false, false, true],
                 },
@@ -673,20 +676,20 @@ fn validate_primal_inputs(plan: &SparseMatmulPlan, inputs: &[&Tensor]) -> Result
 }
 
 #[cfg(feature = "autodiff")]
-fn downcast_matmul_op<'a>(
-    op: &'a dyn ExtensionOp,
+fn downcast_matmul_op(
+    op: &dyn ExtensionOp,
     rule: ADRuleKind,
-) -> ADRuleResult<&'a SparseMatmulOp> {
+) -> ADRuleResult<&SparseMatmulOp> {
     op.as_any()
         .downcast_ref::<SparseMatmulOp>()
         .ok_or_else(|| ADRuleError::unsupported(FAMILY_ID, rule))
 }
 
 #[cfg(feature = "autodiff")]
-fn downcast_jvp_op<'a>(
-    op: &'a dyn ExtensionOp,
+fn downcast_jvp_op(
+    op: &dyn ExtensionOp,
     rule: ADRuleKind,
-) -> ADRuleResult<&'a SparseMatmulJvpOp> {
+) -> ADRuleResult<&SparseMatmulJvpOp> {
     op.as_any()
         .downcast_ref::<SparseMatmulJvpOp>()
         .ok_or_else(|| ADRuleError::unsupported(JVP_FAMILY_ID, rule))
