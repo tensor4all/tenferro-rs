@@ -6,7 +6,7 @@ use computegraph::types::{LocalValueId, OperationRole, ValueKey};
 use computegraph::GraphOperation;
 use num_complex::{Complex32, Complex64};
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleResult, Primitive, PrimitiveBuilder, PrimitiveValue};
+use tidu::{ADRuleResult, Primitive, PrimitiveBuilder};
 
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
@@ -477,12 +477,11 @@ impl Primitive for StdTensorOp {
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[PrimitiveValue<Self>],
+        inputs: &[tidu::PrimitiveTransposeInput<Self>],
         mode: &OperationRole,
         ctx: &mut Self::ADContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let inputs = inputs.iter().cloned().map(Into::into).collect::<Vec<_>>();
-        crate::ad::transpose_rule(self, builder, cotangent_out, &inputs, mode, ctx)
+        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
     }
 }
 
@@ -501,12 +500,24 @@ impl StdTensorOp {
 
     pub(crate) fn transpose_rule(
         &self,
-        builder: &mut impl crate::ad::PrimitiveRuleBuilder,
+        builder: &mut computegraph::graph::GraphBuilder<Self>,
         cotangent_out: &[Option<LocalValueId>],
         inputs: &[computegraph::ValueRef<Self>],
         mode: &OperationRole,
         ctx: &mut crate::ad::context::ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
+        let inputs = inputs
+            .iter()
+            .map(|input| match input {
+                computegraph::ValueRef::Local(local_id) => {
+                    let key = builder.global_key(*local_id).clone();
+                    tidu::PrimitiveTransposeInput::Residual(key)
+                }
+                computegraph::ValueRef::External(key) => {
+                    tidu::PrimitiveTransposeInput::Residual(key.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+        crate::ad::transpose_rule(self, builder, cotangent_out, inputs.as_slice(), mode, ctx)
     }
 }

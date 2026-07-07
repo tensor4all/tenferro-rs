@@ -4,6 +4,9 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::{ShapeGuardContext, ShapeGuardError};
 use crate::ad::support::{is_differentiable_dtype, linear_transpose_input_active};
+use crate::ad::transpose_input::{
+    linearized_inputs_with_inactive_shape_sources, TransposeInputRef,
+};
 use crate::ad::zeros::SymbolicZero;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::dim_expr::DimExpr;
@@ -363,16 +366,16 @@ pub fn transpose_transpose(
     })
 }
 
-pub fn transpose_reshape(
+pub fn transpose_reshape_input(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     op: &StdTensorOp,
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let StdTensorOp::Reshape { to_shape: _ } = op else {
-        unreachable!("transpose_reshape expects Reshape");
+        unreachable!("transpose_reshape_input expects Reshape");
     };
 
     let mut result = Vec::with_capacity(inputs.len());
@@ -383,17 +386,11 @@ pub fn transpose_reshape(
 
     let primary = match cotangent_out[0] {
         Some(ct) => {
-            let input_rank = ctx.rank_of(&inputs[0])?;
-            let remapped_to_shape = DimExpr::input_shape(1, input_rank);
-            let needs_shape_source =
-                DimExpr::max_input_idx_all(&remapped_to_shape).is_some_and(|idx| idx > 0);
-            let mut op_inputs = vec![ValueRef::Local(ct)];
-            let active_mask = if needs_shape_source {
-                op_inputs.push(inputs[0].clone());
-                vec![true, false]
-            } else {
-                vec![true]
-            };
+            let input_key = ValueRef::External(inputs[0].key().clone());
+            let input_rank = ctx.rank_of(&input_key)?;
+            let (remapped_to_shape, shape_sources) = inputs[0].shape_operand(input_rank, 1, ctx)?;
+            let (op_inputs, active_mask) =
+                linearized_inputs_with_inactive_shape_sources(ValueRef::Local(ct), shape_sources);
             let out = builder.add_operation(
                 StdTensorOp::Reshape {
                     to_shape: remapped_to_shape,
@@ -412,12 +409,12 @@ pub fn transpose_reshape(
     Ok(result)
 }
 
-pub fn transpose_broadcast_in_dim(
+pub fn transpose_broadcast_in_dim_input(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
     shape: &[DimExpr],
     dims: &[usize],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -427,8 +424,12 @@ pub fn transpose_broadcast_in_dim(
         return Ok(result);
     }
 
+    let value_inputs: Vec<_> = inputs
+        .iter()
+        .map(|input| ValueRef::External(input.key().clone()))
+        .collect();
     let (reduce_axes, needs_input_shape_restore) =
-        broadcast_transpose_reduce_axes(shape, dims, inputs, ctx)?;
+        broadcast_transpose_reduce_axes(shape, dims, &value_inputs, ctx)?;
 
     let primary = match cotangent_out[0] {
         Some(ct) => {
@@ -459,15 +460,16 @@ pub fn transpose_broadcast_in_dim(
                 reduced
             };
             if needs_input_shape_restore {
-                let input_rank = ctx.rank_of(&inputs[0])?;
+                let input_rank = ctx.rank_of(&value_inputs[0])?;
+                let (to_shape, shape_sources) = inputs[0].shape_operand(input_rank, 1, ctx)?;
+                let (op_inputs, active_mask) = linearized_inputs_with_inactive_shape_sources(
+                    ValueRef::Local(restored_order),
+                    shape_sources,
+                );
                 let reshaped = builder.add_operation(
-                    StdTensorOp::Reshape {
-                        to_shape: DimExpr::input_shape(1, input_rank),
-                    },
-                    vec![ValueRef::Local(restored_order), inputs[0].clone()],
-                    OperationRole::Linearized {
-                        active_mask: vec![true, false],
-                    },
+                    StdTensorOp::Reshape { to_shape },
+                    op_inputs,
+                    OperationRole::Linearized { active_mask },
                 );
                 Some(reshaped[0])
             } else {

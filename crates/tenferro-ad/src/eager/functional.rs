@@ -20,7 +20,7 @@ use crate::extension_runtime::ExtensionExecutor;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, live_graph_values, missing_tangent_base_key,
-    prefill_missing_linear_zero_values,
+    prefill_linear_residual_values, prefill_missing_linear_zero_values,
 };
 use super::{
     eager_val_key, record_eager_outputs, tensor_ptr, zero_like_tensor, EagerRuntime, EagerTensor,
@@ -352,6 +352,12 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             return Err(err);
         }
         let mut external_data = external_data.clone();
+        prefill_linear_residual_values(
+            linear,
+            &mut external_data,
+            self.backend,
+            self.extension_executor.as_deref_mut(),
+        )?;
         ctx.refresh_global_metadata();
         prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
         let external_tensors = self.external_tensors(&external_data)?;

@@ -28,6 +28,9 @@ mod structural;
 #[doc(hidden)]
 pub mod support;
 #[cfg(feature = "autodiff")]
+#[doc(hidden)]
+pub mod transpose_input;
+#[cfg(feature = "autodiff")]
 mod zeros;
 
 #[cfg(feature = "autodiff")]
@@ -35,7 +38,10 @@ use computegraph::graph::GraphBuilder;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
+use tidu::{
+    ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveTransposeInput,
+    PrimitiveValue,
+};
 
 #[cfg(feature = "autodiff")]
 use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
@@ -157,7 +163,7 @@ pub fn transpose_rule(
     op: &StdTensorOp,
     builder: &mut impl PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut context::ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -173,13 +179,17 @@ pub fn transpose_rule(
         );
     }
 
+    let transpose_inputs = inputs
+        .iter()
+        .map(transpose_input::TransposeInputRef::new)
+        .collect::<Vec<_>>();
     let kind = op
         .primitive_kind()
         .ok_or_else(|| missing_primitive_kind(op, ADRuleKind::Transpose))?;
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Transpose))?;
     let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;
-    rule.transpose_rule(op, builder_dyn, cotangent_out, inputs, mode, ctx)
+    rule.transpose_rule(op, builder_dyn, cotangent_out, &transpose_inputs, mode, ctx)
 }
 
 #[cfg(test)]

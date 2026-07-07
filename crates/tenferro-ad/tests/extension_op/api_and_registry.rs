@@ -197,6 +197,10 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
     let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
     let bound =
         Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]).unwrap();
+    assert!(
+        !compiled_program_contains_extension_with_specs(&g, &[(&x, bound.dtype(), bound.shape())]),
+        "symbolic sum(scale_by_2(x)) grad should not retain the forward extension as a shape-only dependency"
+    );
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g

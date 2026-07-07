@@ -54,7 +54,7 @@ where
         &self,
         builder: &mut impl PrimitiveBuilder<Self>,
         cotangent_outputs: &[Option<LocalValueId>],
-        inputs: &[PrimitiveValue<Self>],
+        inputs: &[PrimitiveTransposeInput<Self>],
         role: &OperationRole,
         ctx: &mut Self::ADContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>
@@ -81,6 +81,35 @@ pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 
 `DiffPassId` is `u64`.
 
+## PrimitiveTransposeInput (canonical definition)
+
+Defined in `tidu-rs/src/rules/primitive_builder.rs`. `linear_transpose`
+passes these typed input references to primitive transpose rules so rules can
+distinguish residual operands from tangent-flow operands.
+
+```rust
+pub enum PrimitiveTransposeInput<Op: GraphOperation> {
+    Residual(ValueKey<Op>),
+    Linear {
+        key: ValueKey<Op>,
+        primal: Option<ValueKey<Op>>,
+    },
+}
+
+impl<Op: GraphOperation> PrimitiveTransposeInput<Op> {
+    pub fn key(&self) -> &ValueKey<Op>;
+    pub fn primal(&self) -> Option<&ValueKey<Op>>;
+    pub fn as_residual_value(&self) -> Option<PrimitiveValue<Op>>;
+}
+```
+
+`Residual` inputs are independent of the differentiated tangent flow and may be
+used as ordinary rule operands. `Linear` inputs belong to tangent flow; their
+`key` identifies the linearized value and `primal` identifies the corresponding
+primal value when tidu can recover one. Downstream primitive sets must not
+blindly convert a `Linear { primal: None, .. }` input into an ordinary residual
+operand, because doing so retains the tangent sweep in the transposed graph.
+
 ## LinearizedGraph (canonical definition)
 
 Defined in `tidu-rs/src/linearized_graph.rs`. Returned by
@@ -90,18 +119,35 @@ per operation node — note that `jvp_rule` itself returns
 assembled by `linearize`).
 
 ```rust
+use std::sync::Arc;
+
 pub struct LinearizedGraph<Op: GraphOperation> {
-    graph: Graph<Op>,
+    linear: Graph<Op>,
+    residual: Arc<Graph<Op>>,
     tangent_inputs: Vec<(Op::InputKey, LocalValueId)>,
     tangent_outputs: Vec<Option<LocalValueId>>,
+    linear_primals: Vec<Option<ValueKey<Op>>>,
 }
 
 impl<Op: GraphOperation> LinearizedGraph<Op> {
+    /// Borrow the strictly-linear graph representation.
     pub fn as_graph(&self) -> &Graph<Op>;
+    /// Borrow the residual graph referenced by the linear graph.
+    pub fn residual_graph(&self) -> &Graph<Op>;
+    /// Consume this value and return the strictly-linear graph representation.
+    pub fn into_graph(self) -> Graph<Op>;
+    /// Consume this value and return both graph parts.
+    pub fn into_graphs(self) -> (Graph<Op>, Arc<Graph<Op>>);
     pub fn tangent_inputs(&self) -> &[(Op::InputKey, LocalValueId)];
     pub fn tangent_outputs(&self) -> &[Option<LocalValueId>];
 }
 ```
+
+The strictly-linear graph is the only graph traversed by `linear_transpose`.
+The residual graph contains primal or metadata values referenced from that
+linear graph. Transform owners that cache VJP artifacts should retain the
+residual graph and optimized transposed graph, not the strictly-linear tangent
+sweep, unless they explicitly need to re-run `linear_transpose`.
 
 ## Rules
 
@@ -123,7 +169,15 @@ impl<Op: GraphOperation> LinearizedGraph<Op> {
    during `materialize_merge` so that shared primal computations are not
    duplicated.
 
-5. **Extension AD boundary**: built-in AD is defined for `StdTensorOp`.
+5. **Transpose input typing**: `transpose_rule` receives
+   `PrimitiveTransposeInput` values, not raw `ValueRef`s. Rules may use
+   residual inputs directly. Rules may use a linear input's `primal` only for
+   metadata, runtime shape sources, or fixed coefficients that are genuinely
+   independent of the tangent flow. A linear input without a primal counterpart
+   must be rejected at such a use site rather than smuggled into the residual
+   graph.
+
+6. **Extension AD boundary**: built-in AD is defined for `StdTensorOp`.
    `StdTensorOp::Extension` may participate in AD only when its operation
    family registers an extension AD rule. Missing extension rules must report
    unsupported AD; they must not silently drop or zero gradients.
@@ -176,11 +230,13 @@ runtimes created directly own a private cache. Direct `TracedTensorAdExt`
 methods remain stateless.
 
 The AD transform cache stores graph artifacts only: eager `RecordedGraph`
-linearization, traced JVP linearized/optimized graphs, and traced VJP
-linearized plus optimized transposed graphs. The default retention policy is
-bounded by both entry count and logical retained bytes. Owners expose limits,
-stats, and clear APIs through `AdContext` and `EagerRuntime`; retained-byte
-stats are logical estimates and do not report process RSS.
+linearization, traced JVP linearized/optimized graphs, and traced VJP residual
+graphs plus optimized transposed graphs. It must not keep the strictly-linear
+tangent sweep alive after a VJP transform has been transposed and optimized.
+The default retention policy is bounded by both entry count and logical
+retained bytes. Owners expose limits, stats, and clear APIs through `AdContext`
+and `EagerRuntime`; retained-byte stats are logical estimates and do not report
+process RSS.
 
 Cache keys must be deterministic, structural, and metadata-only. Eager keys
 cover the recorded graph fingerprint and requested output slots. Traced keys

@@ -7,6 +7,7 @@ use crate::ad::support::{
     convert_linear_to_dtype, dtype_of_or_real, linear_transpose_input_active,
     project_linear_to_dtype, promote_dtype,
 };
+use crate::ad::transpose_input::{metadata_value_refs, TransposeInputRef};
 use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -166,7 +167,7 @@ pub fn transpose_add(
 pub fn transpose_mul(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -180,13 +181,15 @@ pub fn transpose_mul(
         OperationRole::Primary => return Ok(vec![None, None]),
     };
 
-    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
-    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let metadata_inputs = metadata_value_refs(inputs);
+    let lhs_dtype = dtype_of_or_real(ctx, &metadata_inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &metadata_inputs[1]);
     let output_dtype = promote_dtype(lhs_dtype, rhs_dtype);
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj = conjugate_primal_if_complex(builder, inputs[1].clone(), ctx)?;
+        let rhs = inputs[1].fixed_value("mul", 1)?;
+        let rhs_conj = conjugate_primal_if_complex(builder, rhs, ctx)?;
         let rhs_conj = convert_fixed_ref_to_dtype(builder, rhs_conj, rhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Mul,
@@ -204,7 +207,8 @@ pub fn transpose_mul(
     }
 
     if active_mask[1] {
-        let lhs_conj = conjugate_primal_if_complex(builder, inputs[0].clone(), ctx)?;
+        let lhs = inputs[0].fixed_value("mul", 0)?;
+        let lhs_conj = conjugate_primal_if_complex(builder, lhs, ctx)?;
         let lhs_conj = convert_fixed_ref_to_dtype(builder, lhs_conj, lhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Mul,

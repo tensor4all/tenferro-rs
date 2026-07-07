@@ -27,8 +27,9 @@ use crate::eager_exec::exec_op_on_tensor_reads_with_extension_executor;
 use crate::metadata::{register_scoped_metadata_batch, tensor_meta_from_tensor};
 
 use super::backward::{
-    eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,
-    zero_from_exact_metadata, TenferroBackwardCallbacks,
+    eager_forward_input_metadata, eager_forward_value, eager_residual_value,
+    missing_tangent_base_key, prefill_linear_residual_values, zero_from_exact_metadata,
+    TenferroBackwardCallbacks,
 };
 use super::{
     eager_op_profile_enabled, eager_op_profile_per_call_us, maybe_print_eager_op_profile,
@@ -559,6 +560,138 @@ fn eager_backward_transpose_runs_without_extension_executor() {
 
     let grad = gradients[0].as_ref().expect("active gradient");
     assert_eq!(grad.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
+fn eager_backward_prefills_split_linear_residual_graph_values() {
+    let base_key = TensorInputKey::User { id: 124 };
+    let exponent_key = TensorInputKey::User { id: 125 };
+    let mut graph_builder = GraphBuilder::<StdTensorOp>::new();
+    let x = graph_builder.add_input(base_key.clone());
+    let exponent = graph_builder.add_input(exponent_key.clone());
+    let y = graph_builder.add_operation(
+        StdTensorOp::Pow,
+        vec![ValueRef::Local(x), ValueRef::Local(exponent)],
+        OperationRole::Primary,
+    )[0];
+    graph_builder.set_outputs(vec![y]);
+    let graph = Arc::new(graph_builder.build());
+    let output_key = graph.values()[y].key.clone();
+    let x_tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap());
+    let exponent_tensor =
+        Arc::new(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]).unwrap());
+    let output_tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 9.0]).unwrap());
+    let _primal_scope = register_scoped_metadata_batch(vec![
+        (
+            ValueKey::Input(base_key.clone()),
+            tensor_meta_from_tensor(x_tensor.as_ref()),
+        ),
+        (
+            ValueKey::Input(exponent_key.clone()),
+            tensor_meta_from_tensor(exponent_tensor.as_ref()),
+        ),
+        (
+            output_key.clone(),
+            tensor_meta_from_tensor(output_tensor.as_ref()),
+        ),
+    ])
+    .unwrap();
+
+    let view = resolve(vec![Arc::clone(&graph)]);
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
+    let linear = linearize(
+        &view,
+        std::slice::from_ref(&output_key),
+        &[base_key.clone(), exponent_key.clone()],
+        0,
+        &mut ad_ctx,
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(
+        !linear.residual_graph().operations().is_empty(),
+        "Pow linearization should emit fixed residual operations"
+    );
+
+    let mut backend = CpuBackend::new();
+    let mut external_data = HashMap::from([
+        (ValueKey::Input(base_key), x_tensor),
+        (ValueKey::Input(exponent_key), exponent_tensor),
+        (output_key, output_tensor),
+    ]);
+    let before_len = external_data.len();
+    prefill_linear_residual_values(&linear, &mut external_data, &mut backend, None).unwrap();
+
+    assert!(
+        external_data.len() > before_len,
+        "residual prefill should add fixed linearization intermediates"
+    );
+}
+
+#[test]
+fn eager_backward_forward_replay_runs_only_live_fixed_linear_ops() {
+    let input_key = TensorInputKey::User { id: 126 };
+    let external_key = ValueKey::Input(input_key.clone());
+    let mut graph_builder = GraphBuilder::<StdTensorOp>::new();
+    let x = graph_builder.add_input(input_key.clone());
+    graph_builder.add_operation(
+        StdTensorOp::Neg,
+        vec![ValueRef::Local(x)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    );
+    graph_builder.add_operation(
+        StdTensorOp::Neg,
+        vec![ValueRef::Local(x)],
+        OperationRole::Primary,
+    );
+    let sum = graph_builder.add_operation(
+        StdTensorOp::Add,
+        vec![ValueRef::Local(x), ValueRef::External(external_key.clone())],
+        OperationRole::Linearized {
+            active_mask: vec![false, false],
+        },
+    )[0];
+    graph_builder.set_outputs(vec![sum]);
+    let graph = graph_builder.build();
+
+    let x_tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap());
+    let initial_data = HashMap::from([(external_key, x_tensor)]);
+    let mut backend = CpuBackend::new();
+    let mut callbacks = TenferroBackwardCallbacks::new(&mut backend, None, Vec::new());
+
+    let all_values = callbacks.execute_forward_graph(&graph, &initial_data);
+
+    let out_key = &graph.values()[sum].key;
+    let out = all_values
+        .get(out_key)
+        .expect("live fixed op output should be replayed");
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert!(
+        callbacks.take_error().is_none(),
+        "forward replay should not record errors"
+    );
+}
+
+#[test]
+fn eager_backward_residual_value_synthesizes_missing_tangent_zero() {
+    let user = TensorInputKey::User { id: 127 };
+    let base_key = ValueKey::Input(user.clone());
+    let tangent_key = ValueKey::Input(user.tangent_of(128));
+    let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 6.0]).unwrap());
+    let mut all_values = HashMap::from([(base_key, base)]);
+    let mut backend = CpuBackend::new();
+
+    let tangent = eager_residual_value(&mut all_values, &tangent_key, &mut backend).unwrap();
+
+    assert_eq!(tangent.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+    assert!(Arc::ptr_eq(
+        &tangent,
+        all_values
+            .get(&tangent_key)
+            .expect("synthesized tangent should be cached")
+    ));
 }
 
 #[test]

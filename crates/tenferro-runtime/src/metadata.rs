@@ -230,6 +230,34 @@ fn graph_metadata_registrations(
     let mut known: HashMap<ValueKey<StdTensorOp>, TensorMeta> = seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
+    let mut visited = HashSet::new();
+    append_graph_metadata_registrations(
+        graph,
+        live_values,
+        &mut known,
+        &mut registrations,
+        &mut visited,
+    )?;
+
+    Ok(registrations)
+}
+
+fn append_graph_metadata_registrations(
+    graph: &Graph<StdTensorOp>,
+    live_values: Option<&HashSet<LocalValueId>>,
+    known: &mut HashMap<ValueKey<StdTensorOp>, TensorMeta>,
+    registrations: &mut Vec<(ValueKey<StdTensorOp>, TensorMeta)>,
+    visited: &mut HashSet<*const Graph<StdTensorOp>>,
+) -> Result<()> {
+    let graph_ptr: *const Graph<StdTensorOp> = graph;
+    if !visited.insert(graph_ptr) {
+        return Ok(());
+    }
+
+    for parent in graph.parents() {
+        append_graph_metadata_registrations(parent, None, known, registrations, visited)?;
+    }
+
     for op_node in graph.operations() {
         if let Some(live_values) = live_values {
             if !op_node
@@ -269,7 +297,7 @@ fn graph_metadata_registrations(
         }
     }
 
-    Ok(registrations)
+    Ok(())
 }
 
 fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Vec<TensorMeta>> {

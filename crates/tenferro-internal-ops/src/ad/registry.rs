@@ -1,9 +1,10 @@
 use crate::ad::PrimitiveRuleBuilder;
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use computegraph::types::{LocalValueId, OperationRole, ValueKey};
 use tenferro_core_ops::PrimitiveOpKind;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use super::context::ShapeGuardContext;
+use super::transpose_input::{fixed_value_refs, metadata_value_refs, TransposeInputRef};
 use super::{
     analytic, contraction, diagonal, dynamic, elementwise, indexing, semiring, structural,
 };
@@ -22,7 +23,7 @@ pub(crate) type TransposeFn = fn(
     &StdTensorOp,
     &mut dyn PrimitiveRuleBuilder,
     &[Option<LocalValueId>],
-    &[ValueRef<StdTensorOp>],
+    &[TransposeInputRef<'_>],
     &OperationRole,
     &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
@@ -45,7 +46,7 @@ pub(crate) trait PrimitiveAdRule: Send + Sync {
         op: &StdTensorOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[TransposeInputRef<'_>],
         mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
@@ -79,7 +80,7 @@ impl PrimitiveAdRule for FunctionPrimitiveAdRule {
         op: &StdTensorOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[TransposeInputRef<'_>],
         mode: &OperationRole,
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -372,11 +373,12 @@ fn transpose_add(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    semiring::transpose_add(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = metadata_value_refs(inputs);
+    semiring::transpose_add(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_mul(
@@ -394,7 +396,7 @@ fn transpose_mul(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -416,7 +418,7 @@ fn transpose_neg(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -438,11 +440,12 @@ fn transpose_conj(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    semiring::transpose_conj(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = metadata_value_refs(inputs);
+    semiring::transpose_conj(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_div(
@@ -549,11 +552,12 @@ macro_rules! transpose_elementwise {
             _op: &StdTensorOp,
             builder: &mut dyn PrimitiveRuleBuilder,
             cotangent_out: &[Option<LocalValueId>],
-            inputs: &[ValueRef<StdTensorOp>],
+            inputs: &[TransposeInputRef<'_>],
             mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            Ok($callee(builder, cotangent_out, inputs, mode))
+            let inputs = fixed_value_refs(stringify!($name), inputs)?;
+            Ok($callee(builder, cotangent_out, &inputs, mode))
         }
     };
 }
@@ -562,30 +566,25 @@ fn transpose_div(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(elementwise::transpose_div(
-        builder,
-        cotangent_out,
-        inputs,
-        mode,
-        ctx,
-    ))
+    elementwise::transpose_div(builder, cotangent_out, inputs, mode, ctx)
 }
 fn transpose_abs(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let inputs = fixed_value_refs("abs", inputs)?;
     Ok(elementwise::transpose_abs(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         ctx,
     ))
@@ -594,7 +593,7 @@ fn transpose_sign(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -604,14 +603,15 @@ fn transpose_maximum(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let inputs = fixed_value_refs("maximum", inputs)?;
     Ok(elementwise::transpose_maximum(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         ctx,
     ))
@@ -621,25 +621,35 @@ fn transpose_minimum(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let inputs = fixed_value_refs("minimum", inputs)?;
     Ok(elementwise::transpose_minimum(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         ctx,
     ))
 }
-transpose_elementwise!(transpose_select, elementwise::transpose_select);
+fn transpose_select(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
+    mode: &OperationRole,
+    _ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    elementwise::transpose_select(builder, cotangent_out, inputs, mode)
+}
 transpose_elementwise!(transpose_clamp, elementwise::transpose_clamp);
 fn transpose_compare(
     _op: &StdTensorOp,
     _builder: &mut dyn PrimitiveRuleBuilder,
     _cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -737,11 +747,12 @@ macro_rules! analytic_transpose {
             _op: &StdTensorOp,
             builder: &mut dyn PrimitiveRuleBuilder,
             cotangent_out: &[Option<LocalValueId>],
-            inputs: &[ValueRef<StdTensorOp>],
+            inputs: &[TransposeInputRef<'_>],
             mode: &OperationRole,
             ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-            Ok($callee(builder, cotangent_out, inputs, mode, ctx))
+            let inputs = fixed_value_refs(stringify!($name), inputs)?;
+            Ok($callee(builder, cotangent_out, &inputs, mode, ctx))
         }
     };
 }
@@ -754,11 +765,12 @@ fn transpose_tanh(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    analytic::transpose_tanh(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = fixed_value_refs("tanh", inputs)?;
+    analytic::transpose_tanh(builder, cotangent_out, &inputs, mode, ctx)
 }
 analytic_transpose!(transpose_sqrt, analytic::transpose_sqrt);
 analytic_transpose!(transpose_rsqrt, analytic::transpose_rsqrt);
@@ -766,22 +778,24 @@ fn transpose_pow(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    analytic::transpose_pow(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = fixed_value_refs("pow", inputs)?;
+    analytic::transpose_pow(builder, cotangent_out, &inputs, mode, ctx)
 }
 analytic_transpose!(transpose_expm1, analytic::transpose_expm1);
 fn transpose_log1p(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    analytic::transpose_log1p(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = fixed_value_refs("log1p", inputs)?;
+    analytic::transpose_log1p(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_dot_general(
@@ -801,7 +815,7 @@ fn transpose_dot_general(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -828,11 +842,11 @@ fn transpose_reduce_sum(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs, ctx)
+    contraction::transpose_reduce_sum_input(builder, cotangent_out, op, &inputs[0], ctx)
 }
 
 fn linearize_reduce_prod(
@@ -851,11 +865,12 @@ fn transpose_reduce_prod(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op, ctx)
+    let inputs = fixed_value_refs("reduce_prod", inputs)?;
+    contraction::transpose_reduce_prod(builder, cotangent_out, &inputs, op, ctx)
 }
 
 fn linearize_reduce_max(
@@ -886,22 +901,24 @@ fn transpose_reduce_max(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
+    let inputs = fixed_value_refs("reduce_max", inputs)?;
+    contraction::transpose_reduce_chooser(builder, cotangent_out, &inputs, op, ctx)
 }
 
 fn transpose_reduce_min(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op, ctx)
+    let inputs = fixed_value_refs("reduce_min", inputs)?;
+    contraction::transpose_reduce_chooser(builder, cotangent_out, &inputs, op, ctx)
 }
 
 fn linearize_transpose(
@@ -920,7 +937,7 @@ fn transpose_transpose(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -945,11 +962,11 @@ fn transpose_reshape(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    structural::transpose_reshape(builder, cotangent_out, op, inputs, mode, ctx)
+    structural::transpose_reshape_input(builder, cotangent_out, op, inputs, mode, ctx)
 }
 
 fn linearize_broadcast_in_dim(
@@ -974,7 +991,7 @@ fn transpose_broadcast_in_dim(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -983,7 +1000,15 @@ fn transpose_broadcast_in_dim(
         ADRuleKind::Transpose,
         StdTensorOp::BroadcastInDim { shape, dims } => (shape, dims)
     );
-    structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims, inputs, mode, ctx)
+    structural::transpose_broadcast_in_dim_input(
+        builder,
+        cotangent_out,
+        shape,
+        dims,
+        inputs,
+        mode,
+        ctx,
+    )
 }
 
 fn linearize_convert(
@@ -1005,7 +1030,7 @@ fn transpose_convert(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1045,7 +1070,7 @@ macro_rules! diagonal_rule {
             op: &StdTensorOp,
             builder: &mut dyn PrimitiveRuleBuilder,
             cotangent_out: &[Option<LocalValueId>],
-            inputs: &[ValueRef<StdTensorOp>],
+            inputs: &[TransposeInputRef<'_>],
             mode: &OperationRole,
             ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1092,7 +1117,7 @@ macro_rules! triangular_rule {
             op: &StdTensorOp,
             builder: &mut dyn PrimitiveRuleBuilder,
             cotangent_out: &[Option<LocalValueId>],
-            _inputs: &[ValueRef<StdTensorOp>],
+            _inputs: &[TransposeInputRef<'_>],
             mode: &OperationRole,
             _ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1135,12 +1160,13 @@ fn transpose_gather(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Gather(config) => config);
-    indexing::transpose_gather(builder, cotangent_out, inputs, mode, config, ctx)
+    let inputs = fixed_value_refs("gather", inputs)?;
+    indexing::transpose_gather(builder, cotangent_out, &inputs, mode, config, ctx)
 }
 
 fn linearize_gather_dynamic_slice_sizes(
@@ -1184,7 +1210,7 @@ fn transpose_gather_dynamic_slice_sizes(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1199,10 +1225,11 @@ fn transpose_gather_dynamic_slice_sizes(
             ..
         } => (offset_dims, collapsed_slice_dims, start_index_map, index_vector_dim)
     );
+    let inputs = fixed_value_refs("gather_dynamic_slice_sizes", inputs)?;
     indexing::transpose_gather_dynamic_slice_sizes(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         offset_dims,
         collapsed_slice_dims,
@@ -1228,13 +1255,14 @@ fn transpose_scatter(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let config =
         catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Scatter(config) => config);
-    indexing::transpose_scatter(builder, cotangent_out, inputs, mode, config, ctx)
+    let inputs = fixed_value_refs("scatter", inputs)?;
+    indexing::transpose_scatter(builder, cotangent_out, &inputs, mode, config, ctx)
 }
 
 fn linearize_slice(
@@ -1253,12 +1281,13 @@ fn transpose_slice(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Slice(config) => config);
-    structural::transpose_slice(builder, cotangent_out, inputs, mode, config, ctx)
+    let inputs = fixed_value_refs("slice", inputs)?;
+    structural::transpose_slice(builder, cotangent_out, &inputs, mode, config, ctx)
 }
 
 fn linearize_dynamic_slice(
@@ -1282,11 +1311,12 @@ fn transpose_dynamic_slice(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    indexing::transpose_dynamic_slice(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = fixed_value_refs("dynamic_slice", inputs)?;
+    indexing::transpose_dynamic_slice(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_dynamic_update_slice(
@@ -1304,11 +1334,12 @@ fn transpose_dynamic_update_slice(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    indexing::transpose_dynamic_update_slice(builder, cotangent_out, inputs, mode, ctx)
+    let inputs = fixed_value_refs("dynamic_update_slice", inputs)?;
+    indexing::transpose_dynamic_update_slice(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_pad(
@@ -1327,12 +1358,13 @@ fn transpose_pad(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let config = catalog_payload!(op, ADRuleKind::Transpose, StdTensorOp::Pad(config) => config);
-    structural::transpose_pad(builder, cotangent_out, inputs, mode, config, ctx)
+    let inputs = fixed_value_refs("pad", inputs)?;
+    structural::transpose_pad(builder, cotangent_out, &inputs, mode, config, ctx)
 }
 
 fn linearize_concatenate(
@@ -1355,7 +1387,7 @@ fn transpose_concatenate(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1364,10 +1396,11 @@ fn transpose_concatenate(
         ADRuleKind::Transpose,
         StdTensorOp::Concatenate { axis, input_count } => (axis, input_count)
     );
+    let inputs = fixed_value_refs("concatenate", inputs)?;
     structural::transpose_concatenate(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         *axis,
         *input_count,
@@ -1391,7 +1424,7 @@ fn transpose_reverse(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1419,7 +1452,7 @@ fn transpose_shape_of(
     _op: &StdTensorOp,
     _builder: &mut dyn PrimitiveRuleBuilder,
     _cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1448,7 +1481,7 @@ fn transpose_dynamic_truncate(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1457,10 +1490,11 @@ fn transpose_dynamic_truncate(
         ADRuleKind::Transpose,
         StdTensorOp::DynamicTruncate { axis } => axis
     );
+    let inputs = fixed_value_refs("dynamic_truncate", inputs)?;
     Ok(dynamic::transpose_dynamic_truncate(
         builder,
         cotangent_out,
-        inputs,
+        &inputs,
         mode,
         *axis,
     ))
@@ -1484,7 +1518,7 @@ fn transpose_pad_to_match(
     op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -1493,7 +1527,8 @@ fn transpose_pad_to_match(
         ADRuleKind::Transpose,
         StdTensorOp::PadToMatch { axis } => axis
     );
-    dynamic::transpose_pad_to_match(builder, cotangent_out, inputs, mode, *axis, ctx)
+    let inputs = fixed_value_refs("pad_to_match", inputs)?;
+    dynamic::transpose_pad_to_match(builder, cotangent_out, &inputs, mode, *axis, ctx)
 }
 
 fn linearize_constant(
@@ -1511,7 +1546,7 @@ fn transpose_constant(
     _op: &StdTensorOp,
     _builder: &mut dyn PrimitiveRuleBuilder,
     _cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[ValueRef<StdTensorOp>],
+    _inputs: &[TransposeInputRef<'_>],
     _mode: &OperationRole,
     _ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {

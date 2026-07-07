@@ -3,9 +3,11 @@ use crate::ad::support::{
     conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
     dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
 };
+use crate::ad::transpose_input::{metadata_value_refs, TransposeInputRef};
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType};
+use tidu::ADRuleResult;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -561,27 +563,29 @@ pub fn linearize_clamp(
 pub fn transpose_div(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
-        None => return vec![None, None],
+        None => return Ok(vec![None, None]),
     };
 
     let active_mask = match mode {
         OperationRole::Linearized { active_mask } => active_mask,
-        OperationRole::Primary => return vec![None, None],
+        OperationRole::Primary => return Ok(vec![None, None]),
     };
 
-    let lhs_dtype = dtype_of_or_real(ctx, &inputs[0]);
-    let rhs_dtype = dtype_of_or_real(ctx, &inputs[1]);
+    let metadata_inputs = metadata_value_refs(inputs);
+    let lhs_dtype = dtype_of_or_real(ctx, &metadata_inputs[0]);
+    let rhs_dtype = dtype_of_or_real(ctx, &metadata_inputs[1]);
     let output_dtype = promote_dtype_div_like(lhs_dtype, rhs_dtype);
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let denominator = conjugate_for_input_dtypes(builder, inputs[1].clone(), inputs, &[1], ctx);
+        let rhs = inputs[1].fixed_value("div", 1)?;
+        let denominator = conjugate_for_input_dtypes(builder, rhs, &metadata_inputs, &[1], ctx);
         let denominator = convert_fixed_ref_to_dtype(builder, denominator, rhs_dtype, output_dtype);
         let out = builder.add_operation(
             StdTensorOp::Div,
@@ -599,15 +603,20 @@ pub fn transpose_div(
     }
 
     if active_mask[1] {
-        let numerator =
-            convert_fixed_ref_to_dtype(builder, inputs[0].clone(), lhs_dtype, output_dtype);
-        let denominator =
-            convert_fixed_ref_to_dtype(builder, inputs[1].clone(), rhs_dtype, output_dtype);
+        let lhs = inputs[0].fixed_value("div", 0)?;
+        let rhs = inputs[1].fixed_value("div", 1)?;
+        let numerator = convert_fixed_ref_to_dtype(builder, lhs, lhs_dtype, output_dtype);
+        let denominator = convert_fixed_ref_to_dtype(builder, rhs, rhs_dtype, output_dtype);
         let quotient = emit_fixed_div(builder, numerator, denominator.clone());
         let neg_quotient = emit_fixed_neg(builder, ValueRef::Local(quotient));
         let coeff = emit_fixed_div(builder, ValueRef::Local(neg_quotient), denominator);
-        let coeff =
-            conjugate_for_input_dtypes(builder, ValueRef::Local(coeff), inputs, &[0, 1], ctx);
+        let coeff = conjugate_for_input_dtypes(
+            builder,
+            ValueRef::Local(coeff),
+            &metadata_inputs,
+            &[0, 1],
+            ctx,
+        );
         let cotangent = emit_linear_mul_fixed(builder, coeff, ct);
         result[1] = Some(project_linear_to_dtype(
             builder,
@@ -617,7 +626,7 @@ pub fn transpose_div(
         ));
     }
 
-    result
+    Ok(result)
 }
 
 pub fn transpose_abs(
@@ -747,21 +756,22 @@ pub fn transpose_minimum(
 pub fn transpose_select(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
-) -> Vec<Option<LocalValueId>> {
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
-        return vec![None, None, None];
+        return Ok(vec![None, None, None]);
     };
     let active = active_mask(mode, 3);
     let true_active = active.get(1).copied().unwrap_or(false);
     let false_active = active.get(2).copied().unwrap_or(false);
     if !true_active && !false_active {
-        return vec![None, None, None];
+        return Ok(vec![None, None, None]);
     }
+    let condition = inputs[0].fixed_value("select", 0)?;
     let (on_true, on_false) =
-        split_cotangent_by_mask(builder, inputs[0].clone(), ct, true_active, false_active);
-    vec![None, on_true, on_false]
+        split_cotangent_by_mask(builder, condition, ct, true_active, false_active);
+    Ok(vec![None, on_true, on_false])
 }
 
 pub fn transpose_clamp(

@@ -27,7 +27,8 @@ fn einsum_vjp_broadcast_active_mask_matches_dynamic_inputs() {
         .expect("broadcast_einsum_vjp_to_input_shape source section should exist");
 
     assert!(
-        section.contains("let mut active_mask ="),
+        section.contains("let source_count = shape_sources.len();")
+            && section.contains("std::iter::repeat_n(false, source_count)"),
         "einsum VJP broadcast should build active_mask from the actual inputs"
     );
     assert!(

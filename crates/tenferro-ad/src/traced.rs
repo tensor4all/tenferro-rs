@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::ad_rule_error::ad_rule_error;
+use computegraph::graph::Graph;
 use computegraph::resolve::resolve;
 use computegraph::resolve::{ResolvedView, ValueDef};
 use computegraph::types::ValueKey;
@@ -53,8 +54,10 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
 fn shape_guard_context(
     extension_rules: Option<&ExtensionRuleSet>,
     active_values: Option<Arc<HashSet<ValueKey<StdTensorOp>>>>,
+    roots: &[Arc<Graph<StdTensorOp>>],
 ) -> ShapeGuardContext {
-    let ctx = ShapeGuardContext::with_global_metadata();
+    let mut ctx = ShapeGuardContext::with_global_metadata();
+    register_shape_sources(&mut ctx, roots);
     let ctx = match extension_rules {
         Some(rules) => ctx.with_extension_rules(rules.clone()),
         None => ctx,
@@ -62,6 +65,41 @@ fn shape_guard_context(
     match active_values {
         Some(keys) => ctx.with_linearize_active_values(keys),
         None => ctx,
+    }
+}
+
+fn register_shape_sources(ctx: &mut ShapeGuardContext, roots: &[Arc<Graph<StdTensorOp>>]) {
+    let mut seen = HashSet::new();
+    for graph in roots {
+        register_graph_shape_sources(ctx, graph, &mut seen);
+    }
+}
+
+fn register_graph_shape_sources(
+    ctx: &mut ShapeGuardContext,
+    graph: &Arc<Graph<StdTensorOp>>,
+    seen: &mut HashSet<*const Graph<StdTensorOp>>,
+) {
+    if !seen.insert(Arc::as_ptr(graph)) {
+        return;
+    }
+    for parent in graph.parents() {
+        register_graph_shape_sources(ctx, parent, seen);
+    }
+    for &input_id in graph.inputs() {
+        let key = graph.values()[input_id].key.clone();
+        let Ok(meta) = registered_meta(&key) else {
+            continue;
+        };
+        let Some(shape) = meta.bound_shape() else {
+            continue;
+        };
+        for tensor_id in shape
+            .iter()
+            .flat_map(|dim| dim.referenced_tensor_ids().into_iter())
+        {
+            ctx.insert_shape_source(tensor_id, key.clone());
+        }
     }
 }
 
@@ -507,7 +545,8 @@ fn jvp_optional_impl(
             if let Some(linear) = cache.get_traced_linearized(&key)? {
                 linear
             } else {
-                let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+                let mut ad_ctx =
+                    shape_guard_context(extension_rules, Some(active_values), &view.roots);
                 let linear = linearize(
                     &view,
                     std::slice::from_ref(&output_key),
@@ -523,7 +562,7 @@ fn jvp_optional_impl(
             }
         }
         _ => {
-            let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+            let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values), &view.roots);
             let linear = linearize(
                 &view,
                 std::slice::from_ref(&output_key),
@@ -636,7 +675,7 @@ fn compute_linear_vjp_transform(
     active_values: Arc<HashSet<ValueKey<StdTensorOp>>>,
     wrt: &TracedTensor,
 ) -> Result<tidu::ADRuleResult<Option<ActiveLinearVjp>>> {
-    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values));
+    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values), &view.roots);
     let linear = match linearize(
         view,
         std::slice::from_ref(output_key),
@@ -665,15 +704,13 @@ fn compute_linear_vjp_transform(
         Ok(transposed) => OptimizedLinearGraph::from_tidu(transposed).into_cached(),
         Err(err) => return Ok(Err(err)),
     };
-    let linear_tangent_inputs = linear.tangent_inputs().to_vec();
-    let linear_graph = Arc::new(linear.into_graph());
+    let (_linear_graph, residual_graph) = linear.into_graphs();
+    let residual_metadata_scope =
+        register_scoped_graph_metadata(residual_graph.as_ref(), std::iter::empty())?;
+    drop(linear_metadata_scope);
     Ok(Ok(Some(ActiveLinearVjp {
-        transposed: Arc::new(CachedTracedVjpTransform::new(
-            linear_graph,
-            linear_tangent_inputs,
-            transposed,
-        )),
-        metadata_scope: linear_metadata_scope,
+        transposed: Arc::new(CachedTracedVjpTransform::new(residual_graph, transposed)),
+        metadata_scope: residual_metadata_scope,
     })))
 }
 
@@ -714,20 +751,11 @@ fn vjp_optional_impl(
     let linear_attempt = match (ad_transform_cache, cache_key) {
         (Some(cache), Some(key)) => {
             if let Some(cached) = cache.get_traced_vjp(&key)? {
-                let linear_seed_key = linear_input_key(
-                    cached.linear_graph().as_ref(),
-                    cached.linear_tangent_inputs()[0].1,
-                )?;
-                let linear_metadata_scope = register_scoped_graph_metadata(
-                    cached.linear_graph().as_ref(),
-                    vec![(
-                        ValueKey::Input(linear_seed_key),
-                        registered_meta(&wrt.graph().values()[wrt.val].key)?,
-                    )],
-                )?;
+                let residual_metadata_scope =
+                    register_scoped_graph_metadata(cached.residual_graph(), std::iter::empty())?;
                 Ok(Some(ActiveLinearVjp {
                     transposed: cached,
-                    metadata_scope: linear_metadata_scope,
+                    metadata_scope: residual_metadata_scope,
                 }))
             } else {
                 let computed = compute_linear_vjp_transform(
@@ -756,15 +784,14 @@ fn vjp_optional_impl(
         )?,
     };
 
-    let (transposed, linear_metadata_scope, linear_graph) = match linear_attempt {
+    let (transposed, linear_metadata_scope) = match linear_attempt {
         Ok(None) => return Ok(None),
         Ok(Some(active)) => (
             VjpTransposeGraph::Linear(active.transposed),
             Some(active.metadata_scope),
-            None,
         ),
         Err(linear_err) => {
-            let mut primal_ad_ctx = shape_guard_context(extension_rules, None);
+            let mut primal_ad_ctx = shape_guard_context(extension_rules, None, &view.roots);
             primal_ad_ctx.refresh_global_metadata();
             match try_primal_transpose(
                 &view,
@@ -781,7 +808,7 @@ fn vjp_optional_impl(
                         .and_then(|slot| *slot)
                         .is_some() =>
                 {
-                    (VjpTransposeGraph::Primal(transposed), None, None)
+                    (VjpTransposeGraph::Primal(transposed), None)
                 }
                 _ => return Err(ad_rule_error(transform, linear_err)),
             }
@@ -816,11 +843,8 @@ fn vjp_optional_impl(
     inputs_map.insert(cotangent_input_key.clone(), cotangent_data);
 
     let mut extra_roots = vec![Arc::clone(output.graph())];
-    if let Some(linear_graph) = linear_graph {
-        extra_roots.push(linear_graph);
-    }
     if let VjpTransposeGraph::Linear(cached) = &transposed {
-        extra_roots.push(Arc::clone(cached.linear_graph()));
+        extra_roots.push(Arc::clone(cached.residual_graph()));
     }
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(tensor_extra_roots(output));

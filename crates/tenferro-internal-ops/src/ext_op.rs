@@ -30,7 +30,7 @@ use computegraph::types::ValueRef;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{DType, Tensor};
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 #[cfg(feature = "autodiff")]
 use crate::ad::context::ShapeGuardContext;
@@ -329,7 +329,7 @@ pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
@@ -792,7 +792,7 @@ pub fn transpose_extension_rule(
     op: &dyn ExtensionOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -809,13 +809,42 @@ pub fn transpose_extension_rule(
             }
         }
         OperationRole::Primary => match ctx.extension_primal_vjp_rule_for(op.family_id()) {
-            Some(rule) => rule.primal_vjp(op, builder, cotangent_out, inputs, ctx),
+            Some(rule) => {
+                let value_inputs = primal_vjp_inputs(inputs)?;
+                rule.primal_vjp(op, builder, cotangent_out, &value_inputs, ctx)
+            }
             None => Err(ADRuleError::unsupported(
                 op.family_id(),
                 ADRuleKind::Transpose,
             )),
         },
     }
+}
+
+#[cfg(feature = "autodiff")]
+fn primal_vjp_inputs(
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+) -> ADRuleResult<Vec<ValueRef<StdTensorOp>>> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| match input {
+            PrimitiveTransposeInput::Residual(key) => Ok(ValueRef::External(key.clone())),
+            PrimitiveTransposeInput::Linear {
+                primal: Some(primal),
+                ..
+            } => Ok(ValueRef::External(primal.clone())),
+            PrimitiveTransposeInput::Linear { key, primal: None } => {
+                Err(ADRuleError::invalid_input(
+                    "extension transpose",
+                    ADRuleKind::Transpose,
+                    format!(
+                        "input {index} is linear-only and cannot be used as a primal VJP value: {key:?}"
+                    ),
+                ))
+            }
+        })
+        .collect()
 }
 
 /// Thin adapter that lets a generic `H: Hasher` satisfy the object-safe

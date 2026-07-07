@@ -1,8 +1,18 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use computegraph::graph::GraphBuilder;
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{
+    ad_support::{tensor_from_parts, TracedTensorParts},
+    DType, GraphCompiler, GraphExecutor, SymDim, Tensor, TensorRead, TracedTensor,
+};
+use tidu::ADKey;
 
 #[test]
 fn graph_executor_runs_compiled_single_output_program() {
@@ -239,4 +249,55 @@ fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
 
     assert_eq!(out.shape(), &[4]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
+}
+
+#[test]
+fn graph_executor_synthesizes_deferred_zero_tangents_from_borrowed_primal_binding() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let loss = (&x * &x).unwrap().reduce_sum(&[0]).unwrap();
+    let grad = loss.grad(&x).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&grad, &[(&x, DType::F64, &[4])])
+        .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let out = executor
+        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&bound))])
+        .unwrap();
+
+    assert_eq!(out.shape(), &[4]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
+}
+
+#[test]
+fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
+    let primal_key = TensorInputKey::User { id: 1234 };
+    let tangent_key = primal_key.tangent_of(7);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let tangent_id = builder.add_input(tangent_key);
+    builder.set_outputs(vec![tangent_id]);
+    let graph = Arc::new(builder.build());
+
+    let primal = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let output = tensor_from_parts(TracedTensorParts {
+        rank: 1,
+        dtype: DType::F64,
+        graph,
+        val: tangent_id,
+        data: None,
+        shape_hint: Some(vec![SymDim::from(2usize)]),
+        inputs_map: Arc::new(HashMap::from([(primal_key, primal)])),
+        extra_roots: Vec::new(),
+        checkpoint_chain: None,
+        metadata_scopes: Vec::new(),
+    });
+
+    let err = GraphCompiler::new().compile(&output).unwrap_err();
+    assert!(
+        matches!(err, Error::UnboundPlaceholder { ref input_key } if input_key.contains("Tangent")),
+        "dangling tangent inputs must not be silently bound from primal defaults: {err:?}"
+    );
 }

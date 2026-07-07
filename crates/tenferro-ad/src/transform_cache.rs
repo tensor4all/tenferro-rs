@@ -201,30 +201,23 @@ impl fmt::Debug for CachedOptimizedLinearGraph {
 
 #[derive(Clone)]
 pub(crate) struct CachedTracedVjpTransform {
-    linear_graph: Arc<Graph<StdTensorOp>>,
-    linear_tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+    residual_graph: Arc<Graph<StdTensorOp>>,
     transposed: Arc<CachedOptimizedLinearGraph>,
 }
 
 impl CachedTracedVjpTransform {
     pub(crate) fn new(
-        linear_graph: Arc<Graph<StdTensorOp>>,
-        linear_tangent_inputs: Vec<(TensorInputKey, LocalValueId)>,
+        residual_graph: Arc<Graph<StdTensorOp>>,
         transposed: CachedOptimizedLinearGraph,
     ) -> Self {
         Self {
-            linear_graph,
-            linear_tangent_inputs,
+            residual_graph,
             transposed: Arc::new(transposed),
         }
     }
 
-    pub(crate) fn linear_graph(&self) -> &Arc<Graph<StdTensorOp>> {
-        &self.linear_graph
-    }
-
-    pub(crate) fn linear_tangent_inputs(&self) -> &[(TensorInputKey, LocalValueId)] {
-        &self.linear_tangent_inputs
+    pub(crate) fn residual_graph(&self) -> &Arc<Graph<StdTensorOp>> {
+        &self.residual_graph
     }
 
     pub(crate) fn transposed(&self) -> &CachedOptimizedLinearGraph {
@@ -235,14 +228,10 @@ impl CachedTracedVjpTransform {
 impl fmt::Debug for CachedTracedVjpTransform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CachedTracedVjpTransform")
-            .field("linear_values_len", &self.linear_graph.values().len())
+            .field("residual_values_len", &self.residual_graph.values().len())
             .field(
-                "linear_operations_len",
-                &self.linear_graph.operations().len(),
-            )
-            .field(
-                "linear_tangent_inputs_len",
-                &self.linear_tangent_inputs.len(),
+                "residual_operations_len",
+                &self.residual_graph.operations().len(),
             )
             .field("transposed", &self.transposed)
             .finish()
@@ -621,8 +610,7 @@ fn ad_transform_cache_value_retained_bytes(entry: &AdTransformCacheEntry) -> usi
 
 fn cached_traced_vjp_retained_bytes(vjp: &CachedTracedVjpTransform) -> usize {
     size_of::<CachedTracedVjpTransform>()
-        + graph_retained_bytes(vjp.linear_graph.as_ref())
-        + vjp.linear_tangent_inputs.capacity() * size_of::<(TensorInputKey, LocalValueId)>()
+        + graph_retained_bytes(vjp.residual_graph.as_ref())
         + cached_optimized_linear_graph_retained_bytes(vjp.transposed.as_ref())
 }
 

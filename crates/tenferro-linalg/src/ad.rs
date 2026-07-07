@@ -31,7 +31,7 @@ use tenferro_ad::extension::{
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 use crate::LINALG_EXTENSION_FAMILY_ID;
@@ -147,7 +147,7 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -162,34 +162,45 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
                 lower,
                 transpose_a,
                 unit_diagonal,
-            } => rules::transpose_triangular_solve(
-                &mut builder,
-                cotangent_out,
-                inputs,
-                &mode,
-                rules::TriangularSolveFlags::new(left_side, lower, transpose_a, unit_diagonal),
-                ctx,
-            ),
+            } => {
+                let value_inputs =
+                    linear_solve_transpose_inputs("triangular_solve", inputs, active_mask)?;
+                rules::transpose_triangular_solve(
+                    &mut builder,
+                    cotangent_out,
+                    &value_inputs,
+                    &mode,
+                    rules::TriangularSolveFlags::new(left_side, lower, transpose_a, unit_diagonal),
+                    ctx,
+                )
+            }
             LinalgOp::LuSolvePrepared {
                 transpose_a,
                 conjugate_a,
-            } => rules::transpose_lu_solve_prepared(
-                &mut builder,
-                cotangent_out,
-                inputs,
-                &mode,
-                transpose_a,
-                conjugate_a,
-                ctx,
-            ),
-            LinalgOp::FullPivLuSolve { transpose_a } => rules::transpose_full_piv_lu_solve(
-                &mut builder,
-                cotangent_out,
-                inputs,
-                &mode,
-                transpose_a,
-                ctx,
-            ),
+            } => {
+                let value_inputs = lu_solve_prepared_transpose_inputs(inputs, active_mask)?;
+                rules::transpose_lu_solve_prepared(
+                    &mut builder,
+                    cotangent_out,
+                    &value_inputs,
+                    &mode,
+                    transpose_a,
+                    conjugate_a,
+                    ctx,
+                )
+            }
+            LinalgOp::FullPivLuSolve { transpose_a } => {
+                let value_inputs =
+                    linear_solve_transpose_inputs("full_piv_lu_solve", inputs, active_mask)?;
+                rules::transpose_full_piv_lu_solve(
+                    &mut builder,
+                    cotangent_out,
+                    &value_inputs,
+                    &mode,
+                    transpose_a,
+                    ctx,
+                )
+            }
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
@@ -224,6 +235,70 @@ fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&Linal
         .ok_or_else(|| {
             ADRuleError::invalid_input("tenferro-linalg.linalg.v1", kind, "payload type mismatch")
         })
+}
+
+fn linear_solve_transpose_inputs(
+    op: &str,
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+    active_mask: &[bool],
+) -> ADRuleResult<Vec<ValueRef<StdTensorOp>>> {
+    let matrix_active = active_mask.first().copied().unwrap_or(false);
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            if index == 0 || matrix_active {
+                fixed_transpose_value(op, index, input)
+            } else {
+                Ok(metadata_transpose_value(input))
+            }
+        })
+        .collect()
+}
+
+fn lu_solve_prepared_transpose_inputs(
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+    active_mask: &[bool],
+) -> ADRuleResult<Vec<ValueRef<StdTensorOp>>> {
+    let matrix_active = active_mask.first().copied().unwrap_or(false);
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            if index <= 2 || matrix_active {
+                fixed_transpose_value("lu_solve_prepared", index, input)
+            } else {
+                Ok(metadata_transpose_value(input))
+            }
+        })
+        .collect()
+}
+
+fn metadata_transpose_value(input: &PrimitiveTransposeInput<StdTensorOp>) -> ValueRef<StdTensorOp> {
+    ValueRef::External(input.key().clone())
+}
+
+fn fixed_transpose_value(
+    op: &str,
+    index: usize,
+    input: &PrimitiveTransposeInput<StdTensorOp>,
+) -> ADRuleResult<ValueRef<StdTensorOp>> {
+    match input {
+        PrimitiveTransposeInput::Residual(key) => Ok(ValueRef::External(key.clone())),
+        PrimitiveTransposeInput::Linear {
+            primal: Some(primal),
+            ..
+        } => Ok(ValueRef::External(primal.clone())),
+        PrimitiveTransposeInput::Linear { key, primal: None } => {
+            Err(ADRuleError::invalid_input(
+                op,
+                ADRuleKind::Transpose,
+                format!(
+                    "transpose input {index} is linear-only and cannot be retained as a tensor operand: {key:?}"
+                ),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -777,7 +852,10 @@ mod tests {
                 &op,
                 &mut builder,
                 &[Some(cotangent)],
-                &[ValueRef::External(lhs.clone()), ValueRef::External(rhs)],
+                &[
+                    PrimitiveTransposeInput::Residual(lhs.clone()),
+                    PrimitiveTransposeInput::Residual(rhs),
+                ],
                 &[false, true],
                 &mut ctx,
             )
@@ -805,7 +883,7 @@ mod tests {
                 &op,
                 &mut builder,
                 &[Some(cotangent)],
-                &[ValueRef::External(a)],
+                &[PrimitiveTransposeInput::Residual(a)],
                 &[true],
                 &mut ctx,
             )
@@ -833,7 +911,7 @@ mod tests {
                 &op,
                 &mut builder,
                 &[Some(g_w), Some(g_v)],
-                &[ValueRef::External(a)],
+                &[PrimitiveTransposeInput::Residual(a)],
                 &[true],
                 &mut ctx,
             )
@@ -858,7 +936,7 @@ mod tests {
                 &LinalgExtensionOp::new(LinalgOp::Qr),
                 &mut builder,
                 &[Some(g_q), Some(g_r)],
-                &[ValueRef::External(a)],
+                &[PrimitiveTransposeInput::Residual(a)],
                 &[true],
                 &mut ctx,
             )

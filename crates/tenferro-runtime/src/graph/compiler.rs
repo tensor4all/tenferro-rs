@@ -509,34 +509,6 @@ fn descriptor_for_input(
     if let Some(spec) = binding_specs.get(key) {
         return Ok(spec.clone());
     }
-    if !matches!(key, TensorInputKey::User { .. }) {
-        let root = tangent_primal_root(key);
-        if let Some(tensor) = default_inputs.get(root) {
-            return Ok(InputDescriptor {
-                key: key.clone(),
-                dtype: tensor.dtype(),
-                shape: tensor.shape().to_vec(),
-                default_tensor: Some(Arc::new(zeros_tensor(
-                    tensor.dtype(),
-                    tensor.shape().to_vec(),
-                )?)),
-            });
-        }
-        if let Some(spec) = binding_specs.get(root) {
-            return Ok(InputDescriptor {
-                key: key.clone(),
-                dtype: spec.dtype,
-                shape: spec.shape.clone(),
-                default_tensor: spec
-                    .default_tensor
-                    .as_ref()
-                    .map(|tensor| {
-                        zeros_tensor(tensor.dtype(), tensor.shape().to_vec()).map(Arc::new)
-                    })
-                    .transpose()?,
-            });
-        }
-    }
     Err(Error::UnboundPlaceholder {
         input_key: format!("{:?}", key),
     })
@@ -567,38 +539,6 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
         // Arc<Tensor> is considered equivalent by `default_tensors_equivalent`.
         _ => false,
     }
-}
-
-fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
-    key.primal_root()
-}
-
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
-    match dtype {
-        DType::F32 => Ok(Tensor::F32(tenferro_tensor::TypedTensor::zeros(shape)?)),
-        DType::F64 => Ok(Tensor::F64(tenferro_tensor::TypedTensor::zeros(shape)?)),
-        DType::I32 => Ok(Tensor::I32(tenferro_tensor::TypedTensor::zeros(shape)?)),
-        DType::I64 => Ok(Tensor::I64(tenferro_tensor::TypedTensor::zeros(shape)?)),
-        DType::Bool => {
-            let len = checked_default_element_count(&shape)?;
-            Ok(Tensor::Bool(
-                tenferro_tensor::TypedTensor::from_vec_col_major(shape, vec![false; len])?,
-            ))
-        }
-        DType::C32 => Ok(Tensor::C32(tenferro_tensor::TypedTensor::zeros(shape)?)),
-        DType::C64 => Ok(Tensor::C64(tenferro_tensor::TypedTensor::zeros(shape)?)),
-    }
-}
-
-fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
-    shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| Error::InvalidCompiledGraph {
-                message: format!(
-                    "default tensor shape product overflows usize for shape {shape:?}"
-                ),
-            })
-    })
 }
 
 #[cfg(test)]

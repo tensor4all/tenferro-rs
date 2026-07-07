@@ -38,7 +38,7 @@ use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, HostReferenceRuntime};
 use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TypedTensor};
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 // ----------------------------------------------------------------------
 // TestScaleBy2: single-input, single-output. y = x + x (= 2x).
@@ -157,7 +157,7 @@ impl ExtensionLinearTransposeRule for TestScaleBy2Rule {
         _op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
+        _inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -285,7 +285,7 @@ impl ExtensionLinearTransposeRule for TestSwapRule {
         _op: &dyn ExtensionOp,
         _builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
+        _inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -766,7 +766,7 @@ impl ExtensionLinearTransposeRule for TestProbeLinearRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         _active_mask: &[bool],
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
@@ -781,10 +781,29 @@ impl ExtensionLinearTransposeRule for TestProbeLinearRule {
             StdTensorOp::Reshape {
                 to_shape: DimExpr::from_concrete(&op.probe_shape),
             },
-            vec![inputs[1].clone()],
+            vec![transpose_input_value("probe_linear", 1, &inputs[1])?],
             OperationRole::Primary,
         );
         Ok(vec![Some(ct), None])
+    }
+}
+
+fn transpose_input_value(
+    op: &'static str,
+    index: usize,
+    input: &PrimitiveTransposeInput<StdTensorOp>,
+) -> ADRuleResult<ValueRef<StdTensorOp>> {
+    match input {
+        PrimitiveTransposeInput::Residual(key) => Ok(ValueRef::External(key.clone())),
+        PrimitiveTransposeInput::Linear {
+            primal: Some(primal),
+            ..
+        } => Ok(ValueRef::External(primal.clone())),
+        PrimitiveTransposeInput::Linear { key, primal: None } => Err(ADRuleError::invalid_input(
+            op,
+            ADRuleKind::Transpose,
+            format!("input {index} is linear-only and cannot be used as a test value: {key:?}"),
+        )),
     }
 }
 
@@ -900,6 +919,31 @@ fn register_test_eager_runtime(runtime: &EagerRuntime, family_id: &'static str) 
         .expect("register test eager extension runtime");
 }
 
+fn compiled_program_contains_extension(output: &TracedTensor) -> bool {
+    let mut compiler = tenferro_runtime::GraphCompiler::new();
+    let program = compiler.compile(output).expect("compile traced tensor");
+    let contains_extension = program
+        .lowering_view()
+        .instructions()
+        .any(|instruction| instruction.op_name() == "Extension");
+    contains_extension
+}
+
+fn compiled_program_contains_extension_with_specs(
+    output: &TracedTensor,
+    specs: &[(&TracedTensor, DType, &[usize])],
+) -> bool {
+    let mut compiler = tenferro_runtime::GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(output, specs)
+        .expect("compile traced tensor with specs");
+    let contains_extension = program
+        .lowering_view()
+        .instructions()
+        .any(|instruction| instruction.op_name() == "Extension");
+    contains_extension
+}
+
 // ----------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------
@@ -931,6 +975,10 @@ fn scale_by_2_grad_against_reduce_sum() {
     let loss = scaled.reduce_sum(&[0]).unwrap();
 
     let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
+    assert!(
+        !compiled_program_contains_extension(&g),
+        "sum(scale_by_2(x)) grad should not retain the forward extension as a shape-only dependency"
+    );
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g.run_with(&mut engine).unwrap();
 

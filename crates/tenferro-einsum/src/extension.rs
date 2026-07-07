@@ -18,6 +18,8 @@ use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
+use tenferro_ops::ad::transpose_input::TransposeInputRef;
+#[cfg(feature = "autodiff")]
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
@@ -38,7 +40,7 @@ use tenferro_tensor::{
     DType, Error as TensorError, RuntimeCacheControl, Tensor, TensorBackend, TensorRead,
 };
 #[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
@@ -418,11 +420,12 @@ impl ExtensionLinearTransposeRule for EinsumAdRule {
         op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
         active_mask: &[bool],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
+        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
         let input_labels = &op.subscripts.inputs;
         let output_labels = &op.subscripts.output;
         let input_count = input_labels.len();
@@ -432,7 +435,10 @@ impl ExtensionLinearTransposeRule for EinsumAdRule {
         };
         let primal_input_shapes: Vec<Vec<SymDim>> = inputs
             .iter()
-            .map(|input| ctx.shape_of(input).map(|shape| shape.to_vec()))
+            .map(|input| {
+                let metadata = input.metadata_value();
+                ctx.shape_of(&metadata).map(|shape| shape.to_vec())
+            })
             .collect::<Result<_, _>>()?;
         let cotangent_shape = op.output_shape_hint.clone().ok_or_else(|| {
             ADRuleError::unsupported(
@@ -472,11 +478,8 @@ impl ExtensionLinearTransposeRule for EinsumAdRule {
                 }
                 vjp_input_labels.push(input_labels[input_idx].clone());
                 vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
-                vjp_inputs.push(conjugate_primal_if_complex(
-                    builder,
-                    inputs[input_idx].clone(),
-                    ctx,
-                )?);
+                let fixed_input = inputs[input_idx].fixed_value("einsum VJP", input_idx)?;
+                vjp_inputs.push(conjugate_primal_if_complex(builder, fixed_input, ctx)?);
             }
 
             let output_shape_hint = primal_input_shapes[active_idx].clone();
@@ -501,13 +504,15 @@ impl ExtensionLinearTransposeRule for EinsumAdRule {
             );
             let mut cotangent = out[0];
             if vjp_output_labels != input_labels[active_idx] {
+                let (shape, shape_sources) =
+                    inputs[active_idx].shape_operand(output_shape_hint.len(), 1, ctx)?;
                 let remapped = broadcast_einsum_vjp_to_input_shape(
                     builder,
                     cotangent,
                     &vjp_output_labels,
                     &input_labels[active_idx],
-                    inputs[active_idx].clone(),
-                    &output_shape_hint,
+                    shape,
+                    shape_sources,
                 )?;
                 cotangent = remapped;
             }
@@ -871,14 +876,9 @@ fn broadcast_einsum_vjp_to_input_shape(
     cotangent: LocalValueId,
     cotangent_labels: &[u32],
     input_labels: &[u32],
-    shape_source: ValueRef<StdTensorOp>,
-    input_shape: &[SymDim],
+    shape: Vec<DimExpr>,
+    shape_sources: Vec<ValueRef<StdTensorOp>>,
 ) -> ADRuleResult<LocalValueId> {
-    let shape: Vec<DimExpr> = input_shape
-        .iter()
-        .enumerate()
-        .map(|(axis, _)| DimExpr::InputDim { input_idx: 1, axis })
-        .collect();
     let dims = map_label_occurrences(cotangent_labels, input_labels).ok_or_else(|| {
         ADRuleError::unsupported(
             format!(
@@ -888,12 +888,12 @@ fn broadcast_einsum_vjp_to_input_shape(
             ADRuleKind::Transpose,
         )
     })?;
+    let source_count = shape_sources.len();
     let mut inputs = vec![ValueRef::Local(cotangent)];
-    let mut active_mask = vec![true];
-    if !shape.is_empty() {
-        inputs.push(shape_source);
-        active_mask.push(false);
-    }
+    inputs.extend(shape_sources);
+    let active_mask = std::iter::once(true)
+        .chain(std::iter::repeat_n(false, source_count))
+        .collect();
     let broadcast = builder.add_operation(
         StdTensorOp::BroadcastInDim { shape, dims },
         inputs,
