@@ -140,6 +140,33 @@ fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
 }
 
 #[test]
+fn lapack_right_triangular_solve_uses_right_side_trsm_without_physical_transposes() {
+    let source = cpu_lapack_source("triangular_solve.rs");
+    let solve_right = source_section(&source, "fn solve_right", "fn triangular_solve_2d");
+
+    assert!(
+        solve_right.contains("T::trsm("),
+        "right-side triangular_solve should call BLAS TRSM directly"
+    );
+    assert!(
+        solve_right.contains("CblasRight"),
+        "right-side triangular_solve should use BLAS side=Right"
+    );
+    assert!(
+        !solve_right.contains("transpose_col_major_data("),
+        "right-side triangular_solve should not physically transpose RHS data"
+    );
+    assert!(
+        !solve_right.contains("T::trtrs("),
+        "right-side triangular_solve should not emulate side=Right through LAPACK TRTRS"
+    );
+    assert!(
+        solve_right.contains("validate_non_unit_diagonal"),
+        "right-side TRSM path should preserve non-unit singular checks before calling BLAS"
+    );
+}
+
+#[test]
 fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
     let source = cpu_lapack_helpers_source();
     let batched_helpers = source_section(

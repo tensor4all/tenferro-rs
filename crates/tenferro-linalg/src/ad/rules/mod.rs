@@ -123,16 +123,24 @@ pub(crate) fn linearize_lu(
     let p = ValueRef::External(primal_out[0].clone());
     let l = ValueRef::External(primal_out[1].clone());
     let u = ValueRef::External(primal_out[2].clone());
-    let l_square = augment_unit_lower_to_square_fixed(
-        builder,
-        l.clone(),
-        SquareAugmentSpec::new(dtype, m_size, k_size, batch_shape, rank),
-    );
-    let u_square = augment_upper_to_square_fixed(
-        builder,
-        u.clone(),
-        SquareAugmentSpec::new(dtype, k_size, n_size, batch_shape, rank),
-    );
+    let l_square = if m_size == k_size {
+        l.clone()
+    } else {
+        ValueRef::Local(augment_unit_lower_to_square_fixed(
+            builder,
+            l.clone(),
+            SquareAugmentSpec::new(dtype, m_size, k_size, batch_shape, rank),
+        ))
+    };
+    let u_square = if k_size == n_size {
+        u.clone()
+    } else {
+        ValueRef::Local(augment_upper_to_square_fixed(
+            builder,
+            u.clone(),
+            SquareAugmentSpec::new(dtype, k_size, n_size, batch_shape, rank),
+        ))
+    };
 
     let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
     let la = builder.add_operation(
@@ -142,7 +150,7 @@ pub(crate) fn linearize_lu(
             transpose_a: false,
             unit_diagonal: true,
         }),
-        vec![ValueRef::Local(l_square), ValueRef::Local(pd_a)],
+        vec![l_square.clone(), ValueRef::Local(pd_a)],
         OperationRole::Linearized {
             active_mask: vec![false, true],
         },
@@ -154,7 +162,7 @@ pub(crate) fn linearize_lu(
             transpose_a: false,
             unit_diagonal: false,
         }),
-        vec![ValueRef::Local(u_square), ValueRef::Local(la)],
+        vec![u_square.clone(), ValueRef::Local(la)],
         OperationRole::Linearized {
             active_mask: vec![false, true],
         },
@@ -164,7 +172,7 @@ pub(crate) fn linearize_lu(
         let x_lower = linear_unary(builder, StdTensorOp::Tril { k: -1 }, x);
         let dl_full = matmul_linear(
             builder,
-            ValueRef::Local(l_square),
+            l_square,
             ValueRef::Local(x_lower),
             vec![false, true],
             rank,
@@ -186,7 +194,7 @@ pub(crate) fn linearize_lu(
         let du_full = matmul_linear(
             builder,
             ValueRef::Local(x_upper),
-            ValueRef::Local(u_square),
+            u_square,
             vec![true, false],
             rank,
         );
