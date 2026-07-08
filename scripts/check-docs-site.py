@@ -96,7 +96,11 @@ def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
     required_snippets = [
         (
             root / "README.md",
-            "`EagerRuntime` functional `grad`, `vjp`, and `jvp`",
+            "Both eager and traced modes support VJP and JVP",
+        ),
+        (
+            root / "README.md",
+            "HVP-style higher-order composition",
         ),
         (
             root / "docs" / "index.md",

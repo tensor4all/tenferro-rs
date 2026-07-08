@@ -12,9 +12,10 @@ dispatch, linear algebra, einsum, FFT, and extensible automatic differentiation
 native to Rust. Use it as an ordinary tensor library first: direct
 `TypedTensor` and `Tensor` APIs run through a chosen CPU, CUDA, or experimental
 WebGPU backend, while `EagerTensor` and `TracedTensor` add automatic
-differentiation when a workflow needs it. Eager code can use PyTorch-style
-`backward()` on tracked losses or `EagerRuntime` functional `grad`, `vjp`, and
-`jvp`; traced code builds graph transforms for compile/run reuse.
+differentiation when a workflow needs it. Both eager and traced modes support
+VJP and JVP. Eager mode also supports PyTorch-style `backward()` for scalar
+losses, while traced mode is the main surface for reusable graph transforms and
+HVP-style higher-order composition.
 
 Positioning: tenferro-rs sits between low-level array crates and full
 deep-learning frameworks for Rust scientific code that needs column-major
@@ -149,10 +150,10 @@ tenferro-rs is a good fit when:
   counts resolve at execution time — the daily reality of tensor networks and
   much of adaptive scientific computing (see
   [dynamic and symbolic shapes](https://tensor4all.org/tenferro-rs/design/dynamic-symbolic-shapes.html)).
-- **You want autodiff in Rust without a Python runtime.** `backward()` plus
-  functional `grad`, `vjp`, `jvp`, and HVP composition on eager tensors;
-  compiled `grad`, `vjp`, `jvp`, and HVP workflows on traced graphs; shipped as
-  a single binary.
+- **You want autodiff in Rust without a Python runtime.** `backward()` on eager
+  scalar losses; VJP and JVP in both eager and traced modes; HVP-style
+  higher-order composition on reusable traced graphs; shipped as a single
+  binary.
 - **Your data lives in the column-major world.** Storage matches Fortran,
   Julia, MATLAB, and LAPACK/BLAS conventions, and strided views bridge
   row-major data without eager copies (see
@@ -185,8 +186,8 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 | --- | --- |
 | Fixed scalar type, ordinary tensor computation, no autodiff | `TypedTensor<T, R>` |
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
-| Immediate execution in one runtime, optionally with `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` and `EagerRuntime` |
-| `grad`, `vjp`, and `jvp` on traced graphs, graph reuse, or repeated compile/run execution | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
+| Immediate execution in one runtime, optionally with `backward()`, VJP, or JVP | `EagerTensor` and `EagerRuntime` |
+| Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
 | CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
 | Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
