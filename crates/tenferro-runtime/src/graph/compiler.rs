@@ -3,7 +3,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use computegraph::compile::compile;
+use computegraph::compile::{compile, CompiledProgram};
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
@@ -11,6 +11,7 @@ use lru::LruCache;
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use super::cache::{
@@ -398,7 +399,8 @@ impl GraphCompiler {
 
         let view = resolve(roots);
         let graph = materialize_merge(&view, &output_keys);
-        let compiled = compile(&graph);
+        let mut compiled = compile(&graph);
+        prune_compiled_extension_outputs(&mut compiled)?;
 
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
         let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
@@ -514,6 +516,75 @@ fn descriptor_for_input(
     })
 }
 
+fn prune_compiled_extension_outputs(prog: &mut CompiledProgram<StdTensorOp>) -> Result<()> {
+    let mut live_slots = vec![false; prog.n_slots];
+    for &slot in &prog.output_slots {
+        let Some(live) = live_slots.get_mut(slot) else {
+            return Err(invalid_compiled_graph(format!(
+                "program output slot {slot} is outside slot table of length {}",
+                prog.n_slots
+            )));
+        };
+        *live = true;
+    }
+
+    for instr in prog.instructions.iter_mut().rev() {
+        let live_outputs = instr
+            .outputs
+            .iter()
+            .map(|&slot| {
+                live_slots.get(slot).copied().ok_or_else(|| {
+                    invalid_compiled_graph(format!(
+                        "instruction output slot {slot} is outside slot table of length {}",
+                        prog.n_slots
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if let StdTensorOp::Extension(ext) = &instr.operation {
+            if let Some(pruned) = ext.prune_outputs(&live_outputs) {
+                let kept_outputs = instr
+                    .outputs
+                    .iter()
+                    .zip(live_outputs.iter())
+                    .filter_map(|(&slot, &live)| live.then_some(slot))
+                    .collect::<Vec<_>>();
+                if pruned.output_count() != kept_outputs.len() {
+                    return Err(invalid_compiled_graph(format!(
+                        "extension family_id={:?} pruned to {} outputs for {} live slots",
+                        ext.family_id(),
+                        pruned.output_count(),
+                        kept_outputs.len()
+                    )));
+                }
+                instr.operation = StdTensorOp::Extension(pruned);
+                instr.outputs = kept_outputs;
+            }
+        }
+
+        if live_outputs.iter().any(|&live| live) {
+            for &slot in &instr.inputs {
+                let Some(live) = live_slots.get_mut(slot) else {
+                    return Err(invalid_compiled_graph(format!(
+                        "instruction input slot {slot} is outside slot table of length {}",
+                        prog.n_slots
+                    )));
+                };
+                *live = true;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_compiled_graph(message: impl Into<String>) -> Error {
+    Error::InvalidCompiledGraph {
+        message: message.into(),
+    }
+}
+
 fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
     if Arc::ptr_eq(lhs, rhs) {
         return true;
@@ -544,7 +615,10 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::Any;
+    use std::hash::Hasher;
     use std::sync::Arc;
+    use tenferro_ops::{ext_op::ExtensionOp, SymDim};
     use tenferro_tensor::{
         Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
         TypedTensor,
@@ -600,5 +674,91 @@ mod tests {
             "distinct backend-resident default tensors must not compare equal just because both are unreadable on host"
         );
         assert!(default_tensors_equivalent(&lhs, &lhs));
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct PrunableTestOp {
+        pruned: bool,
+    }
+
+    impl ExtensionOp for PrunableTestOp {
+        fn family_id(&self) -> &'static str {
+            "tenferro-runtime.test-prunable.v1"
+        }
+
+        fn payload_hash(&self, hasher: &mut dyn Hasher) {
+            hasher.write_u8(u8::from(self.pruned));
+        }
+
+        fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .is_some_and(|that| self == that)
+        }
+
+        fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+            Arc::new(self.clone())
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn input_count(&self) -> usize {
+            1
+        }
+
+        fn output_count(&self) -> usize {
+            if self.pruned {
+                1
+            } else {
+                3
+            }
+        }
+
+        fn infer_output_meta(
+            &self,
+            input_dtypes: &[DType],
+            input_shapes: &[&[SymDim]],
+        ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+            Ok((0..self.output_count())
+                .map(|_| (input_dtypes[0], input_shapes[0].to_vec()))
+                .collect())
+        }
+
+        fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
+            (!self.pruned && live_outputs == [false, true, false])
+                .then(|| Arc::new(Self { pruned: true }) as Arc<dyn ExtensionOp>)
+        }
+    }
+
+    #[test]
+    fn compile_prunes_extension_outputs_with_replacement_op() {
+        let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let outputs =
+            crate::extension::apply(Arc::new(PrunableTestOp { pruned: false }), &[&input]).unwrap();
+
+        let program = GraphCompiler::new().compile(&outputs[1]).unwrap();
+        let pruned_instruction = program
+            .lowering_view()
+            .instructions()
+            .find_map(|inst| match inst.op() {
+                crate::GraphOpView::Extension { op }
+                    if op.family_id() == "tenferro-runtime.test-prunable.v1" =>
+                {
+                    Some((
+                        inst.output_slots().to_vec(),
+                        format!("{op:?}"),
+                        op.output_count(),
+                    ))
+                }
+                _ => None,
+            })
+            .expect("compiled program should contain the test extension");
+
+        assert_eq!(pruned_instruction.0.len(), 1);
+        assert!(pruned_instruction.1.contains("pruned: true"));
+        assert_eq!(pruned_instruction.2, 1);
     }
 }

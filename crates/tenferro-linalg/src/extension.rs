@@ -265,6 +265,21 @@ impl ExtensionOp for LinalgExtensionOp {
         self.op.output_count()
     }
 
+    fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
+        match self.op {
+            LinalgOp::Svd { eps } if live_outputs == [false, true, false] => {
+                Some(Arc::new(Self::new(LinalgOp::SvdVals { eps })))
+            }
+            LinalgOp::Eigh { eps } if live_outputs == [true, false] => {
+                Some(Arc::new(Self::new(LinalgOp::EighVals { eps })))
+            }
+            LinalgOp::Eig { input_dtype } if live_outputs == [true, false] => {
+                Some(Arc::new(Self::new(LinalgOp::EigVals { input_dtype })))
+            }
+            _ => None,
+        }
+    }
+
     fn infer_output_meta(
         &self,
         input_dtypes: &[DType],

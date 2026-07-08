@@ -371,7 +371,26 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
             .unwrap();
 
     let norm = matrix.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
-    let actual = eval(&ad.jvp(&norm, &matrix, &tangent).unwrap());
+    let primal_op_debugs = graph_op_debugs(&norm);
+    assert!(
+        primal_op_debugs.iter().any(|op| op.contains("Svd {")),
+        "spectral norm primal graph should carry full SVD residuals for AD: {primal_op_debugs:#?}"
+    );
+    assert!(
+        !primal_op_debugs.iter().any(|op| op.contains("SvdVals")),
+        "spectral norm primal graph should not use values-only SVD before compile-time pruning: {primal_op_debugs:#?}"
+    );
+    let jvp = ad.jvp(&norm, &matrix, &tangent).unwrap();
+    let op_debugs = graph_op_debugs(&jvp);
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("SvdVals")),
+        "spectral norm JVP should reuse a full SVD residual instead of keeping a values-only primal op: {op_debugs:#?}"
+    );
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("Svd {")),
+        "spectral norm JVP should not emit an extra full SVD after residual reuse: {op_debugs:#?}"
+    );
+    let actual = eval(&jvp);
 
     assert_close_scalar(
         "spectral norm directional JVP",
