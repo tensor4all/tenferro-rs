@@ -59,11 +59,11 @@ on the domain `x ∈ [-5, 5]`, `t ∈ [0, 1]`.
 
 **Approach A: `TracedTensor` + `AdContext` (JAX-style graph AD).**
 
-`EagerTensor` does not expose a `create_graph` equivalent, so higher-order automatic differentiation through `EagerTensor::backward()` is not supported. To compute the KdV term `u_xxx` exactly, we build a `TracedTensor` graph and use `TracedTensorAdExt::grad` repeatedly. Network parameters and collocation points are `TracedTensor::input_concrete_shape` placeholders, so the same compiled `GraphProgram` can be re-evaluated each epoch with `GraphExecutor::run_with_inputs`.
+`EagerTensor::backward()` does not expose a `create_graph`-style accumulation API. `EagerRuntime` functional transforms support returned `grad`/`vjp`/`jvp` tensors and HVP-style composition, but this sample needs repeated PDE derivative graph reuse. To compute the KdV term `u_xxx` exactly, we build a `TracedTensor` graph and use `TracedTensorAdExt::grad` repeatedly. Network parameters and collocation points are `TracedTensor::input_concrete_shape` placeholders, so the same compiled `GraphProgram` can be re-evaluated each epoch with `GraphExecutor::run_with_inputs`.
 
 ### Rejected Alternatives
 
-- **`EagerTensor` + `EagerRuntime`**: Familiar, but only first-order AD is available. Would require numerical differentiation for `u_xxx` and lose exact higher-order gradients.
+- **`EagerTensor` + `EagerRuntime`**: Familiar and useful for immediate `backward()` and functional `grad`/`vjp`/`jvp` workflows, but it does not provide the reusable compiled derivative graph needed for the training loop and PDE residual.
 - **Mixed Approach**: Adds complexity by switching between Eager and Traced tensors. Avoided for the first version.
 
 ---

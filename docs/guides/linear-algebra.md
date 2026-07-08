@@ -2,9 +2,10 @@
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
 Use `LinalgBackend` for direct execution without autodiff, `EagerTensorLinalgExt`
-for immediate forward execution under an `EagerRuntime`, and `TracedTensorLinalgExt`
-when the operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated
-compile/run workflow.
+for immediate forward execution and eager `backward()` / functional transform
+workflows under an `EagerRuntime`, and `TracedTensorLinalgExt` when the
+operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
+workflow.
 
 ## Setup
 
@@ -46,7 +47,7 @@ Box<dyn std::error::Error>>` for a standalone binary.
 | Layer | Linear algebra style |
 | --- | --- |
 | Concrete `Tensor` | `tenferro_linalg::LinalgBackend` methods on a backend |
-| `EagerTensor` | `EagerTensorLinalgExt` methods behind `autodiff`; tracked variables record gradients for scalar losses where AD rules support the operation |
+| `EagerTensor` | `EagerTensorLinalgExt` methods behind `autodiff`; tracked variables support `backward()` and `EagerRuntime` functional transforms where AD rules support the operation |
 | `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
@@ -122,8 +123,9 @@ assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 The same operation families are available outside traced graphs. Use concrete
 or typed tensors for direct execution without autodiff, eager tensors when the result
 should be produced immediately under an `EagerRuntime`, and traced helpers when
-the operation belongs in a reusable graph. Use tracked eager tensors only when
-the result should remain connected to a scalar loss `backward()` pass.
+the operation belongs in a reusable graph. Use tracked eager tensors when the
+result should remain connected to a scalar loss `backward()` pass or to
+functional eager `grad`/`vjp`/`jvp` transforms.
 For linalg eager helpers or linalg AD rules, add the `tenferro-ad` dependency
 and enable `tenferro-linalg`'s `autodiff` feature.
 

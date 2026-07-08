@@ -1,9 +1,9 @@
 # Execution Models
 
 tenferro supports direct execution, PyTorch-like eager execution with optional
-reverse-mode AD, and JAX-like traced graph execution on the same dense tensor
-stack. The key distinction is when work is submitted and when the host waits
-for results.
+stateful and functional AD, and JAX-like traced graph execution on the same
+dense tensor stack. The key distinction is when work is submitted and when the
+host waits for results.
 
 ![Eager CPU, Eager GPU, and Traced execution timelines](../assets/execution-models.svg)
 

@@ -1,11 +1,12 @@
 # Eager Operations
 
 This guide covers immediate execution: direct tensor computation without autodiff and
-`EagerTensor` forward execution with optional PyTorch-like reverse-mode
-autodiff on scalar losses. Start with `TypedTensor<T, R>` or `Tensor` for
-work without autodiff. Use `EagerTensor` when you want operations to run immediately
-inside an `EagerRuntime`, and create tracked variables when the workflow needs
-gradient accumulation and `backward()`.
+`EagerTensor` forward execution with optional eager autodiff. Start with
+`TypedTensor<T, R>` or `Tensor` for work without autodiff. Use `EagerTensor`
+when you want operations to run immediately inside an `EagerRuntime`, create
+tracked variables when the workflow needs stateful reverse-mode and functional
+`grad`/`vjp`/`jvp`, and use `backward()` when gradients should accumulate in
+leaf gradient slots.
 
 ## Setup
 

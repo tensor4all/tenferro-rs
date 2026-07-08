@@ -10,9 +10,10 @@ backend or device executes the work.
 
 For most projects without autodiff, `TypedTensor<T, R>` or `Tensor` should
 come first. Move to `EagerTensor` when you want immediate execution under an
-`EagerRuntime`; make tensors tracked only when the workflow needs `backward()`
-on scalar losses. Move to `TracedTensor` when the workflow needs `grad`, `vjp`,
-or `jvp` on traced graphs.
+`EagerRuntime`; make tensors tracked when the workflow needs `backward()` on
+scalar losses or functional eager `grad`, `vjp`, `jvp`, and HVP composition.
+Move to `TracedTensor` when the workflow needs those transforms on compiled
+graphs.
 
 Quick reference:
 
@@ -20,7 +21,7 @@ Quick reference:
 | --- | --- |
 | No autodiff, scalar type known at compile time | `TypedTensor<T, R>` |
 | No autodiff, dtype selected at runtime | `Tensor` |
-| Immediate forward execution in one runtime, optionally `backward()` on scalar losses | `EagerTensor` + `EagerRuntime` |
+| Immediate forward execution in one runtime, optionally `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` + `EagerRuntime` |
 | `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
 
 ## Tensor Types
@@ -42,7 +43,8 @@ host-only adapters such as `HostTensor<T>`, not the backend-capable
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.
 Untracked eager tensors are forward-only. Tracked eager tensors additionally
-record reverse-mode state for `backward()` on scalar losses.
+record reverse-mode state for `backward()` on scalar losses and can feed
+`EagerRuntime` functional `grad`, `vjp`, and `jvp` transforms.
 
 `TracedTensor` is a graph-building handle. It is the graph and compilation API,
 not the default concrete tensor type.
@@ -52,7 +54,7 @@ not the default concrete tensor type.
 | Model | Similar to | What happens on each op |
 | --- | --- | --- |
 | Direct tensor execution | NumPy-style explicit backend calls | The backend runs the op immediately and returns a concrete `Tensor` |
-| Eager execution | PyTorch eager/autograd | The op runs immediately; tracked values record enough state for `backward()` |
+| Eager execution | PyTorch eager/autograd | The op runs immediately; tracked values record enough state for `backward()` and functional eager transforms |
 | Traced execution | JAX tracing/jit/grad | The op records graph structure; compute runs after compile/execute |
 
 See [Execution Models](execution-models.md) for the time-axis diagram,
@@ -91,7 +93,7 @@ operations.
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | Not exposed today | `x.fft(...)` via `TracedTensorFftExt` plus `register_runtime` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
-| Automatic differentiation | Not applicable | `backward()` on tracked scalar losses | `grad`, `vjp`, `jvp`, HVP via composition |
+| Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 
 Use CPU or CUDA with these paths according to backend coverage. CUDA tensors

@@ -127,8 +127,8 @@ Use this convention note when comparing:
 
 - `TracedTensorAdExt::grad` and `AdContext::grad` on complex scalar outputs,
 - `vjp` with complex cotangent seeds,
-- eager `EagerTensor::backward()` and stored `grad()` values for complex
-  scalar losses.
+- eager `EagerTensor::backward()` / `EagerRuntime::vjp` and stored `grad()`
+  values for complex scalar losses.
 
 For real-valued code, or for JVPs viewed as directional derivatives, there is
 no extra conjugation step to apply when comparing values.

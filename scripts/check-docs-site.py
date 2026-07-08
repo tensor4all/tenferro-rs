@@ -92,6 +92,59 @@ def missing_rendered_html_links(site_root: pathlib.Path) -> list[tuple[pathlib.P
     return missing
 
 
+def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
+    required_snippets = [
+        (
+            root / "README.md",
+            "`EagerRuntime` functional `grad`, `vjp`, and `jvp`",
+        ),
+        (
+            root / "docs" / "index.md",
+            "`EagerRuntime` functional `grad`, `vjp`, and `jvp`",
+        ),
+        (
+            root / "docs" / "getting-started" / "index.md",
+            "functional eager `grad`, `vjp`, and `jvp`",
+        ),
+        (
+            root / "docs" / "getting-started" / "core-concepts.md",
+            "functional `grad`, `vjp`, and `jvp` transforms",
+        ),
+        (
+            root / "docs" / "getting-started" / "pytorch-jax-mapping.md",
+            "`EagerRuntime` functional `grad`/`vjp`/`jvp`",
+        ),
+        (
+            root / "docs" / "tutorials" / "index.md",
+            "functional eager AD entry point",
+        ),
+        (
+            root / "docs" / "spec" / "operation-categories.md",
+            "stateful `backward()` plus functional `grad`/`vjp`/`jvp`",
+        ),
+        (
+            root / "docs" / "guides" / "eager-operations.md",
+            "stateful reverse-mode and functional `grad`/`vjp`/`jvp`",
+        ),
+        (
+            root / "docs" / "assets" / "tenferro-architecture.svg",
+            "backward · grad",
+        ),
+        (
+            root / "docs" / "assets" / "tenferro-architecture.svg",
+            "vjp · jvp",
+        ),
+    ]
+    missing: list[str] = []
+    for path, snippet in required_snippets:
+        text = path.read_text(encoding="utf-8")
+        normalized_text = " ".join(text.split())
+        normalized_snippet = " ".join(snippet.split())
+        if normalized_snippet not in normalized_text:
+            missing.append(f"{path.relative_to(root)}: missing {snippet!r}")
+    return missing
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify docs-site completeness for workspace library crates.")
     parser.add_argument("--root-dir", default=".", help="Repository root (default: current directory)")
@@ -236,6 +289,13 @@ def main() -> int:
             source_rel = source.relative_to(docs_site_root)
             target_rel = target.relative_to(docs_site_root)
             print(f"- {source_rel}: {href} -> {target_rel}", file=sys.stderr)
+        return 1
+
+    eager_ad_doc_gaps = check_eager_functional_ad_docs(root)
+    if eager_ad_doc_gaps:
+        print("eager functional AD docs are stale:", file=sys.stderr)
+        for gap in eager_ad_doc_gaps:
+            print(f"- {gap}", file=sys.stderr)
         return 1
 
     if not args.quiet:
