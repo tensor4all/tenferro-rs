@@ -966,7 +966,7 @@ these error types / behaviours in the listed scenarios.
 | `HostReferenceRuntime` receives an op with no `host_reference()` capability | Return `Error::NoHostReference { family_id }`. MUST NOT panic or synthesize a fake result. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
+| AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced transforms and eager `backward` / functional `grad` / `vjp` / `jvp` propagate it through the public `Error` type re-exported by the owning surface crate. |
 | Duplicate AD rule `(family_id, role)` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule { family_id, role }`. |
 | Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |

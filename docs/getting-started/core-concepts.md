@@ -3,9 +3,9 @@
 tenferro separates tensor data, execution timing, automatic differentiation,
 and device location. That separation is the main design point: users can stay
 in typed tensor code for ordinary numeric work without autodiff, move to eager
-execution for PyTorch-like forward-and-backward training loops, or move to
-traced graphs for JAX-like `grad`, `vjp`, and `jvp` workflows plus compile/run
-reuse.
+execution for PyTorch-like forward-and-backward training loops or functional
+`grad`, `vjp`, and `jvp` transforms, or move to traced graphs for compiled
+transform workflows plus compile/run reuse.
 
 ## The Three Axes
 
@@ -25,8 +25,8 @@ to a CUDA backend.
 | --- | --- | --- |
 | `TypedTensor<T>` | Concrete tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
 | `Tensor` | Concrete tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
-| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; reverse-mode AD on scalar losses when tracked |
-| `TracedTensor` | Graph-building tensor | `grad`, `vjp`, and `jvp` on traced graphs, graph optimization, repeated execution |
+| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; `backward()` on scalar losses and `EagerRuntime` functional transforms when tracked |
+| `TracedTensor` | Graph-building tensor | Compiled `grad`, `vjp`, and `jvp` on traced graphs, graph optimization, repeated execution |
 
 Use the smallest layer that matches the job. AD is optional, and many projects
 should never leave the concrete tensor APIs.
@@ -98,7 +98,7 @@ Einsum is provided by the `tenferro-einsum` standard extension. Traced code
 uses `GraphCompilerEinsumExt` and registers `tenferro_einsum::register_runtime`
 on the executor.
 
-## Eager Execution And Backward
+## Eager Execution And Autodiff
 
 `EagerTensor` wraps concrete values in an `EagerRuntime`. Each operation
 computes or submits immediately and returns a concrete tensor handle. CPU
@@ -107,8 +107,11 @@ host inspection. If a tensor is a tracked variable, eager operations also
 record reverse-mode state so a scalar loss can call `backward()` and accumulate
 gradients.
 
-This is not the forward-mode AD/JVP API. Use `TracedTensor` for `grad`, `vjp`,
-`jvp`, and HVP via composition on traced graphs.
+When the derivative itself should be returned as an eager tensor instead of
+accumulated into a gradient slot, call `EagerRuntime::grad`,
+`EagerRuntime::vjp`, or `EagerRuntime::jvp`. These functional eager transforms
+can be composed for HVP-style workflows. Use `TracedTensor` when the derivative
+workflow should be compiled, optimized as a graph, or reused across runs.
 
 <!-- snippet-source: crates/tenferro-ad/examples/eager_backward.rs -->
 ```rust
@@ -159,8 +162,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-Traced mode is the right API for `grad`, `vjp`, `jvp`, and HVP via composition
-on traced graphs, symbolic inputs, graph optimization, and repeated execution.
+Traced mode is the right API when `grad`, `vjp`, `jvp`, or HVP-style
+composition should run on traced graphs with symbolic inputs, graph
+optimization, and repeated execution.
 Core primitive AD rules are available by default. Extension operation families
 that provide AD rules, such as `tenferro-linalg`, require enabling that crate's
 `autodiff` feature and registering the extension rule set with

@@ -2,8 +2,9 @@
 
 tenferro is a Rust-native tensor computation stack with opt-in autodiff for
 scientific workloads: typed tensors, dynamic tensors, PyTorch-style immediate
-execution with `backward()`, JAX-style traced graphs, einsum, linear algebra,
-FFT, and explicit CPU, CUDA, and experimental WebGPU backend control.
+execution with `backward()` and `EagerRuntime` functional `grad`, `vjp`, and
+`jvp`, JAX-style traced graphs, einsum, linear algebra, FFT, and explicit CPU,
+CUDA, and experimental WebGPU backend control.
 
 The project covers both ordinary tensor computation and autodiff workflows.
 Start with the smallest API that solves your problem, then add autodiff, graph
@@ -87,9 +88,10 @@ traced graphs are not competing APIs; they answer different questions.
 
 Most code without autodiff starts with `TypedTensor<T>` when the scalar type is
 known at compile time, or `Tensor` when dtype must be selected at runtime.
-`EagerTensor` adds immediate execution through an `EagerRuntime` and optional
-`backward()` on scalar losses. `TracedTensor` adds graph compilation, `grad`,
-`vjp`, and `jvp` on traced graphs, symbolic inputs, and reuse.
+`EagerTensor` adds immediate execution through an `EagerRuntime`, optional
+stateful `backward()` on scalar losses, and functional eager `grad`, `vjp`, and
+`jvp` transforms. `TracedTensor` adds graph compilation, `grad`, `vjp`, and
+`jvp` on traced graphs, symbolic inputs, and reuse.
 
 ## Get In Touch
 

@@ -16,7 +16,7 @@ Related:
 |---|---|---|
 | **TypedTensor** | `TypedTensor<T, R>` (non-AD) | Static/dynamic-rank typed value; the "lightweight array" path |
 | **Tensor** | `Tensor` (runtime dtype) | Dynamic-dtype value with explicit backend |
-| **Eager** | `EagerTensor` | PyTorch-style immediate execution + `backward()` |
+| **Eager** | `EagerTensor` | PyTorch-style immediate execution + stateful `backward()` plus functional `grad`/`vjp`/`jvp` |
 | **Traced** | `TracedTensor` | JAX-style traced graph + `grad`/`vjp`/`jvp` |
 
 **Rank model.** `TypedTensor<T, R = DynRank>` offers `Rank<N>` (opt-in static rank)
@@ -155,8 +155,10 @@ and traced surfaces (subject to the same parity rule within each family):
 
 ## 9. AD transforms
 
-Not value operations; listed for completeness. `grad` / `vjp` / `jvp` / HVP on
-`Traced`; `backward` on `Eager` scalar losses.
+Not value operations; listed for completeness. `EagerRuntime` exposes stateful
+`backward()` / `backward_with(seed)` plus functional `grad` / `vjp` / `jvp` /
+HVP composition on eager tensors. `TracedTensor` and `AdContext` expose graph
+`grad` / `vjp` / `jvp` / HVP workflows for compiled execution and graph reuse.
 
 ## 10. Host iteration and closure map (non-AD surfaces only)
 

@@ -1,9 +1,9 @@
 # Getting Started
 
 tenferro supports tensor computation without autodiff, immediate execution with
-optional `backward()` on scalar losses, traced graph execution, `grad`, `vjp`,
-and `jvp` on traced graphs, einsum, linear algebra, and CUDA execution through
-the feature-gated CUDA backend.
+optional `backward()` on scalar losses, functional eager `grad`, `vjp`, and
+`jvp`, traced graph execution, einsum, linear algebra, and CUDA execution
+through the feature-gated CUDA backend.
 
 ## Mental Model
 
@@ -14,7 +14,7 @@ compiled traced program, then choose a CPU or CUDA backend explicitly.
 | Choice | Question | Common starting point |
 | --- | --- | --- |
 | Tensor layer | What kind of value do I pass around? | `TypedTensor<T>` for typed CPU values, `Tensor` for runtime dtype |
-| Execution model | When does computation run? | Direct/eager for ordinary code, traced for `grad`, `vjp`, `jvp`, or reuse |
+| Execution model | When does computation run? | Direct/eager for ordinary code and eager AD; traced for compiled graph reuse |
 | Backend/device | Where does computation run? | `CpuBackend`; upload/download explicitly for CUDA |
 
 CUDA, eager execution, and traced graphs are not competing APIs. They compose

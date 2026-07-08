@@ -455,7 +455,7 @@ Split `eager.rs` (currently 631 lines) to keep files focused:
 
 | File | Responsibility |
 |------|---------------|
-| `eager.rs` | `EagerTensor` struct, `EagerRuntime` (pub), `new_leaf`, `new_result`, `backward()`, `detach()`, `data()`, `grad()`, internal helpers (`saved_forward_values`, `derived_output_key`, etc.) |
+| `eager.rs` | `EagerTensor` struct, `EagerRuntime` (pub), `new_leaf`, `new_result`, `backward()`, functional `grad`/`vjp`/`jvp`, `detach()`, `data()`, `grad()`, internal helpers (`saved_forward_values`, `derived_output_key`, etc.) |
 | `eager_ops.rs` | All op methods: `unary_op`, `binary_op`, `ternary_op`, `multi_output_unary_op`, `nary_op`, and every public method (`add`, `mul`, ..., `svd`, `transpose`, etc.) |
 | `eager_einsum.rs` | `eager_einsum_ad` free function |
 | `eager_exec.rs` | `exec_op_on_tensors` — add `NaryEinsum` branch (delegate to `eager_einsum`) |

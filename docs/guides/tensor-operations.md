@@ -4,7 +4,7 @@ This guide covers everyday tensor operations: elementwise math, shape changes,
 broadcasting, reductions, and concrete backend execution. These operations are
 available through different tensor APIs depending on whether you need
 computation without autodiff, eager forward execution with optional
-`backward()` on scalar losses, or traced graph execution.
+`backward()` or functional `grad`/`vjp`/`jvp`, or traced graph execution.
 
 ## Setup
 
@@ -24,7 +24,7 @@ Choose the tensor API first, then choose the operation entry point.
 | --- | --- | --- | --- |
 | `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `TypedTensorOpsExt` backend-explicit methods for dynamic-rank `TypedTensor<T>` | No |
 | `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `TensorOpsExt` backend-explicit methods | No |
-| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` on scalar losses | `EagerTensor` methods and associated functions | Yes, for tracked values |
+| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` methods and associated functions | Yes, for tracked values |
 | `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `TracedTensor` methods and associated functions | Yes, through graph transforms |
 
 For most code without autodiff, start with `TypedTensor<T, R>` when the scalar type is
@@ -54,7 +54,7 @@ in Rust's type system and when computation happens.
 | Host typed slice access | Direct `&[T]` on host tensors | Fallible `as_slice::<T>()` | Through concrete data | Only after graph execution |
 | Host iteration | Direct `iter()` and `iter_mut()` on host tensors | Fallible `iter::<T>()` and `iter_mut::<T>()` | Through concrete data | Not a concrete-data API |
 | Backend math | Selected typed wrappers | Broad concrete backend API | Eager runtime API | Graph-building API |
-| AD | No | No | Optional reverse-mode for tracked values | Transform AD and graph reuse |
+| AD | No | No | Stateful reverse mode plus functional transforms for tracked values | Transform AD and graph reuse |
 
 Use this distinction when reading operation examples:
 
@@ -219,11 +219,11 @@ assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
 
-## Eager Forward And Backward Example
+## Eager Forward And Autodiff Example
 
 Use `EagerTensor` when the same immediate computation should stay in an
 `EagerRuntime`. Create tracked variables when a scalar loss should accumulate
-gradients.
+gradients or when a derivative transform should return another eager tensor.
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
