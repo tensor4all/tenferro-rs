@@ -45,6 +45,24 @@ fn reduce_all(tensor: &TracedTensor) -> TracedTensor {
     tensor.reduce_sum(&axes).unwrap()
 }
 
+fn graph_op_debugs(tensor: &TracedTensor) -> Vec<String> {
+    let mut ops = Vec::new();
+    collect_graph_op_debugs(tensor.graph(), &mut ops);
+    ops
+}
+
+fn collect_graph_op_debugs(graph: &computegraph::graph::Graph<StdTensorOp>, ops: &mut Vec<String>) {
+    for parent in graph.parents() {
+        collect_graph_op_debugs(parent, ops);
+    }
+    ops.extend(
+        graph
+            .operations()
+            .iter()
+            .map(|node| format!("{:?}", node.operation)),
+    );
+}
+
 fn weighted_square_sum(
     tensor: &TracedTensor,
     shape: Vec<usize>,
@@ -267,6 +285,46 @@ fn triangular_solve_jvp_rejects_non_square_lhs_without_panic() {
 }
 
 #[test]
+fn square_lu_jvp_does_not_materialize_solve_input_augmentations() {
+    let ad = ad_context();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.5, 0.25, 3.0]))
+            .unwrap();
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.2, 0.1, -0.1, 0.4]))
+            .unwrap();
+    let (_p, l, u, _parity) = matrix.lu().unwrap();
+    let loss = (&reduce_all(&l) + &reduce_all(&u)).unwrap();
+    let jvp = ad.jvp(&loss, &matrix, &tangent).unwrap();
+
+    let op_debugs = graph_op_debugs(&jvp);
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("EmbedDiag")),
+        "square LU JVP should not build a dense identity for triangular solve inputs: {op_debugs:#?}"
+    );
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("BroadcastInDim")),
+        "square LU JVP should not broadcast identity diagonals: {op_debugs:#?}"
+    );
+    assert_eq!(
+        op_debugs
+            .iter()
+            .filter(|op| op.contains("Tril { k: -1 }"))
+            .count(),
+        1,
+        "square LU JVP should keep only the output-forming strict-lower mask: {op_debugs:#?}"
+    );
+    assert_eq!(
+        op_debugs
+            .iter()
+            .filter(|op| op.contains("Triu { k: 0 }"))
+            .count(),
+        1,
+        "square LU JVP should keep only the output-forming upper mask: {op_debugs:#?}"
+    );
+}
+
+#[test]
 fn svd_values_grad_matches_finite_diff() {
     let ad = ad_context();
     let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
@@ -313,7 +371,26 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
             .unwrap();
 
     let norm = matrix.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
-    let actual = eval(&ad.jvp(&norm, &matrix, &tangent).unwrap());
+    let primal_op_debugs = graph_op_debugs(&norm);
+    assert!(
+        primal_op_debugs.iter().any(|op| op.contains("Svd {")),
+        "spectral norm primal graph should carry full SVD residuals for AD: {primal_op_debugs:#?}"
+    );
+    assert!(
+        !primal_op_debugs.iter().any(|op| op.contains("SvdVals")),
+        "spectral norm primal graph should not use values-only SVD before compile-time pruning: {primal_op_debugs:#?}"
+    );
+    let jvp = ad.jvp(&norm, &matrix, &tangent).unwrap();
+    let op_debugs = graph_op_debugs(&jvp);
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("SvdVals")),
+        "spectral norm JVP should reuse a full SVD residual instead of keeping a values-only primal op: {op_debugs:#?}"
+    );
+    assert!(
+        !op_debugs.iter().any(|op| op.contains("Svd {")),
+        "spectral norm JVP should not emit an extra full SVD after residual reuse: {op_debugs:#?}"
+    );
+    let actual = eval(&jvp);
 
     assert_close_scalar(
         "spectral norm directional JVP",

@@ -84,3 +84,43 @@ fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
         }
     }
 }
+
+#[test]
+fn decomposition_value_outputs_prune_to_values_only_ops() {
+    let svd = LinalgExtensionOp::new(LinalgOp::Svd { eps: 1.0e-12 });
+    let pruned_svd = svd
+        .prune_outputs(&[false, true, false])
+        .expect("S-only SVD should prune to SvdVals");
+    let pruned_svd = pruned_svd
+        .as_any()
+        .downcast_ref::<LinalgExtensionOp>()
+        .expect("pruned SVD op should stay in linalg family");
+    assert_eq!(pruned_svd.op(), LinalgOp::SvdVals { eps: 1.0e-12 });
+
+    let eigh = LinalgExtensionOp::new(LinalgOp::Eigh { eps: 1.0e-12 });
+    let pruned_eigh = eigh
+        .prune_outputs(&[true, false])
+        .expect("eigenvalue-only Hermitian eigendecomposition should prune to EighVals");
+    let pruned_eigh = pruned_eigh
+        .as_any()
+        .downcast_ref::<LinalgExtensionOp>()
+        .expect("pruned Eigh op should stay in linalg family");
+    assert_eq!(pruned_eigh.op(), LinalgOp::EighVals { eps: 1.0e-12 });
+
+    let eig = LinalgExtensionOp::new(LinalgOp::Eig {
+        input_dtype: DType::F64,
+    });
+    let pruned_eig = eig
+        .prune_outputs(&[true, false])
+        .expect("eigenvalue-only general eigendecomposition should prune to EigVals");
+    let pruned_eig = pruned_eig
+        .as_any()
+        .downcast_ref::<LinalgExtensionOp>()
+        .expect("pruned Eig op should stay in linalg family");
+    assert_eq!(
+        pruned_eig.op(),
+        LinalgOp::EigVals {
+            input_dtype: DType::F64
+        }
+    );
+}

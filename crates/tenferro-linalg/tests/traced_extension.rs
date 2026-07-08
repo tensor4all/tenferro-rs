@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{
-    DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+    DType, Error, GraphCompiler, GraphExecutor, GraphOpView, Tensor, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::Error as TensorError;
 
@@ -94,6 +94,39 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
     assert_eq!(outputs[1].dtype(), DType::F64);
     assert_eq!(outputs[0].shape(), &[2]);
     assert_eq!(outputs[1].shape(), &[2]);
+}
+
+#[test]
+fn spectral_norm_compile_prunes_residual_svd_to_values_only_op() {
+    let a = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.1, 0.2, 0.3, 2.0, 0.4]).unwrap(),
+    )
+    .unwrap();
+    let norm = a.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&norm).unwrap();
+    let extension_ops = program
+        .lowering_view()
+        .instructions()
+        .filter_map(|inst| match inst.op() {
+            GraphOpView::Extension { op }
+                if op.family_id() == tenferro_linalg::LINALG_EXTENSION_FAMILY_ID =>
+            {
+                Some(format!("{op:?}"))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        extension_ops.iter().any(|op| op.contains("SvdVals")),
+        "forward-only spectral norm should lower residual SVD to values-only op: {extension_ops:#?}"
+    );
+    assert!(
+        !extension_ops.iter().any(|op| op.contains("Svd {")),
+        "forward-only spectral norm should not execute full SVD after pruning: {extension_ops:#?}"
+    );
 }
 
 #[test]

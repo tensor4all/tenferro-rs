@@ -909,39 +909,42 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
 }
 
 fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
-    one_output(
+    let (_u, s, _vt) = three_outputs(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::SvdVals {
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Svd {
                 eps: DEFAULT_DECOMPOSITION_AD_EPS,
             })),
             &[a],
         )?,
         "svd_values",
-    )
+    )?;
+    Ok(s)
 }
 
 fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
-    one_output(
+    let (values, _vectors) = two_outputs(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::EighVals {
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
                 eps: DEFAULT_DECOMPOSITION_AD_EPS,
             })),
             &[a],
         )?,
         "eigh_values",
-    )
+    )?;
+    Ok(values)
 }
 
 fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
-    one_output(
+    let (values, _vectors) = two_outputs(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::EigVals {
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
                 input_dtype: a.dtype,
             })),
             &[a],
         )?,
         "eig_values",
-    )
+    )?;
+    Ok(values)
 }
 
 fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<TracedTensor> {
