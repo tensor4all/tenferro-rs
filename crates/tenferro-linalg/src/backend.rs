@@ -1,5 +1,7 @@
 use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 
+use crate::extension::{apply_svd_gauge, validate_derivative_eps, EighOptions, SvdOptions};
+
 /// Build the shared "unsupported dtype" backend-failure error used by the
 /// linalg backends.
 ///
@@ -77,6 +79,39 @@ pub trait LinalgBackend: TensorBackend {
 
     /// Compute public SVD outputs `(U, S, Vt)`.
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
+
+    /// Compute public SVD outputs `(U, S, Vt)` with explicit options.
+    ///
+    /// `derivative_eps` is validated for API consistency, but concrete backend
+    /// execution does not perform AD. `gauge` controls optional singular-vector
+    /// post-processing.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{LinalgBackend, SvdGauge, SvdOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.svd_with_options(
+    ///     &input,
+    ///     SvdOptions::default().gauge(SvdGauge::CanonicalPivot),
+    /// )?;
+    /// assert_eq!(outputs[1].shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svd_with_options(
+        &mut self,
+        input: &Tensor,
+        options: SvdOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_derivative_eps("svd_with_options", options.derivative_eps)?;
+        let mut outputs = self.svd(input)?;
+        apply_svd_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
+    }
 
     #[doc(hidden)]
     fn svd_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -157,6 +192,36 @@ pub trait LinalgBackend: TensorBackend {
     /// The returned vector order is `[values, vectors]`, where `values` has
     /// shape `[n]` and `vectors` has shape `[n, n]`.
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
+
+    /// Compute public Hermitian eigendecomposition outputs with explicit options.
+    ///
+    /// `derivative_eps` is validated for API consistency, but concrete backend
+    /// execution does not perform AD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{EighOptions, LinalgBackend};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.eigh_with_options(
+    ///     &input,
+    ///     EighOptions::default().derivative_eps(1.0e-10),
+    /// )?;
+    /// assert_eq!(outputs[0].shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigh_with_options(
+        &mut self,
+        input: &Tensor,
+        options: EighOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
+        self.eigh(input)
+    }
 
     /// Compute public Hermitian eigendecomposition outputs from a borrowed tensor view.
     ///

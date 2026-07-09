@@ -61,9 +61,9 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Dense solve | `solve` | `solve` | `solve` |
 | Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
-| SVD | `svd` | `svd` | `svd` |
+| SVD | `svd`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr` | `qr` | `qr` |
-| Hermitian eigen | `eigh` | `eigh` | `eigh`, `eigvalsh` |
+| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` |
 | General eigen | `eig` | `eig` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
 | Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
@@ -176,6 +176,67 @@ let us = u.matmul(&sigma, &mut backend).unwrap();
 let reconstructed = us.matmul(vt, &mut backend).unwrap();
 
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
+```
+
+## Decomposition Options And SVD Truncation
+
+Eager and traced SVD expose options when you need a deterministic singular-vector
+gauge or a non-default derivative regularization epsilon. `derivative_eps`
+regularizes AD formulas for repeated or nearly repeated singular values or
+eigenvalues. It is not a backend solver tolerance and does not change the
+forward decomposition algorithm.
+
+```rust
+use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
+use tenferro_runtime::TracedTensor;
+
+let a = TracedTensor::from_vec_col_major(
+    vec![3, 3],
+    vec![
+        3.0_f64, 0.0, 0.0,
+        0.0, 2.0, 0.0,
+        0.0, 0.0, 1.0,
+    ],
+)
+.unwrap();
+let (u, s, vt) = a
+    .svd_with_options(
+        SvdOptions::default()
+            .gauge(SvdGauge::CanonicalPivot)
+            .derivative_eps(1.0e-10),
+    )
+    .unwrap();
+
+let rank = 2;
+let u_rank2 = u.slice_axis(1, 0..rank).unwrap();
+let s_rank2 = s.slice_axis(0, 0..rank).unwrap();
+let vt_rank2 = vt.slice_axis(0, 0..rank).unwrap();
+
+assert_eq!(u_rank2.concrete_shape().unwrap(), vec![3, 2]);
+assert_eq!(s_rank2.concrete_shape().unwrap(), vec![2]);
+assert_eq!(vt_rank2.concrete_shape().unwrap(), vec![2, 3]);
+```
+
+Use `slice_axis` for rank-preserving contiguous ranges and `take_axis` when the
+selected axis needs repeated or reordered indices:
+
+```rust
+use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_runtime::TracedTensor;
+
+let a = TracedTensor::from_vec_col_major(
+    vec![3, 3],
+    vec![
+        3.0_f64, 0.0, 0.0,
+        0.0, 2.0, 0.0,
+        0.0, 0.0, 1.0,
+    ],
+)
+.unwrap();
+let (_u, s, _vt) = a.svd().unwrap();
+let repeated = s.take_axis(0, &[0, 1, 0]).unwrap();
+
+assert_eq!(repeated.concrete_shape().unwrap(), vec![3]);
 ```
 
 ## QR decomposition

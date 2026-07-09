@@ -172,6 +172,52 @@ fn matrix_eager_input_uses_column_major_values() {
 }
 
 #[test]
+fn eager_slice_axis_and_builder_preserve_column_major_values() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(
+            vec![3, 4],
+            vec![
+                1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        )
+        .unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+
+    let rows = x.slice_axis(0, 1..3).unwrap();
+    assert_eq!(rows.shape(), &[2, 4]);
+    assert_eq!(
+        f64_data(rows.materialized().unwrap().as_ref()),
+        &[2.0, 3.0, 5.0, 6.0, 8.0, 9.0, 11.0, 12.0]
+    );
+
+    let strided = x
+        .slice_builder()
+        .axis(0, 1..3)
+        .axis_step(1, 0..4, 2)
+        .apply()
+        .unwrap();
+    assert_eq!(strided.shape(), &[2, 2]);
+    assert_eq!(
+        f64_data(strided.materialized().unwrap().as_ref()),
+        &[2.0, 3.0, 8.0, 9.0]
+    );
+
+    let mixed = x
+        .slice_builder()
+        .axis(0, 0..2)
+        .take_axis(1, &[3, 1, 3])
+        .apply()
+        .unwrap();
+    assert_eq!(mixed.shape(), &[2, 3]);
+    assert_eq!(
+        f64_data(mixed.materialized().unwrap().as_ref()),
+        &[10.0, 11.0, 4.0, 5.0, 10.0, 11.0]
+    );
+}
+
+#[test]
 fn eager_concatenate_empty_reports_typed_validation_error() {
     let err = EagerTensor::concatenate(&[], 0).unwrap_err();
 

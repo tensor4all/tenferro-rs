@@ -21,6 +21,53 @@ pub enum LinalgAdRuleSupport {
     PendingOracle,
 }
 
+/// Implementation route used for a user-visible AD mode.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{linalg_ad_support, LinalgAdOpKind, LinalgAdRoute};
+///
+/// let svd = linalg_ad_support(LinalgAdOpKind::Svd);
+/// assert_eq!(svd.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinalgAdRoute {
+    /// No supported route exists.
+    Unsupported,
+    /// The mode is emitted directly by the operation's linearize rule.
+    Linearize,
+    /// Reverse mode is supported by linearizing the primal graph and then
+    /// transposing that linear graph.
+    LinearizeThenTranspose,
+    /// Reverse mode is supported by linearizing the primal graph and using a
+    /// custom transposed-linear rule for the emitted linear operation.
+    LinearizeThenCustomLinearTranspose,
+    /// Reverse mode is emitted by a direct operation-specific primal VJP rule.
+    CustomVjp,
+    /// A custom VJP is preferred, with the canonical linearize-then-transpose
+    /// route retained as an intentional not-applicable fallback.
+    CustomPreferredWithLinearizeFallback,
+}
+
+/// User-visible AD support for one mode.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{linalg_ad_support, LinalgAdOpKind, LinalgAdRoute};
+///
+/// let solve = linalg_ad_support(LinalgAdOpKind::TriangularSolve);
+/// assert_eq!(solve.vjp.route, LinalgAdRoute::LinearizeThenCustomLinearTranspose);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinalgAdModeSupport {
+    /// Whether the user-visible mode is supported.
+    pub status: LinalgAdRuleSupport,
+    /// How the mode is implemented.
+    pub route: LinalgAdRoute,
+}
+
 /// Operation keys covered by the linalg AD support manifest.
 ///
 /// # Examples
@@ -129,18 +176,68 @@ pub struct LinalgAdOutputSupport {
 /// use tenferro_linalg::{linalg_ad_support, LinalgAdOpKind, LinalgAdRuleSupport};
 ///
 /// let solve = linalg_ad_support(LinalgAdOpKind::TriangularSolve);
-/// assert_eq!(solve.transpose, LinalgAdRuleSupport::Supported);
+/// assert_eq!(solve.vjp.route, tenferro_linalg::LinalgAdRoute::LinearizeThenCustomLinearTranspose);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinalgAdSupport {
     /// Operation kind described by this manifest entry.
     pub kind: LinalgAdOpKind,
+    /// User-visible JVP support and route.
+    pub jvp: LinalgAdModeSupport,
+    /// User-visible VJP support and route.
+    pub vjp: LinalgAdModeSupport,
+    /// Definitional linearize rule implementation status.
+    pub linearize_rule: LinalgAdRuleSupport,
+    /// Direct primal VJP rule implementation status.
+    pub custom_vjp_rule: LinalgAdRuleSupport,
+    /// Custom transposed-linear rule implementation status.
+    pub custom_linear_transpose_rule: LinalgAdRuleSupport,
     /// Forward-mode graph emission support.
     pub linearize: LinalgAdRuleSupport,
     /// Transposed-linear graph emission support.
     pub transpose: LinalgAdRuleSupport,
     /// Per-output support status for multi-output operations.
     pub outputs: &'static [LinalgAdOutputSupport],
+    /// Numerical or semantic caveats for this operation family.
+    pub caveats: &'static [&'static str],
+}
+
+const fn mode(status: LinalgAdRuleSupport, route: LinalgAdRoute) -> LinalgAdModeSupport {
+    LinalgAdModeSupport { status, route }
+}
+
+const fn jvp_route(status: LinalgAdRuleSupport) -> LinalgAdRoute {
+    match status {
+        LinalgAdRuleSupport::Unsupported
+        | LinalgAdRuleSupport::NonDifferentiable
+        | LinalgAdRuleSupport::PendingOracle => LinalgAdRoute::Unsupported,
+        LinalgAdRuleSupport::Supported
+        | LinalgAdRuleSupport::SupportedViaLinearize
+        | LinalgAdRuleSupport::PartiallySupported => LinalgAdRoute::Linearize,
+    }
+}
+
+const fn support_entry(
+    kind: LinalgAdOpKind,
+    linearize: LinalgAdRuleSupport,
+    transpose: LinalgAdRuleSupport,
+    vjp: LinalgAdModeSupport,
+    custom_linear_transpose_rule: LinalgAdRuleSupport,
+    outputs: &'static [LinalgAdOutputSupport],
+    caveats: &'static [&'static str],
+) -> LinalgAdSupport {
+    LinalgAdSupport {
+        kind,
+        jvp: mode(linearize, jvp_route(linearize)),
+        vjp,
+        linearize_rule: linearize,
+        custom_vjp_rule: LinalgAdRuleSupport::Unsupported,
+        custom_linear_transpose_rule,
+        linearize,
+        transpose,
+        outputs,
+        caveats,
+    }
 }
 
 const fn output(
@@ -229,91 +326,176 @@ static EIG_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
     LinalgAdRuleSupport::SupportedViaLinearize,
 )];
 
+static DECOMPOSITION_CAVEATS: [&str; 1] = [
+    "Derivative regularization handles near-degenerate spectra but does not make exact degeneracies smoothly differentiable.",
+];
+
 static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Cholesky,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &CHOLESKY_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Lu,
-        linearize: LinalgAdRuleSupport::PartiallySupported,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &LU_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::LuFactor,
-        linearize: LinalgAdRuleSupport::Unsupported,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &LU_FACTOR_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::LuSolvePrepared,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::PartiallySupported,
-        outputs: &SOLUTION_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::FullPivLu,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &FULL_PIV_LU_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::FullPivLuSolve,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Supported,
-        outputs: &FULL_PIV_LU_SOLVE_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Svd,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &SVD_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::SvdVals,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &SVD_VALS_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Qr,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &QR_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Eigh,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &EIGH_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::EighVals,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &EIGH_VALS_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::Eig,
-        linearize: LinalgAdRuleSupport::PartiallySupported,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &EIG_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::EigVals,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Unsupported,
-        outputs: &EIG_VALS_OUTPUTS,
-    },
-    LinalgAdSupport {
-        kind: LinalgAdOpKind::TriangularSolve,
-        linearize: LinalgAdRuleSupport::SupportedViaLinearize,
-        transpose: LinalgAdRuleSupport::Supported,
-        outputs: &SOLUTION_OUTPUTS,
-    },
+    support_entry(
+        LinalgAdOpKind::Cholesky,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &CHOLESKY_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::Lu,
+        LinalgAdRuleSupport::PartiallySupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::PartiallySupported,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &LU_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::LuFactor,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &LU_FACTOR_OUTPUTS,
+        &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::LuSolvePrepared,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::PartiallySupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenCustomLinearTranspose,
+        ),
+        LinalgAdRuleSupport::PartiallySupported,
+        &SOLUTION_OUTPUTS,
+        &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::FullPivLu,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &FULL_PIV_LU_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::FullPivLuSolve,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Supported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenCustomLinearTranspose,
+        ),
+        LinalgAdRuleSupport::Supported,
+        &FULL_PIV_LU_SOLVE_OUTPUTS,
+        &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::Svd,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &SVD_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::SvdVals,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &SVD_VALS_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::Qr,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &QR_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::Eigh,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &EIGH_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::EighVals,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &EIGH_VALS_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::Eig,
+        LinalgAdRuleSupport::PartiallySupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::PartiallySupported,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &EIG_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::EigVals,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &EIG_VALS_OUTPUTS,
+        &DECOMPOSITION_CAVEATS,
+    ),
+    support_entry(
+        LinalgAdOpKind::TriangularSolve,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Supported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenCustomLinearTranspose,
+        ),
+        LinalgAdRuleSupport::Supported,
+        &SOLUTION_OUTPUTS,
+        &[],
+    ),
 ];
 
 /// Return the complete linalg AD support manifest.

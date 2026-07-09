@@ -67,6 +67,7 @@ pub use graph::{
     GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
     GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };
+pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::{
     CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,

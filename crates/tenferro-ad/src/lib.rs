@@ -45,6 +45,7 @@ mod transform_cache;
 pub use context::{AdContext, AdContextBuilder, AdContextCacheStats};
 pub use eager::{EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
+pub use shape_packing::EagerSliceBuilder;
 pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
 pub use transform_cache::AdTransformCacheLimits;
 pub(crate) mod shape_infer {

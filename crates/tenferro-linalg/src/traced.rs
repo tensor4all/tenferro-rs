@@ -4,15 +4,20 @@ use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
-use crate::extension::{LinalgExtensionOp, LinalgOp, DEFAULT_DECOMPOSITION_AD_EPS};
+use crate::extension::{
+    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, SvdOptions,
+};
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
     fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
-    fn svd_with_eps(&self, eps: f64) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+    fn svd_with_options(
+        &self,
+        options: SvdOptions,
+    ) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
-    fn eigh_with_eps(&self, eps: f64) -> Result<(TracedTensor, TracedTensor)>;
+    fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)>;
     fn cholesky(&self) -> Result<TracedTensor>;
     fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
     fn full_piv_lu(
@@ -50,8 +55,11 @@ impl TracedTensorLinalgExt for TracedTensor {
         svd(self)
     }
 
-    fn svd_with_eps(&self, eps: f64) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-        svd_with_eps(self, eps)
+    fn svd_with_options(
+        &self,
+        options: SvdOptions,
+    ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+        svd_with_options(self, options)
     }
 
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)> {
@@ -62,8 +70,8 @@ impl TracedTensorLinalgExt for TracedTensor {
         eigh(self)
     }
 
-    fn eigh_with_eps(&self, eps: f64) -> Result<(TracedTensor, TracedTensor)> {
-        eigh_with_eps(self, eps)
+    fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)> {
+        eigh_with_options(self, options)
     }
 
     fn cholesky(&self) -> Result<TracedTensor> {
@@ -142,7 +150,7 @@ impl TracedTensorLinalgExt for TracedTensor {
     }
 }
 
-/// Build a traced singular value decomposition op using the default epsilon.
+/// Build a traced singular value decomposition op using default options.
 ///
 /// # Examples
 ///
@@ -157,28 +165,38 @@ impl TracedTensorLinalgExt for TracedTensor {
 /// assert_eq!(vt.rank, 2);
 /// ```
 pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-    svd_with_eps(a, DEFAULT_DECOMPOSITION_AD_EPS)
+    svd_with_options(a, SvdOptions::default())
 }
 
-/// Build a traced singular value decomposition op with an explicit epsilon.
+/// Build a traced singular value decomposition op with explicit options.
+///
+/// `derivative_eps` regularizes decomposition derivative formulas. It is not a
+/// backend SVD solver tolerance.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_linalg::TracedTensorLinalgExt;
+/// use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
-/// let (_u, s, _vt) = a.svd_with_eps(1e-10).unwrap();
+/// let options = SvdOptions::default()
+///     .gauge(SvdGauge::CanonicalPivot)
+///     .derivative_eps(1e-10);
+/// let (_u, s, _vt) = a.svd_with_options(options).unwrap();
 /// assert_eq!(s.rank, 1);
 /// ```
-pub fn svd_with_eps(
+pub fn svd_with_options(
     a: &TracedTensor,
-    eps: f64,
+    options: SvdOptions,
 ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    validate_derivative_eps("svd_with_options", options.derivative_eps)?;
     three_outputs(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Svd {
+                derivative_eps: options.derivative_eps,
+                gauge: options.gauge,
+            })),
             &[a],
         )?,
         "svd",
@@ -205,7 +223,7 @@ pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     )
 }
 
-/// Build a traced Hermitian eigenvalue decomposition op using the default epsilon.
+/// Build a traced Hermitian eigenvalue decomposition op using default options.
 ///
 /// # Examples
 ///
@@ -219,25 +237,36 @@ pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// assert_eq!(vectors.rank, 2);
 /// ```
 pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
-    eigh_with_eps(a, DEFAULT_DECOMPOSITION_AD_EPS)
+    eigh_with_options(a, EighOptions::default())
 }
 
-/// Build a traced Hermitian eigenvalue decomposition op with an explicit epsilon.
+/// Build a traced Hermitian eigenvalue decomposition op with explicit options.
+///
+/// `derivative_eps` regularizes derivative formulas for repeated or nearly
+/// repeated eigenvalues. It is not a backend eigensolver tolerance.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_linalg::TracedTensorLinalgExt;
+/// use tenferro_linalg::{EighOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
-/// let (values, _vectors) = a.eigh_with_eps(1e-10).unwrap();
+/// let (values, _vectors) = a
+///     .eigh_with_options(EighOptions::default().derivative_eps(1e-10))
+///     .unwrap();
 /// assert_eq!(values.rank, 1);
 /// ```
-pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, TracedTensor)> {
+pub fn eigh_with_options(
+    a: &TracedTensor,
+    options: EighOptions,
+) -> Result<(TracedTensor, TracedTensor)> {
+    validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
     two_outputs(
         apply(
-            Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps })),
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
+                derivative_eps: options.derivative_eps,
+            })),
             &[a],
         )?,
         "eigh",
@@ -912,7 +941,8 @@ fn svd_values(a: &TracedTensor) -> Result<TracedTensor> {
     let (_u, s, _vt) = three_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Svd {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: SvdOptions::default().derivative_eps,
+                gauge: SvdOptions::default().gauge,
             })),
             &[a],
         )?,
@@ -925,7 +955,7 @@ fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
     let (values, _vectors) = two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: EighOptions::default().derivative_eps,
             })),
             &[a],
         )?,

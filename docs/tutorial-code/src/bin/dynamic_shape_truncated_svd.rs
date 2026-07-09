@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
     CompareDir, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
 };
@@ -60,7 +60,7 @@ fn run_case(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4])?;
-    let (u, s, vt) = x.svd_with_eps(1.0e-12)?;
+    let (u, s, vt) = x.svd_with_options(SvdOptions::default().derivative_eps(1.0e-12))?;
 
     let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s

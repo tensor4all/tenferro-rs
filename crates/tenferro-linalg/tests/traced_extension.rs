@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{EighOptions, LinalgBackend, SvdGauge, SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
     DType, Error, GraphCompiler, GraphExecutor, GraphOpView, Tensor, TracedTensor, TypedTensor,
 };
@@ -56,6 +56,64 @@ fn svd_executes_after_runtime_registration() {
     assert_eq!(outputs[0].shape(), &[2, 2]);
     assert_eq!(outputs[1].shape(), &[2]);
     assert_eq!(outputs[2].shape(), &[2, 2]);
+}
+
+#[test]
+fn concrete_decomposition_options_execute_through_backend_defaults() {
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let svd_outputs = backend
+        .svd_with_options(
+            &a,
+            SvdOptions::default()
+                .gauge(SvdGauge::CanonicalPivot)
+                .derivative_eps(1.0e-10),
+        )
+        .unwrap();
+    let eigh_outputs = backend
+        .eigh_with_options(&a, EighOptions::default().derivative_eps(1.0e-10))
+        .unwrap();
+
+    assert_eq!(svd_outputs[0].shape(), &[2, 2]);
+    assert_eq!(svd_outputs[1].shape(), &[2]);
+    assert_eq!(svd_outputs[2].shape(), &[2, 2]);
+    assert_eq!(eigh_outputs[0].shape(), &[2]);
+    assert_eq!(eigh_outputs[1].shape(), &[2, 2]);
+}
+
+#[test]
+fn traced_decomposition_options_execute_through_registered_runtime() {
+    let a = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+    )
+    .unwrap();
+    let (u, s, vt) = a
+        .svd_with_options(
+            SvdOptions::default()
+                .gauge(SvdGauge::CanonicalPivot)
+                .derivative_eps(1.0e-10),
+        )
+        .unwrap();
+    let (eigh_values, eigh_vectors) = a
+        .eigh_with_options(EighOptions::default().derivative_eps(1.0e-10))
+        .unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_many(&[&u, &s, &vt, &eigh_values, &eigh_vectors])
+        .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_linalg::register_runtime)
+        .unwrap();
+    let outputs = executor.run_many(&program).unwrap();
+
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(outputs[1].shape(), &[2]);
+    assert_eq!(outputs[2].shape(), &[2, 2]);
+    assert_eq!(outputs[3].shape(), &[2]);
+    assert_eq!(outputs[4].shape(), &[2, 2]);
 }
 
 #[test]

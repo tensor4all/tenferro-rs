@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 
 use tenferro_linalg::{
-    all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdRuleSupport,
+    all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdRoute, LinalgAdRuleSupport,
 };
 
 fn workspace_root() -> &'static Path {
@@ -140,6 +140,46 @@ fn linalg_ad_support_manifest_marks_values_only_rules_finite_diff_backed() {
         "eigenvalues",
         LinalgAdRuleSupport::SupportedViaLinearize,
     );
+}
+
+#[test]
+fn linalg_ad_support_manifest_separates_user_modes_from_rule_routes() {
+    let svd = linalg_ad_support(LinalgAdOpKind::Svd);
+    assert_eq!(svd.jvp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_eq!(svd.jvp.route, LinalgAdRoute::Linearize);
+    assert_eq!(svd.vjp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+    assert_eq!(svd.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+    assert_eq!(svd.custom_vjp_rule, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(
+        svd.custom_linear_transpose_rule,
+        LinalgAdRuleSupport::Unsupported
+    );
+
+    let svd_vals = linalg_ad_support(LinalgAdOpKind::SvdVals);
+    assert_eq!(svd_vals.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+
+    let triangular_solve = linalg_ad_support(LinalgAdOpKind::TriangularSolve);
+    assert_eq!(
+        triangular_solve.vjp.route,
+        LinalgAdRoute::LinearizeThenCustomLinearTranspose
+    );
+    assert_eq!(
+        triangular_solve.custom_linear_transpose_rule,
+        LinalgAdRuleSupport::Supported
+    );
+
+    let lu_solve = linalg_ad_support(LinalgAdOpKind::LuSolvePrepared);
+    assert_eq!(
+        lu_solve.vjp.route,
+        LinalgAdRoute::LinearizeThenCustomLinearTranspose
+    );
+    assert_eq!(
+        lu_solve.custom_linear_transpose_rule,
+        LinalgAdRuleSupport::PartiallySupported
+    );
+
+    let lu_factor = linalg_ad_support(LinalgAdOpKind::LuFactor);
+    assert_eq!(lu_factor.vjp.route, LinalgAdRoute::Unsupported);
 }
 
 #[test]
