@@ -1,15 +1,18 @@
 name: CI_gpu
 
-# Build the CUDA test archive on a cheap non-GPU runner IN PARALLEL with the
-# repository-policy and non-GPU CI checks, then execute CUDA-feature GPU tests
-# on the org larger GPU runner `ubuntu-gpu` only after those checks pass, to
-# minimize GPU billing. Only the GPU runner (`cuda-run`) is gated behind
-# `pre-gpu-gate`; the archive build is not, so the GPU stage can start the
-# moment the gate clears instead of waiting for the archive to compile.
+# Retired from automatic PR gating by issue #1341. RunPod now owns the
+# branch-protection-required `CI GPU gate` check for eligible maintainer PRs.
+# Keep this workflow as a manual legacy fallback for comparing the org larger
+# GPU runner (`ubuntu-gpu`) with RunPod while the migration settles.
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tenferro_ref:
+        description: tenferro-rs git ref, branch, tag, or SHA to validate on ubuntu-gpu
+        required: false
+        default: main
+        type: string
 
 permissions:
   actions: read
@@ -33,11 +36,16 @@ env:
 jobs:
   pre-gpu-gate:
     name: Wait for review and non-GPU CI
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - name: Manual fallback does not wait for PR checks
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "CI_gpu.yml is a manual legacy fallback; RunPod owns the PR CI GPU gate."
+
       - name: Wait for prerequisite checks
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -144,6 +152,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tenferro_ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Compute CUDA archive cache key
         id: archive_key
@@ -205,7 +215,6 @@ jobs:
   cuda-run:
     name: CUDA tests (${{ matrix.gpu_vendor }})
     needs: [pre-gpu-gate, cuda-archive]
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-gpu
     timeout-minutes: 45
     strategy:
@@ -489,7 +498,7 @@ jobs:
             cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
 
   cuda-gate:
-    name: CI GPU gate
+    name: CI GPU legacy manual gate
     needs: [cuda-archive, pre-gpu-gate, cuda-run]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -499,17 +508,8 @@ jobs:
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
           PRE_GPU_RESULT: ${{ needs.pre-gpu-gate.result }}
           CUDA_RESULT: ${{ needs.cuda-run.result }}
-          IS_FORK_PR: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
-          if [ "${IS_FORK_PR}" = "true" ]; then
-            if [ "${ARCHIVE_RESULT}" != "success" ]; then
-              echo "Expected cuda-archive to succeed for fork PR; got cuda-archive=${ARCHIVE_RESULT}"
-              exit 1
-            fi
-            echo "Fork PR: GPU tests skipped on the org larger GPU runner; archive build passed."
-            exit 0
-          fi
           if [ "${PRE_GPU_RESULT}" != "success" ]; then
             echo "Expected pre-gpu-gate to succeed; got pre-gpu-gate=${PRE_GPU_RESULT}"
             exit 1

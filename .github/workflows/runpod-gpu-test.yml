@@ -26,6 +26,8 @@ name: RunPod tenferro-rs GPU Test
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
+#   * This workflow owns the branch-protection-required `CI GPU gate` check for
+#     eligible maintainer PRs. The legacy `CI_gpu.yml` workflow is manual-only.
 # ---------------------------------------------------------------------------
 
 on:
@@ -1288,3 +1290,48 @@ jobs:
           fi
 
           echo "Deleted RunPod pod: ${POD_ID}"
+
+  ci-gpu-gate:
+    name: CI GPU gate
+    needs:
+      - authorize
+      - pre-runpod-gate
+      - cuda-archive
+      - start-runpod
+      - run-gpu-tests
+      - cleanup-runpod
+
+    if: always() && !cancelled()
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require successful RunPod GPU validation and cleanup
+        env:
+          AUTHORIZE_RESULT: ${{ needs.authorize.result }}
+          PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
+          ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          START_RUNPOD_RESULT: ${{ needs.start-runpod.result }}
+          RUN_GPU_TESTS_RESULT: ${{ needs.run-gpu-tests.result }}
+          CLEANUP_RUNPOD_RESULT: ${{ needs.cleanup-runpod.result }}
+        run: |
+          set -euo pipefail
+
+          require_success() {
+            local job="$1"
+            local result="$2"
+            if [ "${result}" != "success" ]; then
+              echo "::error::Expected ${job} to succeed; got ${result}."
+              exit 1
+            fi
+          }
+
+          require_success "authorize" "${AUTHORIZE_RESULT}"
+          require_success "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
+          require_success "cuda-archive" "${ARCHIVE_RESULT}"
+          require_success "start-runpod" "${START_RUNPOD_RESULT}"
+          require_success "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
+          require_success "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
+
+          echo "RunPod GPU validation completed successfully and owns CI GPU gate."
