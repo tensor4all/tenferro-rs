@@ -114,18 +114,28 @@ impl ExtensionLinearizeRule for LinalgAdRule {
             LinalgOp::Cholesky => {
                 rules::linearize_cholesky(builder, primal_in, primal_out, tangent_in, ctx)
             }
-            LinalgOp::Svd { eps } => {
-                rules::linearize_svd(builder, primal_in, primal_out, tangent_in, eps, ctx)
-            }
-            LinalgOp::SvdVals { eps } => {
-                rules::linearize_svd_values(builder, primal_in, tangent_in, eps, ctx)
+            LinalgOp::Svd { derivative_eps, .. } => rules::linearize_svd(
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                derivative_eps,
+                ctx,
+            ),
+            LinalgOp::SvdVals { derivative_eps } => {
+                rules::linearize_svd_values(builder, primal_in, tangent_in, derivative_eps, ctx)
             }
             LinalgOp::Qr => rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
-            LinalgOp::Eigh { eps } => {
-                rules::linearize_eigh(builder, primal_in, primal_out, tangent_in, eps, ctx)
-            }
-            LinalgOp::EighVals { eps } => {
-                rules::linearize_eigh_values(builder, primal_in, tangent_in, eps, ctx)
+            LinalgOp::Eigh { derivative_eps } => rules::linearize_eigh(
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                derivative_eps,
+                ctx,
+            ),
+            LinalgOp::EighVals { derivative_eps } => {
+                rules::linearize_eigh_values(builder, primal_in, tangent_in, derivative_eps, ctx)
             }
             LinalgOp::Eig { input_dtype } => {
                 rules::linearize_eig(builder, primal_in, primal_out, tangent_in, input_dtype, ctx)
@@ -304,7 +314,7 @@ fn fixed_transpose_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::DEFAULT_DECOMPOSITION_AD_EPS;
+    use crate::extension::{SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
     use tenferro_ops::input_key::TensorInputKey;
@@ -534,14 +544,15 @@ mod tests {
             ),
             (
                 LinalgOp::Svd {
-                    eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                    derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    gauge: SvdGauge::Raw,
                 },
                 svd_context(&[2, 2]),
                 vec![None, None, None],
             ),
             (
                 LinalgOp::Eigh {
-                    eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                    derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 },
                 eigh_context(),
                 vec![None, None],
@@ -588,7 +599,8 @@ mod tests {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let tangent = builder.add_input(TensorInputKey::User { id: 133 });
         let op = LinalgExtensionOp::new(LinalgOp::Svd {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            gauge: SvdGauge::Raw,
         });
 
         let result = LinalgAdRule
@@ -619,7 +631,7 @@ mod tests {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let tangent = builder.add_input(TensorInputKey::User { id: 134 });
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
         });
 
         let result = LinalgAdRule
@@ -875,7 +887,7 @@ mod tests {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let cotangent = builder.add_input(TensorInputKey::User { id: 85 });
         let op = LinalgExtensionOp::new(LinalgOp::EighVals {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
         });
 
         let result = LinalgAdRule
@@ -903,7 +915,7 @@ mod tests {
         let g_w = builder.add_input(TensorInputKey::User { id: 86 });
         let g_v = builder.add_input(TensorInputKey::User { id: 87 });
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
         });
 
         let result = LinalgAdRule
@@ -1013,17 +1025,18 @@ mod tests {
             LinalgOp::Lu,
             LinalgOp::FullPivLu,
             LinalgOp::Svd {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                gauge: SvdGauge::Raw,
             },
             LinalgOp::SvdVals {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             },
             LinalgOp::Qr,
             LinalgOp::Eigh {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             },
             LinalgOp::EighVals {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             },
             LinalgOp::Eig {
                 input_dtype: DType::F64,

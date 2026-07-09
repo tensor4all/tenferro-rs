@@ -1,9 +1,10 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
+use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
@@ -140,7 +141,261 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+enum AxisSelection {
+    Slice {
+        axis: usize,
+        range: Range<usize>,
+        step: usize,
+    },
+    Take {
+        axis: usize,
+        indices: Vec<usize>,
+    },
+}
+
+fn concrete_shape_for_axis_slice(tensor: &TracedTensor, op: &'static str) -> Result<Vec<usize>> {
+    try_concrete_shape(tensor).ok_or_else(|| Error::InvalidGraphBuild {
+        op,
+        message: format!("{op} requires a concrete shape hint"),
+    })
+}
+
+fn validate_axis_selection(
+    op: &'static str,
+    rank: usize,
+    seen: &mut [bool],
+    axis: usize,
+) -> Result<()> {
+    if axis >= rank {
+        return Err(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank }.into());
+    }
+    if seen[axis] {
+        return Err(tenferro_tensor::Error::DuplicateAxis {
+            op,
+            axis,
+            role: "selection",
+        }
+        .into());
+    }
+    seen[axis] = true;
+    Ok(())
+}
+
+fn apply_slice_axis_config(
+    op: &'static str,
+    shape: &[usize],
+    selections: &[AxisSelection],
+) -> Result<Option<SliceConfig>> {
+    let mut starts = vec![0; shape.len()];
+    let mut limits = shape.to_vec();
+    let mut strides = vec![1; shape.len()];
+    let mut has_slice = false;
+    for selection in selections {
+        let AxisSelection::Slice { axis, range, step } = selection else {
+            continue;
+        };
+        if *step == 0 {
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: format!("axis {axis} has zero step"),
+            }
+            .into());
+        }
+        let extent = shape[*axis];
+        if range.start > range.end || range.end > extent {
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op,
+                message: format!(
+                    "axis {axis} range {}..{} is out of bounds for extent {extent}",
+                    range.start, range.end
+                ),
+            }
+            .into());
+        }
+        starts[*axis] = range.start;
+        limits[*axis] = range.end;
+        strides[*axis] = *step;
+        has_slice = true;
+    }
+    Ok(has_slice.then_some(SliceConfig {
+        starts,
+        limits,
+        strides,
+    }))
+}
+
+/// Rank-preserving traced tensor slicing builder.
+///
+/// Unspecified axes are kept whole. Range selections become one `Slice`
+/// operation; host-known position selections become `Gather`/`index_select`
+/// operations.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::TracedTensor;
+///
+/// let x = TracedTensor::from_vec_col_major(vec![3, 4], vec![0.0_f64; 12]).unwrap();
+/// let y = x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply().unwrap();
+/// assert_eq!(y.try_concrete_shape(), Some(vec![2, 2]));
+/// ```
+#[derive(Clone, Debug)]
+pub struct TracedSliceBuilder<'a> {
+    tensor: &'a TracedTensor,
+    selections: Vec<AxisSelection>,
+}
+
+impl<'a> TracedSliceBuilder<'a> {
+    fn new(tensor: &'a TracedTensor) -> Self {
+        Self {
+            tensor,
+            selections: Vec::new(),
+        }
+    }
+
+    /// Add an exclusive-end range selection for one axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.slice_builder().axis(0, 1..3).apply().unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
+    /// ```
+    pub fn axis(mut self, axis: usize, range: Range<usize>) -> Self {
+        self.selections.push(AxisSelection::Slice {
+            axis,
+            range,
+            step: 1,
+        });
+        self
+    }
+
+    /// Add an exclusive-end strided range selection for one axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    /// let y = x.slice_builder().axis_step(0, 0..5, 2).apply().unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
+    /// ```
+    pub fn axis_step(mut self, axis: usize, range: Range<usize>, step: usize) -> Self {
+        self.selections
+            .push(AxisSelection::Slice { axis, range, step });
+        self
+    }
+
+    /// Add a host-known position selection for one axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let y = x.slice_builder().take_axis(0, &[2, 0]).apply().unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
+    /// ```
+    pub fn take_axis(mut self, axis: usize, indices: &[usize]) -> Self {
+        self.selections.push(AxisSelection::Take {
+            axis,
+            indices: indices.to_vec(),
+        });
+        self
+    }
+
+    /// Build and apply the requested slice/take operations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.slice_builder().axis(0, 1..4).apply().unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
+    /// ```
+    pub fn apply(self) -> Result<TracedTensor> {
+        let shape = concrete_shape_for_axis_slice(self.tensor, "slice_builder")?;
+        let mut seen = vec![false; shape.len()];
+        for selection in &self.selections {
+            let axis = match selection {
+                AxisSelection::Slice { axis, .. } | AxisSelection::Take { axis, .. } => *axis,
+            };
+            validate_axis_selection("slice_builder", shape.len(), &mut seen, axis)?;
+        }
+
+        let mut output = self.tensor.clone();
+        if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &self.selections)? {
+            output = output.slice(config)?;
+        }
+        for selection in self.selections {
+            if let AxisSelection::Take { axis, indices } = selection {
+                output = output.take_axis(axis, &indices)?;
+            }
+        }
+        Ok(output)
+    }
+}
+
 impl TracedTensor {
+    /// Slice one axis with an exclusive-end range, keeping all other axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let y = x.slice_axis(0, 1..3).unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
+    /// ```
+    pub fn slice_axis(&self, axis: usize, range: Range<usize>) -> Result<Self> {
+        self.slice_builder().axis(axis, range).apply()
+    }
+
+    /// Start a rank-preserving slicing builder for this tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let y = x.slice_builder().axis(0, 0..2).apply().unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
+    /// ```
+    pub fn slice_builder(&self) -> TracedSliceBuilder<'_> {
+        TracedSliceBuilder::new(self)
+    }
+
+    /// Select entries from one axis using host-known indices.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    /// let y = x.take_axis(0, &[2, 0]).unwrap();
+    /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
+    /// ```
+    pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
+        let axis = isize::try_from(axis).map_err(|_| {
+            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+                op: "take_axis",
+                message: format!("axis {axis} cannot be represented as isize"),
+            })
+        })?;
+        self.index_select(axis, indices)
+    }
+
     /// Select entries from one axis using host-known positions.
     ///
     /// # Examples

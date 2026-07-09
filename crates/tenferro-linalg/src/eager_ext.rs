@@ -4,12 +4,18 @@ use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
-use crate::extension::{LinalgExtensionOp, LinalgOp, DEFAULT_DECOMPOSITION_AD_EPS};
+use crate::extension::{
+    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, SvdOptions,
+};
 use crate::register_runtime;
 
 /// Linear algebra extension methods for [`EagerTensor`].
 pub trait EagerTensorLinalgExt {
     fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    fn svd_with_options(
+        &self,
+        options: SvdOptions,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
     fn full_piv_lu(
@@ -25,6 +31,7 @@ pub trait EagerTensorLinalgExt {
     fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
     fn cholesky(&self) -> Result<EagerTensor>;
     fn eigh(&self) -> Result<(EagerTensor, EagerTensor)>;
+    fn eigh_with_options(&self, options: EighOptions) -> Result<(EagerTensor, EagerTensor)>;
     fn eig(&self) -> Result<(EagerTensor, EagerTensor)>;
     fn triangular_solve(
         &self,
@@ -39,6 +46,13 @@ pub trait EagerTensorLinalgExt {
 impl EagerTensorLinalgExt for EagerTensor {
     fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
         svd(self)
+    }
+
+    fn svd_with_options(
+        &self,
+        options: SvdOptions,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+        svd_with_options(self, options)
     }
 
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)> {
@@ -75,6 +89,10 @@ impl EagerTensorLinalgExt for EagerTensor {
 
     fn eigh(&self) -> Result<(EagerTensor, EagerTensor)> {
         eigh(self)
+    }
+
+    fn eigh_with_options(&self, options: EighOptions) -> Result<(EagerTensor, EagerTensor)> {
+        eigh_with_options(self, options)
     }
 
     fn eig(&self) -> Result<(EagerTensor, EagerTensor)> {
@@ -121,9 +139,41 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+    svd_with_options(a, SvdOptions::default())
+}
+
+/// Singular value decomposition for eager tensors with explicit options.
+///
+/// `derivative_eps` regularizes decomposition derivative formulas. It is not a
+/// backend SVD solver tolerance.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::{EagerTensorLinalgExt, SvdGauge, SvdOptions};
+///
+/// let ctx = EagerRuntime::new();
+/// let a = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+///     ctx,
+/// ).unwrap();
+/// let options = SvdOptions::default()
+///     .gauge(SvdGauge::CanonicalPivot)
+///     .derivative_eps(1.0e-10);
+/// let (_u, s, _vt) = a.svd_with_options(options)?;
+/// assert_eq!(s.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub fn svd_with_options(
+    a: &EagerTensor,
+    options: SvdOptions,
+) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+    validate_derivative_eps("svd_with_options", options.derivative_eps)?;
     let mut outputs = apply_linalg_eager(
         LinalgOp::Svd {
-            eps: DEFAULT_DECOMPOSITION_AD_EPS,
+            derivative_eps: options.derivative_eps,
+            gauge: options.gauge,
         },
         &[a],
     )?
@@ -363,10 +413,40 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
+    eigh_with_options(a, EighOptions::default())
+}
+
+/// Hermitian eigenvalue decomposition for eager tensors with explicit options.
+///
+/// `derivative_eps` regularizes derivative formulas for repeated or nearly
+/// repeated eigenvalues. It is not a backend eigensolver tolerance.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::{EagerTensorLinalgExt, EighOptions};
+///
+/// let ctx = EagerRuntime::new();
+/// let a = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
+///     ctx,
+/// ).unwrap();
+/// let (values, vectors) = a
+///     .eigh_with_options(EighOptions::default().derivative_eps(1.0e-10))?;
+/// assert_eq!(values.shape(), &[2]);
+/// assert_eq!(vectors.shape(), &[2, 2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub fn eigh_with_options(
+    a: &EagerTensor,
+    options: EighOptions,
+) -> Result<(EagerTensor, EagerTensor)> {
+    validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
     two_outputs(
         apply_linalg_eager(
             LinalgOp::Eigh {
-                eps: DEFAULT_DECOMPOSITION_AD_EPS,
+                derivative_eps: options.derivative_eps,
             },
             &[a],
         )?,

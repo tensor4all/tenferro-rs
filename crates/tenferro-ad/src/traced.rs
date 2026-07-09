@@ -21,7 +21,7 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
-use tidu::{linear_transpose, linearize};
+use tidu::{linear_transpose, linearize, ADRuleError};
 
 #[path = "traced/optimizer.rs"]
 mod optimizer;
@@ -131,6 +131,51 @@ fn linearize_active_value_keys(
         }
     }
     Arc::new(active)
+}
+
+fn graph_has_registered_primal_vjp(
+    view: &ResolvedView<StdTensorOp>,
+    outputs: &[ValueKey<StdTensorOp>],
+    aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
+    extension_rules: Option<&ExtensionRuleSet>,
+) -> bool {
+    let Some(extension_rules) = extension_rules else {
+        return false;
+    };
+    let mut seen = HashSet::new();
+    let mut stack = outputs.to_vec();
+    while let Some(key) = stack.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if let ValueKey::Derived { operation, .. } = &key {
+            if let StdTensorOp::Extension(ext) = operation.operation() {
+                if extension_rules.lookup_primal_vjp(ext.family_id()).is_some() {
+                    return true;
+                }
+            }
+        }
+        let Some(val_def) = view.resolve_value(&key) else {
+            continue;
+        };
+        match val_def {
+            ValueDef::Produced { input_keys, .. } => {
+                for input_key in input_keys {
+                    stack.push(input_key);
+                }
+            }
+            ValueDef::Input { key: input_key } => {
+                if let Some(aliased) = aliases.get(&input_key) {
+                    stack.push(aliased.clone());
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_not_applicable_custom_vjp(err: &ADRuleError) -> bool {
+    matches!(err, ADRuleError::Unsupported { .. })
 }
 
 pub(crate) fn grad_with_rules_and_cache(
@@ -748,6 +793,49 @@ fn vjp_optional_impl(
             &aliases,
         )
     });
+    if graph_has_registered_primal_vjp(
+        &view,
+        std::slice::from_ref(&output_key),
+        &aliases,
+        extension_rules,
+    ) {
+        let mut primal_ad_ctx = shape_guard_context(extension_rules, None, &view.roots);
+        primal_ad_ctx.refresh_global_metadata();
+        match try_primal_transpose(
+            &view,
+            std::slice::from_ref(&output_key),
+            std::slice::from_ref(&wrt_input_key),
+            &aliases,
+            &mut primal_ad_ctx,
+            next_pass_id(),
+        ) {
+            Ok(transposed) => {
+                if transposed
+                    .tangent_outputs()
+                    .first()
+                    .and_then(|slot| *slot)
+                    .is_some()
+                {
+                    let transposed = VjpTransposeGraph::Primal(transposed);
+                    return build_vjp_tensor(
+                        output,
+                        wrt,
+                        cotangent,
+                        transposed,
+                        None,
+                        checkpoint_chain,
+                        checkpoint_graphs,
+                    );
+                }
+                return Ok(None);
+            }
+            Err(err) if !is_not_applicable_custom_vjp(&err) => {
+                return Err(ad_rule_error(transform, err));
+            }
+            Err(_) => {}
+        }
+    }
+
     let linear_attempt = match (ad_transform_cache, cache_key) {
         (Some(cache), Some(key)) => {
             if let Some(cached) = cache.get_traced_vjp(&key)? {
@@ -790,31 +878,29 @@ fn vjp_optional_impl(
             VjpTransposeGraph::Linear(active.transposed),
             Some(active.metadata_scope),
         ),
-        Err(linear_err) => {
-            let mut primal_ad_ctx = shape_guard_context(extension_rules, None, &view.roots);
-            primal_ad_ctx.refresh_global_metadata();
-            match try_primal_transpose(
-                &view,
-                std::slice::from_ref(&output_key),
-                std::slice::from_ref(&wrt_input_key),
-                &aliases,
-                &mut primal_ad_ctx,
-                next_pass_id(),
-            ) {
-                Ok(transposed)
-                    if transposed
-                        .tangent_outputs()
-                        .first()
-                        .and_then(|slot| *slot)
-                        .is_some() =>
-                {
-                    (VjpTransposeGraph::Primal(transposed), None)
-                }
-                _ => return Err(ad_rule_error(transform, linear_err)),
-            }
-        }
+        Err(linear_err) => return Err(ad_rule_error(transform, linear_err)),
     };
 
+    build_vjp_tensor(
+        output,
+        wrt,
+        cotangent,
+        transposed,
+        linear_metadata_scope,
+        checkpoint_chain,
+        checkpoint_graphs,
+    )
+}
+
+fn build_vjp_tensor(
+    output: &TracedTensor,
+    wrt: &TracedTensor,
+    cotangent: &TracedTensor,
+    transposed: VjpTransposeGraph,
+    linear_metadata_scope: Option<GlobalMetadataScope>,
+    checkpoint_chain: Option<Arc<tenferro_runtime::ad_support::CheckpointNode>>,
+    checkpoint_graphs: Vec<Arc<Graph<StdTensorOp>>>,
+) -> Result<Option<TracedTensor>> {
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
     let cotangent_data =

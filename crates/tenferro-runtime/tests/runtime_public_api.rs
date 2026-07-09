@@ -103,6 +103,51 @@ fn traced_tensor_methods_cover_structural_surface() {
         .unwrap();
     assert_eq!(run(&sliced).as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
+    let matrix_3x4 = TracedTensor::from_vec_col_major(
+        vec![3, 4],
+        vec![
+            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    )
+    .unwrap();
+    let row_slice = matrix_3x4.slice_axis(0, 1..3).unwrap();
+    assert_eq!(row_slice.try_concrete_shape(), Some(vec![2, 4]));
+    assert_eq!(
+        run(&row_slice).as_slice::<f64>().unwrap(),
+        &[2.0, 3.0, 5.0, 6.0, 8.0, 9.0, 11.0, 12.0]
+    );
+
+    let builder_slice = matrix_3x4
+        .slice_builder()
+        .axis(0, 1..3)
+        .axis_step(1, 0..4, 2)
+        .apply()
+        .unwrap();
+    assert_eq!(builder_slice.try_concrete_shape(), Some(vec![2, 2]));
+    assert_eq!(
+        run(&builder_slice).as_slice::<f64>().unwrap(),
+        &[2.0, 3.0, 8.0, 9.0]
+    );
+
+    let selected = matrix_3x4.take_axis(1, &[3, 1, 3]).unwrap();
+    assert_eq!(selected.try_concrete_shape(), Some(vec![3, 3]));
+    assert_eq!(
+        run(&selected).as_slice::<f64>().unwrap(),
+        &[10.0, 11.0, 12.0, 4.0, 5.0, 6.0, 10.0, 11.0, 12.0]
+    );
+
+    let mixed = matrix_3x4
+        .slice_builder()
+        .axis(0, 0..2)
+        .take_axis(1, &[3, 1, 3])
+        .apply()
+        .unwrap();
+    assert_eq!(mixed.try_concrete_shape(), Some(vec![2, 3]));
+    assert_eq!(
+        run(&mixed).as_slice::<f64>().unwrap(),
+        &[10.0, 11.0, 4.0, 5.0, 10.0, 11.0]
+    );
+
     let padded = sliced
         .pad(PadConfig {
             edge_padding_low: vec![1],

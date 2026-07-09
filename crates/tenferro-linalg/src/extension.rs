@@ -2,6 +2,7 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp, HostReference};
@@ -16,7 +17,156 @@ mod tests;
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
-pub(crate) const DEFAULT_DECOMPOSITION_AD_EPS: f64 = 1e-12;
+/// Default derivative regularization used by decomposition AD rules.
+///
+/// This epsilon is used only when differentiating decomposition formulas with
+/// repeated or nearly repeated spectral values. It is not a solver tolerance.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
+///
+/// let options = SvdOptions::default();
+/// assert_eq!(options.derivative_eps, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS);
+/// ```
+pub const DEFAULT_DECOMPOSITION_DERIVATIVE_EPS: f64 = 1e-12;
+
+/// Singular-vector gauge convention used by [`SvdOptions`].
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{SvdGauge, SvdOptions};
+///
+/// let options = SvdOptions::default().gauge(SvdGauge::CanonicalPivot);
+/// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvdGauge {
+    /// Leave the backend's raw singular vector signs or phases unchanged.
+    Raw,
+    /// Make each left singular vector's max-absolute pivot entry positive-real
+    /// and adjust the matching `VT` row so reconstruction is preserved.
+    CanonicalPivot,
+}
+
+/// Options for singular value decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{SvdGauge, SvdOptions};
+///
+/// let options = SvdOptions::default()
+///     .gauge(SvdGauge::CanonicalPivot)
+///     .derivative_eps(1.0e-10);
+/// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
+/// assert_eq!(options.derivative_eps, 1.0e-10);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SvdOptions {
+    /// Singular-vector gauge convention.
+    pub gauge: SvdGauge,
+    /// AD derivative regularization for repeated or nearly repeated singular values.
+    pub derivative_eps: f64,
+}
+
+impl Default for SvdOptions {
+    fn default() -> Self {
+        Self {
+            gauge: SvdGauge::Raw,
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+        }
+    }
+}
+
+impl SvdOptions {
+    /// Return options with the requested singular-vector gauge.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{SvdGauge, SvdOptions};
+    ///
+    /// let options = SvdOptions::default().gauge(SvdGauge::CanonicalPivot);
+    /// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
+    /// ```
+    pub fn gauge(mut self, gauge: SvdGauge) -> Self {
+        self.gauge = gauge;
+        self
+    }
+
+    /// Return options with an explicit derivative epsilon.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::SvdOptions;
+    ///
+    /// let options = SvdOptions::default().derivative_eps(1.0e-9);
+    /// assert_eq!(options.derivative_eps, 1.0e-9);
+    /// ```
+    pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
+        self.derivative_eps = derivative_eps;
+        self
+    }
+}
+
+/// Options for Hermitian eigenvalue decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::EighOptions;
+///
+/// let options = EighOptions::default().derivative_eps(1.0e-10);
+/// assert_eq!(options.derivative_eps, 1.0e-10);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EighOptions {
+    /// AD derivative regularization for repeated or nearly repeated eigenvalues.
+    pub derivative_eps: f64,
+}
+
+impl Default for EighOptions {
+    fn default() -> Self {
+        Self {
+            derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+        }
+    }
+}
+
+impl EighOptions {
+    /// Return options with an explicit derivative epsilon.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::EighOptions;
+    ///
+    /// let options = EighOptions::default().derivative_eps(1.0e-9);
+    /// assert_eq!(options.derivative_eps, 1.0e-9);
+    /// ```
+    pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
+        self.derivative_eps = derivative_eps;
+        self
+    }
+}
+
+pub(crate) fn validate_derivative_eps(
+    op: &'static str,
+    derivative_eps: f64,
+) -> tenferro_tensor::Result<()> {
+    if derivative_eps.is_finite() && derivative_eps > 0.0 {
+        Ok(())
+    } else {
+        Err(Error::InvalidConfig {
+            op,
+            message: format!("derivative_eps must be positive and finite, got {derivative_eps}"),
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[doc(hidden)]
@@ -33,17 +183,18 @@ pub(crate) enum LinalgOp {
         transpose_a: bool,
     },
     Svd {
-        eps: f64,
+        derivative_eps: f64,
+        gauge: SvdGauge,
     },
     SvdVals {
-        eps: f64,
+        derivative_eps: f64,
     },
     Qr,
     Eigh {
-        eps: f64,
+        derivative_eps: f64,
     },
     EighVals {
-        eps: f64,
+        derivative_eps: f64,
     },
     Eig {
         input_dtype: DType,
@@ -206,10 +357,18 @@ impl ExtensionOp for LinalgExtensionOp {
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
         hasher.write_u8(self.op.tag());
         match self.op {
-            LinalgOp::Svd { eps }
-            | LinalgOp::SvdVals { eps }
-            | LinalgOp::Eigh { eps }
-            | LinalgOp::EighVals { eps } => hasher.write_u64(eps.to_bits()),
+            LinalgOp::Svd {
+                derivative_eps,
+                gauge,
+            } => {
+                hasher.write_u64(derivative_eps.to_bits());
+                hash_svd_gauge(hasher, gauge);
+            }
+            LinalgOp::SvdVals { derivative_eps }
+            | LinalgOp::Eigh { derivative_eps }
+            | LinalgOp::EighVals { derivative_eps } => {
+                hasher.write_u64(derivative_eps.to_bits());
+            }
             LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
                 hash_dtype(hasher, input_dtype);
             }
@@ -267,11 +426,11 @@ impl ExtensionOp for LinalgExtensionOp {
 
     fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
         match self.op {
-            LinalgOp::Svd { eps } if live_outputs == [false, true, false] => {
-                Some(Arc::new(Self::new(LinalgOp::SvdVals { eps })))
+            LinalgOp::Svd { derivative_eps, .. } if live_outputs == [false, true, false] => {
+                Some(Arc::new(Self::new(LinalgOp::SvdVals { derivative_eps })))
             }
-            LinalgOp::Eigh { eps } if live_outputs == [true, false] => {
-                Some(Arc::new(Self::new(LinalgOp::EighVals { eps })))
+            LinalgOp::Eigh { derivative_eps } if live_outputs == [true, false] => {
+                Some(Arc::new(Self::new(LinalgOp::EighVals { derivative_eps })))
             }
             LinalgOp::Eig { input_dtype } if live_outputs == [true, false] => {
                 Some(Arc::new(Self::new(LinalgOp::EigVals { input_dtype })))
@@ -427,10 +586,21 @@ fn execute_linalg<B: LinalgBackend>(
             inputs[1],
             transpose_a,
         )?]),
-        LinalgOp::Svd { .. } => backend.svd(inputs[0]),
+        LinalgOp::Svd {
+            derivative_eps,
+            gauge,
+        } => backend.svd_with_options(
+            inputs[0],
+            SvdOptions {
+                derivative_eps,
+                gauge,
+            },
+        ),
         LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
         LinalgOp::Qr => backend.qr(inputs[0]),
-        LinalgOp::Eigh { .. } => backend.eigh(inputs[0]),
+        LinalgOp::Eigh { derivative_eps } => {
+            backend.eigh_with_options(inputs[0], EighOptions { derivative_eps })
+        }
         LinalgOp::EighVals { .. } => Ok(vec![backend.eigh_values(inputs[0])?]),
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
         LinalgOp::EigVals { .. } => Ok(vec![backend.eig_values(inputs[0])?]),
@@ -448,6 +618,278 @@ fn execute_linalg<B: LinalgBackend>(
             unit_diagonal,
         )?]),
     }
+}
+
+pub(crate) fn apply_svd_gauge(
+    gauge: SvdGauge,
+    outputs: &mut [Tensor],
+) -> tenferro_tensor::Result<()> {
+    match gauge {
+        SvdGauge::Raw => Ok(()),
+        SvdGauge::CanonicalPivot => apply_canonical_pivot_svd_gauge(outputs),
+    }
+}
+
+fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::Result<()> {
+    if outputs.len() != 3 {
+        return Err(Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            message: format!(
+                "canonical SVD gauge expected three outputs, got {}",
+                outputs.len()
+            ),
+        });
+    }
+
+    let (u_slice, rest) = outputs.split_at_mut(1);
+    let (singular_slice, vt_slice) = rest.split_at_mut(1);
+    let u = &mut u_slice[0];
+    let singular_values = &singular_slice[0];
+    let vt = &mut vt_slice[0];
+    let u_shape = u.shape().to_vec();
+    let s_shape = singular_values.shape().to_vec();
+    let vt_shape = vt.shape().to_vec();
+    if u_shape.len() < 2 || vt_shape.len() < 2 || s_shape.is_empty() {
+        return Err(Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            message: format!(
+                "canonical SVD gauge expected U rank >= 2, S rank >= 1, VT rank >= 2; got U={u_shape:?}, S={s_shape:?}, VT={vt_shape:?}"
+            ),
+        });
+    }
+
+    let m = u_shape[0];
+    let k = u_shape[1];
+    let n = vt_shape[1];
+    if s_shape[0] != k
+        || vt_shape[0] != k
+        || u_shape[2..] != vt_shape[2..]
+        || s_shape[1..] != u_shape[2..]
+    {
+        return Err(Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            message: format!(
+                "canonical SVD gauge expected compatible compact SVD shapes, got U={u_shape:?}, S={s_shape:?}, VT={vt_shape:?}"
+            ),
+        });
+    }
+    let batch_count = u_shape[2..].iter().product::<usize>();
+
+    match (u, vt) {
+        (Tensor::F64(u), Tensor::F64(vt)) => canonicalize_svd_gauge_f64(
+            u.host_data_mut()?,
+            vt.host_data_mut()?,
+            m,
+            k,
+            n,
+            batch_count,
+        ),
+        (Tensor::F32(u), Tensor::F32(vt)) => canonicalize_svd_gauge_f32(
+            u.host_data_mut()?,
+            vt.host_data_mut()?,
+            m,
+            k,
+            n,
+            batch_count,
+        ),
+        (Tensor::C64(u), Tensor::C64(vt)) => canonicalize_svd_gauge_c64(
+            u.host_data_mut()?,
+            vt.host_data_mut()?,
+            m,
+            k,
+            n,
+            batch_count,
+        ),
+        (Tensor::C32(u), Tensor::C32(vt)) => canonicalize_svd_gauge_c32(
+            u.host_data_mut()?,
+            vt.host_data_mut()?,
+            m,
+            k,
+            n,
+            batch_count,
+        ),
+        (u, vt) => Err(Error::DTypeMismatch {
+            op: "tenferro-linalg.svd",
+            lhs: u.dtype(),
+            rhs: vt.dtype(),
+        }),
+    }
+}
+
+fn canonicalize_svd_gauge_f64(
+    u: &mut [f64],
+    vt: &mut [f64],
+    m: usize,
+    k: usize,
+    n: usize,
+    batch_count: usize,
+) -> tenferro_tensor::Result<()> {
+    for batch in 0..batch_count {
+        let u_batch = batch * m * k;
+        let vt_batch = batch * k * n;
+        for col in 0..k {
+            let pivot = max_abs_pivot_f64(u, u_batch, m, col);
+            let pivot_value = u[u_batch + pivot + m * col];
+            if pivot_value < 0.0 {
+                for row in 0..m {
+                    let offset = u_batch + row + m * col;
+                    u[offset] = -u[offset];
+                }
+                for vt_col in 0..n {
+                    let offset = vt_batch + col + k * vt_col;
+                    vt[offset] = -vt[offset];
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn canonicalize_svd_gauge_f32(
+    u: &mut [f32],
+    vt: &mut [f32],
+    m: usize,
+    k: usize,
+    n: usize,
+    batch_count: usize,
+) -> tenferro_tensor::Result<()> {
+    for batch in 0..batch_count {
+        let u_batch = batch * m * k;
+        let vt_batch = batch * k * n;
+        for col in 0..k {
+            let pivot = max_abs_pivot_f32(u, u_batch, m, col);
+            let pivot_value = u[u_batch + pivot + m * col];
+            if pivot_value < 0.0 {
+                for row in 0..m {
+                    let offset = u_batch + row + m * col;
+                    u[offset] = -u[offset];
+                }
+                for vt_col in 0..n {
+                    let offset = vt_batch + col + k * vt_col;
+                    vt[offset] = -vt[offset];
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn canonicalize_svd_gauge_c64(
+    u: &mut [Complex64],
+    vt: &mut [Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+    batch_count: usize,
+) -> tenferro_tensor::Result<()> {
+    for batch in 0..batch_count {
+        let u_batch = batch * m * k;
+        let vt_batch = batch * k * n;
+        for col in 0..k {
+            let pivot = max_abs_pivot_c64(u, u_batch, m, col);
+            let pivot_value = u[u_batch + pivot + m * col];
+            let pivot_norm = pivot_value.norm();
+            if pivot_norm == 0.0 {
+                continue;
+            }
+            let phase = pivot_value.conj() / pivot_norm;
+            let vt_phase = phase.conj();
+            for row in 0..m {
+                let offset = u_batch + row + m * col;
+                u[offset] *= phase;
+            }
+            for vt_col in 0..n {
+                let offset = vt_batch + col + k * vt_col;
+                vt[offset] *= vt_phase;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn canonicalize_svd_gauge_c32(
+    u: &mut [Complex32],
+    vt: &mut [Complex32],
+    m: usize,
+    k: usize,
+    n: usize,
+    batch_count: usize,
+) -> tenferro_tensor::Result<()> {
+    for batch in 0..batch_count {
+        let u_batch = batch * m * k;
+        let vt_batch = batch * k * n;
+        for col in 0..k {
+            let pivot = max_abs_pivot_c32(u, u_batch, m, col);
+            let pivot_value = u[u_batch + pivot + m * col];
+            let pivot_norm = pivot_value.norm();
+            if pivot_norm == 0.0 {
+                continue;
+            }
+            let phase = pivot_value.conj() / pivot_norm;
+            let vt_phase = phase.conj();
+            for row in 0..m {
+                let offset = u_batch + row + m * col;
+                u[offset] *= phase;
+            }
+            for vt_col in 0..n {
+                let offset = vt_batch + col + k * vt_col;
+                vt[offset] *= vt_phase;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn max_abs_pivot_f64(u: &[f64], u_batch: usize, m: usize, col: usize) -> usize {
+    let mut pivot = 0;
+    let mut pivot_abs = u[u_batch + m * col].abs();
+    for row in 1..m {
+        let candidate_abs = u[u_batch + row + m * col].abs();
+        if candidate_abs > pivot_abs {
+            pivot = row;
+            pivot_abs = candidate_abs;
+        }
+    }
+    pivot
+}
+
+fn max_abs_pivot_f32(u: &[f32], u_batch: usize, m: usize, col: usize) -> usize {
+    let mut pivot = 0;
+    let mut pivot_abs = u[u_batch + m * col].abs();
+    for row in 1..m {
+        let candidate_abs = u[u_batch + row + m * col].abs();
+        if candidate_abs > pivot_abs {
+            pivot = row;
+            pivot_abs = candidate_abs;
+        }
+    }
+    pivot
+}
+
+fn max_abs_pivot_c64(u: &[Complex64], u_batch: usize, m: usize, col: usize) -> usize {
+    let mut pivot = 0;
+    let mut pivot_abs = u[u_batch + m * col].norm_sqr();
+    for row in 1..m {
+        let candidate_abs = u[u_batch + row + m * col].norm_sqr();
+        if candidate_abs > pivot_abs {
+            pivot = row;
+            pivot_abs = candidate_abs;
+        }
+    }
+    pivot
+}
+
+fn max_abs_pivot_c32(u: &[Complex32], u_batch: usize, m: usize, col: usize) -> usize {
+    let mut pivot = 0;
+    let mut pivot_abs = u[u_batch + m * col].norm_sqr();
+    for row in 1..m {
+        let candidate_abs = u[u_batch + row + m * col].norm_sqr();
+        if candidate_abs > pivot_abs {
+            pivot = row;
+            pivot_abs = candidate_abs;
+        }
+    }
+    pivot
 }
 
 fn require_matrix_meta(op: &'static str, shape: &[SymDim]) -> tenferro_tensor::Result<()> {
@@ -617,6 +1059,14 @@ fn hash_dtype(hasher: &mut dyn Hasher, dtype: DType) {
         DType::C32 => 4,
         DType::I32 => 5,
         DType::Bool => 6,
+    };
+    hasher.write_u8(tag);
+}
+
+fn hash_svd_gauge(hasher: &mut dyn Hasher, gauge: SvdGauge) {
+    let tag = match gauge {
+        SvdGauge::Raw => 0,
+        SvdGauge::CanonicalPivot => 1,
     };
     hasher.write_u8(tag);
 }

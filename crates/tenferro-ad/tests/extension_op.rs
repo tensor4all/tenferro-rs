@@ -310,9 +310,8 @@ fn swap_ad_context() -> AdContext {
 
 // ----------------------------------------------------------------------
 // TestPreferLinearize: identity op with a deliberately distinguishable
-// primary transpose. This guards VJP path ordering: the generic
-// linearize -> linear_transpose path must be preferred when linearization is
-// available, while primary transpose remains an escape hatch.
+// primary transpose. This guards VJP path ordering: a registered custom VJP
+// must be preferred over the generic linearize -> linear_transpose path.
 // ----------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq)]
@@ -431,6 +430,119 @@ fn prefer_linearize_ad_context() -> AdContext {
         .with_extension_rules(prefer_linearize_rules())
         .build()
         .expect("prefer_linearize AD context")
+}
+
+// ----------------------------------------------------------------------
+// TestCustomVjpInvalid: identity op with both canonical and custom routes.
+// The custom route reports a real rule error; VJP dispatch must not hide it
+// behind the canonical linearize -> transpose fallback.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestCustomVjpInvalid;
+
+impl ExtensionOp for TestCustomVjpInvalid {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.custom_vjp_invalid.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestCustomVjpInvalid>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+    }
+
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestCustomVjpInvalid {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Debug)]
+struct TestCustomVjpInvalidRule;
+
+impl ExtensionLinearizeRule for TestCustomVjpInvalidRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.custom_vjp_invalid.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Ok(vec![tangent_in[0]])
+    }
+}
+
+impl ExtensionPrimalVjpRule for TestCustomVjpInvalidRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.custom_vjp_invalid.v1"
+    }
+
+    fn primal_vjp(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut dyn PrimitiveRuleBuilder,
+        _cotangent_out: &[Option<LocalValueId>],
+        _inputs: &[ValueRef<StdTensorOp>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        Err(ADRuleError::invalid_input(
+            "tenferro-tests.custom_vjp_invalid.v1",
+            ADRuleKind::Transpose,
+            "custom VJP validation failure",
+        ))
+    }
+}
+
+fn custom_vjp_invalid_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(
+            ExtensionRuleSet::new()
+                .with_linearize(Arc::new(TestCustomVjpInvalidRule))
+                .expect("custom_vjp_invalid linearize registration")
+                .with_primal_vjp(Arc::new(TestCustomVjpInvalidRule))
+                .expect("custom_vjp_invalid VJP registration"),
+        )
+        .build()
+        .expect("custom_vjp_invalid AD context")
 }
 
 // ----------------------------------------------------------------------
@@ -1078,22 +1190,39 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
 }
 
 #[test]
-fn traced_vjp_prefers_linearize_transpose_over_primary_transpose() {
+fn traced_vjp_prefers_custom_primal_vjp_over_linearize_transpose() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).unwrap();
     let y = apply(Arc::new(TestPreferLinearize), &[&x])
         .unwrap()
         .into_iter()
         .next()
-        .expect("single prefer_linearize output");
+        .expect("single prefer_custom_vjp output");
     let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]).unwrap();
 
     let vjp = prefer_linearize_ad_context()
         .vjp(&y, &x, &dy)
-        .expect("vjp should build through linearize");
+        .expect("vjp should build through custom primal VJP");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let vjp_out = vjp.run_with(&mut engine).unwrap();
 
-    assert_eq!(f64_slice(&vjp_out), &[7.0, 11.0]);
+    assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);
+}
+
+#[test]
+fn traced_vjp_does_not_fallback_when_custom_primal_vjp_reports_invalid_input() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]).unwrap();
+    let y = apply(Arc::new(TestCustomVjpInvalid), &[&x])
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("single custom_vjp_invalid output");
+    let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]).unwrap();
+
+    let err = custom_vjp_invalid_ad_context()
+        .vjp(&y, &x, &dy)
+        .expect_err("custom VJP invalid-input failure must not fallback");
+
+    assert!(err.to_string().contains("custom VJP validation failure"));
 }
 
 #[test]

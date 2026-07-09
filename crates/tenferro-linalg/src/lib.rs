@@ -43,11 +43,14 @@ mod traced;
 pub use ad::ad_rules;
 #[cfg(feature = "autodiff")]
 pub use ad::support::{
-    all_linalg_ad_support, linalg_ad_support, LinalgAdOpKind, LinalgAdOutputSupport,
-    LinalgAdRuleSupport, LinalgAdSupport,
+    all_linalg_ad_support, linalg_ad_support, LinalgAdModeSupport, LinalgAdOpKind,
+    LinalgAdOutputSupport, LinalgAdRoute, LinalgAdRuleSupport, LinalgAdSupport,
 };
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 pub use eager_ext::EagerTensorLinalgExt;
-pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};
+pub use extension::{
+    register_runtime, EighOptions, SvdGauge, SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+    LINALG_EXTENSION_FAMILY_ID,
+};
 pub use traced::TracedTensorLinalgExt;

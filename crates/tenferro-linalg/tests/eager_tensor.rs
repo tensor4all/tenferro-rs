@@ -6,7 +6,7 @@ use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::{EagerTensorLinalgExt, EighOptions, SvdGauge, SvdOptions};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -106,6 +106,32 @@ fn svd_returns_correct_shapes() {
     assert_eq!(u.shape(), &[2, 2]);
     assert_eq!(s.shape(), &[2]);
     assert_eq!(vt.shape(), &[2, 2]);
+}
+
+#[test]
+fn eager_decomposition_options_execute_and_return_expected_shapes() {
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+
+    let (u, s, vt) = a
+        .svd_with_options(
+            SvdOptions::default()
+                .gauge(SvdGauge::CanonicalPivot)
+                .derivative_eps(1.0e-10),
+        )
+        .unwrap();
+    let (eigh_values, eigh_vectors) = a
+        .eigh_with_options(EighOptions::default().derivative_eps(1.0e-10))
+        .unwrap();
+
+    assert_eq!(u.shape(), &[2, 2]);
+    assert_eq!(s.shape(), &[2]);
+    assert_eq!(vt.shape(), &[2, 2]);
+    assert_eq!(eigh_values.shape(), &[2]);
+    assert_eq!(eigh_vectors.shape(), &[2, 2]);
 }
 
 #[test]
