@@ -19,7 +19,9 @@ name: RunPod tenferro-rs GPU Test
 #   * `RUNPOD_API_KEY` (and the GitHub App credentials used to mint the JIT
 #     runner config) must only ever be read in GitHub-hosted jobs
 #     (`start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
-#     become readable from, the pod itself.
+#     become readable from, the pod itself. PR-triggered runs are gated by the
+#     `authorize` job instead of the `runpod-gpu` environment because GitHub
+#     environment branch rules reject `refs/pull/*/merge`.
 # ---------------------------------------------------------------------------
 
 on:
@@ -324,7 +326,6 @@ jobs:
     needs:
       - authorize
       - cuda-archive
-    environment: runpod-gpu
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1055,7 +1056,6 @@ jobs:
 
     if: always()
 
-    environment: runpod-gpu
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
