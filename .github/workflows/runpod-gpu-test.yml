@@ -40,6 +40,11 @@ on:
         required: false
         default: main
         type: string
+      ci_gpu_gate_head_sha:
+        description: Optional PR head SHA to publish the CI GPU gate check to
+        required: false
+        default: ""
+        type: string
   workflow_run:
     workflows: ["CI PR workspace tests"]
     types: [completed]
@@ -1317,6 +1322,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
@@ -1358,6 +1364,8 @@ jobs:
           target_sha=""
           if [ "${EVENT_NAME}" = "workflow_run" ]; then
             target_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+          elif [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
+            target_sha="${MANUAL_GATE_HEAD_SHA}"
           fi
 
           if [ -n "${target_sha}" ]; then

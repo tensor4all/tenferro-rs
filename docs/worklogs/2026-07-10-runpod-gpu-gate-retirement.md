@@ -26,6 +26,9 @@ execution and makes the trusted RunPod workflow own the PR GPU gate.
   the PR head SHA instead of relying on the workflow job's own check run.
 - Keep `checks: write` scoped to the final GitHub-hosted gate job only; the
   self-hosted RunPod job remains read-only.
+- Keep a manual `ci_gpu_gate_head_sha` input so workflow-change PRs can run the
+  PR branch workflow against a pinned test ref and still publish the required
+  gate to the PR head before the trusted workflow has landed on `main`.
 - Preserve the existing trusted-base `workflow_run` model and pinned merge-SHA
   checkout behavior from PR #1340.
 
