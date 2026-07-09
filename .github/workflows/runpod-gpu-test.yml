@@ -54,7 +54,6 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
-  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || format('refs/pull/{0}/merge', github.event.workflow_run.pull_requests[0].number) }}
   # cudarc 0.19.x needs 12080 bindings; install CUDA_RUNTIME_VERSION toolkit when
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
@@ -73,11 +72,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    outputs:
+      tenferro_ref: ${{ steps.resolve_ref.outputs.tenferro_ref }}
+
     steps:
       - name: Check actor and PR source are allowed
+        id: resolve_ref
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || 'main' }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
         run: |
@@ -108,6 +112,8 @@ jobs:
             fi
 
             pr_number="$(jq -r '.[0].number // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+            trigger_head_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+            trigger_base_sha="$(jq -r '.[0].base.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
             if [ -z "${pr_number}" ]; then
               echo "::error::workflow_run did not include an associated pull request."
               exit 1
@@ -116,16 +122,37 @@ jobs:
             pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")"
             pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
             pr_head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+            pr_head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
+            pr_base_sha="$(jq -r '.base.sha' <<<"${pr_json}")"
 
             if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
               echo "::error::Fork PRs are not allowed to launch RunPod CI (${pr_head_repo} -> ${GITHUB_REPOSITORY})."
               exit 1
             fi
 
+            if [ -n "${trigger_head_sha}" ] && [ "${pr_head_sha}" != "${trigger_head_sha}" ]; then
+              echo "::error::PR #${pr_number} head changed after the triggering CI run (${trigger_head_sha} -> ${pr_head_sha}); refusing to launch RunPod."
+              exit 1
+            fi
+            if [ -n "${trigger_base_sha}" ] && [ "${pr_base_sha}" != "${trigger_base_sha}" ]; then
+              echo "::error::PR #${pr_number} base changed after the triggering CI run (${trigger_base_sha} -> ${pr_base_sha}); refusing to launch RunPod."
+              exit 1
+            fi
+
             check_permission "${pr_author}" "PR author"
+
+            merge_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/pull/${pr_number}/merge" --jq .object.sha)"
+            if [ -z "${merge_sha}" ] || [ "${merge_sha}" = "null" ]; then
+              echo "::error::Failed to resolve refs/pull/${pr_number}/merge."
+              exit 1
+            fi
+
+            echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
+            echo "tenferro_ref=${merge_sha}" >> "${GITHUB_OUTPUT}"
           else
             # Manual dispatch relies on the triggering actor check.
             check_permission "${GITHUB_ACTOR}" "Workflow actor"
+            echo "tenferro_ref=${MANUAL_TENFERRO_REF}" >> "${GITHUB_OUTPUT}"
           fi
 
   pre-runpod-gate:
@@ -236,8 +263,12 @@ jobs:
 
   cuda-archive:
     name: CUDA test archive
+    needs: authorize
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+
+    env:
+      TENFERRO_REF: ${{ needs.authorize.outputs.tenferro_ref }}
 
     outputs:
       archive_cache_key: ${{ steps.archive_key.outputs.key }}
@@ -842,8 +873,12 @@ jobs:
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
     needs:
+      - authorize
       - cuda-archive
       - start-runpod
+
+    env:
+      TENFERRO_REF: ${{ needs.authorize.outputs.tenferro_ref }}
 
     runs-on:
       - self-hosted
