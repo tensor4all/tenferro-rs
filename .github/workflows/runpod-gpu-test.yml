@@ -149,6 +149,22 @@ jobs:
               exit 1
             fi
 
+            # Re-read the PR after resolving the moving merge ref. Without
+            # this second check, a push between the first PR read and the merge
+            # ref lookup could make the pinned merge SHA belong to a newer
+            # head/base pair than the CI run that triggered this workflow.
+            refreshed_pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")"
+            refreshed_head_sha="$(jq -r '.head.sha' <<<"${refreshed_pr_json}")"
+            refreshed_base_sha="$(jq -r '.base.sha' <<<"${refreshed_pr_json}")"
+            if [ -n "${trigger_head_sha}" ] && [ "${refreshed_head_sha}" != "${trigger_head_sha}" ]; then
+              echo "::error::PR #${pr_number} head changed while resolving the merge SHA (${trigger_head_sha} -> ${refreshed_head_sha}); refusing to launch RunPod."
+              exit 1
+            fi
+            if [ -n "${trigger_base_sha}" ] && [ "${refreshed_base_sha}" != "${trigger_base_sha}" ]; then
+              echo "::error::PR #${pr_number} base changed while resolving the merge SHA (${trigger_base_sha} -> ${refreshed_base_sha}); refusing to launch RunPod."
+              exit 1
+            fi
+
             echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
             echo "tenferro_ref=${merge_sha}" >> "${GITHUB_OUTPUT}"
           else
