@@ -154,18 +154,40 @@ jobs:
                 per_page: 100,
               });
 
-              const latest = new Map();
+              const candidates = new Map();
               for (const run of runs) {
                 if (!required.includes(run.name)) {
                   continue;
                 }
-                const previous = latest.get(run.name);
-                const runTime = new Date(run.started_at || run.created_at || 0);
-                const previousTime = previous
-                  ? new Date(previous.started_at || previous.created_at || 0)
-                  : new Date(0);
-                if (!previous || runTime > previousTime) {
-                  latest.set(run.name, run);
+                const nameRuns = candidates.get(run.name) || [];
+                nameRuns.push(run);
+                candidates.set(run.name, nameRuns);
+              }
+
+              const latest = new Map();
+              for (const name of required) {
+                const nameRuns = (candidates.get(name) || []).sort((a, b) => {
+                  const aTime = new Date(a.started_at || a.created_at || 0);
+                  const bTime = new Date(b.started_at || b.created_at || 0);
+                  return bTime - aTime;
+                });
+
+                // A cancelled or skipped check run can be a superseded attempt
+                // from before a label/approval update. Prefer any successful
+                // run for the same SHA, otherwise an active run, otherwise a
+                // real completed failure.
+                const successful = nameRuns.find(
+                  (run) => run.status === "completed" && run.conclusion === "success"
+                );
+                const active = nameRuns.find((run) => run.status !== "completed");
+                const failed = nameRuns.find(
+                  (run) =>
+                    run.status === "completed" &&
+                    !["cancelled", "skipped", "neutral", "success"].includes(run.conclusion)
+                );
+                const effective = successful || active || failed;
+                if (effective) {
+                  latest.set(name, effective);
                 }
               }
 
