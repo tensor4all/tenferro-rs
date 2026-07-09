@@ -26,6 +26,9 @@ name: RunPod tenferro-rs GPU Test
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
+#   * This workflow owns the required `CI GPU gate` check. The legacy
+#     `.github/workflows/CI_gpu.yml` workflow is manual-only and must not also
+#     run automatically on PRs.
 # ---------------------------------------------------------------------------
 
 on:
@@ -1288,3 +1291,55 @@ jobs:
           fi
 
           echo "Deleted RunPod pod: ${POD_ID}"
+
+  ci-gpu-gate:
+    name: CI GPU gate
+    needs:
+      - authorize
+      - pre-runpod-gate
+      - cuda-archive
+      - start-runpod
+      - run-gpu-tests
+      - cleanup-runpod
+
+    if: always()
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check RunPod GPU workflow result
+        env:
+          AUTHORIZE_RESULT: ${{ needs.authorize.result }}
+          PRE_RUNPOD_GATE_RESULT: ${{ needs.pre-runpod-gate.result }}
+          CUDA_ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          START_RUNPOD_RESULT: ${{ needs.start-runpod.result }}
+          RUN_GPU_TESTS_RESULT: ${{ needs.run-gpu-tests.result }}
+          CLEANUP_RUNPOD_RESULT: ${{ needs.cleanup-runpod.result }}
+        run: |
+          set -euo pipefail
+
+          failed=0
+          check_result() {
+            local name="$1"
+            local result="$2"
+            if [ "${result}" != "success" ]; then
+              echo "::error::${name} concluded ${result}; RunPod GPU gate failed."
+              failed=1
+            else
+              echo "OK: ${name} succeeded."
+            fi
+          }
+
+          check_result "Authorize RunPod GPU run" "${AUTHORIZE_RESULT}"
+          check_result "Wait for review and non-GPU CI" "${PRE_RUNPOD_GATE_RESULT}"
+          check_result "CUDA test archive" "${CUDA_ARCHIVE_RESULT}"
+          check_result "Start RunPod org runner" "${START_RUNPOD_RESULT}"
+          check_result "CUDA GPU tests on RunPod" "${RUN_GPU_TESTS_RESULT}"
+          check_result "Delete RunPod pod" "${CLEANUP_RUNPOD_RESULT}"
+
+          if [ "${failed}" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "CI_GPU_GATE_OK"
