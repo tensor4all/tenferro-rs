@@ -1,0 +1,54 @@
+name: Delete RunPod pod
+
+on:
+  workflow_dispatch:
+    inputs:
+      pod_id:
+        description: RunPod pod id to delete
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  delete-runpod-pod:
+    name: Delete RunPod pod
+    runs-on: ubuntu-22.04
+    environment: runpod-gpu
+    timeout-minutes: 10
+
+    steps:
+      - name: Delete RunPod pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ inputs.pod_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
+            echo "No POD_ID; nothing to delete"
+            exit 0
+          fi
+
+          echo "Deleting RunPod pod: ${POD_ID}"
+
+          response_file=/tmp/runpod-delete-response.json
+          status="$(
+            curl -sS \
+              --request DELETE \
+              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
+              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              --output "$response_file" \
+              --write-out "%{http_code}"
+          )"
+
+          echo "RunPod delete HTTP status: ${status}"
+          cat "$response_file" | jq . || cat "$response_file" || true
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Failed to delete RunPod pod" >&2
+            exit 1
+          fi
+
+          echo "Deleted RunPod pod: ${POD_ID}"
