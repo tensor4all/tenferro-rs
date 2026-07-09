@@ -5,7 +5,11 @@ on:
     inputs:
       pod_id:
         description: RunPod pod id to delete
-        required: true
+        required: false
+        type: string
+      pod_name:
+        description: RunPod pod name to look up and delete
+        required: false
         type: string
 
 permissions:
@@ -23,12 +27,53 @@ jobs:
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ inputs.pod_id }}
+          POD_NAME: ${{ inputs.pod_name }}
         run: |
           set -euo pipefail
 
           if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
-            echo "No POD_ID; nothing to delete"
-            exit 0
+            if [ -z "${POD_NAME}" ] || [ "${POD_NAME}" = "null" ]; then
+              echo "No POD_ID or POD_NAME; nothing to delete"
+              exit 0
+            fi
+
+            echo "Looking up RunPod pod by name: ${POD_NAME}"
+
+            response_file=/tmp/runpod-pods.json
+            status="$(
+              curl -sS \
+                --request GET \
+                --url "https://rest.runpod.io/v1/pods" \
+                --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
+                --output "$response_file" \
+                --write-out "%{http_code}"
+            )"
+
+            echo "RunPod list HTTP status: ${status}"
+            cat "$response_file" | jq . || cat "$response_file" || true
+
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              echo "Failed to list RunPod pods" >&2
+              exit 1
+            fi
+
+            POD_ID="$(
+              jq -r --arg pod_name "$POD_NAME" '
+                if type == "array" then
+                  .[]
+                else
+                  (.pods // .data // .items // [])
+                  | .[]
+                end
+                | select(.name == $pod_name)
+                | .id
+              ' "$response_file" | head -1
+            )"
+
+            if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
+              echo "No pod found with name: ${POD_NAME}"
+              exit 0
+            fi
           fi
 
           echo "Deleting RunPod pod: ${POD_ID}"
