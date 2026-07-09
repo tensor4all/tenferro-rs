@@ -425,7 +425,11 @@ jobs:
                    .
                  end)
                 | (if has("dockerStartCmd") then
-                     .dockerStartCmd = "***redacted-startup-script***"
+                     (if (.dockerStartCmd | type) == "array" then
+                       .dockerStartCmd = ["***redacted-startup-script***"]
+                     else
+                       .dockerStartCmd = "***redacted-startup-script***"
+                     end)
                    else
                      .
                    end);
