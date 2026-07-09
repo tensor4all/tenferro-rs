@@ -57,7 +57,7 @@ env:
 jobs:
   authorize:
     name: Authorize dispatch actor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 5
 
     steps:
@@ -311,7 +311,7 @@ jobs:
       - authorize
       - cuda-archive
     environment: runpod-gpu
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
 
     outputs:
@@ -1011,7 +1011,7 @@ jobs:
     if: always()
 
     environment: runpod-gpu
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
 
     steps:
