@@ -69,18 +69,35 @@ jobs:
                 per_page: 100,
               });
 
-              const latest = new Map();
+              const candidates = new Map();
               for (const run of runs) {
                 if (!required.includes(run.name)) {
                   continue;
                 }
-                const previous = latest.get(run.name);
-                const runTime = new Date(run.started_at || run.created_at || 0);
-                const previousTime = previous
-                  ? new Date(previous.started_at || previous.created_at || 0)
-                  : new Date(0);
-                if (!previous || runTime > previousTime) {
-                  latest.set(run.name, run);
+                const nameRuns = candidates.get(run.name) || [];
+                nameRuns.push(run);
+                candidates.set(run.name, nameRuns);
+              }
+
+              const latest = new Map();
+              for (const name of required) {
+                const nameRuns = (candidates.get(name) || []).sort((a, b) => {
+                  const aTime = new Date(a.started_at || a.created_at || 0);
+                  const bTime = new Date(b.started_at || b.created_at || 0);
+                  return bTime - aTime;
+                });
+
+                // Cancelled or skipped runs can be superseded attempts from
+                // before a label/approval update. Use the newest current
+                // candidate instead of letting an older success mask a newer
+                // active or failed run.
+                const effective = nameRuns.find(
+                  (run) =>
+                    run.status !== "completed" ||
+                    !["cancelled", "skipped"].includes(run.conclusion)
+                );
+                if (effective) {
+                  latest.set(name, effective);
                 }
               }
 
