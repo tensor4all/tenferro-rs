@@ -48,7 +48,7 @@ env:
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
   CUDA_RUNTIME_VERSION: "12.4"
-  ARCHIVE_WORKSPACE_ROOT: /home/runner/work/hello-world-runpod/hello-world-runpod
+  ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
@@ -984,7 +984,7 @@ jobs:
           cargo nextest run \
             --archive-file "${CUDA_ARCHIVE}" \
             --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs" \
-            --run-ignored all \
+            --run-ignored ignored-only \
             --no-fail-fast \
             -j 1
 

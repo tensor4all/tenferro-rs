@@ -421,7 +421,7 @@ jobs:
           cargo nextest run \
             --archive-file "${CUDA_ARCHIVE}" \
             --workspace-remap "${GITHUB_WORKSPACE}" \
-            --run-ignored all \
+            --run-ignored ignored-only \
             --no-fail-fast \
             -j 1
       - name: Run OpenXLA PJRT E2E tests
