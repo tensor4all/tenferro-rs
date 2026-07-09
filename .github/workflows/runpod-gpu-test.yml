@@ -13,9 +13,11 @@ name: RunPod tenferro-rs GPU Test
 #     process, so fork code must never reach the self-hosted runner.
 #   * NEVER add `pull_request_target` to this workflow: that would combine base
 #     repository secrets with PR-controlled refs.
-#   * Top-level `permissions: contents: read` must never grow. In particular,
-#     never add `id-token: write` or any write scope to a job that runs on
-#     the self-hosted RunPod runner (`run-gpu-tests`).
+#   * Top-level permissions must stay read-only. In particular, never add
+#     `id-token: write` or any write scope to a job that runs on the
+#     self-hosted RunPod runner (`run-gpu-tests`). `checks: read` is present
+#     only so the GitHub-hosted pre-RunPod gate can wait for cheap CI before
+#     any paid pod is created.
 #   * `RUNPOD_API_KEY` (and the GitHub App credentials used to mint the JIT
 #     runner config) must only ever be read in GitHub-hosted jobs
 #     (`start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
@@ -40,6 +42,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  checks: read
   contents: read
 
 env:
@@ -71,6 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
         run: |
           set -euo pipefail
@@ -80,17 +84,122 @@ jobs:
             exit 1
           fi
 
-          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq .permission)"
+          check_permission() {
+            local login="$1"
+            local role="$2"
+            local perm
 
-          case "${perm}" in
-            admin|maintain)
-              echo "OK: ${GITHUB_ACTOR} has '${perm}' permission and is allowed to launch RunPod CI."
-              ;;
-            *)
-              echo "::error::${GITHUB_ACTOR} has '${perm}' permission, which is not allowed to launch RunPod CI (requires admin or maintain)."
-              exit 1
-              ;;
-          esac
+            perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)"
+
+            case "${perm}" in
+              admin|maintain)
+                echo "OK: ${role} ${login} has '${perm}' permission and is allowed to launch RunPod CI."
+                ;;
+              *)
+                echo "::error::${role} ${login} has '${perm}' permission, which is not allowed to launch RunPod CI (requires admin or maintain)."
+                exit 1
+                ;;
+            esac
+          }
+
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            check_permission "${PR_AUTHOR}" "PR author"
+          fi
+
+          # Keep checking the triggering actor too. Manual dispatch relies on
+          # this check, and PR reruns/synchronize events must not let a
+          # lower-trust actor trigger paid infrastructure for someone else's
+          # trusted branch.
+          check_permission "${GITHUB_ACTOR}" "Workflow actor"
+
+  pre-runpod-gate:
+    name: Wait for review and non-GPU CI
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Skip prerequisite gate for manual dispatch
+        if: github.event_name != 'pull_request'
+        run: echo "Manual dispatch is gated by the authorize job only."
+
+      - name: Wait for prerequisite checks
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Gate paid RunPod startup on checks that best predict a broken PR:
+            // repository policy, formatting, lint, coverage, and the full
+            // non-GPU workspace test aggregate. CUDA archive compilation still
+            // runs on a cheap hosted runner in parallel.
+            const required = [
+              "repository rules review",
+              "rustfmt",
+              "clippy",
+              "coverage",
+              "CI gate (PR workspace tests)",
+            ];
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = context.payload.pull_request.head.sha;
+            const deadline = Date.now() + 85 * 60 * 1000;
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            while (Date.now() < deadline) {
+              const runs = await github.paginate(github.rest.checks.listForRef, {
+                owner,
+                repo,
+                ref,
+                per_page: 100,
+              });
+
+              const latest = new Map();
+              for (const run of runs) {
+                if (!required.includes(run.name)) {
+                  continue;
+                }
+                const previous = latest.get(run.name);
+                const runTime = new Date(run.started_at || run.created_at || 0);
+                const previousTime = previous
+                  ? new Date(previous.started_at || previous.created_at || 0)
+                  : new Date(0);
+                if (!previous || runTime > previousTime) {
+                  latest.set(run.name, run);
+                }
+              }
+
+              const missing = required.filter((name) => !latest.has(name));
+              const pending = required.filter((name) => {
+                const run = latest.get(name);
+                return run && run.status !== "completed";
+              });
+              const failed = required.filter((name) => {
+                const run = latest.get(name);
+                return run && run.status === "completed" && run.conclusion !== "success";
+              });
+
+              if (failed.length > 0) {
+                for (const name of failed) {
+                  const run = latest.get(name);
+                  core.error(`${name} concluded ${run.conclusion}: ${run.html_url}`);
+                }
+                core.setFailed("A prerequisite review or non-GPU CI check failed.");
+                return;
+              }
+              if (missing.length === 0 && pending.length === 0) {
+                core.info(`All prerequisite checks passed: ${required.join(", ")}`);
+                return;
+              }
+
+              core.info(
+                `Waiting for prerequisite checks. Missing: ${missing.join(", ") || "none"}. ` +
+                  `Pending: ${pending.join(", ") || "none"}.`
+              );
+              await sleep(30_000);
+            }
+
+            core.setFailed(`Timed out waiting for prerequisite checks: ${required.join(", ")}`);
 
   cuda-archive:
     name: CUDA test archive
@@ -324,6 +433,7 @@ jobs:
     name: Start RunPod org runner
     needs:
       - authorize
+      - pre-runpod-gate
       - cuda-archive
     runs-on: ubuntu-latest
     timeout-minutes: 20
