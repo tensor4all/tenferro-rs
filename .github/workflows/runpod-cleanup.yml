@@ -31,13 +31,42 @@ jobs:
         run: |
           set -euo pipefail
 
+          redact_secrets() {
+            jq '
+              def redact_item:
+                (if has("env") then
+                   .env.RUNNER_JIT_CONFIG = "***redacted***"
+                   | .env.PUBLIC_KEY = "***redacted***"
+                 else
+                   .
+                 end)
+                | (if has("dockerStartCmd") then
+                     .dockerStartCmd = "***redacted-startup-script***"
+                   else
+                     .
+                   end);
+
+              if type == "array" then
+                map(redact_item)
+              elif has("pods") then
+                .pods |= map(redact_item)
+              elif has("data") then
+                .data |= map(redact_item)
+              elif has("items") then
+                .items |= map(redact_item)
+              else
+                redact_item
+              end
+            ' "$1"
+          }
+
           if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
             if [ -z "${POD_NAME}" ] || [ "${POD_NAME}" = "null" ]; then
               echo "No POD_ID or POD_NAME; nothing to delete"
               exit 0
             fi
 
-            echo "Looking up RunPod pod by name: ${POD_NAME}"
+          echo "Looking up RunPod pod by name: ${POD_NAME}"
 
             response_file=/tmp/runpod-pods.json
             status="$(
@@ -45,17 +74,17 @@ jobs:
                 --request GET \
                 --url "https://rest.runpod.io/v1/pods" \
                 --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-                --output "$response_file" \
-                --write-out "%{http_code}"
-            )"
+              --output "$response_file" \
+              --write-out "%{http_code}"
+          )"
 
             echo "RunPod list HTTP status: ${status}"
-            cat "$response_file" | jq . || cat "$response_file" || true
+          redact_secrets "$response_file" || cat "$response_file" || true
 
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-              echo "Failed to list RunPod pods" >&2
-              exit 1
-            fi
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Failed to list RunPod pods" >&2
+            exit 1
+          fi
 
             POD_ID="$(
               jq -r --arg pod_name "$POD_NAME" '
@@ -89,7 +118,7 @@ jobs:
           )"
 
           echo "RunPod delete HTTP status: ${status}"
-          cat "$response_file" | jq . || cat "$response_file" || true
+          redact_secrets "$response_file" || cat "$response_file" || true
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "Failed to delete RunPod pod" >&2
