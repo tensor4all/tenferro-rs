@@ -51,7 +51,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
-  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || github.event.pull_request.head.sha || github.sha }}
+  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || github.sha }}
   # cudarc 0.19.x needs 12080 bindings; install CUDA_RUNTIME_VERSION toolkit when
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
