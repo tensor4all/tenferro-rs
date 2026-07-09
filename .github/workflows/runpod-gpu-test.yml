@@ -358,12 +358,12 @@ jobs:
           request_body="$(
             jq -n \
               --arg name "$RUNNER_LABEL" \
-              --arg label "$RUNNER_LABEL" \
+              --arg runner_label "$RUNNER_LABEL" \
               --argjson runner_group_id "$RUNNER_GROUP_ID" \
               '{
                 name: $name,
                 runner_group_id: $runner_group_id,
-                labels: ["self-hosted", $label],
+                labels: ["self-hosted", $runner_label],
                 work_folder: "_work"
               }'
           )"
@@ -605,11 +605,11 @@ jobs:
             fi
 
             online_count="$(
-              jq --arg label "$RUNNER_LABEL" '
+              jq --arg runner_label "$RUNNER_LABEL" '
                 [
                   .runners[]
                   | select(.status == "online")
-                  | select(any(.labels[]; .name == $label))
+                  | select(any(.labels[]; .name == $runner_label))
                 ]
                 | length
               ' "$response_file"
