@@ -62,7 +62,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
 | SVD | `svd`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
-| QR | `qr` | `qr` | `qr` |
+| QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
 | Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` |
 | General eigen | `eig` | `eig` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
@@ -94,8 +94,8 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ## Concrete Cholesky
 
 ```rust
-use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
+use tenferro_linalg::LinalgBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
@@ -144,8 +144,8 @@ let ad = AdContext::builder()
 ## Singular value decomposition
 
 ```rust
-use tenferro_linalg::LinalgBackend;
 use tenferro_cpu::CpuBackend;
+use tenferro_linalg::{LinalgBackend, QrGauge, QrOptions};
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
@@ -180,11 +180,12 @@ assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 
 ## Decomposition Options And SVD Truncation
 
-Eager and traced SVD expose options when you need a deterministic singular-vector
-gauge or a non-default derivative regularization epsilon. `derivative_eps`
-regularizes AD formulas for repeated or nearly repeated singular values or
-eigenvalues. It is not a backend solver tolerance and does not change the
-forward decomposition algorithm.
+SVD, QR, and Hermitian eigen decomposition expose options when you need an
+opt-in deterministic sign or phase convention. The default remains the
+backend's raw gauge. SVD and Hermitian eigen options also expose
+`derivative_eps`, which regularizes AD formulas for repeated or nearly repeated
+singular values or eigenvalues. It is not a backend solver tolerance and does
+not change the forward decomposition algorithm.
 
 ```rust
 use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
@@ -264,7 +265,12 @@ let a = Tensor::from_vec_col_major(
         3.0, 6.0, 10.0, 5.0,
     ],
 );
-let outputs = LinalgBackend::qr(&mut backend, &a).unwrap();
+let outputs = LinalgBackend::qr_with_options(
+    &mut backend,
+    &a,
+    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+)
+.unwrap();
 let q = &outputs[0];
 let r = &outputs[1];
 

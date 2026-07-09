@@ -12,8 +12,11 @@ use tenferro_tensor::{
 
 use crate::backend::LinalgBackend;
 
+mod gauge;
 #[cfg(all(test, not(feature = "cuda")))]
 mod tests;
+
+pub(crate) use gauge::{apply_eigh_gauge, apply_qr_gauge};
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
@@ -49,6 +52,42 @@ pub enum SvdGauge {
     /// Make each left singular vector's max-absolute pivot entry positive-real
     /// and adjust the matching `VT` row so reconstruction is preserved.
     CanonicalPivot,
+}
+
+/// Eigenvector gauge convention used by [`EighOptions`].
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{EighGauge, EighOptions};
+///
+/// let options = EighOptions::default().gauge(EighGauge::CanonicalPivot);
+/// assert_eq!(options.gauge, EighGauge::CanonicalPivot);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EighGauge {
+    /// Leave the backend's raw eigenvector signs or phases unchanged.
+    Raw,
+    /// Make each eigenvector's max-absolute pivot entry positive-real.
+    CanonicalPivot,
+}
+
+/// QR factor gauge convention used by [`QrOptions`].
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{QrGauge, QrOptions};
+///
+/// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+/// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QrGauge {
+    /// Leave the backend's raw QR signs or phases unchanged.
+    Raw,
+    /// Make each `R` diagonal entry positive-real, compensating `Q`.
+    PositiveDiagonal,
 }
 
 /// Options for singular value decomposition.
@@ -125,6 +164,8 @@ impl SvdOptions {
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EighOptions {
+    /// Eigenvector gauge convention.
+    pub gauge: EighGauge,
     /// AD derivative regularization for repeated or nearly repeated eigenvalues.
     pub derivative_eps: f64,
 }
@@ -132,12 +173,28 @@ pub struct EighOptions {
 impl Default for EighOptions {
     fn default() -> Self {
         Self {
+            gauge: EighGauge::Raw,
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
         }
     }
 }
 
 impl EighOptions {
+    /// Return options with the requested eigenvector gauge.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{EighGauge, EighOptions};
+    ///
+    /// let options = EighOptions::default().gauge(EighGauge::CanonicalPivot);
+    /// assert_eq!(options.gauge, EighGauge::CanonicalPivot);
+    /// ```
+    pub fn gauge(mut self, gauge: EighGauge) -> Self {
+        self.gauge = gauge;
+        self
+    }
+
     /// Return options with an explicit derivative epsilon.
     ///
     /// # Examples
@@ -150,6 +207,47 @@ impl EighOptions {
     /// ```
     pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
         self.derivative_eps = derivative_eps;
+        self
+    }
+}
+
+/// Options for QR decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{QrGauge, QrOptions};
+///
+/// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+/// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QrOptions {
+    /// QR sign or phase convention.
+    pub gauge: QrGauge,
+}
+
+impl Default for QrOptions {
+    fn default() -> Self {
+        Self {
+            gauge: QrGauge::Raw,
+        }
+    }
+}
+
+impl QrOptions {
+    /// Return options with the requested QR gauge.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{QrGauge, QrOptions};
+    ///
+    /// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
+    /// ```
+    pub fn gauge(mut self, gauge: QrGauge) -> Self {
+        self.gauge = gauge;
         self
     }
 }
@@ -189,9 +287,12 @@ pub(crate) enum LinalgOp {
     SvdVals {
         derivative_eps: f64,
     },
-    Qr,
+    Qr {
+        gauge: QrGauge,
+    },
     Eigh {
         derivative_eps: f64,
+        gauge: EighGauge,
     },
     EighVals {
         derivative_eps: f64,
@@ -221,7 +322,7 @@ impl LinalgOp {
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } => 3,
-            Self::Qr | Self::Eigh { .. } | Self::Eig { .. } => 2,
+            Self::Qr { .. } | Self::Eigh { .. } | Self::Eig { .. } => 2,
             Self::LuFactor => 3,
             Self::Lu => 4,
             Self::FullPivLu => 5,
@@ -243,7 +344,7 @@ impl LinalgOp {
             Self::FullPivLu => 2,
             Self::FullPivLuSolve { .. } => 3,
             Self::Svd { .. } => 4,
-            Self::Qr => 5,
+            Self::Qr { .. } => 5,
             Self::Eigh { .. } => 6,
             Self::Eig { .. } => 7,
             Self::TriangularSolve { .. } => 9,
@@ -364,10 +465,18 @@ impl ExtensionOp for LinalgExtensionOp {
                 hasher.write_u64(derivative_eps.to_bits());
                 hash_svd_gauge(hasher, gauge);
             }
-            LinalgOp::SvdVals { derivative_eps }
-            | LinalgOp::Eigh { derivative_eps }
-            | LinalgOp::EighVals { derivative_eps } => {
+            LinalgOp::SvdVals { derivative_eps } | LinalgOp::EighVals { derivative_eps } => {
                 hasher.write_u64(derivative_eps.to_bits());
+            }
+            LinalgOp::Qr { gauge } => {
+                hash_qr_gauge(hasher, gauge);
+            }
+            LinalgOp::Eigh {
+                derivative_eps,
+                gauge,
+            } => {
+                hasher.write_u64(derivative_eps.to_bits());
+                hash_eigh_gauge(hasher, gauge);
             }
             LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
                 hash_dtype(hasher, input_dtype);
@@ -393,11 +502,7 @@ impl ExtensionOp for LinalgExtensionOp {
                 hasher.write_u8(u8::from(transpose_a));
                 hasher.write_u8(u8::from(unit_diagonal));
             }
-            LinalgOp::Cholesky
-            | LinalgOp::Lu
-            | LinalgOp::LuFactor
-            | LinalgOp::FullPivLu
-            | LinalgOp::Qr => {}
+            LinalgOp::Cholesky | LinalgOp::Lu | LinalgOp::LuFactor | LinalgOp::FullPivLu => {}
         }
     }
 
@@ -429,7 +534,7 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Svd { derivative_eps, .. } if live_outputs == [false, true, false] => {
                 Some(Arc::new(Self::new(LinalgOp::SvdVals { derivative_eps })))
             }
-            LinalgOp::Eigh { derivative_eps } if live_outputs == [true, false] => {
+            LinalgOp::Eigh { derivative_eps, .. } if live_outputs == [true, false] => {
                 Some(Arc::new(Self::new(LinalgOp::EighVals { derivative_eps })))
             }
             LinalgOp::Eig { input_dtype } if live_outputs == [true, false] => {
@@ -485,7 +590,7 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::SvdVals { .. } => {
                 vec![svd_values_meta(input_dtypes[0], input_shapes[0])?]
             }
-            LinalgOp::Qr => qr_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::Qr { .. } => qr_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::Eigh { .. } => eigh_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::EighVals { .. } => vec![eigh_values_meta(input_dtypes[0], input_shapes[0])?],
             LinalgOp::Eig { input_dtype } => eig_meta(input_dtype, input_shapes[0])?,
@@ -597,10 +702,17 @@ fn execute_linalg<B: LinalgBackend>(
             },
         ),
         LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
-        LinalgOp::Qr => backend.qr(inputs[0]),
-        LinalgOp::Eigh { derivative_eps } => {
-            backend.eigh_with_options(inputs[0], EighOptions { derivative_eps })
-        }
+        LinalgOp::Qr { gauge } => backend.qr_with_options(inputs[0], QrOptions { gauge }),
+        LinalgOp::Eigh {
+            derivative_eps,
+            gauge,
+        } => backend.eigh_with_options(
+            inputs[0],
+            EighOptions {
+                derivative_eps,
+                gauge,
+            },
+        ),
         LinalgOp::EighVals { .. } => Ok(vec![backend.eigh_values(inputs[0])?]),
         LinalgOp::Eig { .. } => backend.eig(inputs[0]),
         LinalgOp::EigVals { .. } => Ok(vec![backend.eig_values(inputs[0])?]),
@@ -1067,6 +1179,22 @@ fn hash_svd_gauge(hasher: &mut dyn Hasher, gauge: SvdGauge) {
     let tag = match gauge {
         SvdGauge::Raw => 0,
         SvdGauge::CanonicalPivot => 1,
+    };
+    hasher.write_u8(tag);
+}
+
+fn hash_eigh_gauge(hasher: &mut dyn Hasher, gauge: EighGauge) {
+    let tag = match gauge {
+        EighGauge::Raw => 0,
+        EighGauge::CanonicalPivot => 1,
+    };
+    hasher.write_u8(tag);
+}
+
+fn hash_qr_gauge(hasher: &mut dyn Hasher, gauge: QrGauge) {
+    let tag = match gauge {
+        QrGauge::Raw => 0,
+        QrGauge::PositiveDiagonal => 1,
     };
     hasher.write_u8(tag);
 }

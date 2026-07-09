@@ -50,7 +50,7 @@ pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 pub use eager_ext::EagerTensorLinalgExt;
 pub use extension::{
-    register_runtime, EighOptions, SvdGauge, SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
-    LINALG_EXTENSION_FAMILY_ID,
+    register_runtime, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
+    DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
 pub use traced::TracedTensorLinalgExt;

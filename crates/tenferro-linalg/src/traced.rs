@@ -5,7 +5,7 @@ use tenferro_runtime::extension::apply;
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
 use crate::extension::{
-    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, SvdOptions,
+    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
 
 /// Linear algebra extension methods for [`TracedTensor`].
@@ -16,6 +16,7 @@ pub trait TracedTensorLinalgExt {
         options: SvdOptions,
     ) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
+    fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)>;
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
     fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)>;
     fn cholesky(&self) -> Result<TracedTensor>;
@@ -64,6 +65,10 @@ impl TracedTensorLinalgExt for TracedTensor {
 
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)> {
         qr(self)
+    }
+
+    fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)> {
+        qr_with_options(self, options)
     }
 
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)> {
@@ -217,8 +222,35 @@ pub fn svd_with_options(
 /// assert_eq!(r.rank, 2);
 /// ```
 pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
+    qr_with_options(a, QrOptions::default())
+}
+
+/// Build a traced QR decomposition op with explicit options.
+///
+/// `gauge` controls optional sign or phase post-processing.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{QrGauge, QrOptions, TracedTensorLinalgExt};
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+/// let (q, r) = a.qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal)).unwrap();
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(r.rank, 2);
+/// ```
+pub fn qr_with_options(
+    a: &TracedTensor,
+    options: QrOptions,
+) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a])?,
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Qr {
+                gauge: options.gauge,
+            })),
+            &[a],
+        )?,
         "qr",
     )
 }
@@ -248,12 +280,16 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_linalg::{EighOptions, TracedTensorLinalgExt};
+/// use tenferro_linalg::{EighGauge, EighOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let (values, _vectors) = a
-///     .eigh_with_options(EighOptions::default().derivative_eps(1e-10))
+///     .eigh_with_options(
+///         EighOptions::default()
+///             .gauge(EighGauge::CanonicalPivot)
+///             .derivative_eps(1e-10),
+///     )
 ///     .unwrap();
 /// assert_eq!(values.rank, 1);
 /// ```
@@ -266,6 +302,7 @@ pub fn eigh_with_options(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
                 derivative_eps: options.derivative_eps,
+                gauge: options.gauge,
             })),
             &[a],
         )?,
@@ -956,6 +993,7 @@ fn eigh_values(a: &TracedTensor) -> Result<TracedTensor> {
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
                 derivative_eps: EighOptions::default().derivative_eps,
+                gauge: EighOptions::default().gauge,
             })),
             &[a],
         )?,
