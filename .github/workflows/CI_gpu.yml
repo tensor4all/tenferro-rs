@@ -1,13 +1,15 @@
 name: CI_gpu
 
-# Legacy larger-runner GPU workflow. PR GPU gating is owned by
-# `runpod-gpu-test.yml`, which emits the required `CI GPU gate` check through
-# trusted `workflow_run` / explicit maintainer `workflow_dispatch` execution.
-# Keep this workflow manual-only as a fallback for comparing the org larger GPU
-# runner with RunPod.
+# Build the CUDA test archive on a cheap non-GPU runner IN PARALLEL with the
+# repository-policy and non-GPU CI checks, then execute CUDA-feature GPU tests
+# on the org larger GPU runner `ubuntu-gpu` only after those checks pass, to
+# minimize GPU billing. Only the GPU runner (`cuda-run`) is gated behind
+# `pre-gpu-gate`; the archive build is not, so the GPU stage can start the
+# moment the gate clears instead of waiting for the archive to compile.
 
 on:
-  workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 permissions:
   actions: read
