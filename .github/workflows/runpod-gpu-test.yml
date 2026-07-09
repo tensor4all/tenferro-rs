@@ -657,12 +657,15 @@ jobs:
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
     needs:
+      - authorize
       - cuda-archive
-      - start-runpod
+
+    # Queue this job before start-runpod finishes. The RunPod JIT runner can go
+    # offline quickly if no matching job is already waiting.
 
     runs-on:
       - self-hosted
-      - ${{ needs.start-runpod.outputs.runner_label }}
+      - runpod-${{ github.run_id }}-${{ github.run_attempt }}
 
     timeout-minutes: 45
 
@@ -707,7 +710,7 @@ jobs:
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
-          echo "RunPod gpu_type_id (from pod create): ${{ needs.start-runpod.outputs.gpu_type_id }}"
+          echo "RunPod runner label: runpod-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "=== GPU (nvidia-smi) ==="
           nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
           nvidia-smi
