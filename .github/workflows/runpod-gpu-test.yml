@@ -27,7 +27,9 @@ name: RunPod tenferro-rs GPU Test
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
 #   * This workflow owns the branch-protection-required `CI GPU gate` check for
-#     eligible maintainer PRs. The legacy `CI_gpu.yml` workflow is manual-only.
+#     eligible maintainer PRs by publishing that check to the PR head SHA from
+#     a GitHub-hosted final gate job. The legacy `CI_gpu.yml` workflow is
+#     manual-only.
 # ---------------------------------------------------------------------------
 
 on:
@@ -1292,7 +1294,7 @@ jobs:
           echo "Deleted RunPod pod: ${POD_ID}"
 
   ci-gpu-gate:
-    name: CI GPU gate
+    name: Publish CI GPU gate
     needs:
       - authorize
       - pre-runpod-gate
@@ -1306,9 +1308,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    permissions:
+      checks: write
+      contents: read
+
     steps:
-      - name: Require successful RunPod GPU validation and cleanup
+      - name: Publish required PR check
         env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
           PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
@@ -1318,20 +1328,67 @@ jobs:
         run: |
           set -euo pipefail
 
-          require_success() {
+          failures_file="$(mktemp)"
+
+          record_result() {
             local job="$1"
             local result="$2"
             if [ "${result}" != "success" ]; then
               echo "::error::Expected ${job} to succeed; got ${result}."
-              exit 1
+              echo "- ${job}: ${result}" >> "${failures_file}"
             fi
           }
 
-          require_success "authorize" "${AUTHORIZE_RESULT}"
-          require_success "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
-          require_success "cuda-archive" "${ARCHIVE_RESULT}"
-          require_success "start-runpod" "${START_RUNPOD_RESULT}"
-          require_success "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
-          require_success "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
+          record_result "authorize" "${AUTHORIZE_RESULT}"
+          record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
+          record_result "cuda-archive" "${ARCHIVE_RESULT}"
+          record_result "start-runpod" "${START_RUNPOD_RESULT}"
+          record_result "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
+          record_result "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
 
-          echo "RunPod GPU validation completed successfully and owns CI GPU gate."
+          conclusion="success"
+          title="RunPod CI GPU gate passed"
+          summary="RunPod GPU validation completed successfully and owns CI GPU gate."
+          if [ -s "${failures_file}" ]; then
+            conclusion="failure"
+            title="RunPod CI GPU gate failed"
+            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s' "$(cat "${failures_file}")")"
+          fi
+
+          target_sha=""
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            target_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+          fi
+
+          if [ -n "${target_sha}" ]; then
+            echo "Publishing CI GPU gate check to PR head SHA ${target_sha}."
+            jq -n \
+              --arg name "CI GPU gate" \
+              --arg head_sha "${target_sha}" \
+              --arg conclusion "${conclusion}" \
+              --arg details_url "${RUN_URL}" \
+              --arg title "${title}" \
+              --arg summary "${summary}" \
+              '{
+                name: $name,
+                head_sha: $head_sha,
+                status: "completed",
+                conclusion: $conclusion,
+                details_url: $details_url,
+                output: {
+                  title: $title,
+                  summary: $summary
+                }
+              }' > /tmp/ci-gpu-gate-check.json
+
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/check-runs" \
+              --input /tmp/ci-gpu-gate-check.json
+          else
+            echo "No PR head SHA available; skipping PR-head CI GPU gate publication."
+          fi
+
+          if [ "${conclusion}" != "success" ]; then
+            exit 1
+          fi

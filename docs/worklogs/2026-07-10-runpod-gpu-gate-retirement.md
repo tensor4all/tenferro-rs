@@ -21,7 +21,11 @@ execution and makes the trusted RunPod workflow own the PR GPU gate.
   no longer owns the branch-protection-required `CI GPU gate` name.
 - Add the required `CI GPU gate` check to the RunPod workflow after
   authorization, non-GPU pre-gating, archive build, pod startup, GPU tests, and
-  cleanup all succeed.
+  cleanup all succeed. Because `workflow_run` jobs are attached to the default
+  branch commit, the final GitHub-hosted gate publishes a Checks API result to
+  the PR head SHA instead of relying on the workflow job's own check run.
+- Keep `checks: write` scoped to the final GitHub-hosted gate job only; the
+  self-hosted RunPod job remains read-only.
 - Preserve the existing trusted-base `workflow_run` model and pinned merge-SHA
   checkout behavior from PR #1340.
 
