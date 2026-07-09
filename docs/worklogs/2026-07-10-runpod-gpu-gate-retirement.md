@@ -29,6 +29,9 @@ execution and makes the trusted RunPod workflow own the PR GPU gate.
 - Keep a manual `ci_gpu_gate_head_sha` input so workflow-change PRs can run the
   PR branch workflow against a pinned test ref and still publish the required
   gate to the PR head before the trusted workflow has landed on `main`.
+- Make the legacy `CI_gpu.yml` manual fallback check out the requested
+  `tenferro_ref` in both archive and GPU-runner jobs so PJRT validation uses
+  the same ref as the archived CUDA tests.
 - Preserve the existing trusted-base `workflow_run` model and pinned merge-SHA
   checkout behavior from PR #1340.
 

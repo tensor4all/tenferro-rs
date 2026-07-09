@@ -227,6 +227,8 @@ jobs:
           #   if: false
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tenferro_ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
