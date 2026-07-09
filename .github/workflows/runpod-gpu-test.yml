@@ -1,7 +1,7 @@
 name: RunPod tenferro-rs GPU Test
 
 # ---------------------------------------------------------------------------
-# Security policy for this workflow (tracked in tensor4all/tenferro-rs#1322; keep this comment
+# Security policy for this workflow (tracked in issue #1; keep this comment
 # in sync with any port to the public tensor4all/tenferro-rs repo):
 #
 #   * This workflow drives an ephemeral RunPod GPU pod registered as a
@@ -40,6 +40,7 @@ permissions:
 
 env:
   ORG_NAME: tensor4all
+  TENFERRO_REPO: tensor4all/tenferro-rs
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
@@ -47,7 +48,7 @@ env:
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
   CUDA_RUNTIME_VERSION: "12.4"
-  ARCHIVE_WORKSPACE_ROOT: /home/runner/work/tenferro-rs/tenferro-rs
+  ARCHIVE_WORKSPACE_ROOT: /home/runner/work/hello-world-runpod/hello-world-runpod
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
@@ -57,7 +58,7 @@ env:
 jobs:
   authorize:
     name: Authorize dispatch actor
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
@@ -91,7 +92,9 @@ jobs:
       - name: Checkout tenferro-rs
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ env.TENFERRO_REPO }}
           ref: ${{ inputs.tenferro_ref }}
+          path: tenferro-rs
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
         with:
@@ -231,7 +234,7 @@ jobs:
           TENFERRO_REF: ${{ inputs.tenferro_ref }}
         run: |
           set -euo pipefail
-          key="cuda-archive-v8-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${TENFERRO_REF}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**') }}"
+          key="cuda-archive-v8-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${TENFERRO_REF}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
           echo "CUDA archive cache key: ${key}"
 
@@ -239,7 +242,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_cache
         with:
-          path: ${{ env.CUDA_ARCHIVE }}
+          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
 
       - name: Log CUDA archive cache status
@@ -257,7 +260,7 @@ jobs:
           shared-key: cuda-release-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
-          workspaces: . -> target
+          workspaces: tenferro-rs -> target
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
@@ -266,6 +269,7 @@ jobs:
 
       - name: Build CUDA test archive
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
         env:
           CUDARC_CUDA_VERSION: ${{ env.CUDARC_CUDA_VERSION }}
         run: |
@@ -279,6 +283,7 @@ jobs:
             --features cuda
 
       - name: Verify CUDA test archive
+        working-directory: tenferro-rs
         env:
           ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
         run: |
@@ -301,7 +306,7 @@ jobs:
         # always publish the archive so run-gpu-tests can download it on cache miss.
         with:
           name: cuda-tests
-          path: ${{ env.CUDA_ARCHIVE }}
+          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 
@@ -311,7 +316,7 @@ jobs:
       - authorize
       - cuda-archive
     environment: runpod-gpu
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     outputs:
@@ -335,7 +340,7 @@ jobs:
           owner: ${{ env.ORG_NAME }}
 
       # JIT (just-in-time) runner config replaces the old org-level
-      # registration-token + `config.sh` flow (see tensor4all/tenferro-rs#1322, finding 1). A JIT
+      # registration-token + `config.sh` flow (see issue #1, finding 1). A JIT
       # config is single-runner, single-job, cannot be replayed, and is scoped
       # to the runner group below, so a leaked config has far smaller blast
       # radius than the old org-wide reusable registration token.
@@ -358,12 +363,12 @@ jobs:
           request_body="$(
             jq -n \
               --arg name "$RUNNER_LABEL" \
-              --arg runner_label "$RUNNER_LABEL" \
+              --arg label "$RUNNER_LABEL" \
               --argjson runner_group_id "$RUNNER_GROUP_ID" \
               '{
                 name: $name,
                 runner_group_id: $runner_group_id,
-                labels: ["self-hosted", $runner_label],
+                labels: ["self-hosted", $label],
                 work_folder: "_work"
               }'
           )"
@@ -410,6 +415,34 @@ jobs:
           set -euo pipefail
 
           echo "::add-mask::${RUNNER_JIT_CONFIG}"
+          redact_secrets() {
+            jq '
+              def redact_item:
+                (if has("env") then
+                   .env.RUNNER_JIT_CONFIG = "***redacted***"
+                   | .env.PUBLIC_KEY = "***redacted***"
+                 else
+                   .
+                 end)
+                | (if has("dockerStartCmd") then
+                     .dockerStartCmd = "***redacted-startup-script***"
+                   else
+                     .
+                   end);
+
+              if type == "array" then
+                map(redact_item)
+              elif has("pods") then
+                .pods |= map(redact_item)
+              elif has("data") then
+                .data |= map(redact_item)
+              elif has("items") then
+                .items |= map(redact_item)
+              else
+                redact_item
+              end
+            ' "$1"
+          }
 
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
@@ -441,7 +474,7 @@ jobs:
           mkdir actions-runner
           cd actions-runner
 
-          # Pinned actions/runner release (see tensor4all/tenferro-rs#1322, finding 5): resolving
+          # Pinned actions/runner release (see issue #1, finding 5): resolving
           # "latest" at pod-startup time means an attacker who can publish (or
           # a bad actor who can compromise) a runner release gets to run code
           # on every pod we create the moment it lands. Bump both values
@@ -510,11 +543,7 @@ jobs:
             }' > /tmp/pod.json
 
           echo "RunPod request payload, secrets redacted:"
-          jq '
-            .env.RUNNER_JIT_CONFIG = "***" |
-            .env.PUBLIC_KEY = "***" |
-            .dockerStartCmd = ["*** startup script redacted ***"]
-          ' /tmp/pod.json
+          redact_secrets /tmp/pod.json
 
           response_file=/tmp/runpod-response.json
           status=""
@@ -533,7 +562,7 @@ jobs:
             )"
 
             echo "RunPod HTTP status: ${status}"
-            cat "$response_file" | jq . || cat "$response_file"
+            redact_secrets "$response_file" || cat "$response_file"
 
             if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
               break
@@ -605,11 +634,11 @@ jobs:
             fi
 
             online_count="$(
-              jq --arg runner_label "$RUNNER_LABEL" '
+              jq --arg label "$RUNNER_LABEL" '
                 [
                   .runners[]
                   | select(.status == "online")
-                  | select(any(.labels[]; .name == $runner_label))
+                  | select(any(.labels[]; .name == $label))
                 ]
                 | length
               ' "$response_file"
@@ -657,15 +686,12 @@ jobs:
   run-gpu-tests:
     name: CUDA GPU tests on RunPod
     needs:
-      - authorize
       - cuda-archive
-
-    # Queue this job before start-runpod finishes. The RunPod JIT runner can go
-    # offline quickly if no matching job is already waiting.
+      - start-runpod
 
     runs-on:
       - self-hosted
-      - runpod-${{ github.run_id }}-${{ github.run_attempt }}
+      - ${{ needs.start-runpod.outputs.runner_label }}
 
     timeout-minutes: 45
 
@@ -673,7 +699,9 @@ jobs:
       - name: Checkout tenferro-rs
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: ${{ env.TENFERRO_REPO }}
           ref: ${{ inputs.tenferro_ref }}
+          path: tenferro-rs
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
         with:
@@ -683,14 +711,14 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_restore
         with:
-          path: ${{ env.CUDA_ARCHIVE }}
+          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
           key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: steps.cuda_archive_restore.outputs.cache-hit != 'true'
-        timeout-minutes: 5
         with:
           name: cuda-tests
+          path: tenferro-rs
 
       - name: Log CUDA archive source
         run: |
@@ -699,7 +727,7 @@ jobs:
           else
             echo "Using CUDA test archive downloaded from workflow artifact."
           fi
-          ls -lh "${CUDA_ARCHIVE}"
+          ls -lh "tenferro-rs/${CUDA_ARCHIVE}"
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
         with:
@@ -711,7 +739,7 @@ jobs:
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
-          echo "RunPod runner label: runpod-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "RunPod gpu_type_id (from pod create): ${{ needs.start-runpod.outputs.gpu_type_id }}"
           echo "=== GPU (nvidia-smi) ==="
           nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
           nvidia-smi
@@ -941,21 +969,23 @@ jobs:
           fi
           ln -sfn "${GITHUB_WORKSPACE}" "${archive_root}"
           echo "Linked ${archive_root} -> ${GITHUB_WORKSPACE}"
-          test -f "${archive_root}/crates/tenferro-ad/src/context.rs"
+          test -f "${archive_root}/tenferro-rs/crates/tenferro-ad/src/context.rs"
 
       - name: Run CUDA tests from archive
+        working-directory: tenferro-rs
         env:
           NEXTEST_TEST_THREADS: "1"
         run: |
           set -euo pipefail
           cargo nextest run \
             --archive-file "${CUDA_ARCHIVE}" \
-            --workspace-remap "${GITHUB_WORKSPACE}" \
+            --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs" \
             --run-ignored all \
             --no-fail-fast \
             -j 1
 
       - name: Run OpenXLA PJRT E2E tests
+        working-directory: tenferro-rs
         run: |
           set -euo pipefail
           wheel_dir="${RUNNER_TEMP}/openxla-pjrt-wheels"
@@ -1015,7 +1045,7 @@ jobs:
     if: always()
 
     environment: runpod-gpu
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
