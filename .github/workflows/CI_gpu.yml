@@ -87,20 +87,15 @@ jobs:
                   return bTime - aTime;
                 });
 
-                // A cancelled or skipped check run can be a superseded attempt
-                // from before a label/approval update. Prefer any successful
-                // run for the same SHA, otherwise an active run, otherwise a
-                // real completed failure.
-                const successful = nameRuns.find(
-                  (run) => run.status === "completed" && run.conclusion === "success"
-                );
-                const active = nameRuns.find((run) => run.status !== "completed");
-                const failed = nameRuns.find(
+                // Cancelled or skipped runs can be superseded attempts from
+                // before a label/approval update. Use the newest current
+                // candidate instead of letting an older success mask a newer
+                // active or failed run.
+                const effective = nameRuns.find(
                   (run) =>
-                    run.status === "completed" &&
-                    !["cancelled", "skipped", "neutral", "success"].includes(run.conclusion)
+                    run.status !== "completed" ||
+                    !["cancelled", "skipped"].includes(run.conclusion)
                 );
-                const effective = successful || active || failed;
                 if (effective) {
                   latest.set(name, effective);
                 }

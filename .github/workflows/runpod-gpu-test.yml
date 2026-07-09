@@ -8,7 +8,9 @@ name: RunPod tenferro-rs GPU Test
 #     self-hosted GitHub Actions runner. Self-hosted runners on a repo that
 #     accepts external contributions are a well-known escalation path
 #     (see GitHub's "Security hardening for GitHub Actions" guide).
-#   * PR-triggered runs MUST reject fork PRs before RunPod startup. The pod
+#   * PR-triggered runs enter through `workflow_run` from the trusted default
+#     branch workflow file, not through a PR-controlled `pull_request` copy of
+#     this workflow. They MUST reject fork PRs before RunPod startup. The pod
 #     executes the checked-out ref as root, in the same container as the runner
 #     process, so fork code must never reach the self-hosted runner.
 #   * NEVER add `pull_request_target` to this workflow: that would combine base
@@ -19,10 +21,11 @@ name: RunPod tenferro-rs GPU Test
 #     only so the GitHub-hosted pre-RunPod gate can wait for cheap CI before
 #     any paid pod is created.
 #   * `RUNPOD_API_KEY` (and the GitHub App credentials used to mint the JIT
-#     runner config) must only ever be read in GitHub-hosted jobs
+#     runner config) must only ever be read in trusted-base GitHub-hosted jobs
 #     (`start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
-#     become readable from, the pod itself. PR runs use repository secrets
-#     after `authorize` gates the run to same-repo maintainer/admin PRs.
+#     become readable from, the pod itself. Automatic PR runs are started only
+#     by `workflow_run`, after `authorize` gates the run to same-repo
+#     maintainer/admin PRs.
 # ---------------------------------------------------------------------------
 
 on:
@@ -33,9 +36,9 @@ on:
         required: false
         default: main
         type: string
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: ["CI PR workspace tests"]
+    types: [completed]
 
 concurrency:
   group: runpod-tenferro-gpu-${{ github.ref }}
@@ -51,7 +54,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
-  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || github.sha }}
+  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || format('refs/pull/{0}/merge', github.event.workflow_run.pull_requests[0].number) }}
   # cudarc 0.19.x needs 12080 bindings; install CUDA_RUNTIME_VERSION toolkit when
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
@@ -66,6 +69,7 @@ env:
 jobs:
   authorize:
     name: Authorize RunPod GPU run
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -74,15 +78,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
+          WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
         run: |
           set -euo pipefail
-
-          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
-            echo "::error::Fork PRs are not allowed to launch RunPod CI (${PR_HEAD_REPO} -> ${GITHUB_REPOSITORY})."
-            exit 1
-          fi
 
           check_permission() {
             local login="$1"
@@ -98,19 +97,36 @@ jobs:
               *)
                 echo "::error::${role} ${login} has '${perm}' permission, which is not allowed to launch RunPod CI (requires admin or maintain)."
                 exit 1
-                ;;
+              ;;
             esac
           }
 
-          if [ "${EVENT_NAME}" = "pull_request" ]; then
-            check_permission "${PR_AUTHOR}" "PR author"
-          fi
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            if [ "${WORKFLOW_RUN_EVENT}" != "pull_request" ]; then
+              echo "::error::RunPod CI workflow_run events must come from pull_request workflows, got '${WORKFLOW_RUN_EVENT}'."
+              exit 1
+            fi
 
-          # Keep checking the triggering actor too. Manual dispatch relies on
-          # this check, and PR reruns/synchronize events must not let a
-          # lower-trust actor trigger paid infrastructure for someone else's
-          # trusted branch.
-          check_permission "${GITHUB_ACTOR}" "Workflow actor"
+            pr_number="$(jq -r '.[0].number // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+            if [ -z "${pr_number}" ]; then
+              echo "::error::workflow_run did not include an associated pull request."
+              exit 1
+            fi
+
+            pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")"
+            pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
+            pr_head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+
+            if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+              echo "::error::Fork PRs are not allowed to launch RunPod CI (${pr_head_repo} -> ${GITHUB_REPOSITORY})."
+              exit 1
+            fi
+
+            check_permission "${pr_author}" "PR author"
+          else
+            # Manual dispatch relies on the triggering actor check.
+            check_permission "${GITHUB_ACTOR}" "Workflow actor"
+          fi
 
   pre-runpod-gate:
     name: Wait for review and non-GPU CI
@@ -120,11 +136,11 @@ jobs:
 
     steps:
       - name: Skip prerequisite gate for manual dispatch
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'workflow_run'
         run: echo "Manual dispatch is gated by the authorize job only."
 
       - name: Wait for prerequisite checks
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'workflow_run'
         uses: actions/github-script@v7
         with:
           script: |
@@ -142,7 +158,7 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const ref = context.payload.pull_request.head.sha;
+            const ref = context.payload.workflow_run.head_sha;
             const deadline = Date.now() + 85 * 60 * 1000;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -172,20 +188,15 @@ jobs:
                   return bTime - aTime;
                 });
 
-                // A cancelled or skipped check run can be a superseded attempt
-                // from before a label/approval update. Prefer any successful
-                // run for the same SHA, otherwise an active run, otherwise a
-                // real completed failure.
-                const successful = nameRuns.find(
-                  (run) => run.status === "completed" && run.conclusion === "success"
-                );
-                const active = nameRuns.find((run) => run.status !== "completed");
-                const failed = nameRuns.find(
+                // Cancelled or skipped runs can be superseded attempts from
+                // before a label/approval update. Use the newest current
+                // candidate instead of letting an older success mask a newer
+                // active or failed run.
+                const effective = nameRuns.find(
                   (run) =>
-                    run.status === "completed" &&
-                    !["cancelled", "skipped", "neutral", "success"].includes(run.conclusion)
+                    run.status !== "completed" ||
+                    !["cancelled", "skipped"].includes(run.conclusion)
                 );
-                const effective = successful || active || failed;
                 if (effective) {
                   latest.set(name, effective);
                 }
