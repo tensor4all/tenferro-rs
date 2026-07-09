@@ -1,6 +1,9 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::{EighOptions, LinalgBackend, SvdGauge, SvdOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{
+    EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, SvdGauge, SvdOptions,
+    TracedTensorLinalgExt,
+};
 use tenferro_runtime::{
     DType, Error, GraphCompiler, GraphExecutor, GraphOpView, Tensor, TracedTensor, TypedTensor,
 };
@@ -72,7 +75,15 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
         )
         .unwrap();
     let eigh_outputs = backend
-        .eigh_with_options(&a, EighOptions::default().derivative_eps(1.0e-10))
+        .eigh_with_options(
+            &a,
+            EighOptions::default()
+                .gauge(EighGauge::CanonicalPivot)
+                .derivative_eps(1.0e-10),
+        )
+        .unwrap();
+    let qr_outputs = backend
+        .qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
         .unwrap();
 
     assert_eq!(svd_outputs[0].shape(), &[2, 2]);
@@ -80,6 +91,8 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
     assert_eq!(svd_outputs[2].shape(), &[2, 2]);
     assert_eq!(eigh_outputs[0].shape(), &[2]);
     assert_eq!(eigh_outputs[1].shape(), &[2, 2]);
+    assert_eq!(qr_outputs[0].shape(), &[2, 2]);
+    assert_eq!(qr_outputs[1].shape(), &[2, 2]);
 }
 
 #[test]
@@ -96,12 +109,19 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
         )
         .unwrap();
     let (eigh_values, eigh_vectors) = a
-        .eigh_with_options(EighOptions::default().derivative_eps(1.0e-10))
+        .eigh_with_options(
+            EighOptions::default()
+                .gauge(EighGauge::CanonicalPivot)
+                .derivative_eps(1.0e-10),
+        )
+        .unwrap();
+    let (q, r) = a
+        .qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler
-        .compile_many(&[&u, &s, &vt, &eigh_values, &eigh_vectors])
+        .compile_many(&[&u, &s, &vt, &eigh_values, &eigh_vectors, &q, &r])
         .unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor
@@ -114,6 +134,8 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
     assert_eq!(outputs[2].shape(), &[2, 2]);
     assert_eq!(outputs[3].shape(), &[2]);
     assert_eq!(outputs[4].shape(), &[2, 2]);
+    assert_eq!(outputs[5].shape(), &[2, 2]);
+    assert_eq!(outputs[6].shape(), &[2, 2]);
 }
 
 #[test]

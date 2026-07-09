@@ -1,6 +1,9 @@
 use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 
-use crate::extension::{apply_svd_gauge, validate_derivative_eps, EighOptions, SvdOptions};
+use crate::extension::{
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
+    QrOptions, SvdOptions,
+};
 
 /// Build the shared "unsupported dtype" backend-failure error used by the
 /// linalg backends.
@@ -158,6 +161,36 @@ pub trait LinalgBackend: TensorBackend {
     /// `R` has shape `min(m, n) x n`.
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
+    /// Compute public QR outputs `(Q, R)` with explicit options.
+    ///
+    /// `gauge` controls optional sign or phase post-processing.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{LinalgBackend, QrGauge, QrOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// let mut backend = CpuBackend::new();
+    /// let outputs = backend.qr_with_options(
+    ///     &input,
+    ///     QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    /// )?;
+    /// assert_eq!(outputs[0].shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn qr_with_options(
+        &mut self,
+        input: &Tensor,
+        options: QrOptions,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let mut outputs = self.qr(input)?;
+        apply_qr_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
+    }
+
     /// Compute public QR outputs `(Q, R)` from a borrowed tensor view.
     ///
     /// Backends may canonicalize the view inside the same placement family, but
@@ -196,20 +229,23 @@ pub trait LinalgBackend: TensorBackend {
     /// Compute public Hermitian eigendecomposition outputs with explicit options.
     ///
     /// `derivative_eps` is validated for API consistency, but concrete backend
-    /// execution does not perform AD.
+    /// execution does not perform AD. `gauge` controls optional eigenvector
+    /// post-processing.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_linalg::{EighOptions, LinalgBackend};
+    /// use tenferro_linalg::{EighGauge, EighOptions, LinalgBackend};
     /// use tenferro_tensor::Tensor;
     ///
     /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// let mut backend = CpuBackend::new();
     /// let outputs = backend.eigh_with_options(
     ///     &input,
-    ///     EighOptions::default().derivative_eps(1.0e-10),
+    ///     EighOptions::default()
+    ///         .gauge(EighGauge::CanonicalPivot)
+    ///         .derivative_eps(1.0e-10),
     /// )?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -220,7 +256,9 @@ pub trait LinalgBackend: TensorBackend {
         options: EighOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
-        self.eigh(input)
+        let mut outputs = self.eigh(input)?;
+        apply_eigh_gauge(options.gauge, &mut outputs)?;
+        Ok(outputs)
     }
 
     /// Compute public Hermitian eigendecomposition outputs from a borrowed tensor view.

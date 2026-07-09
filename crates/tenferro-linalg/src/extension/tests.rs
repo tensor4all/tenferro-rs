@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{
     Buffer, BufferHandle, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind,
     Placement, Tensor, TypedTensor,
 };
 
-use super::{apply_svd_gauge, promote_dtypes, LinalgExtensionOp, LinalgOp, SvdGauge};
+use super::{
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, promote_dtypes, EighGauge,
+    LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge,
+};
 
 #[test]
 fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
@@ -108,6 +111,7 @@ fn decomposition_value_outputs_prune_to_values_only_ops() {
 
     let eigh = LinalgExtensionOp::new(LinalgOp::Eigh {
         derivative_eps: 1.0e-12,
+        gauge: EighGauge::Raw,
     });
     let pruned_eigh = eigh
         .prune_outputs(&[true, false])
@@ -195,4 +199,456 @@ fn canonical_pivot_svd_gauge_removes_complex_pivot_phase() {
     assert!((vt[0].im - scale).abs() < 1.0e-12);
     assert!((vt[1].re + 1.0 / scale).abs() < 1.0e-12);
     assert!((vt[1].im - 7.0 / scale).abs() < 1.0e-12);
+}
+
+#[test]
+fn canonical_pivot_eigh_gauge_flips_real_eigenvector_columns() {
+    let mut outputs = vec![
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![-0.9_f64, 0.2, -0.8, 0.1]).unwrap(),
+    ];
+    let before_reconstruction = reconstruct_eigh_f64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<f64>().unwrap(),
+        2,
+    );
+
+    apply_eigh_gauge(EighGauge::CanonicalPivot, &mut outputs).unwrap();
+
+    assert_eq!(
+        outputs[1].as_slice::<f64>().unwrap(),
+        &[0.9, -0.2, 0.8, -0.1]
+    );
+    let after_reconstruction = reconstruct_eigh_f64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<f64>().unwrap(),
+        2,
+    );
+    assert_slice_close_f64(&after_reconstruction, &before_reconstruction, 1.0e-12);
+}
+
+#[test]
+fn canonical_pivot_eigh_gauge_removes_complex_eigenvector_phase() {
+    let mut outputs = vec![
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Tensor::C64(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex64::new(1.0, 1.0),
+                    Complex64::new(0.1, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(1.0, 0.0),
+                ],
+            )
+            .unwrap(),
+        ),
+    ];
+    let before_reconstruction = reconstruct_eigh_c64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<Complex64>().unwrap(),
+        2,
+    );
+
+    apply_eigh_gauge(EighGauge::CanonicalPivot, &mut outputs).unwrap();
+
+    let scale = 2.0_f64.sqrt();
+    let vectors = outputs[1].as_slice::<Complex64>().unwrap();
+    assert!((vectors[0].re - scale).abs() < 1.0e-12);
+    assert!(vectors[0].im.abs() < 1.0e-12);
+    assert!((vectors[1].re - 0.1 / scale).abs() < 1.0e-12);
+    assert!((vectors[1].im + 0.1 / scale).abs() < 1.0e-12);
+    let after_reconstruction = reconstruct_eigh_c64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<Complex64>().unwrap(),
+        2,
+    );
+    assert_slice_close_c64(&after_reconstruction, &before_reconstruction, 1.0e-12);
+}
+
+#[test]
+fn eigh_gauge_covers_f32_and_c32_paths() {
+    let mut real_outputs = vec![
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 3.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![-0.7_f32, 0.2, 0.5, -0.8]).unwrap(),
+    ];
+    let before_real = reconstruct_eigh_f64(
+        &real_outputs[0]
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| f64::from(value))
+            .collect::<Vec<_>>(),
+        &real_outputs[1]
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| f64::from(value))
+            .collect::<Vec<_>>(),
+        2,
+    );
+
+    apply_eigh_gauge(EighGauge::CanonicalPivot, &mut real_outputs).unwrap();
+
+    assert_eq!(
+        real_outputs[1].as_slice::<f32>().unwrap(),
+        &[0.7, -0.2, -0.5, 0.8]
+    );
+    let after_real = reconstruct_eigh_f64(
+        &real_outputs[0]
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| f64::from(value))
+            .collect::<Vec<_>>(),
+        &real_outputs[1]
+            .as_slice::<f32>()
+            .unwrap()
+            .iter()
+            .map(|&value| f64::from(value))
+            .collect::<Vec<_>>(),
+        2,
+    );
+    assert_slice_close_f64(&after_real, &before_real, 1.0e-6);
+
+    let mut complex_outputs = vec![
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f32, 3.0]).unwrap(),
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex32::new(1.0, 1.0),
+                    Complex32::new(0.1, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                ],
+            )
+            .unwrap(),
+        ),
+    ];
+
+    apply_eigh_gauge(EighGauge::CanonicalPivot, &mut complex_outputs).unwrap();
+
+    let scale = 2.0_f32.sqrt();
+    let vectors = complex_outputs[1].as_slice::<Complex32>().unwrap();
+    assert!((vectors[0].re - scale).abs() < 1.0e-6);
+    assert!(vectors[0].im.abs() < 1.0e-6);
+    assert!((vectors[1].re - 0.1 / scale).abs() < 1.0e-6);
+    assert!((vectors[1].im + 0.1 / scale).abs() < 1.0e-6);
+    assert_eq!(vectors[2], Complex32::new(0.0, 0.0));
+    assert_eq!(vectors[3], Complex32::new(0.0, 0.0));
+}
+
+#[test]
+fn positive_diagonal_qr_gauge_flips_real_q_columns_and_r_rows() {
+    let mut outputs = vec![
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![-5.0_f64, 0.0, 6.0, -7.0]).unwrap(),
+    ];
+    let before_product = matmul_f64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<f64>().unwrap(),
+        2,
+        2,
+        2,
+    );
+
+    apply_qr_gauge(QrGauge::PositiveDiagonal, &mut outputs).unwrap();
+
+    assert_eq!(
+        outputs[0].as_slice::<f64>().unwrap(),
+        &[-1.0, -2.0, -3.0, -4.0]
+    );
+    assert_eq!(
+        outputs[1].as_slice::<f64>().unwrap(),
+        &[5.0, -0.0, -6.0, 7.0]
+    );
+    let after_product = matmul_f64(
+        outputs[0].as_slice::<f64>().unwrap(),
+        outputs[1].as_slice::<f64>().unwrap(),
+        2,
+        2,
+        2,
+    );
+    assert_slice_close_f64(&after_product, &before_product, 1.0e-12);
+}
+
+#[test]
+fn positive_diagonal_qr_gauge_removes_complex_diagonal_phase() {
+    let mut outputs = vec![
+        Tensor::C64(
+            TypedTensor::from_vec_col_major(
+                vec![2, 1],
+                vec![Complex64::new(2.0, 0.0), Complex64::new(0.0, 1.0)],
+            )
+            .unwrap(),
+        ),
+        Tensor::C64(
+            TypedTensor::from_vec_col_major(
+                vec![1, 2],
+                vec![Complex64::new(1.0, 1.0), Complex64::new(3.0, 4.0)],
+            )
+            .unwrap(),
+        ),
+    ];
+    let before_product = matmul_c64(
+        outputs[0].as_slice::<Complex64>().unwrap(),
+        outputs[1].as_slice::<Complex64>().unwrap(),
+        2,
+        1,
+        2,
+    );
+
+    apply_qr_gauge(QrGauge::PositiveDiagonal, &mut outputs).unwrap();
+
+    let scale = 2.0_f64.sqrt();
+    let q = outputs[0].as_slice::<Complex64>().unwrap();
+    assert!((q[0].re - scale).abs() < 1.0e-12);
+    assert!((q[0].im - scale).abs() < 1.0e-12);
+    assert!((q[1].re + 1.0 / scale).abs() < 1.0e-12);
+    assert!((q[1].im - 1.0 / scale).abs() < 1.0e-12);
+
+    let r = outputs[1].as_slice::<Complex64>().unwrap();
+    assert!((r[0].re - scale).abs() < 1.0e-12);
+    assert!(r[0].im.abs() < 1.0e-12);
+    assert!((r[1].re - 7.0 / scale).abs() < 1.0e-12);
+    assert!((r[1].im - 1.0 / scale).abs() < 1.0e-12);
+    let after_product = matmul_c64(
+        outputs[0].as_slice::<Complex64>().unwrap(),
+        outputs[1].as_slice::<Complex64>().unwrap(),
+        2,
+        1,
+        2,
+    );
+    assert_slice_close_c64(&after_product, &before_product, 1.0e-12);
+}
+
+#[test]
+fn qr_gauge_covers_f32_and_c32_paths() {
+    let mut real_outputs = vec![
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![-5.0_f32, 0.0, 6.0, -7.0]).unwrap(),
+    ];
+
+    apply_qr_gauge(QrGauge::PositiveDiagonal, &mut real_outputs).unwrap();
+
+    assert_eq!(
+        real_outputs[0].as_slice::<f32>().unwrap(),
+        &[-1.0, -2.0, -3.0, -4.0]
+    );
+    assert_eq!(
+        real_outputs[1].as_slice::<f32>().unwrap(),
+        &[5.0, -0.0, -6.0, 7.0]
+    );
+
+    let mut complex_outputs = vec![
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex32::new(2.0, 0.0),
+                    Complex32::new(0.0, 1.0),
+                    Complex32::new(0.5, 0.0),
+                    Complex32::new(1.0, 0.0),
+                ],
+            )
+            .unwrap(),
+        ),
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex32::new(1.0, 1.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(3.0, 4.0),
+                    Complex32::new(0.0, 0.0),
+                ],
+            )
+            .unwrap(),
+        ),
+    ];
+
+    apply_qr_gauge(QrGauge::PositiveDiagonal, &mut complex_outputs).unwrap();
+
+    let scale = 2.0_f32.sqrt();
+    let q = complex_outputs[0].as_slice::<Complex32>().unwrap();
+    assert!((q[0].re - scale).abs() < 1.0e-6);
+    assert!((q[0].im - scale).abs() < 1.0e-6);
+    assert!((q[1].re + 1.0 / scale).abs() < 1.0e-6);
+    assert!((q[1].im - 1.0 / scale).abs() < 1.0e-6);
+    assert_eq!(q[2], Complex32::new(0.5, 0.0));
+    assert_eq!(q[3], Complex32::new(1.0, 0.0));
+
+    let r = complex_outputs[1].as_slice::<Complex32>().unwrap();
+    assert!((r[0].re - scale).abs() < 1.0e-6);
+    assert!(r[0].im.abs() < 1.0e-6);
+    assert!((r[2].re - 7.0 / scale).abs() < 1.0e-6);
+    assert!((r[2].im - 1.0 / scale).abs() < 1.0e-6);
+    assert_eq!(r[3], Complex32::new(0.0, 0.0));
+}
+
+#[test]
+fn raw_gauges_leave_outputs_unchanged() {
+    let mut eigh_outputs = vec![
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64, 0.0, 0.0, -1.0]).unwrap(),
+    ];
+    let original_vectors = eigh_outputs[1].as_slice::<f64>().unwrap().to_vec();
+
+    apply_eigh_gauge(EighGauge::Raw, &mut eigh_outputs).unwrap();
+
+    assert_eq!(eigh_outputs[1].as_slice::<f64>().unwrap(), original_vectors);
+
+    let mut qr_outputs = vec![
+        Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 2], vec![-3.0_f64, 4.0]).unwrap(),
+    ];
+    let original_q = qr_outputs[0].as_slice::<f64>().unwrap().to_vec();
+    let original_r = qr_outputs[1].as_slice::<f64>().unwrap().to_vec();
+
+    apply_qr_gauge(QrGauge::Raw, &mut qr_outputs).unwrap();
+
+    assert_eq!(qr_outputs[0].as_slice::<f64>().unwrap(), original_q);
+    assert_eq!(qr_outputs[1].as_slice::<f64>().unwrap(), original_r);
+}
+
+#[test]
+fn gauge_validation_errors_cover_malformed_outputs() {
+    assert_invalid_config(apply_eigh_gauge(EighGauge::CanonicalPivot, &mut []));
+
+    let mut bad_eigh_rank = vec![
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap(),
+    ];
+    assert_invalid_config(apply_eigh_gauge(
+        EighGauge::CanonicalPivot,
+        &mut bad_eigh_rank,
+    ));
+
+    let mut bad_eigh_shape = vec![
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]).unwrap(),
+    ];
+    assert_invalid_config(apply_eigh_gauge(
+        EighGauge::CanonicalPivot,
+        &mut bad_eigh_shape,
+    ));
+
+    let mut bad_eigh_dtype = vec![
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 1], vec![1_i32]).unwrap(),
+    ];
+    assert!(matches!(
+        apply_eigh_gauge(EighGauge::CanonicalPivot, &mut bad_eigh_dtype),
+        Err(Error::BackendFailure { .. })
+    ));
+
+    assert_invalid_config(apply_qr_gauge(QrGauge::PositiveDiagonal, &mut []));
+
+    let mut bad_qr_rank = vec![
+        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap(),
+    ];
+    assert_invalid_config(apply_qr_gauge(QrGauge::PositiveDiagonal, &mut bad_qr_rank));
+
+    let mut bad_qr_shape = vec![
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 0.0]).unwrap(),
+    ];
+    assert_invalid_config(apply_qr_gauge(QrGauge::PositiveDiagonal, &mut bad_qr_shape));
+
+    let mut bad_qr_dtype = vec![
+        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f32]).unwrap(),
+    ];
+    assert!(matches!(
+        apply_qr_gauge(QrGauge::PositiveDiagonal, &mut bad_qr_dtype),
+        Err(Error::DTypeMismatch { .. })
+    ));
+}
+
+fn reconstruct_eigh_f64(values: &[f64], vectors: &[f64], n: usize) -> Vec<f64> {
+    let mut output = vec![0.0; n * n];
+    for col in 0..n {
+        for row in 0..n {
+            let mut sum = 0.0;
+            for eig in 0..n {
+                sum += vectors[row + n * eig] * values[eig] * vectors[col + n * eig];
+            }
+            output[row + n * col] = sum;
+        }
+    }
+    output
+}
+
+fn reconstruct_eigh_c64(values: &[f64], vectors: &[Complex64], n: usize) -> Vec<Complex64> {
+    let mut output = vec![Complex64::new(0.0, 0.0); n * n];
+    for col in 0..n {
+        for row in 0..n {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for eig in 0..n {
+                sum += vectors[row + n * eig] * values[eig] * vectors[col + n * eig].conj();
+            }
+            output[row + n * col] = sum;
+        }
+    }
+    output
+}
+
+fn matmul_f64(lhs: &[f64], rhs: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {
+    let mut output = vec![0.0; m * n];
+    for col in 0..n {
+        for row in 0..m {
+            let mut sum = 0.0;
+            for inner in 0..k {
+                sum += lhs[row + m * inner] * rhs[inner + k * col];
+            }
+            output[row + m * col] = sum;
+        }
+    }
+    output
+}
+
+fn matmul_c64(
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Complex64> {
+    let mut output = vec![Complex64::new(0.0, 0.0); m * n];
+    for col in 0..n {
+        for row in 0..m {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for inner in 0..k {
+                sum += lhs[row + m * inner] * rhs[inner + k * col];
+            }
+            output[row + m * col] = sum;
+        }
+    }
+    output
+}
+
+fn assert_slice_close_f64(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "index {index}: actual={actual}, expected={expected}, tol={tol}"
+        );
+    }
+}
+
+fn assert_slice_close_c64(actual: &[Complex64], expected: &[Complex64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).norm() <= tol,
+            "index {index}: actual={actual:?}, expected={expected:?}, tol={tol}"
+        );
+    }
+}
+
+fn assert_invalid_config(result: tenferro_tensor::Result<()>) {
+    assert!(matches!(result, Err(Error::InvalidConfig { .. })));
 }

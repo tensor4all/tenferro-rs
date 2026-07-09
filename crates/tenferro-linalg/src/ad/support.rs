@@ -137,7 +137,7 @@ impl LinalgAdOpKind {
             LinalgOp::FullPivLuSolve { .. } => Self::FullPivLuSolve,
             LinalgOp::Svd { .. } => Self::Svd,
             LinalgOp::SvdVals { .. } => Self::SvdVals,
-            LinalgOp::Qr => Self::Qr,
+            LinalgOp::Qr { .. } => Self::Qr,
             LinalgOp::Eigh { .. } => Self::Eigh,
             LinalgOp::EighVals { .. } => Self::EighVals,
             LinalgOp::Eig { .. } => Self::Eig,

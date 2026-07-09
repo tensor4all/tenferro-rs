@@ -125,8 +125,10 @@ impl ExtensionLinearizeRule for LinalgAdRule {
             LinalgOp::SvdVals { derivative_eps } => {
                 rules::linearize_svd_values(builder, primal_in, tangent_in, derivative_eps, ctx)
             }
-            LinalgOp::Qr => rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
-            LinalgOp::Eigh { derivative_eps } => rules::linearize_eigh(
+            LinalgOp::Qr { .. } => {
+                rules::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx)
+            }
+            LinalgOp::Eigh { derivative_eps, .. } => rules::linearize_eigh(
                 builder,
                 primal_in,
                 primal_out,
@@ -217,7 +219,7 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdVals { .. }
-            | LinalgOp::Qr
+            | LinalgOp::Qr { .. }
             | LinalgOp::Eigh { .. }
             | LinalgOp::EighVals { .. }
             | LinalgOp::Eig { .. }
@@ -314,7 +316,7 @@ fn fixed_transpose_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::{SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
+    use crate::extension::{EighGauge, QrGauge, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
     use tenferro_ops::input_key::TensorInputKey;
@@ -553,6 +555,7 @@ mod tests {
             (
                 LinalgOp::Eigh {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                    gauge: EighGauge::Raw,
                 },
                 eigh_context(),
                 vec![None, None],
@@ -564,7 +567,13 @@ mod tests {
                 eig_context(),
                 vec![None, None],
             ),
-            (LinalgOp::Qr, qr_context(&[3, 2]), vec![None, None]),
+            (
+                LinalgOp::Qr {
+                    gauge: QrGauge::Raw,
+                },
+                qr_context(&[3, 2]),
+                vec![None, None],
+            ),
         ];
 
         for (kind, (ctx, a, outputs), expected) in cases {
@@ -632,6 +641,7 @@ mod tests {
         let tangent = builder.add_input(TensorInputKey::User { id: 134 });
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            gauge: EighGauge::Raw,
         });
 
         let result = LinalgAdRule
@@ -681,7 +691,9 @@ mod tests {
 
     #[test]
     fn qr_linearize_prunes_inactive_factor_outputs() {
-        let op = LinalgExtensionOp::new(LinalgOp::Qr);
+        let op = LinalgExtensionOp::new(LinalgOp::Qr {
+            gauge: QrGauge::Raw,
+        });
         for (case, active_slot, expected_active) in [
             ("q only", 0_usize, vec![true, false]),
             ("r only", 1_usize, vec![false, true]),
@@ -916,6 +928,7 @@ mod tests {
         let g_v = builder.add_input(TensorInputKey::User { id: 87 });
         let op = LinalgExtensionOp::new(LinalgOp::Eigh {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            gauge: EighGauge::Raw,
         });
 
         let result = LinalgAdRule
@@ -945,7 +958,9 @@ mod tests {
 
         let result = LinalgAdRule
             .linear_transpose(
-                &LinalgExtensionOp::new(LinalgOp::Qr),
+                &LinalgExtensionOp::new(LinalgOp::Qr {
+                    gauge: QrGauge::Raw,
+                }),
                 &mut builder,
                 &[Some(g_q), Some(g_r)],
                 &[PrimitiveTransposeInput::Residual(a)],
@@ -1031,9 +1046,12 @@ mod tests {
             LinalgOp::SvdVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             },
-            LinalgOp::Qr,
+            LinalgOp::Qr {
+                gauge: QrGauge::Raw,
+            },
             LinalgOp::Eigh {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+                gauge: EighGauge::Raw,
             },
             LinalgOp::EighVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,

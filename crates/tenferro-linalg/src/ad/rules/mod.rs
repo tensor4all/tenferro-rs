@@ -22,7 +22,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
-use crate::extension::{LinalgExtensionOp, LinalgOp, SvdGauge};
+use crate::extension::{EighGauge, LinalgExtensionOp, LinalgOp, SvdGauge};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
@@ -764,6 +764,7 @@ pub(crate) fn linearize_eigh_values(
     let eigh_outputs = builder.add_operation(
         linalg_std_op(LinalgOp::Eigh {
             derivative_eps: eps,
+            gauge: EighGauge::Raw,
         }),
         vec![ValueRef::External(primal_in[0].clone())],
         OperationRole::Primary,

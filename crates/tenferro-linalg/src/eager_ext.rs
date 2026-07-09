@@ -5,7 +5,7 @@ use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
 use crate::extension::{
-    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, SvdOptions,
+    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
 use crate::register_runtime;
 
@@ -17,6 +17,7 @@ pub trait EagerTensorLinalgExt {
         options: SvdOptions,
     ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
+    fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)>;
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
     fn full_piv_lu(
         &self,
@@ -57,6 +58,10 @@ impl EagerTensorLinalgExt for EagerTensor {
 
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)> {
         qr(self)
+    }
+
+    fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)> {
+        qr_with_options(self, options)
     }
 
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
@@ -210,7 +215,39 @@ pub fn svd_with_options(
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
-    two_outputs(apply_linalg_eager(LinalgOp::Qr, &[a])?, "qr")
+    qr_with_options(a, QrOptions::default())
+}
+
+/// QR decomposition for eager tensors with explicit options.
+///
+/// `gauge` controls optional sign or phase post-processing.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::{EagerTensorLinalgExt, QrGauge, QrOptions};
+///
+/// let ctx = EagerRuntime::new();
+/// let a = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+///     ctx,
+/// ).unwrap();
+/// let (q, r) = a.qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal))?;
+/// assert_eq!(q.shape(), &[2, 2]);
+/// assert_eq!(r.shape(), &[2, 2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub fn qr_with_options(a: &EagerTensor, options: QrOptions) -> Result<(EagerTensor, EagerTensor)> {
+    two_outputs(
+        apply_linalg_eager(
+            LinalgOp::Qr {
+                gauge: options.gauge,
+            },
+            &[a],
+        )?,
+        "qr",
+    )
 }
 
 /// LU factorization for eager tensors.
@@ -425,7 +462,7 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// use tenferro_linalg::{EagerTensorLinalgExt, EighOptions};
+/// use tenferro_linalg::{EagerTensorLinalgExt, EighGauge, EighOptions};
 ///
 /// let ctx = EagerRuntime::new();
 /// let a = EagerTensor::from_tensor_in(
@@ -433,7 +470,11 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 ///     ctx,
 /// ).unwrap();
 /// let (values, vectors) = a
-///     .eigh_with_options(EighOptions::default().derivative_eps(1.0e-10))?;
+///     .eigh_with_options(
+///         EighOptions::default()
+///             .gauge(EighGauge::CanonicalPivot)
+///             .derivative_eps(1.0e-10),
+///     )?;
 /// assert_eq!(values.shape(), &[2]);
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -447,6 +488,7 @@ pub fn eigh_with_options(
         apply_linalg_eager(
             LinalgOp::Eigh {
                 derivative_eps: options.derivative_eps,
+                gauge: options.gauge,
             },
             &[a],
         )?,
