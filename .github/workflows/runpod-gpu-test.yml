@@ -8,11 +8,11 @@ name: RunPod tenferro-rs GPU Test
 #     self-hosted GitHub Actions runner. Self-hosted runners on a repo that
 #     accepts external contributions are a well-known escalation path
 #     (see GitHub's "Security hardening for GitHub Actions" guide).
-#   * Triggers MUST remain `workflow_dispatch` (optionally also `schedule`).
-#     NEVER add `pull_request` or `pull_request_target` to this workflow: the
-#     pod executes the checked-out ref as root, in the same container as the
-#     runner process, so a PR-triggered run (especially from a fork) would
-#     hand arbitrary code a path to the runner's credentials.
+#   * PR-triggered runs MUST reject fork PRs before RunPod startup. The pod
+#     executes the checked-out ref as root, in the same container as the runner
+#     process, so fork code must never reach the self-hosted runner.
+#   * NEVER add `pull_request_target` to this workflow: that would combine base
+#     repository secrets with PR-controlled refs.
 #   * Top-level `permissions: contents: read` must never grow. In particular,
 #     never add `id-token: write` or any write scope to a job that runs on
 #     the self-hosted RunPod runner (`run-gpu-tests`).
@@ -30,6 +30,9 @@ on:
         required: false
         default: main
         type: string
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: runpod-tenferro-gpu-${{ github.ref }}
@@ -44,6 +47,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
+  TENFERRO_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tenferro_ref || github.event.pull_request.head.sha || github.sha }}
   # cudarc 0.19.x needs 12080 bindings; install CUDA_RUNTIME_VERSION toolkit when
   # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
   CUDARC_CUDA_VERSION: "12080"
@@ -57,22 +61,29 @@ env:
 
 jobs:
   authorize:
-    name: Authorize dispatch actor
+    name: Authorize RunPod GPU run
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Check dispatching actor is a maintainer
+      - name: Check actor and PR source are allowed
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
         run: |
           set -euo pipefail
+
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${PR_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
+            echo "::error::Fork PRs are not allowed to launch RunPod CI (${PR_HEAD_REPO} -> ${GITHUB_REPOSITORY})."
+            exit 1
+          fi
 
           perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq .permission)"
 
           case "${perm}" in
             admin|maintain)
-              echo "OK: ${GITHUB_ACTOR} has '${perm}' permission; allowed to launch RunPod CI."
+              echo "OK: ${GITHUB_ACTOR} has '${perm}' permission and is allowed to launch RunPod CI."
               ;;
             *)
               echo "::error::${GITHUB_ACTOR} has '${perm}' permission, which is not allowed to launch RunPod CI (requires admin or maintain)."
@@ -93,7 +104,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ env.TENFERRO_REPO }}
-          ref: ${{ inputs.tenferro_ref }}
+          ref: ${{ env.TENFERRO_REF }}
           path: tenferro-rs
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
@@ -230,8 +241,6 @@ jobs:
 
       - name: Compute CUDA archive cache key
         id: archive_key
-        env:
-          TENFERRO_REF: ${{ inputs.tenferro_ref }}
         run: |
           set -euo pipefail
           key="cuda-archive-v8-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${TENFERRO_REF}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
@@ -704,7 +713,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ env.TENFERRO_REPO }}
-          ref: ${{ inputs.tenferro_ref }}
+          ref: ${{ env.TENFERRO_REF }}
           path: tenferro-rs
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
@@ -738,8 +747,6 @@ jobs:
           tool: nextest
 
       - name: Check machine
-        env:
-          TENFERRO_REF: ${{ inputs.tenferro_ref }}
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
