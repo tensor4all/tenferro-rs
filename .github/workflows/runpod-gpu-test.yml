@@ -68,7 +68,7 @@ env:
 jobs:
   authorize:
     name: Authorize RunPod GPU run
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -82,6 +82,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || 'main' }}
+          WORKFLOW_RUN_ACTOR: ${{ github.event.workflow_run.actor.login || '' }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
         run: |
@@ -140,6 +141,7 @@ jobs:
             fi
 
             check_permission "${pr_author}" "PR author"
+            check_permission "${WORKFLOW_RUN_ACTOR}" "Source workflow actor"
 
             merge_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/pull/${pr_number}/merge" --jq .object.sha)"
             if [ -z "${merge_sha}" ] || [ "${merge_sha}" = "null" ]; then
