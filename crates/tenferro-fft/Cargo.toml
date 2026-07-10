@@ -14,6 +14,7 @@ description = "FFT extension runtime and public concrete/traced FFT APIs for ten
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
+cpu-tblis = ["tenferro-ad?/cpu-tblis", "tenferro-cpu/cpu-tblis"]
 blas-openblas = ["tenferro-ad?/blas-openblas", "tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-ad?/blas-accelerate", "tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-ad?/blas-mkl", "tenferro-cpu/blas-mkl"]

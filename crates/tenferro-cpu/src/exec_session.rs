@@ -40,6 +40,142 @@ macro_rules! delegate_with_pool {
     };
 }
 
+#[cfg(feature = "cpu-tblis")]
+impl CpuExecSession<'_> {
+    #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
+    fn dot_general_existing_provider_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        let saved_kind = self.kind;
+        #[cfg(feature = "cpu-blas")]
+        {
+            self.kind = CpuBackendKind::Blas;
+        }
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        {
+            self.kind = CpuBackendKind::Faer;
+        }
+        let result = SessionCachedDot::dot_general_cached(self, cache_slot, lhs, rhs, config);
+        self.kind = saved_kind;
+        result
+    }
+
+    #[cfg(not(any(feature = "cpu-blas", feature = "cpu-faer")))]
+    fn dot_general_existing_provider_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        let _ = (cache_slot, lhs, rhs, config);
+        Err(crate::Error::InvalidConfig {
+            op: "dot_general",
+            message: "CpuBackendKind::Tblis fallback requires cpu-blas or cpu-faer".into(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
+    fn dot_general_existing_provider_with_conj_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        let saved_kind = self.kind;
+        #[cfg(feature = "cpu-blas")]
+        {
+            self.kind = CpuBackendKind::Blas;
+        }
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        {
+            self.kind = CpuBackendKind::Faer;
+        }
+        let result = SessionCachedDot::dot_general_with_conj_cached(
+            self, cache_slot, lhs, rhs, config, lhs_conj, rhs_conj,
+        );
+        self.kind = saved_kind;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(not(any(feature = "cpu-blas", feature = "cpu-faer")))]
+    fn dot_general_existing_provider_with_conj_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        let _ = (cache_slot, lhs, rhs, config, lhs_conj, rhs_conj);
+        Err(crate::Error::InvalidConfig {
+            op: "dot_general",
+            message: "CpuBackendKind::Tblis fallback requires cpu-blas or cpu-faer".into(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
+    fn dot_general_existing_provider_read_into_accum_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let saved_kind = self.kind;
+        #[cfg(feature = "cpu-blas")]
+        {
+            self.kind = CpuBackendKind::Blas;
+        }
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        {
+            self.kind = CpuBackendKind::Faer;
+        }
+        let result = SessionCachedDot::dot_general_read_into_accum_cached(
+            self,
+            cache_slot,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            out,
+        );
+        self.kind = saved_kind;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(not(any(feature = "cpu-blas", feature = "cpu-faer")))]
+    fn dot_general_existing_provider_read_into_accum_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let _ = (cache_slot, lhs, rhs, config, accumulation, out);
+        Err(crate::Error::InvalidConfig {
+            op: "dot_general",
+            message: "CpuBackendKind::Tblis fallback requires cpu-blas or cpu-faer".into(),
+        })
+    }
+}
+
 impl TensorElementwise for CpuExecSession<'_> {
     // Elementwise — direct delegation, no install
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
@@ -226,6 +362,24 @@ impl TensorDot for CpuExecSession<'_> {
                     ));
                 }
             }
+            CpuBackendKind::Tblis => {
+                #[cfg(feature = "cpu-tblis")]
+                {
+                    gemm::dot_general_tblis_read_cached(
+                        self.buffers,
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-tblis"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
         };
         if let Some(result) = direct {
             return Ok(result);
@@ -401,6 +555,47 @@ impl SessionCachedDot for CpuExecSession<'_> {
                     ))
                 }
             }
+            CpuBackendKind::Tblis => {
+                #[cfg(feature = "cpu-tblis")]
+                {
+                    let direct = match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::F32))
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::F64))
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::C32))
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::C64))
+                        }
+                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }?;
+                    if let Some(result) = direct {
+                        Ok(result)
+                    } else {
+                        self.dot_general_existing_provider_cached(cache_slot, lhs, rhs, config)
+                    }
+                }
+                #[cfg(not(feature = "cpu-tblis"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
         }
     }
 
@@ -560,6 +755,77 @@ impl SessionCachedDot for CpuExecSession<'_> {
                     ))
                 }
             }
+            CpuBackendKind::Tblis => {
+                #[cfg(feature = "cpu-tblis")]
+                {
+                    let direct = match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::F32))
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::F64))
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::C32))
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::C64))
+                        }
+                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }?;
+                    if let Some(result) = direct {
+                        Ok(result)
+                    } else {
+                        self.dot_general_existing_provider_with_conj_cached(
+                            cache_slot, lhs, rhs, config, lhs_conj, rhs_conj,
+                        )
+                    }
+                }
+                #[cfg(not(feature = "cpu-tblis"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
         }
     }
 
@@ -618,9 +884,40 @@ impl SessionCachedDot for CpuExecSession<'_> {
                     ));
                 }
             }
+            CpuBackendKind::Tblis => {
+                #[cfg(feature = "cpu-tblis")]
+                {
+                    gemm::dot_general_tblis_read_into_accum_cached(
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        accumulation,
+                        &mut out,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-tblis"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
         };
         if direct {
             return Ok(());
+        }
+
+        #[cfg(feature = "cpu-tblis")]
+        if self.kind == CpuBackendKind::Tblis {
+            return self.dot_general_existing_provider_read_into_accum_cached(
+                cache_slot,
+                lhs,
+                rhs,
+                config,
+                accumulation,
+                out,
+            );
         }
 
         dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)

@@ -17,7 +17,9 @@
 //! ```
 
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
-compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
+compile_error!(
+    "enable at least one fallback CPU backend: cpu-faer or cpu-blas; cpu-tblis is an optional contraction provider"
+);
 
 #[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
 compile_error!("provider-inject requires cpu-blas");
@@ -71,6 +73,8 @@ extern crate cblas_src as _;
 extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
+#[cfg(feature = "cpu-tblis")]
+extern crate tenferro_tblis_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::{CpuBackend, CpuBackendKind};

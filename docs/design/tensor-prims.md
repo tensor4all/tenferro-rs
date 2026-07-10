@@ -76,25 +76,29 @@ does not support. Higher layers must not silently fall back across devices.
 CPU provider features are additive:
 
 - `cpu-faer` for faer-backed GEMM/linalg,
-- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
+- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg,
+- `cpu-tblis` for supported TBLIS-backed `dot_general` contractions.
 
 CPU execution uses strided-kernel for elementwise/reduction/structural work and
-faer or BLAS/LAPACK for GEMM and linalg. `CpuBackend` stores the runtime
-provider selection for an individual backend instance. `CpuBackend::new()`
-chooses the compiled default provider: BLAS if `cpu-blas` is compiled,
-otherwise faer. Explicit constructors such as `CpuBackend::with_kind` and
-`CpuBackend::with_threads_and_kind` can select any provider compiled into
-the binary. `CpuContext` stores the CPU thread count as the single source of
-truth for tenferro-owned CPU parallelism and owns the Rayon thread pool used by
-multi-thread contexts.
+faer or BLAS/LAPACK for GEMM and linalg. At least one of `cpu-faer` or
+`cpu-blas` remains required as the fallback/linalg provider when `cpu-tblis` is
+enabled. `CpuBackend` stores the runtime provider selection for an individual
+backend instance. `CpuBackend::new()` chooses the compiled default provider:
+BLAS if `cpu-blas` is compiled, otherwise faer. Explicit constructors such as
+`CpuBackend::with_kind` and `CpuBackend::with_threads_and_kind` can select any
+provider compiled into the binary. `CpuBackendKind::Tblis` attempts supported
+TBLIS contractions first and falls back to the compiled faer/BLAS provider for
+other valid `dot_general` shapes. `CpuContext` stores the CPU thread count as
+the single source of truth for tenferro-owned CPU parallelism and owns the Rayon
+thread pool used by multi-thread contexts.
 
 `CpuBackend::with_backend_session` runs the whole compiled program through
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session
 setup. Session execution enters `CpuContext::install`, so strided CPU kernels
 use the backend-owned Rayon pool when `strided-kernel/parallel` is enabled.
 faer-backed kernels receive `Par::Seq` for one thread or `Par::rayon(0)` for
-multi-threaded execution inside that pool. BLAS/LAPACK provider threading
-remains provider-owned.
+multi-threaded execution inside that pool. BLAS/LAPACK and TBLIS provider
+threading remain provider-owned.
 
 ## CubeCL Backend
 
