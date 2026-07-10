@@ -26,6 +26,11 @@ name: RunPod tenferro-rs GPU Test
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
+#   * This workflow owns the branch-protection-required `CI GPU gate` check for
+#     eligible same-repo maintainer PRs by publishing that check to the PR head
+#     SHA from a GitHub-hosted final gate job. Fork PRs keep using the legacy
+#     `CI_gpu.yml` pull_request path because base-repo Checks API writes cannot
+#     attach a check run to fork commits.
 # ---------------------------------------------------------------------------
 
 on:
@@ -35,6 +40,11 @@ on:
         description: tenferro-rs git ref (branch, tag, or SHA)
         required: false
         default: main
+        type: string
+      ci_gpu_gate_head_sha:
+        description: Optional PR head SHA to publish the CI GPU gate check to
+        required: false
+        default: ""
         type: string
   workflow_run:
     workflows: ["CI PR workspace tests"]
@@ -1288,3 +1298,112 @@ jobs:
           fi
 
           echo "Deleted RunPod pod: ${POD_ID}"
+
+  ci-gpu-gate:
+    name: Publish CI GPU gate
+    needs:
+      - authorize
+      - pre-runpod-gate
+      - cuda-archive
+      - start-runpod
+      - run-gpu-tests
+      - cleanup-runpod
+
+    if: >-
+      always() &&
+      !cancelled() &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        github.event.workflow_run.event == 'pull_request'
+      )
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      checks: write
+      contents: read
+
+    steps:
+      - name: Publish required PR check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
+          WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AUTHORIZE_RESULT: ${{ needs.authorize.result }}
+          PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
+          ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          START_RUNPOD_RESULT: ${{ needs.start-runpod.result }}
+          RUN_GPU_TESTS_RESULT: ${{ needs.run-gpu-tests.result }}
+          CLEANUP_RUNPOD_RESULT: ${{ needs.cleanup-runpod.result }}
+        run: |
+          set -euo pipefail
+
+          failures_file="$(mktemp)"
+
+          record_result() {
+            local job="$1"
+            local result="$2"
+            if [ "${result}" != "success" ]; then
+              echo "::error::Expected ${job} to succeed; got ${result}."
+              echo "- ${job}: ${result}" >> "${failures_file}"
+            fi
+          }
+
+          record_result "authorize" "${AUTHORIZE_RESULT}"
+          record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
+          record_result "cuda-archive" "${ARCHIVE_RESULT}"
+          record_result "start-runpod" "${START_RUNPOD_RESULT}"
+          record_result "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
+          record_result "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
+
+          conclusion="success"
+          title="RunPod CI GPU gate passed"
+          summary="RunPod GPU validation completed successfully and owns CI GPU gate."
+          if [ -s "${failures_file}" ]; then
+            conclusion="failure"
+            title="RunPod CI GPU gate failed"
+            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s' "$(cat "${failures_file}")")"
+          fi
+
+          target_sha=""
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            target_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
+          elif [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
+            target_sha="${MANUAL_GATE_HEAD_SHA}"
+          fi
+
+          if [ -n "${target_sha}" ]; then
+            echo "Publishing CI GPU gate check to PR head SHA ${target_sha}."
+            jq -n \
+              --arg name "CI GPU gate" \
+              --arg head_sha "${target_sha}" \
+              --arg conclusion "${conclusion}" \
+              --arg details_url "${RUN_URL}" \
+              --arg title "${title}" \
+              --arg summary "${summary}" \
+              '{
+                name: $name,
+                head_sha: $head_sha,
+                status: "completed",
+                conclusion: $conclusion,
+                details_url: $details_url,
+                output: {
+                  title: $title,
+                  summary: $summary
+                }
+              }' > /tmp/ci-gpu-gate-check.json
+
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/check-runs" \
+              --input /tmp/ci-gpu-gate-check.json
+          else
+            echo "No PR head SHA available; skipping PR-head CI GPU gate publication."
+          fi
+
+          if [ "${conclusion}" != "success" ]; then
+            exit 1
+          fi
