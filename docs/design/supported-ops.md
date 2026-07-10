@@ -48,15 +48,17 @@ CPU execution, and backend-parametric concrete tensor kernels.
 
 ### CPU Status
 
-The CPU backend is the main complete backend. Exactly one CPU feature must be
-enabled:
+The CPU backend is the main complete backend. At least one fallback/linalg CPU
+feature must be enabled:
 
 - `cpu-faer` for faer-backed GEMM,
-- `cpu-blas` for BLAS-backed GEMM.
+- `cpu-blas` for BLAS-backed GEMM,
+- optional `cpu-tblis` for supported TBLIS-backed `dot_general` contractions.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
 the standard linalg extension are implemented on CPU for the supported dtype
-subset of each op.
+subset of each op. `cpu-tblis` does not replace `cpu-faer` or `cpu-blas`; a
+compiled faer/BLAS provider remains required for fallback and linalg coverage.
 
 ### CUDA/CubeCL Status
 

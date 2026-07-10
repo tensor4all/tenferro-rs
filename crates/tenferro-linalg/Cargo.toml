@@ -27,6 +27,10 @@ cpu-blas = [
     "tenferro-ad?/cpu-blas",
     "tenferro-cpu/cpu-blas",
 ]
+cpu-tblis = [
+    "tenferro-ad?/cpu-tblis",
+    "tenferro-cpu/cpu-tblis",
+]
 blas-openblas = [
     "tenferro-ad?/blas-openblas",
     "tenferro-cpu/blas-openblas",

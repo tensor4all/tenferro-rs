@@ -17,6 +17,7 @@ name = "tenferro_runtime"
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
+cpu-tblis = ["tenferro-cpu/cpu-tblis"]
 blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]

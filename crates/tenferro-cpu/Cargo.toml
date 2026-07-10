@@ -17,6 +17,12 @@ name = "tenferro_cpu"
 default = ["cpu-faer"]
 cpu-faer = ["dep:faer", "dep:strided-einsum2", "strided-einsum2/faer", "strided-einsum2/parallel"]
 cpu-blas = ["dep:cblas-sys", "dep:lapack"]
+cpu-tblis = [
+    "dep:tblis-ffi",
+    "dep:tenferro-tblis-src",
+    "tenferro-tblis-src/build_from_source",
+    "tenferro-tblis-src/static",
+]
 provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
 provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
 blas-openblas = [
@@ -62,6 +68,8 @@ cblas-src = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }
 lapack-src = { workspace = true, optional = true }
+tblis-ffi = { workspace = true, optional = true }
+tenferro-tblis-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
@@ -86,3 +94,8 @@ required-features = ["cpu-blas"]
 [[bench]]
 name = "grouped_gemm"
 harness = false
+
+[[bench]]
+name = "tblis_dot_general_provider"
+harness = false
+required-features = ["cpu-tblis"]

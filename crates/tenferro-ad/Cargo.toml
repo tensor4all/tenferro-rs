@@ -21,6 +21,9 @@ cpu-faer = [
 cpu-blas = [
     "tenferro-cpu/cpu-blas",
 ]
+cpu-tblis = [
+    "tenferro-cpu/cpu-tblis",
+]
 blas-openblas = [
     "tenferro-cpu/blas-openblas",
 ]

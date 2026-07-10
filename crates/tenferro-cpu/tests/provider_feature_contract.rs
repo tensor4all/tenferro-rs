@@ -2,6 +2,15 @@ use std::path::{Path, PathBuf};
 
 const PROVIDER_FEATURES: &[(&str, &[&str])] = &[
     (
+        "cpu-tblis",
+        &[
+            "dep:tblis-ffi",
+            "dep:tenferro-tblis-src",
+            "tenferro-tblis-src/build_from_source",
+            "tenferro-tblis-src/static",
+        ],
+    ),
+    (
         "blas-openblas",
         &[
             "provider-src",
