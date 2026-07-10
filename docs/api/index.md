@@ -47,3 +47,5 @@ are not the recommended application-facing API surface.
   vocabulary and AD rule implementations
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):
   internal extension-op registration macros
+- [tenferro-tblis-src](./tenferro_tblis_src/index.html): internal native
+  TBLIS source-build and link directives for the optional CPU TBLIS provider
