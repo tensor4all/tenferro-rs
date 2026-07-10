@@ -65,7 +65,7 @@ lapack = "0.20"
 lapack-src = "0.13"
 lapack-inject = "0.1.2"
 tblis-ffi = "0.2.6"
-tenferro-tblis-src = { path = "crates/tenferro-tblis-src", version = "0.1.0" }
+tenferro-tblis-src = { path = "crates/tenferro-tblis-src", version = "0.2.0" }
 # Match CubeCL's CUDA API floor. CUDA 12.8 is the oldest cudarc binding set
 # that exposes the driver symbols used by the current cubecl-cuda revision.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }

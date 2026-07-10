@@ -972,6 +972,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
                     ));
                 }
             }
+            CpuBackendKind::Tblis => false,
         };
         if direct {
             return Ok(());

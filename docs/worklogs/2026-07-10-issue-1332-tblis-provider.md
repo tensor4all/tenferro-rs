@@ -218,14 +218,6 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
 - Added optional BLAS baselines gated with `#[cfg(feature = "cpu-blas")]`, so
   the bench compiles both for `cpu-faer,cpu-tblis` and for
   `cpu-faer,cpu-tblis,blas-openblas`.
-- Added owned higher-rank f64 contractions:
-  - rank-4 x rank-4 with adjacent contracted axes and no batch,
-  - rank-4 x rank-4 with contracted axes mixed between free axes,
-  - rank-5 x rank-5 with one batch axis and contracted axes mixed between
-    free axes.
-- Added a non-canonical positive-stride view case through `TensorRead` using
-  row-major rank-4 host views. This exercises TBLIS's direct strided tensor
-  contraction path without materializing a compact col-major tensor first.
 - Verification:
   `cargo fmt --all --check` passed.
 - Verification:
@@ -241,35 +233,38 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
   `CARGO_TARGET_DIR=/private/tmp/tenferro-tblis-blas-bench OPENBLAS_FC=/opt/homebrew/bin/gfortran LIBRARY_PATH=/opt/homebrew/lib/gcc/current:/opt/homebrew/lib/gcc/15 DYLD_LIBRARY_PATH=/opt/homebrew/lib/gcc/current:/opt/homebrew/lib/gcc/15 TBLIS_NUM_THREADS=1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 cargo bench -p tenferro-cpu --no-default-features --features cpu-faer,cpu-tblis,blas-openblas --bench tblis_dot_general_provider -- --quick`
 - Benchmark case definitions:
 
-| Case | Definition | Inputs | Contract dims | Output |
-| --- | --- | --- | --- | --- |
-| f64 matmul N | `C[i,j] = sum_k A[i,k] B[k,j]` | `A,B: f64[N,N]` | lhs `[1]`, rhs `[0]` | `C: f64[N,N]` |
-| c64 lhs-conj matmul N | `C[i,j] = sum_k conj(A[i,k]) B[k,j]` | `A,B: c64[N,N]` | lhs `[1]`, rhs `[0]` | `C: c64[N,N]` |
-| rank-4 adjacent-contracted n | `C[a,b,c,d] = sum_{x,y} A[a,b,x,y] B[x,y,c,d]`. Two indices, `x` and `y`, are summed over and they are adjacent at the end of lhs and start of rhs. | `A,B: f64[n,n,n,n]` | lhs `[2,3]`, rhs `[0,1]` | `C: f64[n,n,n,n]` |
-| rank-4 mixed-axis n | `C[a,b,c,d] = sum_{x,y} A[a,x,b,y] B[c,y,x,d]`. Two indices, `x` and `y`, are summed over, but they are mixed between free axes rather than packed at the tensor edges. | `A,B: f64[n,n,n,n]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
-| rank-5 batched mixed-axis n | `C[b,c,d,e,a] = sum_{x,y} A[a,b,x,c,y] B[a,d,y,x,e]`. Axis `a` is a shared batch axis; `x` and `y` are summed over and mixed between free axes. | `A,B: f64[4,n,n,n,n]` | batch lhs/rhs `[0]`; contract lhs `[2,4]`, rhs `[3,2]` | `C: f64[n,n,n,n,4]` |
-| rank-4 row-major view n | `C[a,b,c,d] = sum_{x,y} A[a,x,b,y] B[c,y,x,d]`. `A` and `B` are borrowed `TensorRead::View` inputs over row-major storage, so their strides are `[n^3,n^2,n,1]` instead of compact column-major `[1,n,n^2,n^3]`. | `A,B: f64[n,n,n,n]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
+`N` is the square matrix size. `n` is the size of each tensor axis in the
+higher-rank cases. The rank-5 case uses a fixed batch size of `4`.
+
+| Case | Question answered | Formula | Inputs | Contract dims | Output |
+| --- | --- | --- | --- | --- | --- |
+| `f64_matrix_square_gemm` | Does TBLIS add overhead on the plain matrix-multiply case that BLAS/faer already handle well? | `C[i,j] = sum_k A[i,k] B[k,j]` | `A,B: f64[N,N]` | lhs `[1]`, rhs `[0]` | `C: f64[N,N]` |
+| `c64_matrix_square_gemm_lhs_conj` | How does the provider handle complex GEMM when the lhs must be conjugated? | `C[i,j] = sum_k conj(A[i,k]) B[k,j]` | `A,B: c64[N,N]` | lhs `[1]`, rhs `[0]` | `C: c64[N,N]` |
+| `f64_rank4_packed_contract_axes` | What happens when a 4-D contraction is essentially GEMM-shaped because the summed axes are already packed together? | `C[a,b,c,d] = sum_{x,y} A[a,b,x,y] B[x,y,c,d]` | `A,B: f64[n,n,n,n]` | lhs `[2,3]`, rhs `[0,1]` | `C: f64[n,n,n,n]` |
+| `f64_rank4_mixed_contract_axes` | What happens when the summed axes are separated by free axes, so a GEMM-only path typically needs axis movement/materialization? | `C[a,b,c,d] = sum_{x,y} A[a,x,b,y] B[c,y,x,d]` | `A,B: f64[n,n,n,n]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
+| `f64_rank5_batched_mixed_contract_axes` | Does the same mixed-axis pattern still behave well when repeated over an explicit batch axis? | `C[b,c,d,e,a] = sum_{x,y} A[a,b,x,c,y] B[a,d,y,x,e]` | `A,B: f64[4,n,n,n,n]` | batch lhs/rhs `[0]`; contract lhs `[2,4]`, rhs `[3,2]` | `C: f64[n,n,n,n,4]` |
+| `f64_rank4_row_major_view_mixed_contract_axes` | Can the provider consume borrowed row-major positive-stride views directly instead of first canonicalizing them to owned column-major tensors? | `C[a,b,c,d] = sum_{x,y} A[a,x,b,y] B[c,y,x,d]` | borrowed `A,B: f64[n,n,n,n]`, row-major strides `[n^3,n^2,n,1]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
 
 - Default/small selected results:
 
 | Case | Parameter | faer | BLAS | TBLIS |
 | --- | ---: | ---: | ---: | ---: |
-| f64 matmul | `N=32` | 3.42 us | 1.98 us | 5.66 us |
-| f64 matmul | `N=64` | 12.71 us | 19.77 us | 19.52 us |
-| f64 matmul | `N=128` | 86.88 us | 99.27 us | 101.31 us |
-| c64 lhs-conj matmul | `N=32` | 6.38 us | 12.10 us | 10.92 us |
-| c64 lhs-conj matmul | `N=64` | 53.72 us | 60.93 us | 53.35 us |
-| c64 lhs-conj matmul | `N=128` | 385.69 us | 406.12 us | 333.33 us |
-| rank-4 adjacent-contracted | `n=4` | 2.02 us | 0.88 us | 3.40 us |
-| rank-4 adjacent-contracted | `n=8` | 12.82 us | 20.60 us | 19.44 us |
-| rank-4 mixed-axis | `n=4` | 3.37 us | 4.05 us | 3.72 us |
-| rank-4 mixed-axis | `n=8` | 16.79 us | 29.64 us | 19.08 us |
-| rank-5 batched mixed-axis | `n=4`, batch `4` | 5.67 us | 6.42 us | 10.38 us |
-| rank-5 batched mixed-axis | `n=8`, batch `4` | 62.11 us | 108.55 us | 74.58 us |
-| rank-4 row-major view | `n=4` | 3.49 us | 5.49 us | 3.88 us |
-| rank-4 row-major view | `n=8` | 17.90 us | 42.66 us | 20.13 us |
+| `f64_matrix_square_gemm` | `N=32` | 3.42 us | 1.98 us | 5.66 us |
+| `f64_matrix_square_gemm` | `N=64` | 12.71 us | 19.77 us | 19.52 us |
+| `f64_matrix_square_gemm` | `N=128` | 86.88 us | 99.27 us | 101.31 us |
+| `c64_matrix_square_gemm_lhs_conj` | `N=32` | 6.38 us | 12.10 us | 10.92 us |
+| `c64_matrix_square_gemm_lhs_conj` | `N=64` | 53.72 us | 60.93 us | 53.35 us |
+| `c64_matrix_square_gemm_lhs_conj` | `N=128` | 385.69 us | 406.12 us | 333.33 us |
+| `f64_rank4_packed_contract_axes` | `n=4` | 2.02 us | 0.88 us | 3.40 us |
+| `f64_rank4_packed_contract_axes` | `n=8` | 12.82 us | 20.60 us | 19.44 us |
+| `f64_rank4_mixed_contract_axes` | `n=4` | 3.37 us | 4.05 us | 3.72 us |
+| `f64_rank4_mixed_contract_axes` | `n=8` | 16.79 us | 29.64 us | 19.08 us |
+| `f64_rank5_batched_mixed_contract_axes` | `n=4`, batch `4` | 5.67 us | 6.42 us | 10.38 us |
+| `f64_rank5_batched_mixed_contract_axes` | `n=8`, batch `4` | 62.11 us | 108.55 us | 74.58 us |
+| `f64_rank4_row_major_view_mixed_contract_axes` | `n=4` | 3.49 us | 5.49 us | 3.88 us |
+| `f64_rank4_row_major_view_mixed_contract_axes` | `n=8` | 17.90 us | 42.66 us | 20.13 us |
 - The expanded benchmark does not show a broad TBLIS win on this machine.
-  TBLIS is competitive with or faster than BLAS on several complex/interleaved
+  TBLIS is competitive with or faster than BLAS on several complex and mixed-axis
   cases, but faer remains faster for most measured f64 higher-rank cases at
   these sizes. PR messaging should present this as an optional provider and
   source-build/correctness integration, not a demonstrated performance win.
@@ -280,14 +275,14 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
 
 | Case | Parameter | faer | BLAS | TBLIS |
 | --- | ---: | ---: | ---: | ---: |
-| f64 matmul | `N=256` | 617.38 us | 748.55 us | 645.64 us |
-| f64 matmul | `N=512` | 5.04 ms | 4.91 ms | 4.78 ms |
-| c64 lhs-conj matmul | `N=256` | 2.93 ms | 2.77 ms | 2.39 ms |
-| c64 lhs-conj matmul | `N=512` | 23.37 ms | 22.08 ms | 18.32 ms |
-| rank-4 adjacent-contracted | `n=16` | 621.53 us | 621.47 us | 646.96 us |
-| rank-4 mixed-axis | `n=16` | 672.51 us | 676.83 us | 646.17 us |
-| rank-5 batched mixed-axis | `n=16`, batch `4` | 3.03 ms | 3.10 ms | 2.67 ms |
-| rank-4 row-major view | `n=16` | 935.45 us | 954.64 us | 651.67 us |
+| `f64_matrix_square_gemm` | `N=256` | 617.38 us | 748.55 us | 645.64 us |
+| `f64_matrix_square_gemm` | `N=512` | 5.04 ms | 4.91 ms | 4.78 ms |
+| `c64_matrix_square_gemm_lhs_conj` | `N=256` | 2.93 ms | 2.77 ms | 2.39 ms |
+| `c64_matrix_square_gemm_lhs_conj` | `N=512` | 23.37 ms | 22.08 ms | 18.32 ms |
+| `f64_rank4_packed_contract_axes` | `n=16` | 621.53 us | 621.47 us | 646.96 us |
+| `f64_rank4_mixed_contract_axes` | `n=16` | 672.51 us | 676.83 us | 646.17 us |
+| `f64_rank5_batched_mixed_contract_axes` | `n=16`, batch `4` | 3.03 ms | 3.10 ms | 2.67 ms |
+| `f64_rank4_row_major_view_mixed_contract_axes` | `n=16` | 935.45 us | 954.64 us | 651.67 us |
 - Larger cases are more favorable to TBLIS than the default small quick bench,
   especially complex GEMM, batched mixed-axis higher-rank contraction, and
   direct row-major positive-stride views. The broad claim should still remain

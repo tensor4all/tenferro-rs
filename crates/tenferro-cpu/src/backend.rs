@@ -1824,6 +1824,7 @@ impl BackendCachedDot for CpuBackend {
                     return Err(unavailable_cpu_backend_kind(self.kind, "grouped_gemm"));
                 }
             }
+            CpuBackendKind::Tblis => false,
         };
         if direct {
             return Ok(());

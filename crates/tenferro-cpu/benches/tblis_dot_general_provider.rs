@@ -40,7 +40,7 @@ fn rank4_contract_config() -> DotGeneralConfig {
 }
 
 #[cfg(feature = "cpu-tblis")]
-fn interleaved_rank4_contract_config() -> DotGeneralConfig {
+fn rank4_mixed_contract_axes_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1, 3],
         rhs_contracting_dims: vec![2, 1],
@@ -50,7 +50,7 @@ fn interleaved_rank4_contract_config() -> DotGeneralConfig {
 }
 
 #[cfg(feature = "cpu-tblis")]
-fn batched_interleaved_rank5_contract_config() -> DotGeneralConfig {
+fn rank5_batched_mixed_contract_axes_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![2, 4],
         rhs_contracting_dims: vec![3, 2],
@@ -327,7 +327,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
 
         bench_owned_all_providers(
             &mut group,
-            "f64_matmul",
+            "f64_matrix_square_gemm",
             n,
             &real_lhs,
             &real_rhs,
@@ -338,7 +338,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
             &mut group,
             "faer",
             CpuBackendKind::Faer,
-            "c64_lhs_conj_matmul",
+            "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
             &complex_rhs,
@@ -349,7 +349,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
             &mut group,
             "blas",
             CpuBackendKind::Blas,
-            "c64_lhs_conj_matmul",
+            "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
             &complex_rhs,
@@ -359,7 +359,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
             &mut group,
             "tblis",
             CpuBackendKind::Tblis,
-            "c64_lhs_conj_matmul",
+            "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
             &complex_rhs,
@@ -368,30 +368,30 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
     }
 
     let rank4_config = rank4_contract_config();
-    let interleaved_rank4_config = interleaved_rank4_contract_config();
-    let batched_config = batched_interleaved_rank5_contract_config();
+    let rank4_mixed_config = rank4_mixed_contract_axes_config();
+    let batched_mixed_config = rank5_batched_mixed_contract_axes_config();
 
     for &n in &higher_rank_sizes {
         let rank4_lhs = real_tensor(&[n, n, n, n], 11);
         let rank4_rhs = real_tensor(&[n, n, n, n], 12);
         bench_owned_all_providers(
             &mut group,
-            "f64_rank4_two_contract",
+            "f64_rank4_packed_contract_axes",
             format!("n_{n}"),
             &rank4_lhs,
             &rank4_rhs,
             &rank4_config,
         );
 
-        let interleaved_lhs = real_tensor(&[n, n, n, n], 21);
-        let interleaved_rhs = real_tensor(&[n, n, n, n], 22);
+        let mixed_lhs = real_tensor(&[n, n, n, n], 21);
+        let mixed_rhs = real_tensor(&[n, n, n, n], 22);
         bench_owned_all_providers(
             &mut group,
-            "f64_rank4_interleaved_two_contract",
+            "f64_rank4_mixed_contract_axes",
             format!("n_{n}"),
-            &interleaved_lhs,
-            &interleaved_rhs,
-            &interleaved_rank4_config,
+            &mixed_lhs,
+            &mixed_rhs,
+            &rank4_mixed_config,
         );
 
         let batch = 4;
@@ -399,11 +399,11 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         let batched_rhs = real_tensor(&[batch, n, n, n, n], 32);
         bench_owned_all_providers(
             &mut group,
-            "f64_rank5_batched_interleaved_two_contract",
+            "f64_rank5_batched_mixed_contract_axes",
             format!("batch_{batch}_n_{n}"),
             &batched_lhs,
             &batched_rhs,
-            &batched_config,
+            &batched_mixed_config,
         );
     }
 
@@ -416,7 +416,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         let rhs_data = real_data(&rhs_shape, 42);
         bench_read_view_all_providers(
             &mut group,
-            "f64_rank4_interleaved_row_major_view",
+            "f64_rank4_row_major_view_mixed_contract_axes",
             format!("n_{n}"),
             StridedData {
                 shape: &lhs_shape,
@@ -428,7 +428,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
                 strides: &rhs_row_major_strides,
                 data: &rhs_data,
             },
-            &interleaved_rank4_config,
+            &rank4_mixed_config,
         );
     }
 
