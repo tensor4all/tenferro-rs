@@ -81,6 +81,10 @@ fn path_candidates(env_candidates: &[&str]) -> impl Iterator<Item = PathBuf> {
 }
 
 fn link_tblis() {
+    if !cfg!(feature = "build_from_source") {
+        return;
+    }
+
     let env_candidates = [
         "TBLIS_DIR",
         "REST_EXT_DIR",
