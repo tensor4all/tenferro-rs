@@ -238,21 +238,35 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
   `OMP_NUM_THREADS=1`, and `OPENBLAS_NUM_THREADS=1`.
 - Command:
   `CARGO_TARGET_DIR=/private/tmp/tenferro-tblis-blas-bench OPENBLAS_FC=/opt/homebrew/bin/gfortran LIBRARY_PATH=/opt/homebrew/lib/gcc/current:/opt/homebrew/lib/gcc/15 DYLD_LIBRARY_PATH=/opt/homebrew/lib/gcc/current:/opt/homebrew/lib/gcc/15 TBLIS_NUM_THREADS=1 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 cargo bench -p tenferro-cpu --no-default-features --features cpu-faer,cpu-tblis,blas-openblas --bench tblis_dot_general_provider -- --quick`
-- Selected results:
-  - f64 matmul 32: faer 3.42 us, BLAS 1.98 us, TBLIS 5.66 us
-  - f64 matmul 64: faer 12.71 us, BLAS 19.77 us, TBLIS 19.52 us
-  - f64 matmul 128: faer 86.88 us, BLAS 99.27 us, TBLIS 101.31 us
-  - c64 lhs-conj matmul 32: faer 6.38 us, BLAS 12.10 us, TBLIS 10.92 us
-  - c64 lhs-conj matmul 64: faer 53.72 us, BLAS 60.93 us, TBLIS 53.35 us
-  - c64 lhs-conj matmul 128: faer 385.69 us, BLAS 406.12 us, TBLIS 333.33 us
-  - rank-4 two-contract n=4: faer 2.02 us, BLAS 0.88 us, TBLIS 3.40 us
-  - rank-4 two-contract n=8: faer 12.82 us, BLAS 20.60 us, TBLIS 19.44 us
-  - rank-4 interleaved n=4: faer 3.37 us, BLAS 4.05 us, TBLIS 3.72 us
-  - rank-4 interleaved n=8: faer 16.79 us, BLAS 29.64 us, TBLIS 19.08 us
-  - rank-5 batched interleaved n=4: faer 5.67 us, BLAS 6.42 us, TBLIS 10.38 us
-  - rank-5 batched interleaved n=8: faer 62.11 us, BLAS 108.55 us, TBLIS 74.58 us
-  - rank-4 row-major view n=4: faer 3.49 us, BLAS 5.49 us, TBLIS 3.88 us
-  - rank-4 row-major view n=8: faer 17.90 us, BLAS 42.66 us, TBLIS 20.13 us
+- Benchmark case definitions:
+
+| Case | Definition | Inputs | Contract dims | Output |
+| --- | --- | --- | --- | --- |
+| f64 matmul N | `C[i,j] = sum_k A[i,k] B[k,j]` | `A,B: f64[N,N]` | lhs `[1]`, rhs `[0]` | `C: f64[N,N]` |
+| c64 lhs-conj matmul N | `C[i,j] = sum_k conj(A[i,k]) B[k,j]` | `A,B: c64[N,N]` | lhs `[1]`, rhs `[0]` | `C: c64[N,N]` |
+| rank-4 two-contract n | `C[a,b,c,d] = sum_{x,y} A[a,b,x,y] B[x,y,c,d]` | `A,B: f64[n,n,n,n]` | lhs `[2,3]`, rhs `[0,1]` | `C: f64[n,n,n,n]` |
+| rank-4 interleaved n | `C[a,b,c,d] = sum_{x,y} A[a,x,b,y] B[c,y,x,d]` | `A,B: f64[n,n,n,n]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
+| rank-5 batched interleaved n | `C[a,b,c,d,e] = sum_{x,y} A[a,b,x,c,y] B[a,d,y,x,e]` | `A,B: f64[4,n,n,n,n]` | batch lhs/rhs `[0]`; contract lhs `[2,4]`, rhs `[3,2]` | `C: f64[n,n,n,n,4]` |
+| rank-4 row-major view n | same contraction as rank-4 interleaved, but both inputs are positive-stride row-major `TensorRead` views | `A,B: f64[n,n,n,n]`, strides `[n^3,n^2,n,1]` | lhs `[1,3]`, rhs `[2,1]` | `C: f64[n,n,n,n]` |
+
+- Default/small selected results:
+
+| Case | Parameter | faer | BLAS | TBLIS |
+| --- | ---: | ---: | ---: | ---: |
+| f64 matmul | `N=32` | 3.42 us | 1.98 us | 5.66 us |
+| f64 matmul | `N=64` | 12.71 us | 19.77 us | 19.52 us |
+| f64 matmul | `N=128` | 86.88 us | 99.27 us | 101.31 us |
+| c64 lhs-conj matmul | `N=32` | 6.38 us | 12.10 us | 10.92 us |
+| c64 lhs-conj matmul | `N=64` | 53.72 us | 60.93 us | 53.35 us |
+| c64 lhs-conj matmul | `N=128` | 385.69 us | 406.12 us | 333.33 us |
+| rank-4 two-contract | `n=4` | 2.02 us | 0.88 us | 3.40 us |
+| rank-4 two-contract | `n=8` | 12.82 us | 20.60 us | 19.44 us |
+| rank-4 interleaved | `n=4` | 3.37 us | 4.05 us | 3.72 us |
+| rank-4 interleaved | `n=8` | 16.79 us | 29.64 us | 19.08 us |
+| rank-5 batched interleaved | `n=4`, batch `4` | 5.67 us | 6.42 us | 10.38 us |
+| rank-5 batched interleaved | `n=8`, batch `4` | 62.11 us | 108.55 us | 74.58 us |
+| rank-4 row-major view | `n=4` | 3.49 us | 5.49 us | 3.88 us |
+| rank-4 row-major view | `n=8` | 17.90 us | 42.66 us | 20.13 us |
 - The expanded benchmark does not show a broad TBLIS win on this machine.
   TBLIS is competitive with or faster than BLAS on several complex/interleaved
   cases, but faer remains faster for most measured f64 higher-rank cases at
@@ -262,14 +276,17 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
   `TENFERRO_TBLIS_BENCH_MATMUL_SIZES=256,512 TENFERRO_TBLIS_BENCH_HIGHER_RANK_NS=16`
   with the same pinned single-thread settings and `blas-openblas`.
 - Large-size selected results:
-  - f64 matmul 256: faer 617.38 us, BLAS 748.55 us, TBLIS 645.64 us
-  - f64 matmul 512: faer 5.04 ms, BLAS 4.91 ms, TBLIS 4.78 ms
-  - c64 lhs-conj matmul 256: faer 2.93 ms, BLAS 2.77 ms, TBLIS 2.39 ms
-  - c64 lhs-conj matmul 512: faer 23.37 ms, BLAS 22.08 ms, TBLIS 18.32 ms
-  - rank-4 two-contract n=16: faer 621.53 us, BLAS 621.47 us, TBLIS 646.96 us
-  - rank-4 interleaved n=16: faer 672.51 us, BLAS 676.83 us, TBLIS 646.17 us
-  - rank-5 batched interleaved n=16: faer 3.03 ms, BLAS 3.10 ms, TBLIS 2.67 ms
-  - rank-4 row-major view n=16: faer 935.45 us, BLAS 954.64 us, TBLIS 651.67 us
+
+| Case | Parameter | faer | BLAS | TBLIS |
+| --- | ---: | ---: | ---: | ---: |
+| f64 matmul | `N=256` | 617.38 us | 748.55 us | 645.64 us |
+| f64 matmul | `N=512` | 5.04 ms | 4.91 ms | 4.78 ms |
+| c64 lhs-conj matmul | `N=256` | 2.93 ms | 2.77 ms | 2.39 ms |
+| c64 lhs-conj matmul | `N=512` | 23.37 ms | 22.08 ms | 18.32 ms |
+| rank-4 two-contract | `n=16` | 621.53 us | 621.47 us | 646.96 us |
+| rank-4 interleaved | `n=16` | 672.51 us | 676.83 us | 646.17 us |
+| rank-5 batched interleaved | `n=16`, batch `4` | 3.03 ms | 3.10 ms | 2.67 ms |
+| rank-4 row-major view | `n=16` | 935.45 us | 954.64 us | 651.67 us |
 - Larger cases are more favorable to TBLIS than the default small quick bench,
   especially complex GEMM, batched/interleaved higher-rank contraction, and
   direct row-major positive-stride views. The broad claim should still remain
