@@ -17,14 +17,11 @@ writes cannot attach a required check to fork commits.
 
 ## Decisions
 
-- Keep `CI_gpu.yml` as a fork-PR fallback instead of deleting it immediately,
-  so fork PRs still have a branch-protection-compatible `CI GPU gate` check.
-  It also remains available as a manual fallback for maintainers comparing the
-  org larger GPU runner with RunPod.
-- Rename the legacy workflow's final check to `CI GPU legacy manual gate` for
-  same-repo/manual paths, but keep the exact `CI GPU gate` name on fork PRs.
-  This avoids a skipped same-repo legacy job satisfying branch protection while
-  preserving the required check path for forks.
+- Keep `CI_gpu.yml` as the PR-attached `CI GPU gate` wrapper. Same-repo PRs do
+  not run legacy GPU work there; they wait for the trusted RunPod check. Fork
+  PRs still use the legacy `ubuntu-gpu` path because the RunPod workflow cannot
+  attach a base-repo Checks API result to fork commits.
+- Keep a separate `CI GPU legacy manual gate` for manual fallback runs.
 - Add the required `CI GPU gate` check to the RunPod workflow after
   authorization, non-GPU pre-gating, archive build, pod startup, GPU tests, and
   cleanup all succeed. Because `workflow_run` jobs are attached to the default

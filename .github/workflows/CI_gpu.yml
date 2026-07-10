@@ -2,10 +2,12 @@ name: CI_gpu
 
 # Retired from automatic same-repo PR gating by issue #1341. RunPod now owns the
 # branch-protection-required `CI GPU gate` check for eligible maintainer PRs.
-# Keep this workflow as the automatic fork-PR path because base-repo Checks API
-# writes cannot attach `CI GPU gate` to fork commits. It also remains a manual
-# legacy fallback for comparing the org larger GPU runner (`ubuntu-gpu`) with
-# RunPod while the migration settles.
+# Keep this workflow as the PR-attached `CI GPU gate` wrapper: same-repo PRs wait
+# for the trusted RunPod check published by `runpod-gpu-test.yml`, while fork PRs
+# use the legacy `ubuntu-gpu` path because base-repo Checks API writes cannot
+# attach `CI GPU gate` to fork commits. It also remains a manual legacy fallback
+# for comparing the org larger GPU runner with RunPod while the migration
+# settles.
 
 on:
   pull_request:
@@ -516,19 +518,94 @@ jobs:
             cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
 
   cuda-gate:
-    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'CI GPU gate' || 'CI GPU legacy manual gate' }}
+    name: CI GPU gate
     needs: [cuda-archive, pre-gpu-gate, cuda-run]
     if: >-
       always() &&
       !cancelled() &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name != github.repository)
-      )
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Require CUDA GPU tests
+      - name: Require fork CUDA GPU tests or same-repo RunPod gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_RUN_MARKER: /actions/runs/${{ github.run_id }}
+          ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          PRE_GPU_RESULT: ${{ needs.pre-gpu-gate.result }}
+          CUDA_RESULT: ${{ needs.cuda-run.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "${HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
+            if [ "${PRE_GPU_RESULT}" != "success" ]; then
+              echo "Expected pre-gpu-gate to succeed; got pre-gpu-gate=${PRE_GPU_RESULT}"
+              exit 1
+            fi
+            if [ "${ARCHIVE_RESULT}" != "success" ]; then
+              echo "Expected cuda-archive to succeed; got cuda-archive=${ARCHIVE_RESULT}"
+              exit 1
+            fi
+            if [ "${CUDA_RESULT}" = "success" ]; then
+              exit 0
+            fi
+            echo "Expected cuda-run to succeed on ubuntu-gpu; got cuda-run=${CUDA_RESULT}"
+            exit 1
+          fi
+
+          deadline=$((SECONDS + 90 * 60))
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
+            checks_file="$(mktemp)"
+            gh api \
+              --method GET \
+              "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+              -f check_name="CI GPU gate" \
+              --jq . > "${checks_file}"
+
+            run_json="$(
+              jq -c --arg current "${CURRENT_RUN_MARKER}" '
+                .check_runs
+                | map(select((((.details_url // "") | contains($current)) | not)))
+                | sort_by(.started_at // .created_at // "")
+                | reverse
+                | .[0] // empty
+              ' "${checks_file}"
+            )"
+
+            if [ -n "${run_json}" ]; then
+              status="$(jq -r '.status' <<<"${run_json}")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"${run_json}")"
+              url="$(jq -r '.details_url // .html_url // ""' <<<"${run_json}")"
+              if [ "${status}" = "completed" ] && [ "${conclusion}" = "success" ]; then
+                echo "RunPod CI GPU gate passed: ${url}"
+                exit 0
+              fi
+              if [ "${status}" = "completed" ]; then
+                echo "RunPod CI GPU gate concluded ${conclusion}: ${url}"
+                exit 1
+              fi
+              echo "Waiting for RunPod CI GPU gate (${status}): ${url}"
+            else
+              echo "Waiting for RunPod CI GPU gate on ${HEAD_SHA}."
+            fi
+
+            sleep 30
+          done
+
+          echo "Timed out waiting for RunPod CI GPU gate on ${HEAD_SHA}."
+          exit 1
+
+  cuda-gate-manual:
+    name: CI GPU legacy manual gate
+    needs: [cuda-archive, pre-gpu-gate, cuda-run]
+    if: >-
+      always() &&
+      !cancelled() &&
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require manual CUDA GPU tests
         env:
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
           PRE_GPU_RESULT: ${{ needs.pre-gpu-gate.result }}
