@@ -2,8 +2,10 @@
 
 ## Summary
 
-Issue #1341 retires the legacy `CI_gpu.yml` workflow from automatic PR
-execution and makes the trusted RunPod workflow own the PR GPU gate.
+Issue #1341 retires the legacy `CI_gpu.yml` workflow from automatic same-repo
+PR execution and makes the trusted RunPod workflow own the maintainer PR GPU
+gate. Fork PRs keep the legacy pull_request path because base-repo Checks API
+writes cannot attach a required check to fork commits.
 
 ## Context read
 
@@ -15,10 +17,14 @@ execution and makes the trusted RunPod workflow own the PR GPU gate.
 
 ## Decisions
 
-- Keep `CI_gpu.yml` as a manual fallback instead of deleting it immediately, so
-  maintainers can still compare the org larger GPU runner with RunPod.
-- Rename the legacy workflow's final check to `CI GPU legacy manual gate` so it
-  no longer owns the branch-protection-required `CI GPU gate` name.
+- Keep `CI_gpu.yml` as a fork-PR fallback instead of deleting it immediately,
+  so fork PRs still have a branch-protection-compatible `CI GPU gate` check.
+  It also remains available as a manual fallback for maintainers comparing the
+  org larger GPU runner with RunPod.
+- Rename the legacy workflow's final check to `CI GPU legacy manual gate` for
+  same-repo/manual paths, but keep the exact `CI GPU gate` name on fork PRs.
+  This avoids a skipped same-repo legacy job satisfying branch protection while
+  preserving the required check path for forks.
 - Add the required `CI GPU gate` check to the RunPod workflow after
   authorization, non-GPU pre-gating, archive build, pod startup, GPU tests, and
   cleanup all succeed. Because `workflow_run` jobs are attached to the default
@@ -35,20 +41,26 @@ execution and makes the trusted RunPod workflow own the PR GPU gate.
   publish.
 - Make the legacy `CI_gpu.yml` manual fallback check out the requested
   `tenferro_ref` in both archive and GPU-runner jobs so PJRT validation uses
-  the same ref as the archived CUDA tests.
+  the same ref as the archived CUDA tests. Pull request runs use the PR event
+  ref.
+- Keep `CI_gpu.yml` automatic only for fork PRs. Same-repo PRs must use RunPod,
+  while fork PRs cannot receive the RunPod-published base-repo check on the
+  fork head SHA.
 - Preserve the existing trusted-base `workflow_run` model and pinned merge-SHA
   checkout behavior from PR #1340.
 
 ## Deferred
 
-- Deleting `CI_gpu.yml` entirely remains a maintainer decision after RunPod has
-  enough production history.
+- Deleting `CI_gpu.yml` entirely requires a separate fork-PR gate design, not
+  just more RunPod production history.
 - Branch protection should continue requiring the same check name,
-  `CI GPU gate`, now emitted by the RunPod workflow.
+  `CI GPU gate`, emitted by RunPod for same-repo maintainer PRs and by
+  `CI_gpu.yml` for fork PRs.
 
 ## Verification
 
 No local CI was run in this editing pass. The intended verification is a manual
 dispatch of `runpod-gpu-test.yml` against a pinned PR merge SHA, followed by a
 maintainer same-repo PR update confirming that only RunPod automatically emits
-`CI GPU gate`.
+`CI GPU gate` for same-repo PRs. A future fork PR should confirm the legacy
+`CI_gpu.yml` path still emits `CI GPU gate`.

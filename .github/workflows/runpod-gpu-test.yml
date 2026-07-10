@@ -27,9 +27,10 @@ name: RunPod tenferro-rs GPU Test
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
 #   * This workflow owns the branch-protection-required `CI GPU gate` check for
-#     eligible maintainer PRs by publishing that check to the PR head SHA from
-#     a GitHub-hosted final gate job. The legacy `CI_gpu.yml` workflow is
-#     manual-only.
+#     eligible same-repo maintainer PRs by publishing that check to the PR head
+#     SHA from a GitHub-hosted final gate job. Fork PRs keep using the legacy
+#     `CI_gpu.yml` pull_request path because base-repo Checks API writes cannot
+#     attach a check run to fork commits.
 # ---------------------------------------------------------------------------
 
 on:
