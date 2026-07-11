@@ -535,9 +535,9 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
     let diag_u = packed_lu.extract_diag(0, 1)?;
-    let sign_u = diag_u.sign().reduce_prod(&[0])?;
+    let sign_u = diag_u.sign()?.reduce_prod(&[0])?;
     let sign = (&parity * &sign_u)?;
-    let logabsdet = diag_u.abs().log().reduce_sum(&[0])?;
+    let logabsdet = diag_u.abs()?.log()?.reduce_sum(&[0])?;
     Ok((sign, logabsdet))
 }
 
@@ -555,7 +555,7 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
     let (sign, logabsdet) = slogdet(a)?;
-    &sign * &logabsdet.exp()
+    &sign * &logabsdet.exp()?
 }
 
 /// Build a traced matrix inverse op.
@@ -654,7 +654,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     ensure_float_or_complex("pinv_with_rtol", a.dtype)?;
     require_concrete_shape("pinv_with_rtol", a)?;
     let (u, s, vt) = svd(a)?;
-    let abs_s = s.abs();
+    let abs_s = s.abs()?;
     let s_max = abs_s.reduce_max(&[0])?;
     let s_max_shape = s_max.concrete_shape()?;
     let threshold_scalar = broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0))?, &s_max_shape)?;
@@ -664,11 +664,12 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     let mask = abs_s.compare(&threshold, CompareDir::Gt)?;
     let mask = mask.convert(s.dtype)?;
     let ones = ones_like(&s)?;
-    let denom = (&s + &(&ones + &(-&mask))?)?;
+    let neg_mask = (-&mask)?;
+    let denom = (&s + &(&ones + &neg_mask)?)?;
     let s_inv = (&mask / &denom)?;
 
-    let v = vt.conj().transpose(&matrix_transpose_perm(vt.rank))?;
-    let uh = u.conj().transpose(&matrix_transpose_perm(u.rank))?;
+    let v = vt.conj()?.transpose(&matrix_transpose_perm(vt.rank))?;
+    let uh = u.conj()?.transpose(&matrix_transpose_perm(u.rank))?;
     let vs = scale_matrix_columns(&v, &s_inv)?;
     matmul_preserve_trailing_batch(&vs, &uh)
 }
@@ -706,7 +707,7 @@ pub fn norm(
         1 => vector_norm(a, axes[0], ord)?,
         2 => matrix_norm(a, &axes, ord)?,
         _ => {
-            let abs = a.abs();
+            let abs = a.abs()?;
             match ord {
                 None => frobenius_norm(&abs, &axes)?,
                 Some(p) if p == f64::INFINITY => abs.reduce_max(&axes)?,
@@ -917,7 +918,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     let squared = abs.pow(&scalar_real(abs.dtype, 2.0)?)?;
-    Ok(squared.reduce_sum(axes)?.sqrt())
+    Ok(squared.reduce_sum(axes)?.sqrt()?)
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
@@ -942,7 +943,7 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
 }
 
 fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> Result<TracedTensor> {
-    let abs = a.abs();
+    let abs = a.abs()?;
     match ord {
         None => frobenius_norm(&abs, &[axis]),
         Some(0.0) => count_nonzero(&abs, &[axis]),
@@ -954,7 +955,7 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> Result<Traced
 
 fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<TracedTensor> {
     let matrix = move_axes_to_front(a, axes)?;
-    let abs = matrix.abs();
+    let abs = matrix.abs()?;
     match ord {
         None => frobenius_norm(&abs, &[0, 1]),
         Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
@@ -962,11 +963,11 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
         Some(1.0) => matrix_col_sum_norm(&abs, true),
         Some(-1.0) => matrix_col_sum_norm(&abs, false),
         Some(2.0) => {
-            let singular_values = svd_values(&matrix)?.abs();
+            let singular_values = svd_values(&matrix)?.abs()?;
             singular_values.reduce_max(&[0])
         }
         Some(-2.0) => {
-            let singular_values = svd_values(&matrix)?.abs();
+            let singular_values = svd_values(&matrix)?.abs()?;
             singular_values.reduce_min(&[0])
         }
         Some(0.0) => count_nonzero(&abs, &[0, 1]),
@@ -1094,7 +1095,7 @@ mod tests {
     #[test]
     fn p_norm_rejects_zero_and_non_finite_orders() {
         let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let abs = x.abs();
+        let abs = x.abs().unwrap();
 
         for p in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let err = p_norm(&abs, &[0], p).unwrap_err();

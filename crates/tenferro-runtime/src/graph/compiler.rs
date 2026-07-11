@@ -627,8 +627,8 @@ mod tests {
     #[test]
     fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
         let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-        let y1 = x.neg();
-        let mut y2 = x.neg();
+        let y1 = x.neg().unwrap();
+        let mut y2 = x.neg().unwrap();
         let key = x.input_key().expect("concrete traced tensor has input key");
         let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
         let mut inputs = (*y2.inputs_map).clone();

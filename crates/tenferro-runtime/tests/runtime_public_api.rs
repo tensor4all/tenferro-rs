@@ -72,7 +72,7 @@ fn traced_tensor_methods_cover_conversion_and_rank_errors() {
     let converted = vector.convert(DType::C64).unwrap();
     assert_eq!(converted.dtype, DType::C64);
 
-    let casted = vector.cast(DType::I32);
+    let casted = vector.cast(DType::I32).unwrap();
     assert_eq!(casted.dtype, DType::I32);
 
     let err = scalar.matmul(&vector).unwrap_err();
@@ -206,11 +206,11 @@ fn traced_tensor_methods_cover_structural_surface() {
     let matrix =
         TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(
-        run(&matrix.tril(0)).as_slice::<f64>().unwrap(),
+        run(&matrix.tril(0).unwrap()).as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 0.0, 4.0]
     );
     assert_eq!(
-        run(&matrix.triu(0)).as_slice::<f64>().unwrap(),
+        run(&matrix.triu(0).unwrap()).as_slice::<f64>().unwrap(),
         &[1.0, 0.0, 3.0, 4.0]
     );
     let rectangular =
@@ -435,7 +435,7 @@ fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
     assert!(matches!(shape, Error::PlaceholderShapeMismatch { .. }));
 
     let multi = compiler
-        .compile_many(&[&concrete, &concrete.neg()])
+        .compile_many(&[&concrete, &concrete.neg().unwrap()])
         .unwrap();
     let output_count = executor.run(&multi).unwrap_err();
     assert!(output_count.to_string().contains("expected 1 output"));
