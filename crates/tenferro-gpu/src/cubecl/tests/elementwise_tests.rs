@@ -176,6 +176,8 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
 fn assert_float_classes_and_zero_signs_match(actual: &Tensor, expected: &Tensor) {
     match (actual, expected) {
         (Tensor::F32(actual), Tensor::F32(expected)) => {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.n_elements(), expected.n_elements());
             for (actual, expected) in actual
                 .as_slice()
                 .unwrap()
@@ -186,10 +188,17 @@ fn assert_float_classes_and_zero_signs_match(actual: &Tensor, expected: &Tensor)
                 assert_eq!(actual.is_infinite(), expected.is_infinite());
                 if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
                     assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+                } else if actual.is_finite() && expected.is_finite() {
+                    assert!(
+                        (actual - expected).abs() <= 1e-6,
+                        "expected {expected}, got {actual}"
+                    );
                 }
             }
         }
         (Tensor::F64(actual), Tensor::F64(expected)) => {
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(actual.n_elements(), expected.n_elements());
             for (actual, expected) in actual
                 .as_slice()
                 .unwrap()
@@ -200,6 +209,11 @@ fn assert_float_classes_and_zero_signs_match(actual: &Tensor, expected: &Tensor)
                 assert_eq!(actual.is_infinite(), expected.is_infinite());
                 if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
                     assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+                } else if actual.is_finite() && expected.is_finite() {
+                    assert!(
+                        (actual - expected).abs() <= 1e-12,
+                        "expected {expected}, got {actual}"
+                    );
                 }
             }
         }
