@@ -3,8 +3,8 @@ use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusi
 use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion};
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f64,
-    upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
+    tensor_f64, upload,
 };
 
 /// Build a plan for: out = (a + b) * a
@@ -272,4 +272,36 @@ fn test_fused_empty_tensor() {
         .expect("fusion should handle empty tensors");
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].shape(), &[0]);
+}
+
+#[test]
+#[ignore]
+fn fusion_shape_mismatch_defuses() {
+    let vector = tensor_f64(vec![3], vec![1.0, 2.0, 3.0]);
+    let scalar = tensor_f64(vec![], vec![2.0]);
+
+    let mut gpu = gpu_backend();
+    let gpu_vector = upload(&gpu, &vector);
+    let gpu_scalar = upload(&gpu, &scalar);
+
+    let result = gpu
+        .execute_elementwise_fusion(&[&gpu_vector, &gpu_scalar], &add_mul_plan())
+        .expect("unsupported fusion shapes should not be a hard error");
+    assert!(result.is_none());
+}
+
+#[test]
+#[ignore]
+fn fusion_plan_runtime_dtype_descriptor_mismatch_remains_a_hard_error() {
+    let lhs = tensor_f64(vec![3], vec![1.0, 2.0, 3.0]);
+    let rhs = tensor_f32(vec![3], vec![4.0, 5.0, 6.0]);
+
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+
+    let err = gpu
+        .execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &add_mul_plan())
+        .expect_err("a runtime dtype mismatch must remain a typed hard error");
+    assert!(matches!(err, crate::Error::BackendFailure { .. }));
 }
