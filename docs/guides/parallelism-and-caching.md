@@ -28,11 +28,12 @@ current binary:
 | `cpu-blas` only | BLAS/LAPACK |
 | `cpu-faer` and `cpu-blas` | BLAS/LAPACK |
 
-This is the default provider for that backend instance. If multiple providers
-are compiled, select a provider explicitly when a specific call path should use
-faer, BLAS, or TBLIS. `CpuBackendKind::Tblis` first attempts supported TBLIS
-`dot_general` contractions and then falls back to the compiled faer/BLAS
-provider for shapes outside the TBLIS path. Explicit selection returns a
+This is the default provider for that backend instance. If multiple complete
+CPU providers are compiled, select `CpuBackendKind::Faer` or
+`CpuBackendKind::Blas` explicitly when a specific call path should use one of
+them. TBLIS is not a complete backend kind; opt into TBLIS `dot_general`
+attempts with `DotGeneralProvider::TblisIfAvailable` or require TBLIS with
+`DotGeneralProvider::TblisRequired`. Explicit base-provider selection returns a
 configuration error if the requested provider was not compiled into the binary:
 
 ```rust

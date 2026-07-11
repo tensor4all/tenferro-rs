@@ -104,9 +104,10 @@ CPU execution is handled by `CpuBackend`:
   for multi-thread contexts,
 - BLAS/LAPACK and TBLIS provider threading remain provider-owned.
 
-`cpu-tblis` is additive to the faer/BLAS providers. `CpuBackendKind::Tblis`
-falls back to the compiled faer/BLAS provider when a valid `dot_general` shape
-is outside the current TBLIS path.
+`cpu-tblis` is additive to the faer/BLAS providers. `CpuBackendKind` still
+selects the complete base provider, while `DotGeneralProvider` controls whether
+`dot_general` attempts TBLIS first. Unsupported TBLIS shapes and unavailable
+runtime TBLIS fall back to the selected base provider unless TBLIS is required.
 
 ## CubeCL/CUDA Execution
 

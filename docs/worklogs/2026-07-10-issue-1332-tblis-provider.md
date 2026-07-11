@@ -4,7 +4,7 @@
 
 Added an initial optional `cpu-tblis` provider path for dense CPU
 `dot_general` contractions. The patch is intentionally narrow: feature wiring,
-`CpuBackendKind::Tblis`, a private TBLIS FFI leaf, and dispatch from
+the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and dispatch from
 `TensorDot`/cached session dot-general paths.
 
 ## Context Read
@@ -30,7 +30,7 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
   requires `cpu-faer` or `cpu-blas`, and `CpuBackendKind::default_compiled()`
   remains unchanged. This preserves current defaults and guarantees unsupported
   TBLIS cases have a compiled fallback path.
-- Added `CpuBackendKind::Tblis`, but kept low-level TBLIS helpers `pub(crate)`.
+- Added the now-superseded TBLIS backend-kind prototype, but kept low-level TBLIS helpers `pub(crate)`.
 - Supports `f32`, `f64`, `c32`, and `c64` TBLIS contractions. Conjugated
   `dot_general_with_conj` and accumulated writes use TBLIS tensor conjugation
   flags when a TBLIS plan is valid.
@@ -49,7 +49,7 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
 - Upstreaming the source-build fixes to `tblis-src` remains desirable, but the
   tenferro PR no longer depends on a new upstream release.
 - A richer TBLIS thread-count policy. The initial path avoids tenferro-owned
-  outer Rayon installation for `CpuBackendKind::Tblis` and leaves native TBLIS
+  outer Rayon installation for the now-superseded TBLIS backend-kind prototype and leaves native TBLIS
   scheduling provider-owned.
 - Broader TBLIS benchmark coverage beyond the quick local release-mode run with
   pinned provider thread counts.
@@ -132,7 +132,7 @@ Added an initial optional `cpu-tblis` provider path for dense CPU
     rank is zero,
   - zero-size matmul, which TBLIS declines because one logical dimension is
     zero.
-  Both use `CpuBackendKind::Tblis` and assert successful results through the
+  Both use the now-superseded TBLIS backend-kind prototype and assert successful results through the
   compiled faer/BLAS fallback provider.
 - Updated public-facing provider docs in:
   `docs/guides/parallelism-and-caching.md`,

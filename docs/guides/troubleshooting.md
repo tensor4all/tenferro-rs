@@ -95,9 +95,10 @@ ambiguous BLAS/LAPACK provider set. Use `OPENBLAS_LIB_DIR` for non-standard
 OpenBLAS installs, and `MKLROOT` or `MKL_LIB_DIR` for non-standard MKL installs
 when the provider build scripts need a library path.
 
-`cpu-tblis` is an optional `dot_general` contraction provider. It is additive
-to `cpu-faer`/`cpu-blas`, and `CpuBackendKind::Tblis` falls back to the
-compiled faer/BLAS provider for valid contraction shapes outside the TBLIS path.
+`cpu-tblis` is an optional runtime-loaded `dot_general` contraction provider.
+It is additive to `cpu-faer`/`cpu-blas`; select the base provider with
+`CpuBackendKind` and opt into TBLIS attempts with `DotGeneralProvider`.
+Use `cpu-tblis-linked` when the build should link the bundled/source TBLIS path.
 
 `CpuBackend::new()` selects the compiled default provider: BLAS when `cpu-blas`
 is compiled, otherwise faer. Use `CpuBackend::with_kind(CpuBackendKind::Faer)`

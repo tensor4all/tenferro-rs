@@ -1283,31 +1283,11 @@ enum CpuLinalgProvider {
 
 fn linalg_provider_kind(
     kind: CpuBackendKind,
-    op: &'static str,
+    _op: &'static str,
 ) -> tenferro_tensor::Result<CpuLinalgProvider> {
     match kind {
         CpuBackendKind::Faer => Ok(CpuLinalgProvider::Faer),
         CpuBackendKind::Blas => Ok(CpuLinalgProvider::Blas),
-        CpuBackendKind::Tblis => {
-            #[cfg(feature = "cpu-blas")]
-            {
-                let _ = op;
-                Ok(CpuLinalgProvider::Blas)
-            }
-            #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
-            {
-                let _ = op;
-                Ok(CpuLinalgProvider::Faer)
-            }
-            #[cfg(all(not(feature = "cpu-blas"), not(feature = "cpu-faer")))]
-            {
-                Err(Error::InvalidConfig {
-                    op,
-                    message: "CpuBackendKind::Tblis linalg fallback requires cpu-blas or cpu-faer"
-                        .into(),
-                })
-            }
-        }
     }
 }
 
