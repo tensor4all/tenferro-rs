@@ -10,6 +10,56 @@ use super::{
 };
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_bool_structural_ops_match_cpu() {
+    let matrix = tensor_bool(vec![2, 2], vec![true, false, false, true]);
+    let vector = tensor_bool(vec![2], vec![true, false]);
+    let scalar = tensor_bool(vec![], vec![true]);
+    let empty = tensor_bool(vec![0, 2], vec![]);
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gm = upload(&gpu, &matrix);
+    let gv = upload(&gpu, &vector);
+    let gs = upload(&gpu, &scalar);
+    let ge = upload(&gpu, &empty);
+    macro_rules! parity {
+        ($cpu:expr, $gpu:expr) => {{
+            let expected = $cpu.unwrap();
+            let out = $gpu.unwrap();
+            let actual = download(&gpu, &out);
+            assert_tensor_close(&actual, &expected, 0.0);
+        }};
+    }
+    parity!(cpu.transpose(&matrix, &[1, 0]), gpu.transpose(&gm, &[1, 0]));
+    parity!(
+        cpu.broadcast_in_dim(&scalar, &[2, 2], &[]),
+        gpu.broadcast_in_dim(&gs, &[2, 2], &[])
+    );
+    parity!(
+        cpu.extract_diagonal(&matrix, 0, 1),
+        gpu.extract_diagonal(&gm, 0, 1)
+    );
+    parity!(
+        cpu.embed_diagonal(&vector, 0, 1),
+        gpu.embed_diagonal(&gv, 0, 1)
+    );
+    parity!(cpu.tril(&matrix, 0), gpu.tril(&gm, 0));
+    parity!(cpu.triu(&matrix, 0), gpu.triu(&gm, 0));
+    parity!(
+        cpu.concatenate(&[&matrix, &matrix], 0),
+        gpu.concatenate(&[&gm, &gm], 0)
+    );
+    parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
+    parity!(cpu.transpose(&empty, &[1, 0]), gpu.transpose(&ge, &[1, 0]));
+    let cpu_err = cpu.transpose(&matrix, &[0, 0]).unwrap_err();
+    let gpu_err = gpu.transpose(&gm, &[0, 0]).unwrap_err();
+    assert_eq!(
+        std::mem::discriminant(&cpu_err),
+        std::mem::discriminant(&gpu_err)
+    );
+}
+
+#[test]
 #[ignore]
 fn test_cubecl_structural_ops_match_cpu() {
     let input = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);

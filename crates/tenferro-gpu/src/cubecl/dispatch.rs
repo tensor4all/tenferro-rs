@@ -198,7 +198,7 @@ fn validate_raw_ternary_shapes<TA, TB, TC>(
     ensure_same_shape(op, c.shape(), out_shape)
 }
 
-pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
+pub(crate) fn typed_tensor_binding<T: Clone + 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
@@ -214,6 +214,117 @@ pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
     Ok(unsafe {
         TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
     })
+}
+
+pub(crate) fn launch_unary_bool_tensor(
+    rt: &CudaRuntime,
+    input: &TypedTensor<bool>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<bool>> {
+    ensure_resident_on_runtime(rt, input, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
+    let output = alloc_bool_output(rt, out_shape)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    let output_arg = typed_tensor_binding(&output, op)?;
+    launch(
+        rt.client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        input_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_binary_bool_tensor<I: CubeElement + Clone>(
+    rt: &CudaRuntime,
+    input: &TypedTensor<bool>,
+    indices: &TypedTensor<I>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<bool>> {
+    ensure_resident_on_runtime(rt, input, op)?;
+    ensure_resident_on_runtime(rt, indices, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
+    let indices_arg = typed_tensor_binding(indices, op)?;
+    let output = alloc_bool_output(rt, out_shape)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    let output_arg = typed_tensor_binding(&output, op)?;
+    launch(
+        rt.client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        input_arg,
+        indices_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_bool_tensor_into(
+    rt: &CudaRuntime,
+    output: &TypedTensor<bool>,
+    input: &TypedTensor<bool>,
+    op: &'static str,
+    count: CubeCount,
+    dim: CubeDim,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CubeclCudaRuntime>,
+        TensorBinding<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<()> {
+    ensure_resident_on_runtime(rt, output, op)?;
+    ensure_resident_on_runtime(rt, input, op)?;
+    let output_arg = typed_tensor_binding(output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
+    if output.n_elements() != 0 {
+        launch(rt.client(), count, dim, output_arg, input_arg);
+    }
+    Ok(())
+}
+
+pub(crate) fn launch_nullary_bool_into(
+    rt: &CudaRuntime,
+    output: &TypedTensor<bool>,
+    op: &'static str,
+    count: CubeCount,
+    dim: CubeDim,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+) -> crate::Result<()> {
+    ensure_resident_on_runtime(rt, output, op)?;
+    let output_arg = bool_tensor_array_arg(output, op)?;
+    if output.n_elements() != 0 {
+        launch(rt.client(), count, dim, output_arg);
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_resident_on_runtime<T: 'static>(

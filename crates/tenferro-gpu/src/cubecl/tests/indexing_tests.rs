@@ -5,8 +5,72 @@ use tenferro_tensor::TensorIndexing;
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
-    simple_gather_config, tensor_c64, tensor_f64, tensor_i64, upload,
+    simple_gather_config, tensor_bool, tensor_c64, tensor_f64, tensor_i64, upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_bool_indexing_ops_match_cpu() {
+    let input = tensor_bool(vec![4], vec![true, false, true, false]);
+    let starts = tensor_i64(vec![1], vec![1]);
+    let indices = tensor_i64(vec![2, 1], vec![0, 3]);
+    let slice = SliceConfig {
+        starts: vec![1],
+        limits: vec![4],
+        strides: vec![2],
+    };
+    let pad = PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![1],
+        interior_padding: vec![1],
+    };
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gi = upload(&gpu, &input);
+    let gs = upload(&gpu, &starts);
+    let gx = upload(&gpu, &indices);
+    macro_rules! parity {
+        ($cpu:expr, $gpu:expr) => {{
+            let expected = $cpu.unwrap();
+            let out = $gpu.unwrap();
+            let actual = download(&gpu, &out);
+            assert_tensor_close(&actual, &expected, 0.0);
+        }};
+    }
+    parity!(cpu.slice(&input, &slice), gpu.slice(&gi, &slice));
+    parity!(
+        cpu.dynamic_slice(&input, &starts, &[2]),
+        gpu.dynamic_slice(&gi, &gs, &[2])
+    );
+    parity!(cpu.pad(&input, &pad), gpu.pad(&gi, &pad));
+    parity!(
+        cpu.gather(&input, &indices, &simple_gather_config()),
+        gpu.gather(&gi, &gx, &simple_gather_config())
+    );
+    let invalid = SliceConfig {
+        starts: vec![0],
+        limits: vec![5],
+        strides: vec![1],
+    };
+    let cpu_err = cpu.slice(&input, &invalid).unwrap_err();
+    let gpu_err = gpu.slice(&gi, &invalid).unwrap_err();
+    assert_eq!(
+        std::mem::discriminant(&cpu_err),
+        std::mem::discriminant(&gpu_err)
+    );
+
+    let updates = tensor_bool(vec![2], vec![true, false]);
+    let scatter_indices = tensor_i64(vec![2, 1], vec![0, 1]);
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    assert!(cpu
+        .scatter(&input, &scatter_indices, &updates, &config)
+        .is_err());
+}
 
 #[test]
 #[ignore]

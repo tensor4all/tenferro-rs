@@ -23,7 +23,7 @@ kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
 Performance optimization is still active work. The remaining unsupported CUDA
 cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
 `dynamic_update_slice`, integer numeric/linalg gaps beyond add/mul/compare/select
-and sum/prod reductions, `Bool` kernel gaps beyond transfer and reshape, and
+and sum/prod reductions, `Bool` arithmetic/reduction/linalg gaps, and
 selected complex analytic or ordering operations.
 WebGPU is being introduced incrementally. The implemented path covers explicit
 transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
@@ -365,7 +365,7 @@ CUDA library calls:
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
 | Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/mul/compare/select; `C32`/`C64` add/mul/div/neg/conj |
 | Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`/`F64` |
-| Structural | reshape for all public tensor dtypes; transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, and triangular masks for non-`Bool` dtypes with CubeCL element storage |
+| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, and triangular masks for all public tensor dtypes; Bool data movement uses its one-byte device representation |
 | Indexing | slice/pad/concatenate/reverse for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; gather/dynamic_slice for `F32`, `F64`, `I32`, `C32`, and `C64` data with `F32`, `F64`, `I32`, or `I64` start/index tensors; scatter for floating and complex data with those numeric index tensors |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
@@ -408,7 +408,7 @@ The following are intentionally outside the current batch:
   `dynamic_update_slice`,
 - integer numeric/linalg CUDA kernels beyond add/mul/compare/select,
   structural paths, and sum/prod reductions,
-- `Bool` CUDA kernels beyond allocation, upload/download, and metadata-only
+- `Bool` CUDA arithmetic, reductions, linalg, and additive scatter beyond allocation, upload/download, metadata-only
   reshape,
 - changing the public placement contract,
 - WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit

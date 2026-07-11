@@ -127,8 +127,9 @@ use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime,
     ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_binary,
-    launch_binary_tensor, launch_compare_bool, launch_nullary_into, launch_select_bool,
-    launch_ternary, launch_unary, launch_unary_tensor, launch_unary_tensor_into,
+    launch_binary_bool_tensor, launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool,
+    launch_nullary_bool_into, launch_nullary_into, launch_select_bool, launch_ternary,
+    launch_unary, launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
@@ -580,6 +581,31 @@ impl CudaBackend {
         )
     }
 
+    fn transpose_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        perm: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        validate_permutation("transpose", perm, input.shape().len())?;
+        let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "transpose",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::transpose_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(perm),
+                );
+            },
+        )
+    }
+
     fn broadcast_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -609,6 +635,32 @@ impl CudaBackend {
         )
     }
 
+    fn broadcast_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        validate_broadcast_in_dim(input.shape(), shape, dims)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            shape,
+            "broadcast_in_dim",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::broadcast_in_dim_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(dims),
+                    shape.len(),
+                );
+            },
+        )
+    }
+
     fn reverse_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -625,6 +677,31 @@ impl CudaBackend {
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
                 structural::reverse_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(axes),
+                    input.shape().len(),
+                );
+            },
+        )
+    }
+
+    fn reverse_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        ensure_axes_unique("reverse", "axes", axes, input.shape().len())?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "reverse",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::reverse_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1032,6 +1109,36 @@ impl CudaBackend {
         )
     }
 
+    fn extract_diagonal_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let (output_shape, diag_output_axis) =
+            extract_diagonal_shape(input.shape(), axis_a, axis_b)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "extract_diagonal",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::extract_diagonal_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    axis_a,
+                    axis_b,
+                    diag_output_axis,
+                    input.shape().len(),
+                    output_shape.len(),
+                );
+            },
+        )
+    }
+
     fn embed_diagonal_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -1079,6 +1186,52 @@ impl CudaBackend {
         Ok(output)
     }
 
+    fn embed_diagonal_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
+        ensure_resident_on_runtime(self.runtime(), input, "embed_diagonal")?;
+        typed_tensor_binding(input, "embed_diagonal")?;
+        let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
+        launch_nullary_bool_into(
+            self.runtime(),
+            &output,
+            "embed_diagonal",
+            cube_count_for_len(output.n_elements())?,
+            cube_dim_1d(),
+            |client, count, dim, out| unsafe {
+                structural::fill_zero_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client, count, dim, out,
+                );
+            },
+        )?;
+        launch_bool_tensor_into(
+            self.runtime(),
+            &output,
+            input,
+            "embed_diagonal",
+            cube_count_for_len(input.n_elements())?,
+            cube_dim_1d(),
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    axis_a,
+                    axis_b,
+                    input.shape().len(),
+                    output_shape.len(),
+                );
+            },
+        )?;
+        Ok(output)
+    }
+
     #[doc(hidden)]
     pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
@@ -1109,6 +1262,32 @@ impl CudaBackend {
         )
     }
 
+    fn tril_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
+        if input.shape().len() < 2 {
+            return Err(crate::Error::RankMismatch {
+                op: "tril",
+                expected: 2,
+                actual: input.shape().len(),
+            });
+        }
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "tril",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::tril_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    k,
+                );
+            },
+        )
+    }
+
     #[doc(hidden)]
     pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
@@ -1128,6 +1307,32 @@ impl CudaBackend {
             "triu",
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::triu_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    k,
+                );
+            },
+        )
+    }
+
+    fn triu_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
+        if input.shape().len() < 2 {
+            return Err(crate::Error::RankMismatch {
+                op: "triu",
+                expected: 2,
+                actual: input.shape().len(),
+            });
+        }
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "triu",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::triu_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1442,6 +1647,31 @@ impl CudaBackend {
         )
     }
 
+    fn slice_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        config: &SliceConfig,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = validate_slice(input.shape(), config)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "slice",
+            |client, count, dim, out, input_arg| unsafe {
+                indexing::slice_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(&config.starts),
+                    comptime_sequence(&config.strides),
+                );
+            },
+        )
+    }
+
     fn dynamic_slice_typed<T, I>(
         &self,
         input: &TypedTensor<T>,
@@ -1489,6 +1719,52 @@ impl CudaBackend {
         )
     }
 
+    fn dynamic_slice_bool<I>(
+        &self,
+        input: &TypedTensor<bool>,
+        starts: &TypedTensor<I>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+    {
+        ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
+        ensure_rank("dynamic_slice", 1, starts.shape().len())?;
+        if starts.shape()[0] != input.shape().len() {
+            return Err(crate::Error::RankMismatch {
+                op: "dynamic_slice",
+                expected: input.shape().len(),
+                actual: starts.shape()[0],
+            });
+        }
+        for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
+            if window > dim {
+                return Err(crate::Error::InvalidConfig {
+                    op: "dynamic_slice",
+                    message: format!("slice size exceeds dimension on axis {axis}"),
+                });
+            }
+        }
+        launch_binary_bool_tensor(
+            self.runtime(),
+            input,
+            starts,
+            slice_sizes,
+            "dynamic_slice",
+            |client, count, dim, out, input_arg, starts_arg| unsafe {
+                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    starts_arg.into_tensor_arg(),
+                    comptime_sequence(slice_sizes),
+                );
+            },
+        )
+    }
+
     fn pad_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -1505,6 +1781,31 @@ impl CudaBackend {
             "pad",
             |client, count, dim, out, input_arg| unsafe {
                 indexing::pad_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(&config.edge_padding_low),
+                    comptime_sequence(&config.interior_padding),
+                );
+            },
+        )
+    }
+
+    fn pad_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        config: &PadConfig,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = pad_output_shape(input.shape(), config)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "pad",
+            |client, count, dim, out, input_arg| unsafe {
+                indexing::pad_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1556,6 +1857,44 @@ impl CudaBackend {
         Ok(output)
     }
 
+    fn concatenate_bool(
+        &self,
+        inputs: &[&TypedTensor<bool>],
+        axis: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = concatenate_output_shape(inputs, axis)?;
+        for input in inputs {
+            ensure_resident_on_runtime(self.runtime(), input, "concatenate")?;
+            typed_tensor_binding(input, "concatenate")?;
+        }
+        let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
+        let mut offset = 0usize;
+        for input in inputs {
+            launch_bool_tensor_into(
+                self.runtime(),
+                &output,
+                input,
+                "concatenate",
+                cube_count_for_len(input.n_elements())?,
+                cube_dim_1d(),
+                |client, count, dim, out, input_arg| unsafe {
+                    structural::concatenate_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out.into_tensor_arg(),
+                        input_arg.into_tensor_arg(),
+                        axis,
+                        offset,
+                        input.shape().len(),
+                    );
+                },
+            )?;
+            offset += input.shape()[axis];
+        }
+        Ok(output)
+    }
+
     fn gather_typed<T, I>(
         &self,
         operand: &TypedTensor<T>,
@@ -1575,6 +1914,43 @@ impl CudaBackend {
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
                 indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    indices_arg.into_tensor_arg(),
+                    comptime_sequence(&meta.window_dims),
+                    comptime_sequence(&config.offset_dims),
+                    comptime_sequence(&config.start_index_map),
+                    comptime_sequence(&config.slice_sizes),
+                    config.index_vector_dim,
+                    operand.shape().len(),
+                    meta.output_shape.len(),
+                    start_indices.shape().len(),
+                );
+            },
+        )
+    }
+
+    fn gather_bool<I>(
+        &self,
+        operand: &TypedTensor<bool>,
+        start_indices: &TypedTensor<I>,
+        config: &GatherConfig,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+    {
+        let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        launch_binary_bool_tensor(
+            self.runtime(),
+            operand,
+            start_indices,
+            &meta.output_shape,
+            "gather",
+            |client, count, dim, out, operand_arg, indices_arg| unsafe {
+                indexing::gather_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -2899,7 +3275,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.transpose_typed(t, perm).map(Tensor::F64),
             Tensor::I32(t) => self.transpose_typed(t, perm).map(Tensor::I32),
             Tensor::I64(t) => self.transpose_typed(t, perm).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("transpose", input.dtype())),
+            Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool),
             Tensor::C32(t) => self.transpose_typed(t, perm).map(Tensor::C32),
             Tensor::C64(t) => self.transpose_typed(t, perm).map(Tensor::C64),
         }
@@ -2965,7 +3341,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::F64),
             Tensor::I32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::I32),
             Tensor::I64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("broadcast_in_dim", input.dtype())),
+            Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool),
             Tensor::C32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C32),
             Tensor::C64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C64),
         }
@@ -3041,7 +3417,9 @@ impl TensorStructural for CudaBackend {
             Tensor::I64(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("extract_diagonal", input.dtype())),
+            Tensor::Bool(t) => self
+                .extract_diagonal_bool(t, axis_a, axis_b)
+                .map(Tensor::Bool),
             Tensor::C32(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -3070,7 +3448,9 @@ impl TensorStructural for CudaBackend {
             Tensor::I64(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("embed_diagonal", input.dtype())),
+            Tensor::Bool(t) => self
+                .embed_diagonal_bool(t, axis_a, axis_b)
+                .map(Tensor::Bool),
             Tensor::C32(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -3086,7 +3466,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.tril_typed(t, k).map(Tensor::F64),
             Tensor::I32(t) => self.tril_typed(t, k).map(Tensor::I32),
             Tensor::I64(t) => self.tril_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("tril", input.dtype())),
+            Tensor::Bool(t) => self.tril_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.tril_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.tril_typed(t, k).map(Tensor::C64),
         }
@@ -3098,7 +3478,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.triu_typed(t, k).map(Tensor::F64),
             Tensor::I32(t) => self.triu_typed(t, k).map(Tensor::I32),
             Tensor::I64(t) => self.triu_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("triu", input.dtype())),
+            Tensor::Bool(t) => self.triu_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.triu_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
         }
@@ -3285,14 +3665,24 @@ impl TensorIndexing for CudaBackend {
             (Tensor::I32(operand), Tensor::I64(indices)) => {
                 self.gather_typed(operand, indices, config).map(Tensor::I32)
             }
+            (Tensor::Bool(operand), Tensor::F32(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::F64(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::I32(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::I64(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("gather", start_indices.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "gather",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I64(_) | Tensor::Bool(_), _) => {
-                Err(unsupported_dtype("gather", operand.dtype()))
-            }
+            (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
         }
     }
 
@@ -3375,7 +3765,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.slice_typed(t, config).map(Tensor::F64),
             Tensor::I32(t) => self.slice_typed(t, config).map(Tensor::I32),
             Tensor::I64(t) => self.slice_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("slice", input.dtype())),
+            Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.slice_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.slice_typed(t, config).map(Tensor::C64),
         }
@@ -3448,14 +3838,24 @@ impl TensorIndexing for CudaBackend {
             (Tensor::I32(input), Tensor::I64(starts)) => self
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::I32),
+            (Tensor::Bool(input), Tensor::F32(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::F64(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::I32(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::I64(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "dynamic_slice",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I64(_) | Tensor::Bool(_), _) => {
-                Err(unsupported_dtype("dynamic_slice", input.dtype()))
-            }
+            (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
         }
     }
 
@@ -3477,7 +3877,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.pad_typed(t, config).map(Tensor::F64),
             Tensor::I32(t) => self.pad_typed(t, config).map(Tensor::I32),
             Tensor::I64(t) => self.pad_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("pad", input.dtype())),
+            Tensor::Bool(t) => self.pad_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.pad_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.pad_typed(t, config).map(Tensor::C64),
         }
@@ -3532,7 +3932,16 @@ impl TensorIndexing for CudaBackend {
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::I64)
             }
-            Tensor::Bool(_) => Err(unsupported_dtype("concatenate", first.dtype())),
+            Tensor::Bool(_) => {
+                let typed: crate::Result<Vec<&TypedTensor<bool>>> = inputs
+                    .iter()
+                    .map(|tensor| match tensor {
+                        Tensor::Bool(t) => Ok(t),
+                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    })
+                    .collect();
+                self.concatenate_bool(&typed?, axis).map(Tensor::Bool)
+            }
             Tensor::C32(_) => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex32>>> = inputs
                     .iter()
@@ -3562,7 +3971,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.reverse_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reverse_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reverse_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("reverse", input.dtype())),
+            Tensor::Bool(t) => self.reverse_bool(t, axes).map(Tensor::Bool),
             Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
         }

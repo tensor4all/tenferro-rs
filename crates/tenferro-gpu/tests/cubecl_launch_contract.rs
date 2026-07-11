@@ -16,6 +16,25 @@ fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
     }
 }
 
+#[test]
+fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
+    let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    for needle in [
+        "Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool)",
+        "Tensor::Bool(operand), Tensor::I64(indices)",
+        "Tensor::Bool(input), Tensor::I64(starts)",
+    ] {
+        assert!(
+            source.contains(needle),
+            "missing Bool copy/index dispatch: {needle}"
+        );
+    }
+    assert!(source.contains("(Tensor::Bool(_), _, _) =>"));
+    assert!(!source.contains("scatter_bool_typed"));
+}
+
 fn production_rust_sources() -> Vec<(PathBuf, String)> {
     let mut sources = Vec::new();
     rust_sources_under(
