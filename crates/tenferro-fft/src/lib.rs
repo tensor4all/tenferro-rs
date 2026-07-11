@@ -1696,6 +1696,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("fft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
+    // Propagate poisoned FFT plan-cache errors to the public caller.
     let fft_plan = cached_fft_plan::<T>(fft_len, forward)?;
     let scale: T = scale_for(norm, forward, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
@@ -1751,6 +1752,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("rfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
+    // Propagate poisoned FFT plan-cache errors to the public caller.
     let fft_plan = cached_fft_plan::<T>(fft_len, true)?;
     let scale: T = scale_for(norm, true, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
@@ -1805,6 +1807,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
+    // Propagate poisoned FFT plan-cache errors to the public caller.
     let fft_plan = cached_fft_plan::<T>(out_axis_len, false)?;
     let scale: T = scale_for(norm, false, out_axis_len)?;
     let mut lane = vec![Complex::zero(); out_axis_len];

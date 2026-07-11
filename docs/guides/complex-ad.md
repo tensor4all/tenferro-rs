@@ -76,8 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let z = TracedTensor::from_vec_col_major(vec![2], z_data.clone())?;
 
-    let holomorphic_loss = z.exp().reduce_sum(&[0]);
-    let tenferro_grad = holomorphic_loss?.grad(&z)?;
+    let holomorphic_loss = z.exp()?.reduce_sum(&[0])?;
+    let tenferro_grad = holomorphic_loss.grad(&z)?;
     let tenferro_grad_value = run(&tenferro_grad)?;
     let expected_grad: Vec<_> = z_data.iter().map(|z| z.exp().conj()).collect();
     assert_complex_slice_close(
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &expected_grad,
     );
 
-    let magnitude = z.abs();
+    let magnitude = z.abs()?;
     let real_loss = (&magnitude * &magnitude)?.reduce_sum(&[0]);
     let real_loss_grad = real_loss?.grad(&z)?;
     let real_loss_grad_value = run(&real_loss_grad)?;
@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![1],
         vec![Complex64::new(0.0, std::f64::consts::FRAC_PI_2)],
     )?;
-    let y = scalar_z.exp();
+    let y = scalar_z.exp()?;
     let seed = Complex64::new(2.0, -3.0);
     let cotangent = TracedTensor::from_vec_col_major(vec![1], vec![seed])?;
     let vjp = y.vjp(&scalar_z, &cotangent)?;

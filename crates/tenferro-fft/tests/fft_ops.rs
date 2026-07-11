@@ -212,6 +212,27 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 }
 
 #[test]
+fn fft_cpu_execution_propagates_plan_cache_errors() {
+    let source = include_str!("../src/lib.rs");
+    let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
+    let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
+    let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
+
+    for (name, section) in [
+        ("execute_c2c", c2c),
+        ("execute_r2c", r2c),
+        ("execute_c2r", c2r),
+    ] {
+        assert!(
+            section.contains("// Propagate poisoned FFT plan-cache errors to the public caller.")
+                && section.contains("cached_fft_plan::<T>")
+                && section.contains("?;"),
+            "{name} must propagate typed FFT plan-cache errors"
+        );
+    }
+}
+
+#[test]
 fn fft_c64_matches_numpy_convention() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],
