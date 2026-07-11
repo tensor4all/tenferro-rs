@@ -9,9 +9,164 @@ use tenferro_tensor::{
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f64,
-    tensor_i32, tensor_i64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
+    tensor_f64, tensor_i32, tensor_i64, upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {
+    if !gpu_available() {
+        eprintln!("skipping scalar div/rem/pow parity test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let cases = [
+        (
+            tensor_f32(vec![3], vec![2.0, -4.0, 8.0]),
+            tensor_f32(vec![], vec![2.0]),
+        ),
+        (
+            tensor_f64(vec![3], vec![2.0, -4.0, 8.0]),
+            tensor_f64(vec![], vec![2.0]),
+        ),
+        (
+            tensor_i32(vec![3], vec![2, 4, 8]),
+            tensor_i32(vec![], vec![2]),
+        ),
+        (
+            tensor_i64(vec![3], vec![2, 4, 8]),
+            tensor_i64(vec![], vec![2]),
+        ),
+    ];
+
+    for (tensor, scalar) in cases {
+        let gpu_tensor = upload(&gpu, &tensor);
+        let gpu_scalar = upload(&gpu, &scalar);
+        for (expected, actual) in [
+            (
+                cpu.div(&scalar, &tensor).unwrap(),
+                gpu.div(&gpu_scalar, &gpu_tensor)
+                    .map(|value| download(&gpu, &value)),
+            ),
+            (
+                cpu.div(&tensor, &scalar).unwrap(),
+                gpu.div(&gpu_tensor, &gpu_scalar)
+                    .map(|value| download(&gpu, &value)),
+            ),
+            (
+                cpu.rem(&scalar, &tensor).unwrap(),
+                gpu.rem(&gpu_scalar, &gpu_tensor)
+                    .map(|value| download(&gpu, &value)),
+            ),
+            (
+                cpu.rem(&tensor, &scalar).unwrap(),
+                gpu.rem(&gpu_tensor, &gpu_scalar)
+                    .map(|value| download(&gpu, &value)),
+            ),
+        ] {
+            assert_tensor_close(&actual.unwrap(), &expected, 0.0);
+        }
+    }
+
+    for (dtype, lhs, zero) in [
+        (
+            DType::I32,
+            tensor_i32(vec![2], vec![i32::MIN, 7]),
+            tensor_i32(vec![], vec![0]),
+        ),
+        (
+            DType::I64,
+            tensor_i64(vec![2], vec![i64::MIN, 7]),
+            tensor_i64(vec![], vec![0]),
+        ),
+    ] {
+        let gpu_lhs = upload(&gpu, &lhs);
+        let gpu_zero = upload(&gpu, &zero);
+        assert!(matches!(
+            gpu.div(&gpu_lhs, &gpu_zero),
+            Err(crate::Error::DivisionByZero { op: "div", dtype: actual }) if actual == dtype
+        ));
+        assert!(matches!(
+            gpu.rem(&gpu_lhs, &gpu_zero),
+            Err(crate::Error::DivisionByZero { op: "rem", dtype: actual }) if actual == dtype
+        ));
+
+        let (scalar_one, zero_rhs) = match dtype {
+            DType::I32 => (tensor_i32(vec![], vec![1]), tensor_i32(vec![2], vec![1, 0])),
+            DType::I64 => (tensor_i64(vec![], vec![1]), tensor_i64(vec![2], vec![1, 0])),
+            _ => unreachable!(),
+        };
+        let gpu_scalar_one = upload(&gpu, &scalar_one);
+        let gpu_zero_rhs = upload(&gpu, &zero_rhs);
+        assert!(matches!(
+            gpu.div(&gpu_scalar_one, &gpu_zero_rhs),
+            Err(crate::Error::DivisionByZero { op: "div", dtype: actual }) if actual == dtype
+        ));
+        assert!(matches!(
+            gpu.rem(&gpu_scalar_one, &gpu_zero_rhs),
+            Err(crate::Error::DivisionByZero { op: "rem", dtype: actual }) if actual == dtype
+        ));
+
+        let minus_one = match dtype {
+            DType::I32 => tensor_i32(vec![], vec![-1]),
+            DType::I64 => tensor_i64(vec![], vec![-1]),
+            _ => unreachable!(),
+        };
+        let gpu_minus_one = upload(&gpu, &minus_one);
+        let expected_div = cpu.div(&lhs, &minus_one).unwrap();
+        let expected_rem = cpu.rem(&lhs, &minus_one).unwrap();
+        let gpu_div = gpu.div(&gpu_lhs, &gpu_minus_one).unwrap();
+        let gpu_rem = gpu.rem(&gpu_lhs, &gpu_minus_one).unwrap();
+        let actual_div = download(&gpu, &gpu_div);
+        let actual_rem = download(&gpu, &gpu_rem);
+        assert_tensor_close(&actual_div, &expected_div, 0.0);
+        assert_tensor_close(&actual_rem, &expected_rem, 0.0);
+    }
+
+    for (tensor, scalar) in [
+        (
+            tensor_f32(vec![2], vec![2.0, 3.0]),
+            tensor_f32(vec![], vec![2.0]),
+        ),
+        (
+            tensor_f64(vec![2], vec![2.0, 3.0]),
+            tensor_f64(vec![], vec![2.0]),
+        ),
+        (tensor_i32(vec![2], vec![2, 3]), tensor_i32(vec![], vec![2])),
+        (tensor_i64(vec![2], vec![2, 3]), tensor_i64(vec![], vec![2])),
+    ] {
+        let gpu_tensor = upload(&gpu, &tensor);
+        let gpu_scalar = upload(&gpu, &scalar);
+        for (cpu_result, gpu_result, lhs_shape, rhs_shape) in [
+            (
+                cpu.pow(&scalar, &tensor),
+                gpu.pow(&gpu_scalar, &gpu_tensor),
+                vec![],
+                vec![2],
+            ),
+            (
+                cpu.pow(&tensor, &scalar),
+                gpu.pow(&gpu_tensor, &gpu_scalar),
+                vec![2],
+                vec![],
+            ),
+        ] {
+            for result in [cpu_result, gpu_result] {
+                match result {
+                    Err(crate::Error::ShapeMismatch { op, lhs, rhs }) => {
+                        assert_eq!(op, "pow");
+                        assert_eq!(lhs, lhs_shape);
+                        assert_eq!(rhs, rhs_shape);
+                    }
+                    other => panic!("unexpected scalar pow result: {other:?}"),
+                }
+            }
+        }
+    }
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]

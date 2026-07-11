@@ -777,6 +777,44 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
 }
 
 #[test]
+fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    assert!(!helper.contains("broadcast_typed"));
+    assert_ordered_needles(
+        "scalar binary shape gate",
+        helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "let lhs_scalar = lhs.shape().is_empty()",
+            "if lhs_scalar",
+            "rhs.shape()",
+            "lhs.shape()",
+        ],
+    );
+
+    for (op, end) in [("fn div(", "fn rem("), ("fn rem(", "fn abs(")] {
+        let section = source_section(&mod_source, op, end);
+        assert!(
+            section.contains("launch_scalar_binary"),
+            "{op} must use the narrow scalar launcher"
+        );
+        assert!(
+            !section.contains("broadcast_typed"),
+            "{op} must not materialize the scalar"
+        );
+    }
+    let pow = source_section(&mod_source, "fn pow(", "fn transpose(");
+    assert!(!pow.contains("launch_scalar_binary"));
+    assert!(pow.contains("ensure_same_shape(op, lhs.shape(), rhs.shape())?"));
+    assert!(pow.contains("launch_binary("));
+}
+
+#[test]
 fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
     let interop_source = cubecl_source("interop.rs");
     let download_source = source_section(

@@ -126,6 +126,82 @@ binary_float_int_complex_kernel!(sub_float, sub_int, sub_complex, -);
 binary_float_int_complex_kernel!(mul_float, mul_int, mul_complex, *);
 binary_float_complex_kernel!(div_float, div_complex, /);
 
+macro_rules! scalar_binary_float_kernel {
+    ($name:ident, |$lhs:ident, $rhs:ident| $body:expr) => {
+        #[cube(launch_unchecked)]
+        pub fn $name<F: Float>(
+            out: &mut Array<F>,
+            lhs: &Array<F>,
+            rhs: &Array<F>,
+            #[comptime] lhs_scalar: bool,
+        ) {
+            if ABSOLUTE_POS < out.len() {
+                let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
+                let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+                let $lhs = lhs[lhs_idx];
+                let $rhs = rhs[rhs_idx];
+                out[ABSOLUTE_POS] = $body;
+            }
+        }
+    };
+}
+
+scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
+scalar_binary_float_kernel!(scalar_rem_float, |x, y| x - (x / y).trunc() * y);
+
+#[cube(launch_unchecked)]
+pub fn scalar_div_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+    #[comptime] lhs_scalar: bool,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let x = lhs[lhs_idx];
+        let y = rhs[rhs_idx];
+        let zero = I::new(0);
+        let minus_one = zero - I::new(1);
+        if y == zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else if y == minus_one {
+            out[ABSOLUTE_POS] = zero - x;
+        } else {
+            out[ABSOLUTE_POS] = x / y;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn scalar_rem_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+    #[comptime] lhs_scalar: bool,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let x = lhs[lhs_idx];
+        let y = rhs[rhs_idx];
+        let zero = I::new(0);
+        let minus_one = zero - I::new(1);
+        if y == zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else if y == minus_one {
+            out[ABSOLUTE_POS] = zero;
+        } else {
+            let quotient = x / y;
+            out[ABSOLUTE_POS] = x - quotient * y;
+        }
+    }
+}
+
 #[cube(launch_unchecked)]
 pub fn div_int_checked<I: Int>(
     out: &mut Array<I>,
