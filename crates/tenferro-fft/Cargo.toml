@@ -17,6 +17,7 @@ cpu-blas = ["tenferro-cpu/cpu-blas"]
 blas-openblas = ["tenferro-ad?/blas-openblas", "tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-ad?/blas-accelerate", "tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-ad?/blas-mkl", "tenferro-cpu/blas-mkl"]
+blas-blis = ["tenferro-ad?/blas-blis", "tenferro-cpu/blas-blis"]
 autodiff = [
     "dep:tidu",
     "dep:tenferro-ad",

@@ -37,6 +37,10 @@ blas-mkl = [
     "tenferro-ad?/blas-mkl",
     "tenferro-cpu/blas-mkl",
 ]
+blas-blis = [
+    "tenferro-ad?/blas-blis",
+    "tenferro-cpu/blas-blis",
+]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 webgpu = ["tenferro-ad?/webgpu", "tenferro-internal-ops/webgpu"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]

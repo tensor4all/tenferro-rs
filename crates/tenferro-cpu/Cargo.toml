@@ -43,6 +43,18 @@ blas-mkl = [
     "strided-einsum2/blas-mkl",
     "strided-einsum2/parallel",
 ]
+blas-blis = [
+    "provider-src",
+    "dep:strided-einsum2",
+    "dep:blis-src",
+    "blas-src/blis",
+    "blis-src/cblas",
+    "blis-src/pthreads",
+    "blis-src/static",
+    "lapack-src/netlib",
+    "strided-einsum2/blas",
+    "strided-einsum2/parallel",
+]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.1.0" }
@@ -59,6 +71,7 @@ cblas-inject = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
 cblas-src = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
+blis-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }
 lapack-src = { workspace = true, optional = true }
 
