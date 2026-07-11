@@ -11,6 +11,12 @@ use crate::{
 };
 
 #[test]
+fn scalar_reduction_shape_stays_separate_from_cubecl_launch_metadata() {
+    assert!(crate::cubecl::reduction_output_shape(&[2, 3], &[0, 1]).is_empty());
+    assert_eq!(cubecl_shape_and_strides(&[]).unwrap(), (vec![1], vec![1]));
+}
+
+#[test]
 fn cubecl_metadata_uses_dense_column_major_strides() {
     assert_eq!(cubecl_shape_and_strides(&[]).unwrap(), (vec![1], vec![1]));
     assert_eq!(

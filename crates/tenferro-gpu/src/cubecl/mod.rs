@@ -1155,11 +1155,11 @@ impl CudaBackend {
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
+        let input_binding = typed_tensor_binding(input, op)?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
 
-        let input_binding = typed_tensor_binding(input, op)?;
         let output_binding = typed_tensor_binding(&output, op)?;
         launch(self.runtime().client(), input_binding, output_binding)
             .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
@@ -3904,18 +3904,11 @@ fn embed_diagonal_shape(
 }
 
 fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    let shape: Vec<usize> = input_shape
+    input_shape
         .iter()
         .enumerate()
         .filter_map(|(axis, &dim)| (!axes.contains(&axis)).then_some(dim))
-        .collect();
-    // cubecl Array::new(0) generates uint32 arr[0] which is invalid CUDA.
-    // When all axes are reduced (scalar output), use shape [1] instead.
-    if shape.is_empty() {
-        vec![1]
-    } else {
-        shape
-    }
+        .collect()
 }
 
 fn reduction_keepdims_shape(input_shape: &[usize], axis: usize) -> Vec<usize> {
