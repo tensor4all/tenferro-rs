@@ -167,6 +167,9 @@ pub fn scalar_real_complex_binary<F: Float>(
         let re = complex[complex_idx];
         let im = complex[complex_idx + 1];
         let zero = F::new(0.0f32);
+        // INVARIANT: These unsimplified component expressions must evaluate in the
+        // same order as CPU `num_complex` after promotion to `Complex(real, +0)`.
+        // Keep zero cross terms: they determine NaN, infinity, overflow, and signed zero.
         let (out_re, out_im) = if mode == MIXED_ADD {
             if real_lhs {
                 (scalar + re, zero + im)

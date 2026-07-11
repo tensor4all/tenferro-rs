@@ -869,6 +869,7 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
             "ensure_resident_on_runtime(backend.runtime(), complex, op)?",
             "let component_len = complex\n        .n_elements()\n        .checked_mul(2)",
             "let real_arg = typed_tensor_array_arg(real, op)?",
+            "// INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`",
             "let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?",
             "let output = alloc_output::<C>",
             "let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?",
@@ -916,6 +917,9 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
         "pub fn scalar_div_int_checked",
     );
     assert!(kernel.contains("let complex_idx = ABSOLUTE_POS * 2"));
+    assert!(kernel
+        .contains("// INVARIANT: These unsimplified component expressions must evaluate in the"));
+    assert!(kernel.contains("Keep zero cross terms"));
     for generic_complex_term in [
         "zero + im",
         "im + zero",

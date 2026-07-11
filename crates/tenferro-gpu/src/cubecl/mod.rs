@@ -1951,6 +1951,9 @@ where
         .checked_mul(2)
         .ok_or_else(|| crate::Error::backend_failure(op, "complex component length overflow"))?;
     let real_arg = typed_tensor_array_arg(real, op)?;
+    // INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`
+    // fields; the checked `2 * n_elements` length and binding validator prove this
+    // real-component view covers exactly the resident complex allocation.
     let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?;
 
     let output = alloc_output::<C>(backend.runtime(), complex.shape())?;
