@@ -673,6 +673,23 @@ fn cpu_pad_supports_signed_edge_cropping() {
 }
 
 #[test]
+fn cpu_pad_skips_extreme_signed_positions_without_overflow() {
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let output = pad(
+        &input,
+        &PadConfig {
+            edge_padding_low: vec![i64::MAX],
+            edge_padding_high: vec![i64::MIN],
+            interior_padding: vec![0],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(output.shape(), &[1]);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0]);
+}
+
+#[test]
 fn cpu_pad_does_not_reject_signed_edges_before_checked_shape_validation() {
     let indexing_source = include_str!("../indexing.rs");
     assert!(!indexing_source.contains("config.edge_padding_low[axis] < 0"));

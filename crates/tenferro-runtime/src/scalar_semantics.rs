@@ -91,7 +91,7 @@ fn scalar_host_value<T: Copy>(data: &[T], dtype: DType) -> Result<T> {
 mod tests {
     use super::{
         bool_from_real_for_op, dynamic_truncate_size, round_real_to_i32_for_op, round_real_to_i64,
-        round_real_to_i64_for_op, scalar_host_value, truncate_i64_size,
+        round_real_to_i64_for_op, scalar_host_value,
     };
     use tenferro_tensor::{DType, Tensor, TypedTensor};
 
@@ -142,16 +142,17 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_truncate_i64_size_clamps_without_lossy_float_conversion() {
-        assert_eq!(truncate_i64_size(-1, 4), 0);
-        assert_eq!(truncate_i64_size(9, 4), 4);
+    fn dynamic_truncate_i64_routing_clamps_without_lossy_float_conversion() {
+        assert_eq!(dynamic_truncate_size(&i64_scalar(-1), 4).unwrap(), 0);
+        assert_eq!(dynamic_truncate_size(&i64_scalar(9), 4).unwrap(), 4);
 
         #[cfg(target_pointer_width = "64")]
         {
             const ABOVE_F64_INTEGER_PRECISION: i64 = (1_i64 << 53) + 1;
             let axis_extent = usize::try_from(ABOVE_F64_INTEGER_PRECISION + 1).unwrap();
             assert_eq!(
-                truncate_i64_size(ABOVE_F64_INTEGER_PRECISION, axis_extent),
+                dynamic_truncate_size(&i64_scalar(ABOVE_F64_INTEGER_PRECISION), axis_extent)
+                    .unwrap(),
                 usize::try_from(ABOVE_F64_INTEGER_PRECISION).unwrap()
             );
         }

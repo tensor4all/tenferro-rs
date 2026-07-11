@@ -426,6 +426,18 @@ fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
 }
 
 #[test]
+fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
+    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
+    let pad_kernel = source_section(
+        &indexing_source,
+        "pub fn pad_kernel",
+        "pub fn gather_kernel",
+    );
+    assert!(!pad_kernel.contains("out_idx[axis] as i64 - low"));
+    assert!(pad_kernel.contains("low.unsigned_abs()"));
+}
+
+#[test]
 fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
     let mod_source = cubecl_source("mod.rs");
     let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");

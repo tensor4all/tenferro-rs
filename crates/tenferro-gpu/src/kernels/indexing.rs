@@ -173,9 +173,18 @@ pub fn pad_kernel<E: CubePrimitive>(
         #[unroll]
         for axis in 0..rank {
             let low = comptime! { *edge_padding_low.index(axis) };
-            let spacing = comptime! { *interior_padding.index(axis) } + 1;
-            let shifted = out_idx[axis] as i64 - low;
-            if shifted < 0 || shifted % spacing != 0 {
+            let low_magnitude = comptime! { low.unsigned_abs() };
+            let spacing = comptime! { (*interior_padding.index(axis) + 1) as u64 };
+            let out_pos = out_idx[axis] as u64;
+            let mut shifted = 0_u64;
+            if comptime! { low < 0 } {
+                shifted = out_pos + low_magnitude;
+            } else if out_pos < low_magnitude {
+                in_bounds = false;
+            } else {
+                shifted = out_pos - low_magnitude;
+            }
+            if shifted % spacing != 0 {
                 in_bounds = false;
             } else {
                 let candidate = (shifted / spacing) as usize;
