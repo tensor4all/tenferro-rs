@@ -187,11 +187,11 @@ pub fn pad_kernel<E: CubePrimitive>(
             if shifted % spacing != 0 {
                 in_bounds = false;
             } else {
-                let candidate = (shifted / spacing) as usize;
-                if candidate >= input.shape(axis) {
+                let candidate = shifted / spacing;
+                if candidate >= input.shape(axis) as u64 {
                     in_bounds = false;
                 } else {
-                    input_idx[axis] = candidate;
+                    input_idx[axis] = candidate as usize;
                 }
             }
         }

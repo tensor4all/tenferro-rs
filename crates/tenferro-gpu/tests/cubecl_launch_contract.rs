@@ -435,6 +435,15 @@ fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
     );
     assert!(!pad_kernel.contains("out_idx[axis] as i64 - low"));
     assert!(pad_kernel.contains("low.unsigned_abs()"));
+    assert_ordered_needles(
+        "pad_kernel candidate bounds check",
+        pad_kernel,
+        &[
+            "let candidate = shifted / spacing;",
+            "if candidate >= input.shape(axis) as u64",
+            "input_idx[axis] = candidate as usize;",
+        ],
+    );
 }
 
 #[test]
