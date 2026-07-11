@@ -264,7 +264,7 @@ descriptor.
 | `gather` | operand `F32`, `F64`, `I32`, `Bool`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` operands are not implemented |
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
 | `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Dense structural/indexing operations |
-| `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64`; starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
+| `dynamic_slice` | input `F32`, `F64`, `I32`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64`; `Bool` input with `I32` or `I64` starts | Complex and `Bool` start tensors; `I64` inputs are not implemented |
 | `dynamic_update_slice` | No CUDA implementation | Returns an error |
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |

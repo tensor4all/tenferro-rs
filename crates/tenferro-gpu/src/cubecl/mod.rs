@@ -1729,12 +1729,20 @@ impl CudaBackend {
         I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
-        ensure_rank("dynamic_slice", 1, starts.shape().len())?;
-        if starts.shape()[0] != input.shape().len() {
-            return Err(crate::Error::RankMismatch {
+        if starts.shape().len() != 1 {
+            return Err(crate::Error::InvalidConfig {
                 op: "dynamic_slice",
-                expected: input.shape().len(),
-                actual: starts.shape()[0],
+                message: "starts must be a rank-1 tensor".into(),
+            });
+        }
+        if starts.shape()[0] != input.shape().len() {
+            return Err(crate::Error::InvalidConfig {
+                op: "dynamic_slice",
+                message: format!(
+                    "starts length {} must match input rank {}",
+                    starts.shape()[0],
+                    input.shape().len()
+                ),
             });
         }
         for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
@@ -3747,7 +3755,11 @@ impl TensorIndexing for CudaBackend {
                 "scatter",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) | (Tensor::Bool(_), _, _) => {
+            (Tensor::Bool(_), _, _) => Err(crate::Error::backend_failure(
+                "scatter",
+                "Bool data tensors are not supported by additive scatter",
+            )),
+            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) => {
                 Err(unsupported_dtype("scatter", operand.dtype()))
             }
             (_, _, _) => Err(ternary_dtype_mismatch(
@@ -3838,18 +3850,15 @@ impl TensorIndexing for CudaBackend {
             (Tensor::I32(input), Tensor::I64(starts)) => self
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::I32),
-            (Tensor::Bool(input), Tensor::F32(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
-                .map(Tensor::Bool),
-            (Tensor::Bool(input), Tensor::F64(starts)) => self
-                .dynamic_slice_bool(input, starts, slice_sizes)
-                .map(Tensor::Bool),
             (Tensor::Bool(input), Tensor::I32(starts)) => self
                 .dynamic_slice_bool(input, starts, slice_sizes)
                 .map(Tensor::Bool),
             (Tensor::Bool(input), Tensor::I64(starts)) => self
                 .dynamic_slice_bool(input, starts, slice_sizes)
                 .map(Tensor::Bool),
+            (Tensor::Bool(_), Tensor::F32(_) | Tensor::F64(_)) => {
+                Err(unsupported_dtype("dynamic_slice", input.dtype()))
+            }
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "dynamic_slice",

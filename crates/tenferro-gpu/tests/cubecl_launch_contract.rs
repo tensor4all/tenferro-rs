@@ -31,8 +31,10 @@ fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
             "missing Bool copy/index dispatch: {needle}"
         );
     }
-    assert!(source.contains("(Tensor::Bool(_), _, _) =>"));
+    assert!(source.contains("Bool data tensors are not supported by additive scatter"));
     assert!(!source.contains("scatter_bool_typed"));
+    assert!(!source.contains("(Tensor::Bool(input), Tensor::F32(starts))"));
+    assert!(!source.contains("(Tensor::Bool(input), Tensor::F64(starts))"));
 }
 
 fn production_rust_sources() -> Vec<(PathBuf, String)> {

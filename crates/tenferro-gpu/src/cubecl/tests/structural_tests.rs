@@ -16,18 +16,27 @@ fn cuda_bool_structural_ops_match_cpu() {
     let vector = tensor_bool(vec![2], vec![true, false]);
     let scalar = tensor_bool(vec![], vec![true]);
     let empty = tensor_bool(vec![0, 2], vec![]);
+    let empty_matrix = tensor_bool(vec![0, 0], vec![]);
+    let empty_vector = tensor_bool(vec![0], vec![]);
     let mut cpu = cpu_backend();
     let mut gpu = gpu_backend();
     let gm = upload(&gpu, &matrix);
     let gv = upload(&gpu, &vector);
     let gs = upload(&gpu, &scalar);
     let ge = upload(&gpu, &empty);
+    let gem = upload(&gpu, &empty_matrix);
+    let gev = upload(&gpu, &empty_vector);
     macro_rules! parity {
         ($cpu:expr, $gpu:expr) => {{
             let expected = $cpu.unwrap();
             let out = $gpu.unwrap();
             let actual = download(&gpu, &out);
             assert_tensor_close(&actual, &expected, 0.0);
+        }};
+    }
+    macro_rules! error_parity {
+        ($cpu:expr, $gpu:expr) => {{
+            assert_eq!($cpu.unwrap_err(), $gpu.unwrap_err());
         }};
     }
     parity!(cpu.transpose(&matrix, &[1, 0]), gpu.transpose(&gm, &[1, 0]));
@@ -51,12 +60,46 @@ fn cuda_bool_structural_ops_match_cpu() {
     );
     parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
     parity!(cpu.transpose(&empty, &[1, 0]), gpu.transpose(&ge, &[1, 0]));
-    let cpu_err = cpu.transpose(&matrix, &[0, 0]).unwrap_err();
-    let gpu_err = gpu.transpose(&gm, &[0, 0]).unwrap_err();
-    assert_eq!(
-        std::mem::discriminant(&cpu_err),
-        std::mem::discriminant(&gpu_err)
+    parity!(
+        cpu.broadcast_in_dim(&empty_vector, &[0, 2], &[0]),
+        gpu.broadcast_in_dim(&gev, &[0, 2], &[0])
     );
+    parity!(
+        cpu.extract_diagonal(&empty_matrix, 0, 1),
+        gpu.extract_diagonal(&gem, 0, 1)
+    );
+    parity!(
+        cpu.embed_diagonal(&empty_vector, 0, 1),
+        gpu.embed_diagonal(&gev, 0, 1)
+    );
+    parity!(cpu.tril(&empty_matrix, 0), gpu.tril(&gem, 0));
+    parity!(cpu.triu(&empty_matrix, 0), gpu.triu(&gem, 0));
+    parity!(
+        cpu.concatenate(&[&empty, &empty], 0),
+        gpu.concatenate(&[&ge, &ge], 0)
+    );
+    parity!(cpu.reverse(&empty, &[1]), gpu.reverse(&ge, &[1]));
+
+    error_parity!(cpu.transpose(&matrix, &[0, 0]), gpu.transpose(&gm, &[0, 0]));
+    error_parity!(
+        cpu.broadcast_in_dim(&vector, &[2, 2], &[]),
+        gpu.broadcast_in_dim(&gv, &[2, 2], &[])
+    );
+    error_parity!(
+        cpu.extract_diagonal(&matrix, 0, 0),
+        gpu.extract_diagonal(&gm, 0, 0)
+    );
+    error_parity!(
+        cpu.embed_diagonal(&vector, 0, 3),
+        gpu.embed_diagonal(&gv, 0, 3)
+    );
+    error_parity!(cpu.tril(&vector, 0), gpu.tril(&gv, 0));
+    error_parity!(cpu.triu(&vector, 0), gpu.triu(&gv, 0));
+    error_parity!(
+        cpu.concatenate(&[&matrix, &matrix], 2),
+        gpu.concatenate(&[&gm, &gm], 2)
+    );
+    error_parity!(cpu.reverse(&matrix, &[2]), gpu.reverse(&gm, &[2]));
 }
 
 #[test]

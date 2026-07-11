@@ -1,11 +1,11 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use num_complex::Complex64;
-use tenferro_tensor::TensorIndexing;
+use tenferro_tensor::{Error, TensorIndexing};
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
-    simple_gather_config, tensor_bool, tensor_c64, tensor_f64, tensor_i64, upload,
+    simple_gather_config, tensor_bool, tensor_c64, tensor_f64, tensor_i32, tensor_i64, upload,
 };
 
 #[test]
@@ -14,6 +14,10 @@ fn cuda_bool_indexing_ops_match_cpu() {
     let input = tensor_bool(vec![4], vec![true, false, true, false]);
     let starts = tensor_i64(vec![1], vec![1]);
     let indices = tensor_i64(vec![2, 1], vec![0, 3]);
+    let starts_i32 = tensor_i32(vec![1], vec![1]);
+    let empty = tensor_bool(vec![0], vec![]);
+    let empty_starts = tensor_i64(vec![1], vec![0]);
+    let empty_indices = tensor_i64(vec![0, 1], vec![]);
     let slice = SliceConfig {
         starts: vec![1],
         limits: vec![4],
@@ -29,6 +33,10 @@ fn cuda_bool_indexing_ops_match_cpu() {
     let gi = upload(&gpu, &input);
     let gs = upload(&gpu, &starts);
     let gx = upload(&gpu, &indices);
+    let gs_i32 = upload(&gpu, &starts_i32);
+    let ge = upload(&gpu, &empty);
+    let ges = upload(&gpu, &empty_starts);
+    let gex = upload(&gpu, &empty_indices);
     macro_rules! parity {
         ($cpu:expr, $gpu:expr) => {{
             let expected = $cpu.unwrap();
@@ -37,10 +45,19 @@ fn cuda_bool_indexing_ops_match_cpu() {
             assert_tensor_close(&actual, &expected, 0.0);
         }};
     }
+    macro_rules! error_parity {
+        ($cpu:expr, $gpu:expr) => {{
+            assert_eq!($cpu.unwrap_err(), $gpu.unwrap_err());
+        }};
+    }
     parity!(cpu.slice(&input, &slice), gpu.slice(&gi, &slice));
     parity!(
         cpu.dynamic_slice(&input, &starts, &[2]),
         gpu.dynamic_slice(&gi, &gs, &[2])
+    );
+    parity!(
+        cpu.dynamic_slice(&input, &starts_i32, &[2]),
+        gpu.dynamic_slice(&gi, &gs_i32, &[2])
     );
     parity!(cpu.pad(&input, &pad), gpu.pad(&gi, &pad));
     parity!(
@@ -52,11 +69,50 @@ fn cuda_bool_indexing_ops_match_cpu() {
         limits: vec![5],
         strides: vec![1],
     };
-    let cpu_err = cpu.slice(&input, &invalid).unwrap_err();
-    let gpu_err = gpu.slice(&gi, &invalid).unwrap_err();
-    assert_eq!(
-        std::mem::discriminant(&cpu_err),
-        std::mem::discriminant(&gpu_err)
+    let empty_slice = SliceConfig {
+        starts: vec![0],
+        limits: vec![0],
+        strides: vec![1],
+    };
+    let empty_pad = PadConfig {
+        edge_padding_low: vec![0],
+        edge_padding_high: vec![0],
+        interior_padding: vec![0],
+    };
+    parity!(
+        cpu.slice(&empty, &empty_slice),
+        gpu.slice(&ge, &empty_slice)
+    );
+    parity!(
+        cpu.dynamic_slice(&empty, &empty_starts, &[0]),
+        gpu.dynamic_slice(&ge, &ges, &[0])
+    );
+    parity!(cpu.pad(&empty, &empty_pad), gpu.pad(&ge, &empty_pad));
+    parity!(
+        cpu.gather(&input, &empty_indices, &simple_gather_config()),
+        gpu.gather(&gi, &gex, &simple_gather_config())
+    );
+
+    error_parity!(cpu.slice(&input, &invalid), gpu.slice(&gi, &invalid));
+    let bad_starts = tensor_i64(vec![2], vec![0, 1]);
+    let gpu_bad_starts = upload(&gpu, &bad_starts);
+    error_parity!(
+        cpu.dynamic_slice(&input, &bad_starts, &[2]),
+        gpu.dynamic_slice(&gi, &gpu_bad_starts, &[2])
+    );
+    let bad_pad = PadConfig {
+        edge_padding_low: vec![],
+        edge_padding_high: vec![],
+        interior_padding: vec![],
+    };
+    error_parity!(cpu.pad(&input, &bad_pad), gpu.pad(&gi, &bad_pad));
+    let bad_gather = crate::config::GatherConfig {
+        start_index_map: vec![1],
+        ..simple_gather_config()
+    };
+    error_parity!(
+        cpu.gather(&input, &indices, &bad_gather),
+        gpu.gather(&gi, &gx, &bad_gather)
     );
 
     let updates = tensor_bool(vec![2], vec![true, false]);
@@ -67,9 +123,22 @@ fn cuda_bool_indexing_ops_match_cpu() {
         scatter_dims_to_operand_dims: vec![0],
         index_vector_dim: 1,
     };
-    assert!(cpu
-        .scatter(&input, &scatter_indices, &updates, &config)
-        .is_err());
+    let expected_scatter_error = Error::BackendFailure {
+        op: "scatter",
+        message: "Bool data tensors are not supported by additive scatter".into(),
+    };
+    assert_eq!(
+        cpu.scatter(&input, &scatter_indices, &updates, &config)
+            .unwrap_err(),
+        expected_scatter_error
+    );
+    let gpu_updates = upload(&gpu, &updates);
+    let gpu_scatter_indices = upload(&gpu, &scatter_indices);
+    assert_eq!(
+        gpu.scatter(&gi, &gpu_scatter_indices, &gpu_updates, &config)
+            .unwrap_err(),
+        expected_scatter_error
+    );
 }
 
 #[test]
