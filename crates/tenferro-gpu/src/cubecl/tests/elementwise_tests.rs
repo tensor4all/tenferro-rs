@@ -13,6 +13,184 @@ use super::{
     tensor_f64, tensor_i32, tensor_i64, upload,
 };
 
+fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
+    fn component_matches<T: num_traits::Float + std::fmt::Debug>(actual: T, expected: T) {
+        if expected.is_nan() {
+            assert!(actual.is_nan(), "expected NaN component, got {actual:?}");
+        } else {
+            assert_eq!(actual, expected);
+            if expected == T::zero() {
+                assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+            }
+        }
+    }
+
+    match (actual, expected) {
+        (Tensor::C32(actual), Tensor::C32(expected)) => {
+            for (actual, expected) in actual
+                .as_slice()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice().unwrap())
+            {
+                component_matches(actual.re, expected.re);
+                component_matches(actual.im, expected.im);
+            }
+        }
+        (Tensor::C64(actual), Tensor::C64(expected)) => {
+            for (actual, expected) in actual
+                .as_slice()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice().unwrap())
+            {
+                component_matches(actual.re, expected.re);
+                component_matches(actual.im, expected.im);
+            }
+        }
+        _ => panic!("expected matching complex tensor dtypes"),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_real_scalar_complex_binary_ops_match_cpu() {
+    if !gpu_available() {
+        eprintln!("skipping real-scalar complex binary parity test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let cases = [
+        (
+            tensor_f32(vec![], vec![2.0]),
+            tensor_c32(
+                vec![4],
+                vec![
+                    Complex32::new(1.0, 2.0),
+                    Complex32::new(0.0, -2.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(-3.0, 4.0),
+                ],
+            ),
+            DType::C32,
+        ),
+        (
+            tensor_f64(vec![], vec![2.0]),
+            tensor_c64(
+                vec![4],
+                vec![
+                    Complex64::new(1.0, 2.0),
+                    Complex64::new(0.0, -2.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(-3.0, 4.0),
+                ],
+            ),
+            DType::C64,
+        ),
+    ];
+
+    for (scalar, complex, expected_dtype) in cases {
+        let gpu_scalar = upload(&gpu, &scalar);
+        let gpu_complex = upload(&gpu, &complex);
+        for (expected, actual) in [
+            (
+                cpu.add(&scalar, &complex),
+                gpu.add(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.add(&complex, &scalar),
+                gpu.add(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.sub(&scalar, &complex),
+                gpu.sub(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.sub(&complex, &scalar),
+                gpu.sub(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.mul(&scalar, &complex),
+                gpu.mul(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.mul(&complex, &scalar),
+                gpu.mul(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.div(&scalar, &complex),
+                gpu.div(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.div(&complex, &scalar),
+                gpu.div(&gpu_complex, &gpu_scalar),
+            ),
+        ] {
+            let expected = expected.unwrap();
+            let actual = download(&gpu, &actual.unwrap());
+            assert_eq!(actual.dtype(), expected_dtype);
+            assert_eq!(actual.shape(), &[4]);
+            assert_complex_classes_and_values_match(&actual, &expected);
+        }
+    }
+
+    for (lhs, rhs, expected_lhs, expected_rhs) in [
+        (
+            tensor_f32(vec![2], vec![1.0, 2.0]),
+            tensor_c32(vec![2], vec![Complex32::new(1.0, 1.0); 2]),
+            DType::F32,
+            DType::C32,
+        ),
+        (
+            tensor_f64(vec![2], vec![1.0, 2.0]),
+            tensor_c64(vec![2], vec![Complex64::new(1.0, 1.0); 2]),
+            DType::F64,
+            DType::C64,
+        ),
+        (
+            tensor_f32(vec![], vec![1.0]),
+            tensor_c64(vec![2], vec![Complex64::new(1.0, 1.0); 2]),
+            DType::F32,
+            DType::C64,
+        ),
+        (
+            tensor_f64(vec![], vec![1.0]),
+            tensor_c32(vec![2], vec![Complex32::new(1.0, 1.0); 2]),
+            DType::F64,
+            DType::C32,
+        ),
+    ] {
+        let gpu_lhs = upload(&gpu, &lhs);
+        let gpu_rhs = upload(&gpu, &rhs);
+        for (op, result) in [
+            ("add", gpu.add(&gpu_lhs, &gpu_rhs)),
+            ("sub", gpu.sub(&gpu_lhs, &gpu_rhs)),
+            ("mul", gpu.mul(&gpu_lhs, &gpu_rhs)),
+            ("div", gpu.div(&gpu_lhs, &gpu_rhs)),
+        ] {
+            assert!(matches!(
+                result,
+                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
+                    if actual == op && lhs == expected_lhs && rhs == expected_rhs
+            ));
+        }
+        for (op, result) in [
+            ("add", gpu.add(&gpu_rhs, &gpu_lhs)),
+            ("sub", gpu.sub(&gpu_rhs, &gpu_lhs)),
+            ("mul", gpu.mul(&gpu_rhs, &gpu_lhs)),
+            ("div", gpu.div(&gpu_rhs, &gpu_lhs)),
+        ] {
+            assert!(matches!(
+                result,
+                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
+                    if actual == op && lhs == expected_rhs && rhs == expected_lhs
+            ));
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {

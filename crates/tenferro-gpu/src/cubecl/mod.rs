@@ -1917,6 +1917,90 @@ where
     Ok(output)
 }
 
+fn launch_real_complex_scalar_binary<R, C>(
+    backend: &CudaBackend,
+    real: &TypedTensor<R>,
+    complex: &TypedTensor<C>,
+    op: &'static str,
+    real_lhs: bool,
+    mode: usize,
+) -> crate::Result<TypedTensor<C>>
+where
+    R: CubeFloat + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    C: CubeComplex<FloatElem = R> + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    if !real.shape().is_empty() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: if real_lhs {
+                real.shape().to_vec()
+            } else {
+                complex.shape().to_vec()
+            },
+            rhs: if real_lhs {
+                complex.shape().to_vec()
+            } else {
+                real.shape().to_vec()
+            },
+        });
+    }
+    ensure_resident_on_runtime(backend.runtime(), real, op)?;
+    ensure_resident_on_runtime(backend.runtime(), complex, op)?;
+    let component_len = complex
+        .n_elements()
+        .checked_mul(2)
+        .ok_or_else(|| crate::Error::backend_failure(op, "complex component length overflow"))?;
+    let real_arg = typed_tensor_array_arg(real, op)?;
+    let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?;
+
+    let output = alloc_output::<C>(backend.runtime(), complex.shape())?;
+    let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    unsafe {
+        elementwise::scalar_real_complex_binary::launch_unchecked::<R, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            cube_count_for_len(output.n_elements())?,
+            cube_dim_1d(),
+            output_arg,
+            real_arg,
+            complex_arg,
+            real_lhs,
+            mode,
+        );
+    }
+    Ok(output)
+}
+
+fn promoted_real_complex_scalar_binary(
+    backend: &CudaBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    op: &'static str,
+    mode: usize,
+) -> Option<crate::Result<Tensor>> {
+    match (lhs, rhs) {
+        (Tensor::F32(real), Tensor::C32(complex)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
+                .map(Tensor::C32),
+        ),
+        (Tensor::C32(complex), Tensor::F32(real)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
+                .map(Tensor::C32),
+        ),
+        (Tensor::F64(real), Tensor::C64(complex)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
+                .map(Tensor::C64),
+        ),
+        (Tensor::C64(complex), Tensor::F64(real)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
+                .map(Tensor::C64),
+        ),
+        _ => None,
+    }
+}
+
 fn launch_checked_integer_scalar_binary<I>(
     backend: &CudaBackend,
     lhs: &TypedTensor<I>,
@@ -1990,6 +2074,11 @@ where
 
 impl TensorElementwise for CudaBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "add", elementwise::MIXED_ADD)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -2002,6 +2091,11 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "sub", elementwise::MIXED_SUB)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -2014,6 +2108,11 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "mul", elementwise::MIXED_MUL)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -2085,6 +2184,11 @@ impl TensorElementwise for CudaBackend {
             PrimitiveOpKind::Div,
             op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
         )?;
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, op, elementwise::MIXED_DIV)
+        {
+            return result;
+        }
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) if lhs.shape() != rhs.shape() => {
                 launch_scalar_binary(

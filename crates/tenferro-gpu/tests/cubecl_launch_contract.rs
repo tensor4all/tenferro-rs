@@ -845,6 +845,74 @@ fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
 }
 
 #[test]
+fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_real_complex_scalar_binary",
+        "fn promoted_real_complex_scalar_binary",
+    );
+    assert_ordered_needles(
+        "mixed real-complex scalar validation",
+        helper,
+        &[
+            "if !real.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), real, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), complex, op)?",
+            "let component_len = complex\n        .n_elements()\n        .checked_mul(2)",
+            "let real_arg = typed_tensor_array_arg(real, op)?",
+            "let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?",
+            "let output = alloc_output::<C>",
+            "let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?",
+            "if output.n_elements() == 0",
+            "scalar_real_complex_binary::launch_unchecked",
+        ],
+    );
+    for banned in [
+        "download_tensor",
+        "upload_tensor",
+        "broadcast_typed",
+        "convert(",
+    ] {
+        assert!(
+            !helper.contains(banned),
+            "mixed scalar promotion must not use host transfer or full-size materialization: {banned}"
+        );
+    }
+
+    let dispatch = source_section(
+        &mod_source,
+        "fn promoted_real_complex_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    for accepted in [
+        "Tensor::F32(real), Tensor::C32(complex)",
+        "Tensor::C32(complex), Tensor::F32(real)",
+        "Tensor::F64(real), Tensor::C64(complex)",
+        "Tensor::C64(complex), Tensor::F64(real)",
+    ] {
+        assert!(
+            dispatch.contains(accepted),
+            "missing accepted pair {accepted}"
+        );
+    }
+    assert_eq!(dispatch.matches("if real.shape().is_empty()").count(), 4);
+
+    let kernel_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/kernels/elementwise.rs"),
+    )
+    .expect("elementwise kernel source should be readable");
+    let kernel = source_section(
+        &kernel_source,
+        "pub fn scalar_real_complex_binary",
+        "pub fn scalar_div_int_checked",
+    );
+    assert!(kernel.contains("let complex_idx = ABSOLUTE_POS * 2"));
+    assert!(kernel.contains("let ratio = im / re"));
+    assert!(kernel.contains("let ratio = re / im"));
+}
+
+#[test]
 fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
     let interop_source = cubecl_source("interop.rs");
     let download_source = source_section(

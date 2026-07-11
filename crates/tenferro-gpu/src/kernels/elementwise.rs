@@ -7,6 +7,10 @@ pub(crate) const COMPARE_LT: usize = 1;
 pub(crate) const COMPARE_LE: usize = 2;
 pub(crate) const COMPARE_GT: usize = 3;
 pub(crate) const COMPARE_GE: usize = 4;
+pub(crate) const MIXED_ADD: usize = 0;
+pub(crate) const MIXED_SUB: usize = 1;
+pub(crate) const MIXED_MUL: usize = 2;
+pub(crate) const MIXED_DIV: usize = 3;
 
 macro_rules! binary_float_complex_kernel {
     ($float_name:ident, $complex_name:ident, $op:tt) => {
@@ -148,6 +152,48 @@ macro_rules! scalar_binary_float_kernel {
 
 scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
 scalar_binary_float_kernel!(scalar_rem_float, |x, y| x - (x / y).trunc() * y);
+
+#[cube(launch_unchecked)]
+pub fn scalar_real_complex_binary<F: Float>(
+    out: &mut Array<F>,
+    real: &Array<F>,
+    complex: &Array<F>,
+    #[comptime] real_lhs: bool,
+    #[comptime] mode: usize,
+) {
+    let complex_idx = ABSOLUTE_POS * 2;
+    if complex_idx < out.len() {
+        let scalar = real[0];
+        let re = complex[complex_idx];
+        let im = complex[complex_idx + 1];
+        let zero = F::new(0.0f32);
+        let (out_re, out_im) = if mode == MIXED_ADD {
+            (re + scalar, im)
+        } else if mode == MIXED_SUB {
+            if real_lhs {
+                (scalar - re, zero - im)
+            } else {
+                (re - scalar, im)
+            }
+        } else if mode == MIXED_MUL {
+            (re * scalar, im * scalar)
+        } else if !real_lhs {
+            (re / scalar, im / scalar)
+        } else if (if re >= zero { re } else { zero - re })
+            >= (if im >= zero { im } else { zero - im })
+        {
+            let ratio = im / re;
+            let denom = re + im * ratio;
+            (scalar / denom, (zero - scalar) * ratio / denom)
+        } else {
+            let ratio = re / im;
+            let denom = im + re * ratio;
+            (scalar * ratio / denom, (zero - scalar) / denom)
+        };
+        out[complex_idx] = out_re;
+        out[complex_idx + 1] = out_im;
+    }
+}
 
 #[cube(launch_unchecked)]
 pub fn scalar_div_int_checked<I: Int>(
