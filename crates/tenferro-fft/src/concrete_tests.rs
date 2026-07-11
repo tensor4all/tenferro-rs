@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
-use crate::{FftNorm, TensorFftExt, TensorReadFftExt};
+use crate::{cached_fft_plan_from_cache, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
 
 fn assert_complex_close(actual: &[Complex64], expected: &[Complex64]) {
     assert_eq!(actual.len(), expected.len());
@@ -139,5 +139,27 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
     assert!(matches!(
         shape_err,
         tenferro_tensor::Error::InvalidConfig { op: "irfft", .. }
+    ));
+}
+
+#[test]
+fn poisoned_fft_plan_cache_returns_typed_error() {
+    let cache: &'static FftPlanCache<f64> = Box::leak(Box::new(Default::default()));
+    let mutex = cache.get_or_init(Default::default);
+    let _ = std::thread::spawn(move || {
+        let _guard = mutex.lock().unwrap();
+        panic!("poison FFT plan cache for regression test");
+    })
+    .join();
+
+    let Err(err) = cached_fft_plan_from_cache(cache, 4, true) else {
+        panic!("poisoned FFT plan cache must return an error");
+    };
+    assert!(matches!(
+        err,
+        tenferro_tensor::Error::BackendFailure {
+            op: "fft_plan_cache",
+            ..
+        }
     ));
 }

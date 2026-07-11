@@ -1622,7 +1622,7 @@ struct FftPlanKey {
 }
 
 trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
-    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>>;
+    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>>;
 }
 
 type FftPlanStore<T> = HashMap<FftPlanKey, Arc<dyn Fft<T>>>;
@@ -1632,18 +1632,21 @@ static F32_FFT_PLAN_CACHE: FftPlanCache<f32> = OnceLock::new();
 static F64_FFT_PLAN_CACHE: FftPlanCache<f64> = OnceLock::new();
 
 impl CachedFftPlanScalar for f32 {
-    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>> {
+    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>> {
         cached_fft_plan_from_cache(&F32_FFT_PLAN_CACHE, len, forward)
     }
 }
 
 impl CachedFftPlanScalar for f64 {
-    fn cached_fft_plan(len: usize, forward: bool) -> Arc<dyn Fft<Self>> {
+    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>> {
         cached_fft_plan_from_cache(&F64_FFT_PLAN_CACHE, len, forward)
     }
 }
 
-fn cached_fft_plan<T: CachedFftPlanScalar>(len: usize, forward: bool) -> Arc<dyn Fft<T>> {
+fn cached_fft_plan<T: CachedFftPlanScalar>(
+    len: usize,
+    forward: bool,
+) -> tenferro_tensor::Result<Arc<dyn Fft<T>>> {
     T::cached_fft_plan(len, forward)
 }
 
@@ -1651,14 +1654,19 @@ fn cached_fft_plan_from_cache<T: FftNum + 'static>(
     cache: &'static FftPlanCache<T>,
     len: usize,
     forward: bool,
-) -> Arc<dyn Fft<T>> {
+) -> tenferro_tensor::Result<Arc<dyn Fft<T>>> {
     let key = FftPlanKey { len, forward };
     let mut guard = cache
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .map_err(|_| {
+            tenferro_tensor::Error::backend_failure(
+                "fft_plan_cache",
+                "FFT plan cache lock is poisoned",
+            )
+        })?;
     if let Some(plan) = guard.get(&key) {
-        return Arc::clone(plan);
+        return Ok(Arc::clone(plan));
     }
 
     let mut planner = FftPlanner::<T>::new();
@@ -1668,7 +1676,7 @@ fn cached_fft_plan_from_cache<T: FftNum + 'static>(
         planner.plan_fft_inverse(len)
     };
     guard.insert(key, Arc::clone(&plan));
-    plan
+    Ok(plan)
 }
 
 fn execute_c2c<T>(
@@ -1688,7 +1696,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("fft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T>(fft_len, forward);
+    let fft_plan = cached_fft_plan::<T>(fft_len, forward)?;
     let scale: T = scale_for(norm, forward, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
@@ -1743,7 +1751,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("rfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T>(fft_len, true);
+    let fft_plan = cached_fft_plan::<T>(fft_len, true)?;
     let scale: T = scale_for(norm, true, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
@@ -1797,7 +1805,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T>(out_axis_len, false);
+    let fft_plan = cached_fft_plan::<T>(out_axis_len, false)?;
     let scale: T = scale_for(norm, false, out_axis_len)?;
     let mut lane = vec![Complex::zero(); out_axis_len];
 
