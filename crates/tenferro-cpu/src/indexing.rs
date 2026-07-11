@@ -1395,12 +1395,6 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
-        if config.edge_padding_low[axis] < 0 || config.edge_padding_high[axis] < 0 {
-            return Err(crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("edge padding must be non-negative on axis {axis}"),
-            });
-        }
         let input_extent_i64 =
             i64::try_from(input_extent).map_err(|_| crate::Error::InvalidConfig {
                 op: "pad",

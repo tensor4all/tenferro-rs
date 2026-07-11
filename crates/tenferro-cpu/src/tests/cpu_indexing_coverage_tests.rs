@@ -441,8 +441,19 @@ fn cpu_indexing_validation_covers_error_branches() {
         backend.pad(
             &input,
             &PadConfig {
-                edge_padding_low: vec![-3],
+                edge_padding_low: vec![0],
                 edge_padding_high: vec![0],
+                interior_padding: vec![i64::MAX],
+            },
+        ),
+        "pad",
+    );
+    expect_invalid_config(
+        backend.pad(
+            &input,
+            &PadConfig {
+                edge_padding_low: vec![i64::MAX],
+                edge_padding_high: vec![1],
                 interior_padding: vec![0],
             },
         ),
@@ -452,8 +463,8 @@ fn cpu_indexing_validation_covers_error_branches() {
         backend.pad(
             &input,
             &PadConfig {
-                edge_padding_low: vec![-1],
-                edge_padding_high: vec![1],
+                edge_padding_low: vec![-3],
+                edge_padding_high: vec![0],
                 interior_padding: vec![0],
             },
         ),
@@ -635,6 +646,37 @@ fn cpu_indexing_validation_covers_error_branches() {
         scatter(&operand_2d, &idx2, &mismatched_updates, &scatter_cfg),
         "scatter",
     );
+}
+
+#[test]
+fn cpu_pad_supports_signed_edge_cropping() {
+    let input = Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap(),
+    );
+
+    for (low, high, expected) in [
+        (-2, 0, vec![3.0, 4.0, 5.0]),
+        (0, -2, vec![1.0, 2.0, 3.0]),
+        (-1, -1, vec![2.0, 3.0, 4.0]),
+    ] {
+        let output = pad(
+            &input,
+            &PadConfig {
+                edge_padding_low: vec![low],
+                edge_padding_high: vec![high],
+                interior_padding: vec![0],
+            },
+        )
+        .unwrap();
+        assert_eq!(output.as_slice::<f64>().unwrap(), expected);
+    }
+}
+
+#[test]
+fn cpu_pad_does_not_reject_signed_edges_before_checked_shape_validation() {
+    let indexing_source = include_str!("../indexing.rs");
+    assert!(!indexing_source.contains("config.edge_padding_low[axis] < 0"));
+    assert!(!indexing_source.contains("config.edge_padding_high[axis] < 0"));
 }
 
 #[test]
