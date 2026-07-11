@@ -138,6 +138,83 @@ fn cuda_float_index_validation_matches_cpu() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_float_index_validation_reports_first_invalid_value() {
+    fn check_first_error(
+        cpu: &mut tenferro_cpu::CpuBackend,
+        gpu: &mut crate::cubecl::CudaBackend,
+        starts: crate::Tensor,
+        gather_indices: crate::Tensor,
+        label: &str,
+    ) {
+        let operand = tensor_f64(vec![4, 4], (0..16).map(|value| value as f64).collect());
+        let updates = tensor_f64(vec![2, 4], vec![1.0; 8]);
+        let gather_config = crate::config::GatherConfig {
+            offset_dims: vec![1],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 1,
+            slice_sizes: vec![1, 4],
+        };
+        let scatter_config = ScatterConfig {
+            update_window_dims: vec![1],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        };
+        let gpu_operand = upload(gpu, &operand);
+        let gpu_starts = upload(gpu, &starts);
+        let gpu_indices = upload(gpu, &gather_indices);
+        let gpu_updates = upload(gpu, &updates);
+
+        for (op, expected, actual) in [
+            (
+                "dynamic_slice",
+                cpu.dynamic_slice(&operand, &starts, &[1, 1]),
+                gpu.dynamic_slice(&gpu_operand, &gpu_starts, &[1, 1]),
+            ),
+            (
+                "gather",
+                cpu.gather(&operand, &gather_indices, &gather_config),
+                gpu.gather(&gpu_operand, &gpu_indices, &gather_config),
+            ),
+            (
+                "scatter",
+                cpu.scatter(&operand, &gather_indices, &updates, &scatter_config),
+                gpu.scatter(&gpu_operand, &gpu_indices, &gpu_updates, &scatter_config),
+            ),
+        ] {
+            assert_eq!(
+                actual.unwrap_err(),
+                expected.unwrap_err(),
+                "{label} {op} must report the lower flat invalid index"
+            );
+        }
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    // The higher flat indices take the short non-finite branch while the
+    // lower indices require fractional/bounds checks, so concurrent workers
+    // may publish the higher invalid index first. Atomic-min must still retain
+    // the lower flat index and therefore CPU's first-value error message.
+    check_first_error(
+        &mut cpu,
+        &mut gpu,
+        tensor_f32(vec![2], vec![1.5, f32::NAN]),
+        tensor_f32(vec![2, 1], vec![1.5, f32::NAN]),
+        "F32 fractional before NaN",
+    );
+    check_first_error(
+        &mut cpu,
+        &mut gpu,
+        tensor_f64(vec![2], vec![9_007_199_254_740_994.0, f64::NEG_INFINITY]),
+        tensor_f64(vec![2, 1], vec![9_007_199_254_740_994.0, f64::NEG_INFINITY]),
+        "F64 outside-bound before -inf",
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_bool_indexing_ops_match_cpu() {
     let input = tensor_bool(vec![4], vec![true, false, true, false]);
     let starts = tensor_i64(vec![1], vec![1]);
