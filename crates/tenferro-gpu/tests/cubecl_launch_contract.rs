@@ -727,6 +727,22 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
         assert_ordered_needles(name, section, &needles);
     }
 
+    let backend_source = cubecl_source("mod.rs");
+    let reduction_section = source_section(
+        &backend_source,
+        "    fn launch_reduce_axis_typed<T>(",
+        "    fn reduce_axes_typed<T>(",
+    );
+    assert_ordered_needles(
+        "launch_reduce_axis_typed",
+        reduction_section,
+        &[
+            "let input_binding = typed_tensor_binding(input, op)?;",
+            "let output = alloc_output::<T>(self.runtime(), &output_shape)?;",
+            "if output.n_elements() == 0",
+        ],
+    );
+
     let fusion_source = cubecl_source("fusion/launch.rs");
     assert_ordered_needles(
         "fusion::launch",

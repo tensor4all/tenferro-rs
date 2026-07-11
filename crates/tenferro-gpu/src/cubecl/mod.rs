@@ -1154,8 +1154,8 @@ impl CudaBackend {
         T: CubeElement + Clone,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
-        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         let input_binding = typed_tensor_binding(input, op)?;
+        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
