@@ -71,7 +71,8 @@ CUDA operation and dtype matrix. The high-level categories are:
 
 - explicit upload/download and device pointer bridge,
 - `F32`/`F64` elementwise arithmetic, comparison, selection, clamp, and
-  analytic unary operations, plus `C32`/`C64` add/mul/div/neg/conj,
+  analytic unary operations, plus `C32`/`C64` add/mul/div/neg/conj and
+  real-output magnitude (`abs`),
 - reductions including sum/product for `F32`, `F64`, `I32`, `I64`, `C32`, and
   `C64`, and min/max for `F32`/`F64`,
 - reshape for all public tensor dtypes, and other structural operations

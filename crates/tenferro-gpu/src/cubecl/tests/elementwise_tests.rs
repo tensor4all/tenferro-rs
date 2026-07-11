@@ -2,15 +2,89 @@
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
+use num_complex::{Complex32, Complex64};
 use tenferro_tensor::BackendId;
 use tenferro_tensor::{
     TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i32,
-    tensor_i64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f64,
+    tensor_i32, tensor_i64, upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_complex_abs_matches_cpu() {
+    if !gpu_available() {
+        eprintln!("skipping test_cubecl_complex_abs_matches_cpu - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let cases = [
+        tensor_c32(
+            vec![9],
+            vec![
+                Complex32::new(3.0, 4.0),
+                Complex32::new(5.0, 12.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(f32::MAX / 4.0, f32::MAX / 4.0),
+                Complex32::new(f32::MIN_POSITIVE, f32::MIN_POSITIVE),
+                Complex32::new(f32::INFINITY, 1.0),
+                Complex32::new(1.0, f32::INFINITY),
+                Complex32::new(f32::NAN, 1.0),
+                Complex32::new(1.0, f32::NAN),
+            ],
+        ),
+        tensor_c64(
+            vec![9],
+            vec![
+                Complex64::new(3.0, 4.0),
+                Complex64::new(5.0, 12.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(f64::MAX / 4.0, f64::MAX / 4.0),
+                Complex64::new(f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+                Complex64::new(f64::INFINITY, 1.0),
+                Complex64::new(1.0, f64::INFINITY),
+                Complex64::new(f64::NAN, 1.0),
+                Complex64::new(1.0, f64::NAN),
+            ],
+        ),
+    ];
+
+    for input in cases {
+        let expected = cpu.abs(&input).unwrap();
+        let gpu_input = upload(&gpu, &input);
+        let gpu_output = gpu.abs(&gpu_input).unwrap();
+        let actual = download(&gpu, &gpu_output);
+
+        assert_eq!(actual.dtype(), expected.dtype());
+        assert_float_classes_and_zero_signs_match(&actual, &expected);
+        match (&actual, &expected) {
+            (Tensor::F32(actual), Tensor::F32(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(&actual[..3], &[5.0, 13.0, 0.0]);
+                for (&actual, &expected) in actual[3..5].iter().zip(&expected[3..5]) {
+                    assert!(actual.is_finite() && actual > 0.0);
+                    assert!((actual / expected - 1.0).abs() <= 2.0 * f32::EPSILON);
+                }
+            }
+            (Tensor::F64(actual), Tensor::F64(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(&actual[..3], &[5.0, 13.0, 0.0]);
+                for (&actual, &expected) in actual[3..5].iter().zip(&expected[3..5]) {
+                    assert!(actual.is_finite() && actual > 0.0);
+                    assert!((actual / expected - 1.0).abs() <= 2.0 * f64::EPSILON);
+                }
+            }
+            _ => panic!("complex abs must produce the matching real dtype"),
+        }
+    }
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]

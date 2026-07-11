@@ -225,6 +225,20 @@ pub fn abs_float<F: Float<WithScalar<F> = F>>(out: &mut Array<F>, input: &Array<
 }
 
 #[cube(launch_unchecked)]
+pub fn abs_complex32(out: &mut Array<f32>, input: &Array<num_complex::Complex32>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn abs_complex64(out: &mut Array<f64>, input: &Array<num_complex::Complex64>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].abs();
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];

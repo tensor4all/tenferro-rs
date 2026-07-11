@@ -2122,7 +2122,55 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_int!(self, input, PrimitiveOpKind::Abs, abs_float, abs_int)
+        let descriptor = op_descriptor::require_gpu_descriptor(
+            PrimitiveOpKind::Abs,
+            op_descriptor::GpuLaunchKind::UnaryFloatInt,
+        )?;
+        let op = descriptor.name;
+        dispatch::require_owned_capability(self, PrimitiveOpKind::Abs, input.dtype())?;
+        match input {
+            Tensor::F32(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f32, F32)
+            }
+            Tensor::F64(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f64, F64)
+            }
+            Tensor::I32(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i32, I32)
+            }
+            Tensor::I64(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i64, I64)
+            }
+            Tensor::C32(tensor) => dispatch::launch_unary(
+                self.runtime(),
+                tensor,
+                tensor.shape(),
+                op,
+                |client, count, dim, out, input_arg| unsafe {
+                    elementwise::abs_complex32::launch_unchecked::<CubeclCudaRuntime>(
+                        client, count, dim, out, input_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            Tensor::C64(tensor) => dispatch::launch_unary(
+                self.runtime(),
+                tensor,
+                tensor.shape(),
+                op,
+                |client, count, dim, out, input_arg| unsafe {
+                    elementwise::abs_complex64::launch_unchecked::<CubeclCudaRuntime>(
+                        client, count, dim, out, input_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            Tensor::Bool(_) => Err(crate::Error::unsupported_op_dtype(
+                op,
+                input.dtype(),
+                tenferro_tensor::BackendId::Cuda,
+            )),
+        }
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
