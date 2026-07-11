@@ -52,7 +52,7 @@ macro_rules! impl_real_qr {
                 }
                 check_lapack_info("qr", $geqrf_name, info)?;
 
-                let r = leading_upper_triangle_from_lapack(&qr, m, k, n);
+                let r = leading_upper_triangle_from_lapack(&qr, m, k, n)?;
                 let mut q = Vec::with_capacity(m * k);
                 for col in 0..k {
                     let start = col * m;
@@ -124,7 +124,7 @@ macro_rules! impl_complex_qr {
                 }
                 check_lapack_info("qr", $geqrf_name, info)?;
 
-                let r = leading_upper_triangle_from_lapack(&qr, m, k, n);
+                let r = leading_upper_triangle_from_lapack(&qr, m, k, n)?;
                 let mut q = Vec::with_capacity(m * k);
                 for col in 0..k {
                     let start = col * m;

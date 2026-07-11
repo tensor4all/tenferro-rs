@@ -473,11 +473,11 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
     let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
     let p_data = permutation_matrix::<T>(&row_perm);
     let q_data = permutation_matrix::<T>(&col_perm);
-    let mut l_data = lower_triangle_from_lapack(&lu, n, n);
+    let mut l_data = lower_triangle_from_lapack(&lu, n, n)?;
     for index in 0..n {
         l_data[index + index * n] = T::one();
     }
-    let u_data = leading_upper_triangle_from_lapack(&lu, n, n, n);
+    let u_data = leading_upper_triangle_from_lapack(&lu, n, n, n)?;
     let row_swap_count = ipiv
         .iter()
         .enumerate()

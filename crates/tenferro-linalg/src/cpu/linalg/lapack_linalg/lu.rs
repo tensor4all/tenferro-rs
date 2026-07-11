@@ -143,7 +143,7 @@ fn lu_2d<T: LapackLu>(
         }
         l_data[col + col * m] = T::one();
     }
-    let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n);
+    let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n)?;
 
     Ok(vec![
         tensor_from_vec_with_template(vec![m, m], p_data, input)?,

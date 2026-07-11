@@ -69,7 +69,11 @@ fn cholesky_2d<T: LapackCholesky>(
         ));
     }
     check_lapack_info("cholesky", "dpotrf", info)?;
-    tensor_from_vec_with_template(vec![n, n], lower_triangle_from_lapack(&factor, n, n), input)
+    tensor_from_vec_with_template(
+        vec![n, n],
+        lower_triangle_from_lapack(&factor, n, n)?,
+        input,
+    )
 }
 
 pub(crate) fn cholesky<T: LapackCholesky>(

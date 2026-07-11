@@ -59,6 +59,25 @@ fn cpu_faer_linalg_source() -> String {
     .unwrap_or_else(|err| panic!("faer linalg source should be readable: {err}"))
 }
 
+#[test]
+fn cpu_linalg_allocation_helpers_remain_fallible_and_checked() {
+    let faer = cpu_faer_linalg_source();
+    let lapack = cpu_lapack_helpers_source();
+
+    for source in [&faer, &lapack] {
+        let lines: Vec<_> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains("rows * cols") || line.contains(".expect(") {
+                let invariant = index > 0 && lines[index - 1].contains("// INVARIANT:");
+                assert!(
+                    invariant,
+                    "linalg helpers must propagate errors and use checked allocation sizes unless the immediately preceding line documents an INVARIANT"
+                );
+            }
+        }
+    }
+}
+
 fn cpu_backend_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
