@@ -60,6 +60,7 @@ cblas-sys = "0.1"
 cblas-src = "0.1.3"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }
+blis-src = { version = "0.2.2", default-features = false }
 lapack = "0.20"
 lapack-src = "0.13"
 lapack-inject = "0.1.2"

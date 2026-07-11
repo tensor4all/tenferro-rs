@@ -31,6 +31,18 @@ const PROVIDER_FEATURES: &[(&str, &[&str])] = &[
             "strided-einsum2/blas-mkl",
         ],
     ),
+    (
+        "blas-blis",
+        &[
+            "provider-src",
+            "dep:strided-einsum2",
+            "dep:blis-src",
+            "blas-src/blis",
+            "blis-src/static",
+            "lapack-src/netlib",
+            "strided-einsum2/blas",
+        ],
+    ),
 ];
 
 const PASSTHROUGH_CRATES: &[&str] = &[
@@ -129,13 +141,29 @@ fn public_cpu_user_crates_expose_provider_passthrough_features() {
 }
 
 #[test]
+fn linalg_explicit_provider_features_enable_local_blas_backend() {
+    let manifest = manifest("tenferro-linalg");
+
+    for (feature, _) in PROVIDER_FEATURES {
+        let values = feature_values(&manifest, feature);
+        assert!(
+            values.contains("\"cpu-blas\""),
+            "`tenferro-linalg` feature `{feature}` should enable its local cpu-blas cfg, got:\n{values}"
+        );
+    }
+}
+
+#[test]
 fn cpu_crate_rejects_ambiguous_explicit_provider_features() {
     let lib = source("crates/tenferro-cpu/src/lib.rs");
 
     for pair in [
         r#"all(feature = "blas-openblas", feature = "blas-accelerate")"#,
         r#"all(feature = "blas-openblas", feature = "blas-mkl")"#,
+        r#"all(feature = "blas-openblas", feature = "blas-blis")"#,
         r#"all(feature = "blas-accelerate", feature = "blas-mkl")"#,
+        r#"all(feature = "blas-accelerate", feature = "blas-blis")"#,
+        r#"all(feature = "blas-mkl", feature = "blas-blis")"#,
     ] {
         assert!(
             lib.contains(pair),

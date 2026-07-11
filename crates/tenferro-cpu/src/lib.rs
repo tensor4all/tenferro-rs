@@ -25,10 +25,13 @@ compile_error!("provider-inject requires cpu-blas");
 #[cfg(any(
     all(feature = "blas-openblas", feature = "blas-accelerate"),
     all(feature = "blas-openblas", feature = "blas-mkl"),
+    all(feature = "blas-openblas", feature = "blas-blis"),
     all(feature = "blas-accelerate", feature = "blas-mkl"),
+    all(feature = "blas-accelerate", feature = "blas-blis"),
+    all(feature = "blas-mkl", feature = "blas-blis"),
 ))]
 compile_error!(
-    "enable at most one explicit BLAS provider feature: blas-openblas, blas-accelerate, or blas-mkl"
+    "enable at most one explicit BLAS provider feature: blas-openblas, blas-accelerate, blas-mkl, or blas-blis"
 );
 
 #[cfg(all(
@@ -36,7 +39,8 @@ compile_error!(
     any(
         feature = "blas-openblas",
         feature = "blas-accelerate",
-        feature = "blas-mkl"
+        feature = "blas-mkl",
+        feature = "blas-blis"
     )
 ))]
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");

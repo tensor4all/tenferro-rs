@@ -30,6 +30,9 @@ blas-accelerate = [
 blas-mkl = [
     "tenferro-cpu/blas-mkl",
 ]
+blas-blis = [
+    "tenferro-cpu/blas-blis",
+]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 webgpu = ["dep:tenferro-gpu", "tenferro-gpu/webgpu"]
 rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
