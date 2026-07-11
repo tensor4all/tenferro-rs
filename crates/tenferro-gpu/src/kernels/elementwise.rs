@@ -1,5 +1,7 @@
 use cubecl::prelude::*;
 
+use crate::kernels::helpers::{flat_to_tensor_index, multi_to_tensor_index};
+
 pub(crate) const COMPARE_EQ: usize = 0;
 pub(crate) const COMPARE_LT: usize = 1;
 pub(crate) const COMPARE_LE: usize = 2;
@@ -40,6 +42,53 @@ macro_rules! binary_float_int_complex_kernel {
         }
     };
 }
+
+#[cube]
+fn broadcast_source_index<E: CubePrimitive>(
+    out_flat: usize,
+    out: &Tensor<E>,
+    input: &Tensor<E>,
+    #[comptime] dims: Sequence<usize>,
+    #[comptime] output_rank: usize,
+) -> usize {
+    let input_rank = dims.len();
+    let out_idx = flat_to_tensor_index(out_flat, out, output_rank);
+    let mut input_idx = Array::<usize>::new(input_rank);
+    #[unroll]
+    for src_axis in 0..input_rank {
+        let dst_axis = comptime! { *dims.index(src_axis) };
+        let src_dim = input.shape(src_axis);
+        input_idx[src_axis] = out_idx[dst_axis];
+        if src_dim == 1 {
+            input_idx[src_axis] = 0;
+        }
+    }
+    multi_to_tensor_index(&input_idx, input, input_rank)
+}
+
+macro_rules! broadcast_multiply_kernel {
+    ($name:ident, $bound:path) => {
+        #[cube(launch_unchecked)]
+        pub fn $name<E: $bound>(
+            out: &mut Tensor<E>,
+            lhs: &Tensor<E>,
+            rhs: &Tensor<E>,
+            #[comptime] lhs_dims: Sequence<usize>,
+            #[comptime] rhs_dims: Sequence<usize>,
+            #[comptime] output_rank: usize,
+        ) {
+            if ABSOLUTE_POS < out.len() {
+                let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
+                let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+                out[ABSOLUTE_POS] = lhs[lhs_idx] * rhs[rhs_idx];
+            }
+        }
+    };
+}
+
+broadcast_multiply_kernel!(broadcast_multiply_float, Float);
+broadcast_multiply_kernel!(broadcast_multiply_int, Int);
+broadcast_multiply_kernel!(broadcast_multiply_complex, ComplexCore);
 
 macro_rules! unary_float_kernel {
     ($name:ident, $method:ident) => {

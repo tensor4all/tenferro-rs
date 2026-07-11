@@ -165,15 +165,35 @@ pub(super) fn fixed_scale(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     factor: f64,
+    shape: Vec<DimExpr>,
+) -> LocalValueId {
+    let constant = broadcast_scalar_constant(builder, factor, shape);
+    builder.add_operation(
+        StdTensorOp::Mul,
+        vec![ValueRef::Local(constant), input],
+        OperationRole::Primary,
+    )[0]
+}
+
+fn broadcast_scalar_constant(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    factor: f64,
+    shape: Vec<DimExpr>,
 ) -> LocalValueId {
     let constant = builder.add_operation(
         StdTensorOp::constant(factor),
         vec![],
         OperationRole::Primary,
-    );
+    )[0];
+    if shape.is_empty() {
+        return constant;
+    }
     builder.add_operation(
-        StdTensorOp::Mul,
-        vec![ValueRef::Local(constant[0]), input],
+        StdTensorOp::BroadcastInDim {
+            shape,
+            dims: vec![],
+        },
+        vec![ValueRef::Local(constant)],
         OperationRole::Primary,
     )[0]
 }
@@ -233,15 +253,12 @@ pub(super) fn linear_scale(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: LocalValueId,
     factor: f64,
+    shape: Vec<DimExpr>,
 ) -> LocalValueId {
-    let constant = builder.add_operation(
-        StdTensorOp::constant(factor),
-        vec![],
-        OperationRole::Primary,
-    );
+    let constant = broadcast_scalar_constant(builder, factor, shape);
     builder.add_operation(
         StdTensorOp::Mul,
-        vec![ValueRef::Local(constant[0]), ValueRef::Local(input)],
+        vec![ValueRef::Local(constant), ValueRef::Local(input)],
         OperationRole::Linearized {
             active_mask: vec![false, true],
         },
@@ -439,6 +456,7 @@ pub(super) fn self_adjoint_from_lower_linear(
     input: LocalValueId,
     rank: usize,
     dtype: DType,
+    diag_shape: Vec<DimExpr>,
 ) -> LocalValueId {
     let strict_lower = builder.add_operation(
         StdTensorOp::Tril { k: -1 },
@@ -456,7 +474,7 @@ pub(super) fn self_adjoint_from_lower_linear(
     } else {
         let diag_h = conjugate_linear_if_dtype_complex(builder, diag, dtype);
         let diag_sum = linear_add(builder, diag, diag_h);
-        linear_scale(builder, diag_sum, 0.5)
+        linear_scale(builder, diag_sum, 0.5, diag_shape)
     };
     let diag_mat = embed_diag_linear(builder, diag);
     linear_add(builder, offdiag, diag_mat)
@@ -531,6 +549,12 @@ pub(super) fn matrix_shape(
     batch_shape: &[DimExpr],
 ) -> Vec<DimExpr> {
     let mut shape = vec![rows.into(), cols.into()];
+    shape.extend_from_slice(batch_shape);
+    shape
+}
+
+pub(super) fn vector_shape(dim: impl Into<DimExpr>, batch_shape: &[DimExpr]) -> Vec<DimExpr> {
+    let mut shape = vec![dim.into()];
     shape.extend_from_slice(batch_shape);
     shape
 }

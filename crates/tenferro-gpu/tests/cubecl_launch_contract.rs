@@ -741,6 +741,42 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
 }
 
 #[test]
+fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
+    let dispatch_source = cubecl_source("dispatch.rs");
+    let binary_macro = source_section(
+        &dispatch_source,
+        "macro_rules! launch_binary_elementwise_kernel",
+        "macro_rules! dispatch_binary_float_complex_int",
+    );
+
+    assert!(
+        !binary_macro.contains("broadcast_typed"),
+        "raw binary elementwise launchers must not allocate dense scalar-broadcast temporaries"
+    );
+    assert!(
+        !binary_macro.contains("shape().is_empty()"),
+        "scalar broadcast should be represented as BroadcastInDim and fused by backend hooks"
+    );
+
+    let mod_source = cubecl_source("mod.rs");
+    let fusion_impl = source_section(
+        &mod_source,
+        "impl TensorFusion for CudaBackend",
+        "impl BackendCachedDot for CudaBackend",
+    );
+    assert_ordered_needles(
+        "CudaBackend broadcast multiply hook",
+        fusion_impl,
+        &[
+            "fn execute_broadcast_multiply(",
+            "launch_broadcast_multiply_typed",
+            "launch_broadcast_multiply_int_typed",
+            "launch_broadcast_multiply_complex_typed",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
     let interop_source = cubecl_source("interop.rs");
     let download_source = source_section(

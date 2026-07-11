@@ -3234,6 +3234,54 @@ impl TensorFusion for CudaBackend {
     ) -> crate::Result<Option<Vec<Tensor>>> {
         fusion::execute_elementwise_fusion(self, inputs, plan)
     }
+
+    fn execute_broadcast_multiply(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_shape: &[usize],
+        lhs_dims: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_shape: &[usize],
+        rhs_dims: &[usize],
+    ) -> crate::Result<Option<Tensor>> {
+        let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (lhs, rhs) else {
+            return Ok(None);
+        };
+        match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_broadcast_multiply_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::F32)
+            .map(Some),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_broadcast_multiply_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::F64)
+            .map(Some),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_broadcast_multiply_int_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::I32)
+            .map(Some),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_broadcast_multiply_int_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::I64)
+            .map(Some),
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_broadcast_multiply_complex_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::C32)
+            .map(Some),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_broadcast_multiply_complex_typed(
+                self, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+            .map(Tensor::C64)
+            .map(Some),
+            (Tensor::Bool(_), Tensor::Bool(_)) => Ok(None),
+            _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
+        }
+    }
 }
 
 impl BackendCachedDot for CudaBackend {}
@@ -3247,6 +3295,131 @@ impl TensorBackend for CudaBackend {}
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     ensure_rank(op, rank, perm.len())?;
     ensure_axes_unique(op, "perm", perm, rank)
+}
+
+fn ensure_same_shape_for_broadcast_multiply(
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+) -> crate::Result<()> {
+    if lhs_shape != rhs_shape {
+        return Err(crate::Error::ShapeMismatch {
+            op: "broadcast_multiply",
+            lhs: lhs_shape.to_vec(),
+            rhs: rhs_shape.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+fn launch_broadcast_multiply_typed<T>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensor<T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + CubeFloat + Clone,
+{
+    ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
+    validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
+    validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
+    launch_binary_tensor(
+        backend.runtime(),
+        lhs,
+        rhs,
+        lhs_shape,
+        "broadcast_multiply",
+        |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+            elementwise::broadcast_multiply_float::launch_unchecked::<T, CubeclCudaRuntime>(
+                client,
+                count,
+                dim,
+                out.into_tensor_arg(),
+                lhs_arg.into_tensor_arg(),
+                rhs_arg.into_tensor_arg(),
+                comptime_sequence(lhs_dims),
+                comptime_sequence(rhs_dims),
+                lhs_shape.len(),
+            );
+        },
+    )
+}
+
+fn launch_broadcast_multiply_int_typed<T>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensor<T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + CubeInt + Clone,
+{
+    ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
+    validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
+    validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
+    launch_binary_tensor(
+        backend.runtime(),
+        lhs,
+        rhs,
+        lhs_shape,
+        "broadcast_multiply",
+        |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+            elementwise::broadcast_multiply_int::launch_unchecked::<T, CubeclCudaRuntime>(
+                client,
+                count,
+                dim,
+                out.into_tensor_arg(),
+                lhs_arg.into_tensor_arg(),
+                rhs_arg.into_tensor_arg(),
+                comptime_sequence(lhs_dims),
+                comptime_sequence(rhs_dims),
+                lhs_shape.len(),
+            );
+        },
+    )
+}
+
+fn launch_broadcast_multiply_complex_typed<T>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<T>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: &TypedTensor<T>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + CubeComplex + Clone,
+{
+    ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
+    validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
+    validate_broadcast_in_dim(rhs.shape(), rhs_shape, rhs_dims)?;
+    launch_binary_tensor(
+        backend.runtime(),
+        lhs,
+        rhs,
+        lhs_shape,
+        "broadcast_multiply",
+        |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+            elementwise::broadcast_multiply_complex::launch_unchecked::<T, CubeclCudaRuntime>(
+                client,
+                count,
+                dim,
+                out.into_tensor_arg(),
+                lhs_arg.into_tensor_arg(),
+                rhs_arg.into_tensor_arg(),
+                comptime_sequence(lhs_dims),
+                comptime_sequence(rhs_dims),
+                lhs_shape.len(),
+            );
+        },
+    )
 }
 
 fn validate_broadcast_in_dim(

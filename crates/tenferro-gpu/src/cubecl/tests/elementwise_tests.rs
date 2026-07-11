@@ -3,12 +3,63 @@ use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use tenferro_tensor::BackendId;
-use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorStructural};
+use tenferro_tensor::{
+    TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
+};
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i32,
     tensor_i64, upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_broadcast_multiply_scalar_operands_match_cpu() {
+    if !gpu_available() {
+        eprintln!(
+            "skipping test_broadcast_multiply_scalar_operands_match_cpu - no CUDA device found"
+        );
+        return;
+    }
+    let Ok(mut backend) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(gpu_backend))
+    else {
+        eprintln!(
+            "skipping test_broadcast_multiply_scalar_operands_match_cpu - CUDA runtime could not be initialized"
+        );
+        return;
+    };
+    let scalar = tensor_f64(vec![], vec![2.0]);
+    let vector = tensor_f64(vec![3], vec![3.0, -4.0, 5.0]);
+    let gpu_scalar = upload(&backend, &scalar);
+    let gpu_vector = upload(&backend, &vector);
+
+    let lhs_scalar = backend
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&gpu_scalar),
+            &[3],
+            &[],
+            TensorRead::from_tensor(&gpu_vector),
+            &[3],
+            &[0],
+        )
+        .unwrap()
+        .expect("scalar lhs broadcast multiply should fuse");
+    let rhs_scalar = backend
+        .execute_broadcast_multiply(
+            TensorRead::from_tensor(&gpu_vector),
+            &[3],
+            &[0],
+            TensorRead::from_tensor(&gpu_scalar),
+            &[3],
+            &[],
+        )
+        .unwrap()
+        .expect("scalar rhs broadcast multiply should fuse");
+
+    let expected = tensor_f64(vec![3], vec![6.0, -8.0, 10.0]);
+    assert_tensor_close(&download(&backend, &lhs_scalar), &expected, 1e-12);
+    assert_tensor_close(&download(&backend, &rhs_scalar), &expected, 1e-12);
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
