@@ -708,11 +708,7 @@ where
         out_core_shape.ok_or_else(|| invalid_config(op_name, "missing output shape"))?;
     out_shape.extend_from_slice(batch_shape);
     let out_data = out_data.ok_or_else(|| invalid_config(op_name, "missing output data"))?;
-    Ok(tensor_from_vec_with_template(
-        out_shape,
-        out_data,
-        input.placement(),
-    )?)
+    tensor_from_vec_with_template(out_shape, out_data, input.placement())
 }
 
 fn batched_multi_result<T, F>(
@@ -994,11 +990,7 @@ where
         out_core_shape.ok_or_else(|| invalid_config(op_name, "missing output shape"))?;
     out_shape.extend_from_slice(a_batch_shape);
     let out_data = out_data.ok_or_else(|| invalid_config(op_name, "missing output data"))?;
-    Ok(tensor_from_vec_with_template(
-        out_shape,
-        out_data,
-        b.placement(),
-    )?)
+    tensor_from_vec_with_template(out_shape, out_data, b.placement())
 }
 
 macro_rules! impl_faer_linalg_for_real {
@@ -1045,11 +1037,11 @@ macro_rules! impl_faer_linalg_for_real {
             Default::default(),
         )
         .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
-        Ok(tensor_from_vec_with_template(
+        tensor_from_vec_with_template(
             vec![n, n],
             lower_triangle_vec_from_mat(l.as_ref())?,
             placement,
-        )?)
+        )
     }
 
     fn lu_2d(
@@ -1313,7 +1305,7 @@ macro_rules! impl_faer_linalg_for_real {
                 stack,
             );
         }
-        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
+        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
     }
 
     fn solve_2d(
@@ -1402,7 +1394,7 @@ macro_rules! impl_faer_linalg_for_real {
                 stack,
             );
         }
-        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
+        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
     }
 
     fn triangular_solve_2d(
@@ -1603,7 +1595,7 @@ macro_rules! impl_faer_linalg_for_real {
         )
         .map_err(|_| decomposition_failed("svd_values"))?;
 
-        Ok(tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), input.placement())?)
+        tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), input.placement())
     }
 
     fn qr_2d(
@@ -1651,7 +1643,7 @@ macro_rules! impl_faer_linalg_for_real {
         )
         .map_err(|_| decomposition_failed("eigh_values"))?;
 
-        Ok(tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), input.placement())?)
+        tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), input.placement())
     }
 
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self> {
@@ -1893,11 +1885,11 @@ macro_rules! impl_faer_linalg_for_complex {
             Default::default(),
         )
         .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
-        Ok(tensor_from_vec_with_template(
+        tensor_from_vec_with_template(
             vec![n, n],
             $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col)?,
             placement,
-        )?)
+        )
     }
 
     fn lu_2d(
@@ -2200,7 +2192,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 stack,
             );
         }
-        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
+        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
     }
 
     fn solve_2d(
@@ -2298,7 +2290,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 stack,
             );
         }
-        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
+        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
     }
 
     fn triangular_solve_2d(
@@ -2512,7 +2504,7 @@ macro_rules! impl_faer_linalg_for_complex {
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
-        Ok(tensor_from_vec_with_template(vec![k], data, input.placement())?)
+        tensor_from_vec_with_template(vec![k], data, input.placement())
     }
 
     fn qr_2d(
@@ -2565,7 +2557,7 @@ macro_rules! impl_faer_linalg_for_complex {
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
-        Ok(tensor_from_vec_with_template(vec![n], data, input.placement())?)
+        tensor_from_vec_with_template(vec![n], data, input.placement())
     }
 
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self> {
@@ -2815,11 +2807,11 @@ pub(crate) fn cholesky<T: FaerLinalg>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "cholesky")?;
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             matrix_with_batch_shape(n, n, batch_shape),
             Vec::new(),
             input.placement(),
-        )?);
+        );
     }
     batched_single("cholesky", buffers, input, 2, |buffers, batch| {
         T::cholesky_2d(ctx, buffers, batch)
@@ -2996,11 +2988,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b.placement(),
-        )?);
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     batched_binary_result("full_piv_lu_solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::full_piv_lu_solve_2d(ctx, buffers, a, b, transpose_a)
@@ -3031,11 +3019,7 @@ pub(crate) fn solve<T: FaerLinalg>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b.placement(),
-        )?);
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     batched_binary_result("solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::solve_2d(ctx, buffers, a, b, transpose_a)
@@ -3072,11 +3056,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
                 rhs: b_batch_shape.to_vec(),
             });
         }
-        return Ok(tensor_from_vec_with_template(
-            b.shape().to_vec(),
-            Vec::new(),
-            b.placement(),
-        )?);
+        return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     batched_binary_result("triangular_solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::triangular_solve_2d(
@@ -3131,11 +3111,11 @@ pub(crate) fn svd_values<T: FaerLinalg>(
     if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "svd_values")?;
         let k = m.min(n);
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             vector_with_batch_shape(k, batch_shape),
             Vec::new(),
             input.placement(),
-        )?);
+        );
     }
     let mut outputs =
         batched_multi_convert_result("svd_values", buffers, input, 2, |buffers, batch| {
@@ -3202,11 +3182,11 @@ pub(crate) fn eigh_values<T: FaerLinalg>(
 ) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "eigh_values")?;
-        return Ok(tensor_from_vec_with_template(
+        return tensor_from_vec_with_template(
             vector_with_batch_shape(n, batch_shape),
             Vec::new(),
             input.placement(),
-        )?);
+        );
     }
     let mut outputs =
         batched_multi_convert_result("eigh_values", buffers, input, 2, |buffers, batch| {
@@ -3432,11 +3412,7 @@ macro_rules! impl_eig_values_real_2d {
             .map_err(|_| decomposition_failed("eig_values"))?;
             let s = $real_eig_to_complex_values(buffers, s_re.as_ref(), s_im.as_ref());
 
-            Ok(tensor_from_vec_with_template(
-                vec![n],
-                s,
-                input.placement(),
-            )?)
+            tensor_from_vec_with_template(vec![n], s, input.placement())
         }
     };
 }
@@ -3529,11 +3505,11 @@ macro_rules! impl_eig_values_complex_2d {
             )
             .map_err(|_| decomposition_failed("eig_values"))?;
 
-            Ok(tensor_from_vec_with_template(
+            tensor_from_vec_with_template(
                 vec![n],
                 $vec_from_diag(buffers, s.as_ref()),
                 input.placement(),
-            )?)
+            )
         }
     };
 }

@@ -488,7 +488,7 @@ fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
         .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
         .expect("cubecl/mod.rs should be inventoried");
     let update_len = source_section(
-        &mod_source,
+        mod_source,
         "fn scatter_update_len(",
         "/// CubeCL-based GPU backend.",
     );

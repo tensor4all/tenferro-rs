@@ -144,7 +144,7 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
 
 #[test]
 fn poisoned_fft_plan_cache_returns_typed_error() {
-    let cache: &'static FftPlanCache<f64> = Box::leak(Box::new(Default::default()));
+    let cache: &'static FftPlanCache<f64> = Box::leak(Box::default());
     let mutex = cache.get_or_init(Default::default);
     let _ = std::thread::spawn(move || {
         let _guard = mutex.lock().unwrap();
