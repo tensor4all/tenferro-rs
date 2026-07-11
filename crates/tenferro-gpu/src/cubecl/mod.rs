@@ -1683,8 +1683,9 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, starts)?;
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape().len())?;
         if starts.shape()[0] != input.shape().len() {
@@ -1729,8 +1730,9 @@ impl CudaBackend {
         slice_sizes: &[usize],
     ) -> crate::Result<TypedTensor<bool>>
     where
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, starts)?;
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         if starts.shape().len() != 1 {
             return Err(crate::Error::InvalidConfig {
@@ -1919,8 +1921,9 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, start_indices)?;
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
         launch_binary_tensor(
             self.runtime(),
@@ -1956,8 +1959,9 @@ impl CudaBackend {
         config: &GatherConfig,
     ) -> crate::Result<TypedTensor<bool>>
     where
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, start_indices)?;
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
         launch_binary_bool_tensor(
             self.runtime(),
@@ -1995,8 +1999,9 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, scatter_indices)?;
         let meta = scatter_launch_meta(
             operand.shape(),
             scatter_indices.shape(),
@@ -2077,8 +2082,9 @@ impl CudaBackend {
     where
         T: CubeElement + CubeComplex + Clone,
         F: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
+        I::validate(self, scatter_indices)?;
         let meta = scatter_launch_meta(
             operand.shape(),
             scatter_indices.shape(),
@@ -2195,6 +2201,166 @@ fn read_checked_integer_flag(
             "integer domain flag download returned unexpected dtype",
         )),
     }
+}
+
+trait CudaFloatIndex:
+    CubeElement
+    + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + CubeFloat
+    + Clone
+    + Send
+    + Sync
+    + fmt::Display
+    + Copy
+    + 'static
+{
+    const MAX_EXACT_INTEGER: Self;
+    fn is_invalid_index(self) -> bool;
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+}
+
+trait CudaIndexValidation: Sized {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()>;
+}
+
+impl CudaIndexValidation for f32 {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+        validate_float_index_tensor(backend, indices)
+    }
+}
+
+impl CudaIndexValidation for f64 {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+        validate_float_index_tensor(backend, indices)
+    }
+}
+
+impl CudaIndexValidation for i32 {
+    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+impl CudaIndexValidation for i64 {
+    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+impl CudaFloatIndex for f32 {
+    const MAX_EXACT_INTEGER: Self = 16_777_216.0;
+
+    fn is_invalid_index(self) -> bool {
+        !self.is_finite() || self.fract() != 0.0 || self.abs() > 16_777_216.0
+    }
+
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        match download_tensor(backend.runtime(), &Tensor::F32(flag.clone()))? {
+            Tensor::F32(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+            }),
+            _ => Err(crate::Error::backend_failure(
+                "index_tensor",
+                "validation flag had unexpected dtype",
+            )),
+        }
+    }
+}
+
+impl CudaFloatIndex for f64 {
+    const MAX_EXACT_INTEGER: Self = 9_007_199_254_740_992.0;
+
+    fn is_invalid_index(self) -> bool {
+        !self.is_finite() || self.fract() != 0.0 || self.abs() > 9_007_199_254_740_992.0
+    }
+
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        match download_tensor(backend.runtime(), &Tensor::F64(flag.clone()))? {
+            Tensor::F64(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+            }),
+            _ => Err(crate::Error::backend_failure(
+                "index_tensor",
+                "validation flag had unexpected dtype",
+            )),
+        }
+    }
+}
+
+fn validate_float_index_tensor<F>(
+    backend: &CudaBackend,
+    indices: &TypedTensor<F>,
+) -> crate::Result<()>
+where
+    F: CudaFloatIndex,
+{
+    ensure_resident_on_runtime(backend.runtime(), indices, "index_tensor")?;
+    let indices_arg = typed_tensor_binding(indices, "index_tensor")?;
+    if indices.n_elements() == 0 {
+        return Ok(());
+    }
+    u32::try_from(indices.n_elements()).map_err(|_| {
+        crate::Error::backend_failure(
+            "index_tensor",
+            "float index validation domain exceeds u32::MAX elements",
+        )
+    })?;
+    let count = cube_count_for_len(indices.n_elements())?;
+    let flag_u32_len = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_div(std::mem::size_of::<u32>()))
+        .ok_or_else(|| crate::Error::backend_failure("index_tensor", "flag size overflow"))?;
+    let flag = alloc_output::<F>(backend.runtime(), &[2])?;
+    let flag_values = typed_tensor_array_arg(&flag, "index_tensor")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    unsafe {
+        // SAFETY: the flag allocation has two `F` elements, and the checked
+        // reinterpretation above proves the atomic-u32 view fits that buffer.
+        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    unsafe {
+        // SAFETY: the input binding was validated before allocation, the
+        // launch domain is the checked input length, and the scalar flag view
+        // was bounds-checked above.
+        indexing::validate_float_indices_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            count,
+            cube_dim_1d(),
+            indices_arg.into_tensor_arg(),
+            flag_atomic,
+            F::MAX_EXACT_INTEGER,
+        );
+    }
+    let indices_arg = typed_tensor_binding(indices, "index_tensor")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    let flag_values = typed_tensor_array_arg(&flag, "index_tensor")?;
+    unsafe {
+        // SAFETY: one worker reads the atomically selected in-range index and
+        // copies that single value into the second element of the same flag.
+        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            indices_arg.into_tensor_arg(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let invalid = F::read_invalid_flag(backend, &flag)?;
+    if invalid.is_invalid_index() {
+        return Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: format!("index value {invalid} is not an exactly representable i64"),
+        });
+    }
+    Ok(())
 }
 
 fn launch_checked_integer_binary<I>(

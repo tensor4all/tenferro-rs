@@ -1477,6 +1477,68 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
     );
 }
 
+#[test]
+fn cuda_float_index_validation_stays_device_native_and_preflighted() {
+    let backend = cubecl_source("mod.rs");
+    let validation = source_section(
+        &backend,
+        "fn validate_float_index_tensor<F>(",
+        "fn launch_checked_integer_binary<I>(",
+    );
+    for needle in [
+        "ensure_resident_on_runtime(backend.runtime(), indices, \"index_tensor\")?;",
+        "typed_tensor_binding(indices, \"index_tensor\")?;",
+        "if indices.n_elements() == 0",
+        "u32::try_from(indices.n_elements())",
+        "cube_count_for_len(indices.n_elements())?;",
+        "validate_float_indices_kernel::launch_unchecked",
+        "extract_invalid_float_index_kernel::launch_unchecked",
+        "F::read_invalid_flag(backend, &flag)?",
+    ] {
+        assert!(
+            validation.contains(needle),
+            "missing float-index contract: {needle}"
+        );
+    }
+    let allocation = validation.find("alloc_output::<F>").unwrap();
+    assert!(validation.find("ensure_resident_on_runtime").unwrap() < allocation);
+    assert!(validation.find("typed_tensor_binding").unwrap() < allocation);
+    assert!(validation.find("cube_count_for_len").unwrap() < allocation);
+    assert!(validation.find("u32::try_from").unwrap() < allocation);
+    assert!(!validation.contains("download_tensor(backend.runtime(), indices"));
+
+    for (start, end, index_name) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            "starts",
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            "start_indices",
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            "scatter_indices",
+        ),
+    ] {
+        let operation = source_section(&backend, start, end);
+        assert!(
+            operation
+                .find(&format!("I::validate(self, {index_name})?;"))
+                .unwrap()
+                < operation.find("alloc_output").unwrap_or(operation.len()),
+            "{start} must validate float index values before allocation"
+        );
+    }
+
+    let kernels = std::fs::read_to_string("src/kernels/indexing.rs").unwrap();
+    assert!(kernels.contains("flag[0].fetch_min(ABSOLUTE_POS as u32)"));
+    assert!(kernels.contains("flag_values[1] = indices[invalid_index as usize]"));
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cubecl_runtime_exposes_explicit_synchronize() {

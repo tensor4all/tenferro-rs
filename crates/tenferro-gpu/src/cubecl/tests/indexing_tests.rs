@@ -5,8 +5,136 @@ use tenferro_tensor::{Error, TensorIndexing};
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
-    simple_gather_config, tensor_bool, tensor_c64, tensor_f64, tensor_i32, tensor_i64, upload,
+    simple_gather_config, tensor_bool, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64,
+    upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_float_index_validation_matches_cpu() {
+    fn check_index(
+        cpu: &mut tenferro_cpu::CpuBackend,
+        gpu: &mut crate::cubecl::CudaBackend,
+        index: crate::Tensor,
+        valid: bool,
+        label: &str,
+        failures: &mut Vec<String>,
+    ) {
+        let operand = tensor_f64(vec![4], vec![10.0, 20.0, 30.0, 40.0]);
+        let updates = tensor_f64(vec![1], vec![5.0]);
+        let gather_indices = match &index {
+            crate::Tensor::F32(values) => {
+                tensor_f32(vec![1, 1], values.as_slice().unwrap().to_vec())
+            }
+            crate::Tensor::F64(values) => {
+                tensor_f64(vec![1, 1], values.as_slice().unwrap().to_vec())
+            }
+            _ => unreachable!("matrix only contains float indices"),
+        };
+        let scatter_config = ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        };
+
+        let gpu_operand = upload(gpu, &operand);
+        let gpu_index = upload(gpu, &index);
+        let gpu_gather_indices = upload(gpu, &gather_indices);
+        let gpu_updates = upload(gpu, &updates);
+
+        let cases = [
+            (
+                "dynamic_slice",
+                cpu.dynamic_slice(&operand, &index, &[1]),
+                gpu.dynamic_slice(&gpu_operand, &gpu_index, &[1]),
+            ),
+            (
+                "gather",
+                cpu.gather(&operand, &gather_indices, &simple_gather_config()),
+                gpu.gather(&gpu_operand, &gpu_gather_indices, &simple_gather_config()),
+            ),
+            (
+                "scatter",
+                cpu.scatter(&operand, &gather_indices, &updates, &scatter_config),
+                gpu.scatter(
+                    &gpu_operand,
+                    &gpu_gather_indices,
+                    &gpu_updates,
+                    &scatter_config,
+                ),
+            ),
+        ];
+
+        for (op, cpu_result, gpu_result) in cases {
+            if valid {
+                let expected = cpu_result.unwrap_or_else(|err| panic!("{label} {op} CPU: {err:?}"));
+                let Ok(actual_gpu) = gpu_result else {
+                    failures.push(format!("{label} {op}: CUDA rejected CPU-valid input"));
+                    continue;
+                };
+                let actual = download(gpu, &actual_gpu);
+                assert_tensor_close(&actual, &expected, 0.0);
+            } else {
+                let expected = cpu_result
+                    .err()
+                    .unwrap_or_else(|| panic!("{label} {op} CPU unexpectedly succeeded"));
+                match gpu_result {
+                    Ok(_) => failures.push(format!("{label} {op}: CUDA unexpectedly succeeded")),
+                    Err(actual) if actual != expected => {
+                        failures.push(format!("{label} {op}: CUDA {actual:?} != CPU {expected:?}"))
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let mut failures = Vec::new();
+    for (label, value, valid) in [
+        ("f32 integral", 1.0_f32, true),
+        ("f32 fractional", 1.5, false),
+        ("f32 NaN", f32::NAN, false),
+        ("f32 +inf", f32::INFINITY, false),
+        ("f32 -inf", f32::NEG_INFINITY, false),
+        ("f32 +boundary", 16_777_216.0, true),
+        ("f32 -boundary", -16_777_216.0, true),
+        ("f32 +outside", 16_777_218.0, false),
+        ("f32 -outside", -16_777_218.0, false),
+    ] {
+        check_index(
+            &mut cpu,
+            &mut gpu,
+            tensor_f32(vec![1], vec![value]),
+            valid,
+            label,
+            &mut failures,
+        );
+    }
+    for (label, value, valid) in [
+        ("f64 integral", 1.0_f64, true),
+        ("f64 fractional", 1.5, false),
+        ("f64 NaN", f64::NAN, false),
+        ("f64 +inf", f64::INFINITY, false),
+        ("f64 -inf", f64::NEG_INFINITY, false),
+        ("f64 +boundary", 9_007_199_254_740_992.0, true),
+        ("f64 -boundary", -9_007_199_254_740_992.0, true),
+        ("f64 +outside", 9_007_199_254_740_994.0, false),
+        ("f64 -outside", -9_007_199_254_740_994.0, false),
+    ] {
+        check_index(
+            &mut cpu,
+            &mut gpu,
+            tensor_f64(vec![1], vec![value]),
+            valid,
+            label,
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
