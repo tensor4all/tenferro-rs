@@ -77,6 +77,76 @@ fn cubecl_scatter_does_not_use_single_thread_launch_fallback() {
 }
 
 #[test]
+fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
+    let mod_source = cubecl_source("mod.rs");
+    let update_len = source_section(
+        &mod_source,
+        "fn scatter_update_len(",
+        "/// CubeCL-based GPU backend.",
+    );
+    assert_ordered_needles(
+        "scatter_update_len",
+        update_len,
+        &[
+            "checked_dim_product(\"scatter\", \"batch shape\", &meta.batch_shape)?",
+            "checked_dim_product(\"scatter\", \"window update shape\", &meta.window_shape_updates)?",
+            "batch_len.checked_mul(window_len)",
+        ],
+    );
+
+    let launch_paths = [
+        (
+            "scatter_float_typed",
+            source_section(
+                &mod_source,
+                "    fn scatter_float_typed<",
+                "    fn scatter_complex_typed<",
+            ),
+            "indexing::scatter_float_kernel::launch_unchecked",
+        ),
+        (
+            "scatter_complex_typed",
+            source_section(
+                &mod_source,
+                "    fn scatter_complex_typed<",
+                "impl BackendRuntimeCache for CudaBackend",
+            ),
+            "indexing::scatter_complex_kernel::launch_unchecked",
+        ),
+    ];
+    assert_eq!(
+        mod_source
+            .matches("scatter_float_kernel::launch_unchecked")
+            .count()
+            + mod_source
+                .matches("scatter_complex_kernel::launch_unchecked")
+                .count(),
+        launch_paths.len(),
+        "every scatter update kernel launch path must be covered below"
+    );
+    for (name, source, launch) in launch_paths {
+        assert_ordered_needles(
+            name,
+            source,
+            &[
+                "scatter_launch_meta(",
+                "let update_len = scatter_update_len(&meta)?;",
+                "if update_len == 0 {\n            return Ok(output);\n        }",
+                launch,
+            ],
+        );
+    }
+
+    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
+    let invariant = "// INVARIANT: `scatter_update_len` checked the batch and window products,\n    // checked their combined update-domain bound, and returned before launch when it was zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());";
+    assert_eq!(
+        indexing_source.matches(invariant).count(),
+        2,
+        "both scatter kernels must keep the checked host-domain proof adjacent to update_window_len"
+    );
+}
+
+#[test]
 fn cubecl_zero_length_launches_validate_buffers_before_returning() {
     let dispatch_source = cubecl_source("dispatch.rs");
     let dispatch_contracts = [
