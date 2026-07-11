@@ -4,8 +4,9 @@ use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 use super::helpers::{
-    batched_multi_convert, check_lapack_info, dim_i32, has_zero_dim, square_matrix_dim,
-    tensor_from_vec_with_template, vector_with_batch_shape, work_len, zero_dim_eig_outputs,
+    batched_multi_convert, check_lapack_info, checked_product, dim_i32, has_zero_dim,
+    square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
+    zero_dim_eig_outputs,
 };
 
 fn eig_imag_is_effectively_zero(real: f64, imag: f64, eps: f64) -> bool {
@@ -19,8 +20,9 @@ macro_rules! impl_real_eig_to_complex_outputs {
             s_re: &[$real],
             s_im: &[$real],
             n: usize,
-        ) -> (Vec<$complex>, Vec<$complex>) {
-            let mut vectors = vec![<$complex>::new(0.0, 0.0); n * n];
+        ) -> tenferro_tensor::Result<(Vec<$complex>, Vec<$complex>)> {
+            let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
+            let mut vectors = vec![<$complex>::new(0.0, 0.0); vector_len];
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut col = 0;
             while col < n {
@@ -48,7 +50,7 @@ macro_rules! impl_real_eig_to_complex_outputs {
                     col += 2;
                 }
             }
-            (vectors, values)
+            Ok((vectors, values))
         }
     };
 }
@@ -82,7 +84,8 @@ macro_rules! impl_eig_real_2d {
             let mut values_re = vec![0.0 as $real; n];
             let mut values_im = vec![0.0 as $real; n];
             let mut vl = vec![0.0 as $real; 1];
-            let mut vectors_real = vec![0.0 as $real; n * n];
+            let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
+            let mut vectors_real = vec![0.0 as $real; vector_len];
             let mut query = vec![0.0 as $real; 1];
             let mut info = 0;
             // SAFETY: all matrix/vector buffers match the validated `n x n`
@@ -129,7 +132,7 @@ macro_rules! impl_eig_real_2d {
                 );
             }
             check_lapack_info("eig", $routine, info)?;
-            let (vectors, values) = $convert(&vectors_real, &values_re, &values_im, n);
+            let (vectors, values) = $convert(&vectors_real, &values_re, &values_im, n)?;
 
             Ok(vec![
                 tensor_from_vec_with_template(vec![n], values, input)?,
@@ -216,9 +219,11 @@ macro_rules! impl_eig_complex_2d {
             let mut a = input.host_data()?.to_vec();
             let mut values = vec![<$complex>::new(0.0, 0.0); n];
             let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
-            let mut vectors = vec![<$complex>::new(0.0, 0.0); n * n];
+            let vector_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
+            let mut vectors = vec![<$complex>::new(0.0, 0.0); vector_len];
             let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-            let mut rwork = vec![0.0 as $real; 2 * n.max(1)];
+            let rwork_len = checked_product("eig", "real workspace", &[2, n.max(1)])?;
+            let mut rwork = vec![0.0 as $real; rwork_len];
             let mut info = 0;
             // SAFETY: all complex matrix/vector buffers and real workspace
             // match the validated `n x n` problem; `lwork = -1` queries workspace.
@@ -286,7 +291,8 @@ macro_rules! impl_eig_values_complex_2d {
             let mut vl = vec![<$complex>::new(0.0, 0.0); 1];
             let mut vr = vec![<$complex>::new(0.0, 0.0); 1];
             let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-            let mut rwork = vec![0.0 as $real; 2 * n.max(1)];
+            let rwork_len = checked_product("eig_values", "real workspace", &[2, n.max(1)])?;
+            let mut rwork = vec![0.0 as $real; rwork_len];
             let mut info = 0;
             // SAFETY: all complex matrix/vector buffers and real workspace
             // match the validated `n x n` problem; `lwork = -1` queries workspace.

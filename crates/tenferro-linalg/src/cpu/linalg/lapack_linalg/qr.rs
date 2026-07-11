@@ -4,9 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, check_lapack_info, dim_i32, has_zero_dim, leading_upper_triangle_from_lapack,
-    matrix_dims, matrix_with_batch_shape, split_core_and_batch_result,
-    tensor_from_vec_with_template, work_len,
+    batched_multi, check_lapack_info, checked_product, dim_i32, has_zero_dim,
+    leading_upper_triangle_from_lapack, matrix_dims, matrix_with_batch_shape,
+    split_core_and_batch_result, tensor_from_vec_with_template, work_len,
 };
 
 pub(crate) trait LapackQr: Clone + Copy + Default + PoolScalar {
@@ -53,7 +53,8 @@ macro_rules! impl_real_qr {
                 check_lapack_info("qr", $geqrf_name, info)?;
 
                 let r = leading_upper_triangle_from_lapack(&qr, m, k, n)?;
-                let mut q = Vec::with_capacity(m * k);
+                let q_len = checked_product("qr", "Q matrix", &[m, k])?;
+                let mut q = Vec::with_capacity(q_len);
                 for col in 0..k {
                     let start = col * m;
                     q.extend_from_slice(&qr[start..start + m]);
@@ -125,7 +126,8 @@ macro_rules! impl_complex_qr {
                 check_lapack_info("qr", $geqrf_name, info)?;
 
                 let r = leading_upper_triangle_from_lapack(&qr, m, k, n)?;
-                let mut q = Vec::with_capacity(m * k);
+                let q_len = checked_product("qr", "Q matrix", &[m, k])?;
+                let mut q = Vec::with_capacity(q_len);
                 for col in 0..k {
                     let start = col * m;
                     q.extend_from_slice(&qr[start..start + m]);

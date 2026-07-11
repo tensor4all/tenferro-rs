@@ -1,5 +1,33 @@
 use std::{fs, path::Path};
 
+fn lapack_production_sources() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("cpu")
+        .join("linalg")
+        .join("lapack_linalg");
+    let mut sources = Vec::new();
+    for entry in fs::read_dir(&root)
+        .unwrap_or_else(|err| panic!("LAPACK source directory should be readable: {err}"))
+    {
+        let path = entry
+            .unwrap_or_else(|err| panic!("LAPACK source entry should be readable: {err}"))
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_else(|| panic!("LAPACK source path should have a UTF-8 file name"))
+            .to_owned();
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("LAPACK source {name} should be readable: {err}"));
+        sources.push((name, source));
+    }
+    sources
+}
+
 fn cpu_lapack_helpers_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -76,6 +104,36 @@ fn cpu_linalg_allocation_helpers_remain_fallible_and_checked() {
             }
         }
     }
+}
+
+#[test]
+fn lapack_shape_derived_allocation_lengths_remain_checked() {
+    let mut violations = Vec::new();
+    for (name, source) in lapack_production_sources() {
+        let lines: Vec<_> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let allocation_product = (line.contains("vec![")
+                || line.contains("with_capacity(")
+                || line.contains("pool_acquire("))
+                && line.contains(" * ");
+            let unchecked_workspace_formula = line.contains("return 5 * mn * mn")
+                || line.contains("(5 * mn * mn")
+                || line.contains("8 * min_dim")
+                || line.contains("2 * min_dim * min_dim")
+                || line.contains("5 * min_dim * min_dim");
+            if allocation_product || unchecked_workspace_formula {
+                let invariant = index > 0 && lines[index - 1].contains("// INVARIANT:");
+                if !invariant {
+                    violations.push(format!("{name}:{}: {}", index + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "LAPACK allocation lengths require checked arithmetic:\n{}",
+        violations.join("\n")
+    );
 }
 
 fn cpu_backend_source() -> String {

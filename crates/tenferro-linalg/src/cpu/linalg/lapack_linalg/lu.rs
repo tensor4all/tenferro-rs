@@ -126,7 +126,8 @@ fn lu_2d<T: LapackLu>(
         }
     }
 
-    let mut p_data = vec![T::default(); m * m];
+    let p_len = checked_product("lu", "permutation matrix", &[m, m])?;
+    let mut p_data = vec![T::default(); p_len];
     for (row, &source_row) in permutation.iter().enumerate() {
         p_data[row + source_row * m] = T::one();
     }
@@ -136,7 +137,8 @@ fn lu_2d<T: LapackLu>(
         T::negative_one()
     };
 
-    let mut l_data = vec![T::default(); m * k];
+    let l_len = checked_product("lu", "lower factor", &[m, k])?;
+    let mut l_data = vec![T::default(); l_len];
     for col in 0..k {
         for row in col..m {
             l_data[row + col * m] = lu[row + col * m];

@@ -4,9 +4,9 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, batched_multi_convert, check_lapack_info, dim_i32, has_zero_dim, matrix_dims,
-    matrix_with_batch_shape, split_core_and_batch_result, tensor_from_vec_with_template,
-    vector_with_batch_shape, work_len,
+    batched_multi, batched_multi_convert, check_lapack_info, checked_product, dim_i32,
+    has_zero_dim, matrix_dims, matrix_with_batch_shape, split_core_and_batch_result,
+    tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
@@ -23,21 +23,40 @@ pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
 }
 
 #[cfg(not(feature = "provider-inject"))]
-fn gesdd_iwork_len(k: usize) -> usize {
-    8 * k.max(1)
+fn gesdd_iwork_len(k: usize) -> tenferro_tensor::Result<usize> {
+    checked_product("svd", "integer workspace", &[8, k.max(1)])
 }
 
 #[cfg(not(feature = "provider-inject"))]
-fn complex_gesdd_rwork_len(jobz: u8, m: usize, n: usize) -> usize {
+fn complex_gesdd_rwork_len(jobz: u8, m: usize, n: usize) -> tenferro_tensor::Result<usize> {
     let mn = m.min(n);
     let mx = m.max(n);
     if jobz == b'N' {
-        return 5 * mn.max(1);
+        return checked_product("svd", "real workspace", &[5, mn.max(1)]);
     }
-    if mx > 10 * mn {
-        return 5 * mn * mn + 5 * mn;
+    let threshold = checked_product("svd", "workspace crossover", &[10, mn])?;
+    let square_term = checked_product("svd", "real workspace square term", &[5, mn, mn])?;
+    let linear_term = checked_product("svd", "real workspace linear term", &[5, mn])?;
+    let small_shape_len = square_term.checked_add(linear_term).ok_or_else(|| {
+        tenferro_tensor::Error::InvalidConfig {
+            op: "svd",
+            message: "real workspace length overflow".into(),
+        }
+    })?;
+    if mx > threshold {
+        return Ok(small_shape_len);
     }
-    (5 * mn * mn + 5 * mn).max(2 * mx * mn + 2 * mn * mn + mn)
+    let rectangular_term = checked_product("svd", "real workspace rectangular term", &[2, mx, mn])?;
+    let second_square_term =
+        checked_product("svd", "real workspace secondary square term", &[2, mn, mn])?;
+    let large_shape_len = rectangular_term
+        .checked_add(second_square_term)
+        .and_then(|len| len.checked_add(mn))
+        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+            op: "svd",
+            message: "real workspace length overflow".into(),
+        })?;
+    Ok(small_shape_len.max(large_shape_len))
 }
 
 #[cfg(feature = "provider-inject")]
@@ -58,8 +77,10 @@ macro_rules! impl_real_svd {
 
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
-                let mut u = vec![0.0 as $scalar; m * k];
-                let mut vt = vec![0.0 as $scalar; k * n];
+                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
+                let mut u = vec![0.0 as $scalar; u_len];
+                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+                let mut vt = vec![0.0 as $scalar; vt_len];
                 let mut query = vec![0.0 as $scalar; 1];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
@@ -172,10 +193,12 @@ macro_rules! impl_real_svd {
 
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
-                let mut u = vec![0.0 as $scalar; m * k];
-                let mut vt = vec![0.0 as $scalar; k * n];
+                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
+                let mut u = vec![0.0 as $scalar; u_len];
+                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+                let mut vt = vec![0.0 as $scalar; vt_len];
                 let mut query = vec![0.0 as $scalar; 1];
-                let mut iwork = vec![0; gesdd_iwork_len(k)];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, and `vt` match the validated SVD
                 // dimensions, and `lwork = -1` makes `query` the workspace output.
@@ -217,7 +240,7 @@ macro_rules! impl_real_svd {
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $scalar; k];
                 let mut query = vec![0.0 as $scalar; 1];
-                let mut iwork = vec![0; gesdd_iwork_len(k)];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
                 let mut info = 0;
                 // SAFETY: `a` and `s` match the validated SVD dimensions;
                 // no-vector mode ignores the dummy U/VT buffers, and `lwork = -1` queries workspace.
@@ -288,10 +311,13 @@ macro_rules! impl_complex_svd {
 
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
-                let mut u = vec![<$complex>::new(0.0, 0.0); m * k];
-                let mut vt = vec![<$complex>::new(0.0, 0.0); k * n];
+                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
+                let mut u = vec![<$complex>::new(0.0, 0.0); u_len];
+                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+                let mut vt = vec![<$complex>::new(0.0, 0.0); vt_len];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
+                let rwork_len = checked_product("svd", "real workspace", &[5, k.max(1)])?;
+                let mut rwork = vec![0.0 as $real; rwork_len];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
                 // validated complex SVD dimensions; `lwork = -1` queries workspace.
@@ -339,7 +365,8 @@ macro_rules! impl_complex_svd {
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; 5 * k.max(1)];
+                let rwork_len = checked_product("svd", "real workspace", &[5, k.max(1)])?;
+                let mut rwork = vec![0.0 as $real; rwork_len];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, and `rwork` match the validated complex
                 // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
@@ -412,11 +439,13 @@ macro_rules! impl_complex_svd {
 
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
-                let mut u = vec![<$complex>::new(0.0, 0.0); m * k];
-                let mut vt = vec![<$complex>::new(0.0, 0.0); k * n];
+                let u_len = checked_product("svd", "left singular vectors", &[m, k])?;
+                let mut u = vec![<$complex>::new(0.0, 0.0); u_len];
+                let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+                let mut vt = vec![<$complex>::new(0.0, 0.0); vt_len];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'S', m, n)];
-                let mut iwork = vec![0; gesdd_iwork_len(k)];
+                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'S', m, n)?];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, `u`, `vt`, and `rwork` match the
                 // validated complex SVD dimensions; `lwork = -1` queries workspace.
@@ -464,8 +493,8 @@ macro_rules! impl_complex_svd {
                 let mut a = input.host_data()?.to_vec();
                 let mut s = vec![0.0 as $real; k];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'N', m, n)];
-                let mut iwork = vec![0; gesdd_iwork_len(k)];
+                let mut rwork = vec![0.0 as $real; complex_gesdd_rwork_len(b'N', m, n)?];
+                let mut iwork = vec![0; gesdd_iwork_len(k)?];
                 let mut info = 0;
                 // SAFETY: `a`, `s`, and `rwork` match the validated complex
                 // SVD dimensions; no-vector mode ignores dummy U/VT buffers, and `lwork = -1` queries workspace.
