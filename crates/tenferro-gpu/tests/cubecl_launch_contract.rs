@@ -26,14 +26,14 @@ fn production_rust_sources() -> Vec<(PathBuf, String)> {
 }
 
 #[derive(Debug)]
-struct RustToken {
+struct Lexeme {
     text: String,
     offset: usize,
 }
 
-fn rust_code_tokens(source: &str) -> Vec<RustToken> {
+fn rust_code_lexemes(source: &str) -> Vec<Lexeme> {
     let bytes = source.as_bytes();
-    let mut tokens = Vec::new();
+    let mut lexemes = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i..].starts_with(b"//") {
@@ -130,31 +130,31 @@ fn rust_code_tokens(source: &str) -> Vec<RustToken> {
         } else {
             i += if bytes[i..].starts_with(b"::") { 2 } else { 1 };
         }
-        tokens.push(RustToken {
+        lexemes.push(Lexeme {
             text: source[start..i].to_owned(),
             offset: start,
         });
     }
-    tokens
+    lexemes
 }
 
-fn token_positions(tokens: &[RustToken], sequence: &[&str]) -> Vec<usize> {
-    tokens
+fn lexeme_positions(lexemes: &[Lexeme], sequence: &[&str]) -> Vec<usize> {
+    lexemes
         .windows(sequence.len())
         .filter(|window| {
             window
                 .iter()
                 .zip(sequence)
-                .all(|(token, expected)| token.text == *expected)
+                .all(|(lexeme, expected)| lexeme.text == *expected)
         })
         .map(|window| window[0].offset)
         .collect()
 }
 
-fn contains_token_subsequence(tokens: &[RustToken], sequence: &[&str]) -> bool {
+fn contains_lexeme_subsequence(lexemes: &[Lexeme], sequence: &[&str]) -> bool {
     let mut next = 0;
-    for token in tokens {
-        if token.text == sequence[next] {
+    for lexeme in lexemes {
+        if lexeme.text == sequence[next] {
             next += 1;
             if next == sequence.len() {
                 return true;
@@ -164,7 +164,7 @@ fn contains_token_subsequence(tokens: &[RustToken], sequence: &[&str]) -> bool {
     false
 }
 
-fn forbidden_scatter_aliases(tokens: &[RustToken]) -> Vec<usize> {
+fn forbidden_scatter_aliases(lexemes: &[Lexeme]) -> Vec<usize> {
     let protected = [
         "update_window_len",
         "scatter_float_kernel",
@@ -173,22 +173,22 @@ fn forbidden_scatter_aliases(tokens: &[RustToken]) -> Vec<usize> {
     ];
     let mut violations = Vec::new();
     let mut index = 0;
-    while index < tokens.len() {
-        if tokens[index].text != "use" {
+    while index < lexemes.len() {
+        if lexemes[index].text != "use" {
             index += 1;
             continue;
         }
-        let end = tokens[index..]
+        let end = lexemes[index..]
             .iter()
-            .position(|token| token.text == ";")
-            .map_or(tokens.len(), |offset| index + offset);
-        let statement = &tokens[index..end];
-        if statement.iter().any(|token| token.text == "as")
+            .position(|lexeme| lexeme.text == ";")
+            .map_or(lexemes.len(), |offset| index + offset);
+        let statement = &lexemes[index..end];
+        if statement.iter().any(|lexeme| lexeme.text == "as")
             && statement
                 .iter()
-                .any(|token| protected.contains(&token.text.as_str()))
+                .any(|lexeme| protected.contains(&lexeme.text.as_str()))
         {
-            violations.push(tokens[index].offset);
+            violations.push(lexemes[index].offset);
         }
         index = end.saturating_add(1);
     }
@@ -205,17 +205,17 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
     let mut launches = Vec::new();
     let mut aliases = Vec::new();
     for (path, source) in sources {
-        let tokens = rust_code_tokens(source);
-        for offset in forbidden_scatter_aliases(&tokens) {
+        let lexemes = rust_code_lexemes(source);
+        for offset in forbidden_scatter_aliases(&lexemes) {
             aliases.push((path, offset));
         }
-        let local_definitions: Vec<_> = tokens
+        let local_definitions: Vec<_> = lexemes
             .windows(2)
             .filter(|window| window[0].text == "fn" && window[1].text == "update_window_len")
             .map(|window| window[1].offset)
             .collect();
         definitions.extend(local_definitions.iter().copied());
-        for offset in token_positions(&tokens, &["update_window_len", "("]) {
+        for offset in lexeme_positions(&lexemes, &["update_window_len", "("]) {
             if local_definitions.contains(&offset) {
                 continue;
             }
@@ -241,7 +241,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
             &["scatter_float_kernel", "::", "launch_unchecked"][..],
             &["scatter_complex_kernel", "::", "launch_unchecked"][..],
         ] {
-            for offset in token_positions(&tokens, sequence) {
+            for offset in lexeme_positions(&lexemes, sequence) {
                 launches.push((path, offset));
             }
         }
@@ -289,7 +289,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         .iter()
         .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
         .ok_or_else(|| "cubecl/mod.rs was not inventoried".to_owned())?;
-    let meta_tokens = rust_code_tokens(source_section(
+    let meta_lexemes = rust_code_lexemes(source_section(
         mod_source,
         "fn scatter_launch_meta(",
         "impl TensorIndexing for CudaBackend",
@@ -339,7 +339,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
             ")",
         ][..],
     ] {
-        if token_positions(&meta_tokens, required).is_empty() {
+        if lexeme_positions(&meta_lexemes, required).is_empty() {
             return Err(format!(
                 "scatter_launch_meta lacks update-window derivation proof {required:?}"
             ));
@@ -360,7 +360,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         ),
     ] {
         let section = source_section(mod_source, start, end);
-        let section_tokens = rust_code_tokens(section);
+        let section_lexemes = rust_code_lexemes(section);
         let kernel = launch
             .strip_prefix("indexing::")
             .and_then(|launch| launch.strip_suffix("::launch_unchecked"))
@@ -397,7 +397,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
             "::",
             "launch_unchecked",
         ];
-        if !contains_token_subsequence(&section_tokens, &required) {
+        if !contains_lexeme_subsequence(&section_lexemes, &required) {
             return Err(format!("{name} lacks ordered checked launch proof"));
         }
     }
@@ -506,7 +506,7 @@ fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
 }
 
 #[test]
-fn rust_token_inventory_ignores_literals_and_accepts_multiline_calls() {
+fn rust_lexeme_inventory_ignores_literals_and_accepts_multiline_calls() {
     let source = r####"
         // update_window_len(fake)
         /* scatter_float_kernel::launch_unchecked(fake) */
@@ -524,21 +524,21 @@ fn rust_token_inventory_ignores_literals_and_accepts_multiline_calls() {
             launch_unchecked
             ();
     "####;
-    let tokens = rust_code_tokens(source);
+    let lexemes = rust_code_lexemes(source);
     assert_eq!(
-        token_positions(&tokens, &["update_window_len", "("]).len(),
+        lexeme_positions(&lexemes, &["update_window_len", "("]).len(),
         1
     );
     assert_eq!(
-        token_positions(
-            &tokens,
+        lexeme_positions(
+            &lexemes,
             &["scatter_float_kernel", "::", "launch_unchecked", "("]
         )
         .len(),
         1
     );
-    assert!(token_positions(
-        &tokens,
+    assert!(lexeme_positions(
+        &lexemes,
         &["scatter_complex_kernel", "::", "launch_unchecked", "("]
     )
     .is_empty());
