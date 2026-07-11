@@ -173,6 +173,82 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 }
 
+fn assert_float_classes_and_zero_signs_match(actual: &Tensor, expected: &Tensor) {
+    match (actual, expected) {
+        (Tensor::F32(actual), Tensor::F32(expected)) => {
+            for (actual, expected) in actual
+                .as_slice()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice().unwrap())
+            {
+                assert_eq!(actual.is_nan(), expected.is_nan());
+                assert_eq!(actual.is_infinite(), expected.is_infinite());
+                if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
+                    assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+                }
+            }
+        }
+        (Tensor::F64(actual), Tensor::F64(expected)) => {
+            for (actual, expected) in actual
+                .as_slice()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice().unwrap())
+            {
+                assert_eq!(actual.is_nan(), expected.is_nan());
+                assert_eq!(actual.is_infinite(), expected.is_infinite());
+                if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
+                    assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+                }
+            }
+        }
+        _ => panic!("expected matching F32 or F64 tensors"),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
+    if !gpu_available() {
+        eprintln!(
+            "skipping test_cubecl_float_div_rem_preserve_ieee_special_values — no CUDA device found"
+        );
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let cases = [
+        (
+            super::tensor_f32(vec![6], vec![1.0, 1.0, 0.0, f32::NAN, f32::INFINITY, -0.0]),
+            super::tensor_f32(vec![6], vec![0.0, -0.0, 0.0, 1.0, f32::INFINITY, 2.0]),
+            super::tensor_f32(vec![6], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0]),
+        ),
+        (
+            tensor_f64(vec![6], vec![1.0, 1.0, 0.0, f64::NAN, f64::INFINITY, -0.0]),
+            tensor_f64(vec![6], vec![0.0, -0.0, 0.0, 1.0, f64::INFINITY, 2.0]),
+            tensor_f64(vec![6], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0]),
+        ),
+    ];
+
+    for (lhs, div_rhs, rem_rhs) in cases {
+        let gpu_lhs = upload(&gpu, &lhs);
+        let gpu_div_rhs = upload(&gpu, &div_rhs);
+        let gpu_rem_rhs = upload(&gpu, &rem_rhs);
+
+        let expected = cpu.div(&lhs, &div_rhs).unwrap();
+        let gpu_out = gpu.div(&gpu_lhs, &gpu_div_rhs).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_float_classes_and_zero_signs_match(&actual, &expected);
+
+        let expected = cpu.rem(&lhs, &rem_rhs).unwrap();
+        let gpu_out = gpu.rem(&gpu_lhs, &gpu_rem_rhs).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_float_classes_and_zero_signs_match(&actual, &expected);
+    }
+}
+
 #[test]
 #[ignore]
 fn test_cubecl_unary_float_elementwise_matches_cpu() {

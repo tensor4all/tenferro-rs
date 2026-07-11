@@ -302,6 +302,10 @@ See `../reference/stablehlo-primitives.md` for the StableHLO-facing reference an
 
 ### Elementwise arithmetic, comparison, and selection
 
+Floating-point exceptional values follow the general
+[floating-point domain behavior](tensor-semantics.md#floating-point-domain-behavior)
+contract; integer domain failures remain typed errors.
+
 | Primitive | Definition | Notes |
 |-----------|------------|-------|
 | `Div` | `y[i] = x0[i] / x1[i]` | Canonical division op |
