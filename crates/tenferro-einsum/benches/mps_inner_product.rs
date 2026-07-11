@@ -64,7 +64,7 @@ fn build_inner_product_graph(
     let mut env =
         TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
-        let bra_core = bra_core.conj();
+        let bra_core = bra_core.conj().unwrap();
         env = compiler
             .einsum(&[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");

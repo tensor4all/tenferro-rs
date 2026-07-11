@@ -280,7 +280,7 @@ mod tests {
     fn default_executor_reports_missing_pjrt_before_dispatch() {
         let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
         let mut compiler = GraphCompiler::new();
-        let program = compiler.compile(&x.neg()).unwrap();
+        let program = compiler.compile(&x.neg().unwrap()).unwrap();
         let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
         let err = XlaExecutor::default()

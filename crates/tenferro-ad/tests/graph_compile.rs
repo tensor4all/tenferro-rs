@@ -91,7 +91,7 @@ fn graph_compiler_validates_placeholder_specs() {
 
     let z = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let err = compiler
-        .compile_with_input_specs(&z.neg(), &[(&z, DType::F64, &[2])])
+        .compile_with_input_specs(&z.neg().unwrap(), &[(&z, DType::F64, &[2])])
         .unwrap_err();
     assert!(format!("{err}").contains("shape"));
 }
@@ -99,7 +99,7 @@ fn graph_compiler_validates_placeholder_specs() {
 #[test]
 fn graph_program_input_accessors_report_compiled_contract() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = x.neg();
+    let y = x.neg().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -122,7 +122,7 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let _ = compiler.compile(&y).unwrap();
-    let _ = compiler.compile(&x.neg()).unwrap();
+    let _ = compiler.compile(&x.neg().unwrap()).unwrap();
 
     let stats = compiler.cache_stats();
     assert_eq!(compiler.compile_cache_capacity().get(), 1);
@@ -134,7 +134,7 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
 fn graph_compiler_compiler_options_setter_clears_compile_cache() {
     let mut compiler = GraphCompiler::new();
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let _ = compiler.compile(&x.neg()).unwrap();
+    let _ = compiler.compile(&x.neg().unwrap()).unwrap();
     assert_eq!(compiler.compile_cache_len(), 1);
 
     let options = CompilerOptions {
@@ -206,7 +206,7 @@ fn graph_compiler_cache_distinguishes_extension_payload_eq_despite_hash_collisio
 fn graph_compiler_compile_many_returns_multi_output_program() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
-    let z = x.neg();
+    let z = x.neg().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&y, &z]).unwrap();

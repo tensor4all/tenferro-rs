@@ -1043,8 +1043,8 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.neg();
-    /// let y2 = -&x;
+    /// let y = x.neg().unwrap();
+    /// let y2 = (-&x).unwrap();
     /// ```
     pub fn neg(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Neg)
@@ -1062,7 +1062,7 @@ impl TracedTensor {
     /// #     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
     /// # )
     /// # .unwrap();
-    /// let y = x.conj();
+    /// let y = x.conj().unwrap();
     /// ```
     pub fn conj(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Conj)
@@ -1077,7 +1077,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
-    /// let y = x.abs();
+    /// let y = x.abs().unwrap();
     /// ```
     pub fn abs(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Abs)
@@ -1090,7 +1090,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
-    /// let y = x.sign();
+    /// let y = x.sign().unwrap();
     /// ```
     pub fn sign(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sign)
@@ -1159,7 +1159,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.exp();
+    /// let y = x.exp().unwrap();
     /// ```
     pub fn exp(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Exp)
@@ -1172,7 +1172,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.log();
+    /// let y = x.log().unwrap();
     /// ```
     pub fn log(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log)
@@ -1185,7 +1185,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.sin();
+    /// let y = x.sin().unwrap();
     /// ```
     pub fn sin(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sin)
@@ -1198,7 +1198,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.cos();
+    /// let y = x.cos().unwrap();
     /// ```
     pub fn cos(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Cos)
@@ -1211,7 +1211,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.tanh();
+    /// let y = x.tanh().unwrap();
     /// ```
     pub fn tanh(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Tanh)
@@ -1224,7 +1224,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
-    /// let y = x.sqrt();
+    /// let y = x.sqrt().unwrap();
     /// ```
     pub fn sqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sqrt)
@@ -1237,7 +1237,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
-    /// let y = x.rsqrt();
+    /// let y = x.rsqrt().unwrap();
     /// ```
     pub fn rsqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Rsqrt)
@@ -1271,7 +1271,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.expm1();
+    /// let y = x.expm1().unwrap();
     /// ```
     pub fn expm1(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Expm1)
@@ -1284,7 +1284,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.log1p();
+    /// let y = x.log1p().unwrap();
     /// ```
     pub fn log1p(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log1p)
@@ -1328,7 +1328,7 @@ impl TracedTensor {
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
     ///
-    /// let y = x.cast(DType::I32);
+    /// let y = x.cast(DType::I32).unwrap();
     /// ```
     pub fn cast(&self, to: DType) -> Result<TracedTensor> {
         if self.dtype == to {
