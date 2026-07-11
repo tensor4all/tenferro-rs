@@ -206,7 +206,7 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
 }
 
 #[test]
-fn cubecl_binary_elementwise_kernels_broadcast_zero_dim_scalars() {
+fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
     let dispatch_source = cubecl_source("dispatch.rs");
     let binary_macro = source_section(
         &dispatch_source,
@@ -214,22 +214,29 @@ fn cubecl_binary_elementwise_kernels_broadcast_zero_dim_scalars() {
         "macro_rules! dispatch_binary_float_complex_int",
     );
 
-    assert_ordered_needles(
-        "launch_binary_elementwise_kernel scalar lhs broadcast",
-        binary_macro,
-        &[
-            "$lhs.shape().is_empty()",
-            "let lhs = $backend.broadcast_typed($lhs, $rhs.shape(), &[])?;",
-            "launch_binary(",
-        ],
+    assert!(
+        !binary_macro.contains("broadcast_typed"),
+        "raw binary elementwise launchers must not allocate dense scalar-broadcast temporaries"
+    );
+    assert!(
+        !binary_macro.contains("shape().is_empty()"),
+        "scalar broadcast should be represented as BroadcastInDim and fused by backend hooks"
+    );
+
+    let mod_source = cubecl_source("mod.rs");
+    let fusion_impl = source_section(
+        &mod_source,
+        "impl TensorFusion for CudaBackend",
+        "impl BackendCachedDot for CudaBackend",
     );
     assert_ordered_needles(
-        "launch_binary_elementwise_kernel scalar rhs broadcast",
-        binary_macro,
+        "CudaBackend broadcast multiply hook",
+        fusion_impl,
         &[
-            "$rhs.shape().is_empty()",
-            "let rhs = $backend.broadcast_typed($rhs, $lhs.shape(), &[])?;",
-            "launch_binary(",
+            "fn execute_broadcast_multiply(",
+            "launch_broadcast_multiply_typed",
+            "launch_broadcast_multiply_int_typed",
+            "launch_broadcast_multiply_complex_typed",
         ],
     );
 }
