@@ -21,6 +21,15 @@ compile_error!(
     "enable at least one fallback CPU backend: cpu-faer or cpu-blas; cpu-tblis is an optional contraction provider"
 );
 
+#[cfg(all(feature = "cpu-tblis-runtime", feature = "cpu-tblis-linked"))]
+compile_error!("enable at most one TBLIS provider mode: cpu-tblis-runtime or cpu-tblis-linked");
+
+#[cfg(all(
+    feature = "cpu-tblis-provider",
+    not(any(feature = "cpu-tblis-runtime", feature = "cpu-tblis-linked"))
+))]
+compile_error!("cpu-tblis-provider is an internal marker; enable cpu-tblis or cpu-tblis-linked");
+
 #[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
 compile_error!("provider-inject requires cpu-blas");
 
@@ -74,7 +83,7 @@ extern crate cblas_src as _;
 extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 extern crate tenferro_tblis_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};

@@ -2,24 +2,24 @@ use criterion::{
     black_box, criterion_group, criterion_main, measurement::WallTime, BenchmarkGroup, BenchmarkId,
     Criterion,
 };
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 use std::env;
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 use num_complex::Complex64;
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 use tenferro_cpu::{CpuBackend, CpuBackendKind, DotGeneralProvider};
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 use tenferro_tensor::{
     DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorView, TypedTensorView,
 };
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 const SIZES: &[usize] = &[32, 64, 128];
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 const HIGHER_RANK_NS: &[usize] = &[4, 8];
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn matmul_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
@@ -29,7 +29,7 @@ fn matmul_config() -> DotGeneralConfig {
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn rank4_contract_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![2, 3],
@@ -39,7 +39,7 @@ fn rank4_contract_config() -> DotGeneralConfig {
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn rank4_mixed_contract_axes_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1, 3],
@@ -49,7 +49,7 @@ fn rank4_mixed_contract_axes_config() -> DotGeneralConfig {
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn rank5_batched_mixed_contract_axes_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![2, 4],
@@ -59,7 +59,7 @@ fn rank5_batched_mixed_contract_axes_config() -> DotGeneralConfig {
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn parse_size_list_env(var: &str, default: &[usize]) -> Vec<usize> {
     env::var(var)
         .ok()
@@ -74,7 +74,7 @@ fn parse_size_list_env(var: &str, default: &[usize]) -> Vec<usize> {
         .unwrap_or_else(|| default.to_vec())
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn real_tensor(shape: &[usize], seed: usize) -> Tensor {
     let len = shape.iter().product();
     let data = (0..len)
@@ -83,7 +83,7 @@ fn real_tensor(shape: &[usize], seed: usize) -> Tensor {
     Tensor::from_vec_col_major(shape.to_vec(), data).unwrap()
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn real_data(shape: &[usize], seed: usize) -> Vec<f64> {
     let len = shape.iter().product();
     (0..len)
@@ -91,12 +91,12 @@ fn real_data(shape: &[usize], seed: usize) -> Vec<f64> {
         .collect()
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn real_matrix(rows: usize, cols: usize, seed: usize) -> Tensor {
     real_tensor(&[rows, cols], seed)
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn complex_matrix(rows: usize, cols: usize, seed: usize) -> Tensor {
     let data = (0..rows * cols)
         .map(|idx| {
@@ -108,7 +108,7 @@ fn complex_matrix(rows: usize, cols: usize, seed: usize) -> Tensor {
     Tensor::from_vec_col_major(vec![rows, cols], data).unwrap()
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn tblis_runtime_available(config: &DotGeneralConfig) -> bool {
     let lhs = real_matrix(2, 2, 1);
     let rhs = real_matrix(2, 2, 2);
@@ -124,7 +124,7 @@ fn tblis_runtime_available(config: &DotGeneralConfig) -> bool {
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_owned_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
@@ -152,7 +152,7 @@ fn bench_owned_dot(
     );
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_owned_conj_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
@@ -186,7 +186,7 @@ fn bench_owned_conj_dot(
     );
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_read_view_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
@@ -224,7 +224,7 @@ fn bench_read_view_dot(
     );
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 #[derive(Clone, Copy)]
 struct StridedData<'a> {
     shape: &'a [usize],
@@ -232,7 +232,7 @@ struct StridedData<'a> {
     data: &'a [f64],
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_owned_all_providers(
     group: &mut BenchmarkGroup<'_, WallTime>,
     case: &str,
@@ -278,7 +278,7 @@ fn bench_owned_all_providers(
     );
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_read_view_all_providers(
     group: &mut BenchmarkGroup<'_, WallTime>,
     case: &str,
@@ -324,7 +324,7 @@ fn bench_read_view_all_providers(
     );
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn bench_tblis_dot_general_provider(c: &mut Criterion) {
     let matmul_config = matmul_config();
     if !tblis_runtime_available(&matmul_config) {
@@ -455,7 +455,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "cpu-tblis"))]
+#[cfg(not(feature = "cpu-tblis-provider"))]
 fn bench_tblis_dot_general_provider(_c: &mut Criterion) {}
 
 criterion_group!(benches, bench_tblis_dot_general_provider);

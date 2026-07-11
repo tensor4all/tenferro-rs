@@ -24,6 +24,9 @@ cpu-blas = [
 cpu-tblis = [
     "tenferro-cpu/cpu-tblis",
 ]
+cpu-tblis-linked = [
+    "tenferro-cpu/cpu-tblis-linked",
+]
 blas-openblas = [
     "tenferro-cpu/blas-openblas",
 ]

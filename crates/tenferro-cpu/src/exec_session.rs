@@ -184,7 +184,7 @@ impl CpuExecSession<'_> {
         result
     }
 
-    #[cfg(feature = "cpu-tblis")]
+    #[cfg(feature = "cpu-tblis-provider")]
     fn tblis_not_applicable<T>(
         &self,
         op: &'static str,
@@ -196,7 +196,7 @@ impl CpuExecSession<'_> {
         Err(super::backend::tblis_required_not_applicable(op))
     }
 
-    #[cfg(not(feature = "cpu-tblis"))]
+    #[cfg(not(feature = "cpu-tblis-provider"))]
     fn tblis_unavailable_for_required<T>(&self, op: &'static str) -> crate::Result<Option<T>> {
         if self.dot_general_provider == DotGeneralProvider::TblisRequired {
             Err(super::backend::tblis_required_unavailable(op))
@@ -226,7 +226,7 @@ impl TensorDot for CpuExecSession<'_> {
         match self.dot_general_provider {
             DotGeneralProvider::Base => {}
             DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis")]
+                #[cfg(feature = "cpu-tblis-provider")]
                 {
                     let direct = gemm::dot_general_tblis_read_cached(
                         self.buffers,
@@ -238,7 +238,7 @@ impl TensorDot for CpuExecSession<'_> {
                         return Ok(result);
                     }
                 }
-                #[cfg(not(feature = "cpu-tblis"))]
+                #[cfg(not(feature = "cpu-tblis-provider"))]
                 {
                     if let Some(result) =
                         self.tblis_unavailable_for_required::<Tensor>("dot_general")?
@@ -356,7 +356,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         match self.dot_general_provider {
             DotGeneralProvider::Base => {}
             DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis")]
+                #[cfg(feature = "cpu-tblis-provider")]
                 {
                     let direct = match (lhs, rhs) {
                         (Tensor::F32(a), Tensor::F32(b)) => {
@@ -386,7 +386,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
                         return Ok(result);
                     }
                 }
-                #[cfg(not(feature = "cpu-tblis"))]
+                #[cfg(not(feature = "cpu-tblis-provider"))]
                 {
                     if let Some(result) =
                         self.tblis_unavailable_for_required::<Tensor>("dot_general")?
@@ -527,7 +527,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         match self.dot_general_provider {
             DotGeneralProvider::Base => {}
             DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis")]
+                #[cfg(feature = "cpu-tblis-provider")]
                 {
                     let direct = match (lhs, rhs) {
                         (Tensor::F32(a), Tensor::F32(b)) => {
@@ -585,7 +585,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
                         return Ok(result);
                     }
                 }
-                #[cfg(not(feature = "cpu-tblis"))]
+                #[cfg(not(feature = "cpu-tblis-provider"))]
                 {
                     if let Some(result) =
                         self.tblis_unavailable_for_required::<Tensor>("dot_general")?
@@ -758,7 +758,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         match self.dot_general_provider {
             DotGeneralProvider::Base => {}
             DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis")]
+                #[cfg(feature = "cpu-tblis-provider")]
                 {
                     let direct = gemm::dot_general_tblis_read_into_accum_cached(
                         lhs.clone(),
@@ -772,7 +772,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
                     }
                     self.tblis_not_applicable::<()>("dot_general", None)?;
                 }
-                #[cfg(not(feature = "cpu-tblis"))]
+                #[cfg(not(feature = "cpu-tblis-provider"))]
                 {
                     self.tblis_unavailable_for_required::<()>("dot_general")?;
                 }

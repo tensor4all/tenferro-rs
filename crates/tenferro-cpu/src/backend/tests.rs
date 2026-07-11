@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 use num_complex::{Complex32, Complex64};
 
 use super::*;
@@ -71,7 +71,7 @@ fn explicit_dot_general_provider_records_selection() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_matches_column_major_matmul() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
@@ -93,7 +93,7 @@ fn tblis_dot_general_matches_column_major_matmul() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
@@ -132,7 +132,7 @@ fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_supports_c64() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
@@ -179,7 +179,7 @@ fn tblis_dot_general_supports_c64() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_c32_conj_accum() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
@@ -241,7 +241,7 @@ fn tblis_dot_general_c32_conj_accum() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
@@ -261,7 +261,7 @@ fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn tblis_dot_general_falls_back_for_zero_size_matmul() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
@@ -280,7 +280,7 @@ fn tblis_dot_general_falls_back_for_zero_size_matmul() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0; 6]);
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn assert_complex64_close(actual: &[Complex64], expected: &[Complex64], tol: f64) {
     assert_eq!(actual.len(), expected.len());
     for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
@@ -291,7 +291,7 @@ fn assert_complex64_close(actual: &[Complex64], expected: &[Complex64], tol: f64
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-linked")]
 fn assert_complex32_close(actual: &[Complex32], expected: &[Complex32], tol: f32) {
     assert_eq!(actual.len(), expected.len());
     for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {

@@ -28,7 +28,7 @@ mod blas_gemm;
 mod faer_gemm;
 #[cfg(feature = "cpu-faer")]
 mod strided_dot;
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 mod tblis_gemm;
 
 #[cfg(feature = "cpu-blas")]
@@ -37,7 +37,7 @@ use blas_gemm::BlasGemm;
 use blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 use tblis_gemm::TblisGemm;
 
 const OP: &str = "dot_general";
@@ -2616,7 +2616,7 @@ where
     )?))
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn dot_general_tblis_cached<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -2629,7 +2629,7 @@ where
     typed_tblis_gemm(buffers, lhs, rhs, config, false, false)
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn dot_general_tblis_with_conj_cached<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -2644,7 +2644,7 @@ where
     typed_tblis_gemm(buffers, lhs, rhs, config, lhs_conj, rhs_conj)
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn dot_general_tblis_read_cached(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
@@ -2703,7 +2703,7 @@ pub(crate) fn dot_general_tblis_read_cached(
     }
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 // INVARIANT: this fast path mirrors dot-general read inputs plus accumulation
 // and output-write metadata for one TBLIS dispatch.
 #[allow(clippy::too_many_arguments)]
@@ -2865,7 +2865,7 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
     Ok(false)
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn dot_general_tblis_accum_typed<L, R, T>(
     lhs: &L,
     rhs: &R,
@@ -2881,6 +2881,10 @@ where
     R: TypedTensorRead<T>,
     T: TblisGemm + Copy + Clone + Zero + One + PartialEq + std::ops::Mul<Output = T> + 'static,
 {
+    if !tblis_gemm::runtime_available()? {
+        return Ok(false);
+    }
+
     let Some(plan) = tblis_gemm::plan(lhs, rhs, config, out.shape(), out.strides())? else {
         return Ok(false);
     };
@@ -2912,7 +2916,7 @@ where
     Ok(true)
 }
 
-#[cfg(feature = "cpu-tblis")]
+#[cfg(feature = "cpu-tblis-provider")]
 fn typed_tblis_gemm<L, R, T>(
     buffers: &mut BufferPool,
     lhs: &L,
@@ -2926,6 +2930,10 @@ where
     R: TypedTensorRead<T>,
     T: TblisGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
+    if !tblis_gemm::runtime_available()? {
+        return Ok(None);
+    }
+
     let out_shape = tblis_gemm::output_shape(lhs, rhs, config)?;
     let out_strides: SmallVec<[isize; 8]> = col_major_strides(&out_shape)?.into_iter().collect();
     let Some(plan) = tblis_gemm::plan(lhs, rhs, config, &out_shape, &out_strides)? else {

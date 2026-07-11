@@ -1,9 +1,19 @@
 use std::path::{Path, PathBuf};
 
 const PROVIDER_FEATURES: &[(&str, &[&str])] = &[
+    ("cpu-tblis", &["cpu-tblis-runtime"]),
     (
-        "cpu-tblis",
+        "cpu-tblis-runtime",
         &[
+            "cpu-tblis-provider",
+            "dep:tblis-ffi",
+            "tblis-ffi/dynamic_loading",
+        ],
+    ),
+    (
+        "cpu-tblis-linked",
+        &[
+            "cpu-tblis-provider",
             "dep:tblis-ffi",
             "dep:tenferro-tblis-src",
             "tenferro-tblis-src/build_from_source",
@@ -49,6 +59,14 @@ const PASSTHROUGH_CRATES: &[&str] = &[
     "tenferro-linalg",
     "tenferro-fft",
     "tenferro-gpu",
+];
+
+const PROVIDER_PASSTHROUGH_FEATURES: &[&str] = &[
+    "cpu-tblis",
+    "cpu-tblis-linked",
+    "blas-openblas",
+    "blas-accelerate",
+    "blas-mkl",
 ];
 
 fn workspace_root() -> PathBuf {
@@ -127,7 +145,7 @@ fn cpu_provider_features_select_matching_source_and_einsum_provider() {
 fn public_cpu_user_crates_expose_provider_passthrough_features() {
     for crate_name in PASSTHROUGH_CRATES {
         let manifest = manifest(crate_name);
-        for (feature, _) in PROVIDER_FEATURES {
+        for feature in PROVIDER_PASSTHROUGH_FEATURES {
             let values = feature_values(&manifest, feature);
             assert!(
                 values.contains(&format!("tenferro-cpu/{feature}")),
@@ -158,5 +176,17 @@ fn cpu_crate_rejects_ambiguous_explicit_provider_features() {
     assert!(
         lib.contains("provider-inject cannot be combined with explicit BLAS provider features"),
         "provider-inject should not be combinable with source provider features"
+    );
+    assert!(
+        lib.contains(r#"all(feature = "cpu-tblis-runtime", feature = "cpu-tblis-linked")"#),
+        "cpu-tblis runtime and linked provider modes should be mutually exclusive"
+    );
+    assert!(
+        lib.contains("enable at most one TBLIS provider mode"),
+        "missing TBLIS provider conflict diagnostic"
+    );
+    assert!(
+        lib.contains("cpu-tblis-provider is an internal marker"),
+        "missing internal TBLIS marker diagnostic"
     );
 }

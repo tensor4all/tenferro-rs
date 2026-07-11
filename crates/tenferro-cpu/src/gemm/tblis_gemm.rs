@@ -331,7 +331,37 @@ where
 }
 
 fn ensure_runtime_available() -> Result<()> {
+    if !runtime_available()? {
+        return Err(Error::InvalidConfig {
+            op: OP,
+            message: "TBLIS runtime library is unavailable".into(),
+        });
+    }
     Ok(())
+}
+
+pub(crate) fn runtime_available() -> Result<bool> {
+    #[cfg(feature = "cpu-tblis-runtime")]
+    {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        Ok(*AVAILABLE.get_or_init(|| {
+            let _guard = PROBE_LOCK.lock().ok();
+            let previous_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let available = std::panic::catch_unwind(|| unsafe {
+                tblis_ffi::tblis::dyload_lib();
+            })
+            .is_ok();
+            std::panic::set_hook(previous_hook);
+            available
+        }))
+    }
+    #[cfg(feature = "cpu-tblis-linked")]
+    {
+        Ok(true)
+    }
 }
 
 pub(crate) fn output_element_count(shape: &[usize]) -> Result<usize> {
