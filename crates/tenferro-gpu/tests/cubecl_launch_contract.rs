@@ -164,6 +164,37 @@ fn contains_token_subsequence(tokens: &[RustToken], sequence: &[&str]) -> bool {
     false
 }
 
+fn forbidden_scatter_aliases(tokens: &[RustToken]) -> Vec<usize> {
+    let protected = [
+        "update_window_len",
+        "scatter_float_kernel",
+        "scatter_complex_kernel",
+        "indexing",
+    ];
+    let mut violations = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens[index].text != "use" {
+            index += 1;
+            continue;
+        }
+        let end = tokens[index..]
+            .iter()
+            .position(|token| token.text == ";")
+            .map_or(tokens.len(), |offset| index + offset);
+        let statement = &tokens[index..end];
+        if statement.iter().any(|token| token.text == "as")
+            && statement
+                .iter()
+                .any(|token| protected.contains(&token.text.as_str()))
+        {
+            violations.push(tokens[index].offset);
+        }
+        index = end.saturating_add(1);
+    }
+    violations
+}
+
 fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), String> {
     let invariants = [
         "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
@@ -172,8 +203,12 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
     let mut product_calls = Vec::new();
     let mut definitions = Vec::new();
     let mut launches = Vec::new();
+    let mut aliases = Vec::new();
     for (path, source) in sources {
         let tokens = rust_code_tokens(source);
+        for offset in forbidden_scatter_aliases(&tokens) {
+            aliases.push((path, offset));
+        }
         let local_definitions: Vec<_> = tokens
             .windows(2)
             .filter(|window| window[0].text == "fn" && window[1].text == "update_window_len")
@@ -210,6 +245,12 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
                 launches.push((path, offset));
             }
         }
+    }
+
+    if !aliases.is_empty() {
+        return Err(format!(
+            "scatter update-window proof symbols must not be imported or re-exported with aliases: {aliases:?}"
+        ));
     }
 
     if definitions.len() != 1 {
@@ -543,6 +584,24 @@ fn scatter_update_window_inventory_rejects_unproved_new_paths() {
         "let third = update_window_len(updates, dims);".to_owned(),
     ));
     assert!(scatter_update_window_contract(&extra_product).is_err());
+
+    let mut aliased_product = sources.clone();
+    aliased_product.push((
+        PathBuf::from("synthetic/aliased_product.rs"),
+        "use crate::kernels::indexing::update_window_len as checked_window;\n\
+         let third = checked_window(updates, dims);"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_product).is_err());
+
+    let mut aliased_scatter_module = sources.clone();
+    aliased_scatter_module.push((
+        PathBuf::from("synthetic/aliased_launch.rs"),
+        "use crate::kernels::indexing as scatter_kernels;\n\
+         scatter_kernels::scatter_float_kernel::launch_unchecked();"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_scatter_module).is_err());
 
     let mut extra_launch = sources;
     extra_launch.push((
