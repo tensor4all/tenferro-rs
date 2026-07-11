@@ -56,17 +56,25 @@ fn explicit_blas_backend_kind_constructor_records_selection() {
 }
 
 #[test]
-#[cfg(feature = "cpu-tblis")]
-fn explicit_tblis_backend_kind_constructor_records_selection() {
-    let backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+fn explicit_dot_general_provider_records_selection() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
 
-    assert_eq!(backend.kind(), CpuBackendKind::Tblis);
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+    assert_eq!(backend.dot_general_provider(), DotGeneralProvider::Base);
+
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    assert_eq!(
+        backend.dot_general_provider(),
+        DotGeneralProvider::TblisIfAvailable
+    );
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
 }
 
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_matches_column_major_matmul() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
@@ -87,7 +95,8 @@ fn tblis_dot_general_matches_column_major_matmul() {
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
@@ -125,7 +134,8 @@ fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_supports_c64() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![
@@ -171,7 +181,8 @@ fn tblis_dot_general_supports_c64() {
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_c32_conj_accum() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![
@@ -232,7 +243,8 @@ fn tblis_dot_general_c32_conj_accum() {
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
     let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let config = DotGeneralConfig {
@@ -251,7 +263,8 @@ fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
 #[test]
 #[cfg(feature = "cpu-tblis")]
 fn tblis_dot_general_falls_back_for_zero_size_matmul() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
     let lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).unwrap();
     let config = DotGeneralConfig {
@@ -327,6 +340,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         ctx: Arc::new(CpuContext::with_threads(1).unwrap()),
         buffers: BufferPool::new(),
         kind: CpuBackendKind::Blas,
+        dot_general_provider: DotGeneralProvider::Base,
     };
     let retained = backend.with_linalg_pool(|pool| {
         <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);

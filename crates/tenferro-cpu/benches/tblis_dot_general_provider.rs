@@ -8,7 +8,7 @@ use std::env;
 #[cfg(feature = "cpu-tblis")]
 use num_complex::Complex64;
 #[cfg(feature = "cpu-tblis")]
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::{CpuBackend, CpuBackendKind, DotGeneralProvider};
 #[cfg(feature = "cpu-tblis")]
 use tenferro_tensor::{
     DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorView, TypedTensorView,
@@ -112,7 +112,9 @@ fn complex_matrix(rows: usize, cols: usize, seed: usize) -> Tensor {
 fn tblis_runtime_available(config: &DotGeneralConfig) -> bool {
     let lhs = real_matrix(2, 2, 1);
     let rhs = real_matrix(2, 2, 2);
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Tblis).unwrap();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisRequired);
     match backend.dot_general(&lhs, &rhs, config) {
         Ok(_) => true,
         Err(err) => {
@@ -127,6 +129,7 @@ fn bench_owned_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
     kind: CpuBackendKind,
+    dot_general_provider: DotGeneralProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: &Tensor,
@@ -136,7 +139,9 @@ fn bench_owned_dot(
     group.bench_function(
         BenchmarkId::new(format!("{provider}_{case}"), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind).unwrap();
+            let mut backend = CpuBackend::with_kind(kind)
+                .unwrap()
+                .with_dot_general_provider(dot_general_provider);
             b.iter(|| {
                 let out = backend
                     .dot_general(black_box(lhs), black_box(rhs), black_box(config))
@@ -152,6 +157,7 @@ fn bench_owned_conj_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
     kind: CpuBackendKind,
+    dot_general_provider: DotGeneralProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: &Tensor,
@@ -161,7 +167,9 @@ fn bench_owned_conj_dot(
     group.bench_function(
         BenchmarkId::new(format!("{provider}_{case}"), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind).unwrap();
+            let mut backend = CpuBackend::with_kind(kind)
+                .unwrap()
+                .with_dot_general_provider(dot_general_provider);
             b.iter(|| {
                 let out = backend
                     .dot_general_with_conj(
@@ -183,6 +191,7 @@ fn bench_read_view_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
     provider: &str,
     kind: CpuBackendKind,
+    dot_general_provider: DotGeneralProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: StridedData<'_>,
@@ -192,7 +201,9 @@ fn bench_read_view_dot(
     group.bench_function(
         BenchmarkId::new(format!("{provider}_{case}"), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind).unwrap();
+            let mut backend = CpuBackend::with_kind(kind)
+                .unwrap()
+                .with_dot_general_provider(dot_general_provider);
             b.iter(|| {
                 let lhs_view =
                     TypedTensorView::from_slice(lhs.shape, lhs.strides, 0, black_box(lhs.data))
@@ -235,6 +246,7 @@ fn bench_owned_all_providers(
         group,
         "faer",
         CpuBackendKind::Faer,
+        DotGeneralProvider::Base,
         case,
         params.clone(),
         lhs,
@@ -246,6 +258,7 @@ fn bench_owned_all_providers(
         group,
         "blas",
         CpuBackendKind::Blas,
+        DotGeneralProvider::Base,
         case,
         params.clone(),
         lhs,
@@ -255,7 +268,8 @@ fn bench_owned_all_providers(
     bench_owned_dot(
         group,
         "tblis",
-        CpuBackendKind::Tblis,
+        CpuBackendKind::default_compiled(),
+        DotGeneralProvider::TblisIfAvailable,
         case,
         params,
         lhs,
@@ -278,6 +292,7 @@ fn bench_read_view_all_providers(
         group,
         "faer",
         CpuBackendKind::Faer,
+        DotGeneralProvider::Base,
         case,
         params.clone(),
         lhs,
@@ -289,6 +304,7 @@ fn bench_read_view_all_providers(
         group,
         "blas",
         CpuBackendKind::Blas,
+        DotGeneralProvider::Base,
         case,
         params.clone(),
         lhs,
@@ -298,7 +314,8 @@ fn bench_read_view_all_providers(
     bench_read_view_dot(
         group,
         "tblis",
-        CpuBackendKind::Tblis,
+        CpuBackendKind::default_compiled(),
+        DotGeneralProvider::TblisIfAvailable,
         case,
         params,
         lhs,
@@ -338,6 +355,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
             &mut group,
             "faer",
             CpuBackendKind::Faer,
+            DotGeneralProvider::Base,
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
@@ -349,6 +367,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
             &mut group,
             "blas",
             CpuBackendKind::Blas,
+            DotGeneralProvider::Base,
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
@@ -358,7 +377,8 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         bench_owned_conj_dot(
             &mut group,
             "tblis",
-            CpuBackendKind::Tblis,
+            CpuBackendKind::default_compiled(),
+            DotGeneralProvider::TblisIfAvailable,
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
