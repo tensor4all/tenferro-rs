@@ -11,7 +11,8 @@ pub(crate) fn mean_square(
     n: usize,
 ) -> Result<TracedTensor> {
     assert!(n > 0, "mean_square count must be positive");
-    let diff = pred.add(&target.neg())?;
+    let neg_target = target.neg()?;
+    let diff = pred.add(&neg_target)?;
     let sq = diff.mul(&diff)?;
     let sum = sq.reduce_sum(&[0, 1])?;
     sum.scale_real(1.0 / n as f64)
