@@ -40,9 +40,26 @@ pub(crate) fn bool_from_real_for_op(op: &'static str, value: f64) -> Result<bool
 }
 
 pub fn dynamic_truncate_size(size_tensor: &Tensor, axis_extent: usize) -> Result<usize> {
+    if !size_tensor.shape().is_empty() {
+        return Err(Error::Internal(format!(
+            "DynamicTruncate size must be an f32, f64, or i64 scalar, got shape {:?}",
+            size_tensor.shape()
+        )));
+    }
+    if let Tensor::I64(inner) = size_tensor {
+        let value = scalar_host_value(inner.host_data()?, DType::I64)?;
+        return Ok(truncate_i64_size(value, axis_extent));
+    }
     let value = scalar_size_value(size_tensor)?;
     let rounded = finite_real_scalar("DynamicTruncate", value)?.round();
     Ok(rounded.max(0.0).min(axis_extent as f64) as usize)
+}
+
+fn truncate_i64_size(value: i64, axis_extent: usize) -> usize {
+    if value <= 0 {
+        return 0;
+    }
+    usize::try_from(value).map_or(axis_extent, |value| value.min(axis_extent))
 }
 
 fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
@@ -56,7 +73,6 @@ fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
     match size_tensor {
         Tensor::F64(inner) => scalar_host_value(inner.host_data()?, DType::F64),
         Tensor::F32(inner) => Ok(scalar_host_value(inner.host_data()?, DType::F32)? as f64),
-        Tensor::I64(inner) => Ok(scalar_host_value(inner.host_data()?, DType::I64)? as f64),
         _ => Err(Error::Internal(
             "DynamicTruncate size must be an f32, f64, or i64 scalar".into(),
         )),
@@ -75,7 +91,7 @@ fn scalar_host_value<T: Copy>(data: &[T], dtype: DType) -> Result<T> {
 mod tests {
     use super::{
         bool_from_real_for_op, dynamic_truncate_size, round_real_to_i32_for_op, round_real_to_i64,
-        round_real_to_i64_for_op, scalar_host_value,
+        round_real_to_i64_for_op, scalar_host_value, truncate_i64_size,
     };
     use tenferro_tensor::{DType, Tensor, TypedTensor};
 
@@ -123,6 +139,22 @@ mod tests {
         assert_eq!(dynamic_truncate_size(&f64_scalar(2.6), 4).unwrap(), 3);
         assert_eq!(dynamic_truncate_size(&f32_scalar(-2.0), 4).unwrap(), 0);
         assert_eq!(dynamic_truncate_size(&i64_scalar(9), 4).unwrap(), 4);
+    }
+
+    #[test]
+    fn dynamic_truncate_i64_size_clamps_without_lossy_float_conversion() {
+        assert_eq!(truncate_i64_size(-1, 4), 0);
+        assert_eq!(truncate_i64_size(9, 4), 4);
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            const ABOVE_F64_INTEGER_PRECISION: i64 = (1_i64 << 53) + 1;
+            let axis_extent = usize::try_from(ABOVE_F64_INTEGER_PRECISION + 1).unwrap();
+            assert_eq!(
+                truncate_i64_size(ABOVE_F64_INTEGER_PRECISION, axis_extent),
+                usize::try_from(ABOVE_F64_INTEGER_PRECISION).unwrap()
+            );
+        }
     }
 
     #[test]
