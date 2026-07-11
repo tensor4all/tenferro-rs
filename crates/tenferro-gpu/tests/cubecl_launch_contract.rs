@@ -38,6 +38,42 @@ fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
 }
 
 #[test]
+fn explicit_cast_uses_shared_device_kernel_families_and_keeps_checked_convert() {
+    let kernels = std::fs::read_to_string("src/kernels/structural.rs").unwrap();
+    for family in [
+        "pub fn convert_numeric<",
+        "pub fn convert_numeric_to_bool<",
+        "pub fn convert_bool_to_numeric<",
+        "pub fn convert_numeric_to_complex_raw<",
+        "pub fn convert_complex_to_numeric<",
+        "pub fn validate_real_cast<",
+    ] {
+        assert!(
+            kernels.contains(family),
+            "missing cast kernel family: {family}"
+        );
+    }
+
+    let backend = std::fs::read_to_string("../tenferro-tensor/src/backend.rs").unwrap();
+    let convert = source_section(
+        &backend,
+        "fn convert(&mut self, input: &Tensor, to: crate::DType)",
+        "fn cast(&mut self, input: &Tensor, to: crate::DType)",
+    );
+    assert!(convert.contains("validate_convert_dtype"));
+    assert!(convert.contains("self.cast(input, to)"));
+
+    let cuda = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let validation = source_section(
+        &cuda,
+        "fn validate_cuda_real_cast",
+        "fn checked_integer_domain_error",
+    );
+    assert!(validation.find("if n == 0").unwrap() < validation.find("alloc_output::<F>").unwrap());
+    assert!(!validation.contains("download_tensor(backend.runtime(), input"));
+}
+
+#[test]
 fn bool_launch_domains_are_checked_before_output_allocation() {
     let dispatch = std::fs::read_to_string("src/cubecl/dispatch.rs").unwrap();
     for (start, end) in [

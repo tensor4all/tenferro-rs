@@ -124,12 +124,13 @@ pub(crate) mod op_descriptor;
 mod runtime;
 
 use dispatch::{
-    alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
-    ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_binary,
-    launch_binary_bool_tensor, launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool,
-    launch_nullary_bool_into, launch_nullary_into, launch_select_bool, launch_ternary,
-    launch_unary, launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
+    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
+    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
+    launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
+    launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
+    launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
@@ -860,6 +861,184 @@ impl CudaBackend {
         )
     }
 
+    fn convert_numeric<In, Out>(&self, input: &TypedTensor<In>) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        launch_unary(
+            self.runtime(),
+            input,
+            input.shape(),
+            "cast",
+            |client, count, dim, out, input| unsafe {
+                structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                    client, count, dim, out, input,
+                );
+            },
+        )
+    }
+
+    fn convert_numeric_to_bool<In>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = typed_tensor_array_arg(input, "cast")?;
+        let output = alloc_bool_output(self.runtime(), input.shape())?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = bool_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_numeric_to_bool::launch_unchecked::<In, CubeclCudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(output.n_elements())?,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_bool_to_numeric<Out>(
+        &self,
+        input: &TypedTensor<bool>,
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = bool_tensor_array_arg(input, "cast")?;
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = typed_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_bool_to_numeric::launch_unchecked::<Out, CubeclCudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(output.n_elements())?,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_numeric_to_complex<In, OutComplex, OutFloat>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<OutComplex>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+        OutComplex: CubeElement + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
+    {
+        self.convert_float_to_complex_raw::<In, OutComplex, OutFloat>(
+            input,
+            |client, out, input, n| {
+                unsafe {
+                    structural::convert_numeric_to_complex_raw::launch_unchecked::<
+                        OutFloat,
+                        In,
+                        CubeclCudaRuntime,
+                    >(client, cube_count_for_len(n)?, cube_dim_1d(), out, input);
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn convert_bool_to_complex<OutComplex, OutFloat>(
+        &self,
+        input: &TypedTensor<bool>,
+    ) -> crate::Result<TypedTensor<OutComplex>>
+    where
+        OutComplex: CubeElement + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let n = input.n_elements();
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
+        if n == 0 {
+            return Ok(output);
+        }
+        let part_len = n.checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex output part length overflow")
+        })?;
+        let out = typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, part_len, "cast")?;
+        let input = bool_tensor_array_arg(input, "cast")?;
+        unsafe {
+            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat, CubeclCudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(n)?,
+                cube_dim_1d(),
+                out,
+                input,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_complex_to_numeric<In, Out>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + CubeComplex + Clone,
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        launch_unary(
+            self.runtime(),
+            input,
+            input.shape(),
+            "cast",
+            |client, count, dim, out, input| unsafe {
+                structural::convert_complex_to_numeric::launch_unchecked::<
+                    Out,
+                    In,
+                    CubeclCudaRuntime,
+                >(client, count, dim, out, input);
+            },
+        )
+    }
+
+    fn convert_complex_to_bool<In, F>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        In: CubeElement + CubeComplex<FloatElem = F> + Clone,
+        F: CubeElement + CubeFloat,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let part_len = input.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex input part length overflow")
+        })?;
+        let input_arg = typed_tensor_array_arg_as::<In, F>(input, part_len, "cast")?;
+        let output = alloc_bool_output(self.runtime(), input.shape())?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let output_arg = bool_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_complex_raw_to_bool::launch_unchecked::<F, CubeclCudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(output.n_elements())?,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
     fn convert_f32_to_c32(
         &self,
         input: &TypedTensor<f32>,
@@ -1053,27 +1232,36 @@ impl CudaBackend {
         )
     }
 
-    fn convert_complex_to_complex<In, Out>(
+    fn convert_complex_to_complex<In, Out, InFloat, OutFloat>(
         &self,
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<Out>>
     where
         In: CubeElement + CubeComplex + Clone,
         Out: CubeElement + CubeComplex + Clone,
+        InFloat: CubeElement + CubeFloat + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
     {
-        launch_unary(
-            self.runtime(),
-            input,
-            input.shape(),
-            "convert",
-            |client, count, dim, out, input_arg| unsafe {
-                structural::convert_complex_to_complex::launch_unchecked::<
-                    Out,
-                    In,
-                    CubeclCudaRuntime,
-                >(client, count, dim, out, input_arg);
-            },
-        )
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let parts = input.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex component length overflow")
+        })?;
+        if parts == 0 {
+            return Ok(output);
+        }
+        let input_arg = typed_tensor_array_arg_as::<In, InFloat>(input, parts, "cast")?;
+        let output_arg = typed_tensor_array_arg_as::<Out, OutFloat>(&output, parts, "cast")?;
+        unsafe {
+            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat, CubeclCudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(parts)?,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
     }
 
     fn extract_diagonal_typed<T>(
@@ -2173,6 +2361,154 @@ impl BackendRuntimeCache for CudaBackend {
 enum CheckedIntegerDomain {
     DivisionByZero,
     NegativeExponent,
+}
+
+#[derive(Clone, Copy)]
+enum CastIntegerTarget {
+    I32,
+    I64,
+}
+
+trait CudaCastFloat:
+    CubeElement
+    + CubeFloat
+    + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + Clone
+    + Send
+    + Sync
+    + Copy
+    + fmt::Display
+    + 'static
+{
+    fn bounds(target: CastIntegerTarget) -> (Self, Self, bool);
+    fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+    fn invalid_error(self, target: CastIntegerTarget) -> crate::Error;
+    fn is_nonfinite(self) -> bool;
+}
+
+macro_rules! impl_cuda_cast_float {
+    ($ty:ty, $variant:ident) => {
+        impl CudaCastFloat for $ty {
+            fn bounds(target: CastIntegerTarget) -> (Self, Self, bool) {
+                match target {
+                    CastIntegerTarget::I32 => (i32::MIN as Self, i32::MAX as Self, true),
+                    CastIntegerTarget::I64 => (
+                        -9_223_372_036_854_775_808.0 as Self,
+                        9_223_372_036_854_775_808.0 as Self,
+                        false,
+                    ),
+                }
+            }
+            fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+                match download_tensor(backend.runtime(), &Tensor::$variant(flag.clone()))? {
+                    Tensor::$variant(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                        crate::Error::backend_failure("cast", "validation flag was malformed")
+                    }),
+                    _ => Err(crate::Error::backend_failure(
+                        "cast",
+                        "validation flag had unexpected dtype",
+                    )),
+                }
+            }
+            fn invalid_error(self, target: CastIntegerTarget) -> crate::Error {
+                let name = match target {
+                    CastIntegerTarget::I32 => "i32",
+                    CastIntegerTarget::I64 => "i64",
+                };
+                let message = if !self.is_finite() {
+                    format!("real value must be finite when casting to {name}, got {self}")
+                } else {
+                    format!("real value {self} is out of {name} range")
+                };
+                crate::Error::InvalidConfig {
+                    op: "cast",
+                    message,
+                }
+            }
+            fn is_nonfinite(self) -> bool {
+                !self.is_finite()
+            }
+        }
+    };
+}
+impl_cuda_cast_float!(f32, F32);
+impl_cuda_cast_float!(f64, F64);
+
+fn validate_cuda_real_cast<S, F>(
+    backend: &CudaBackend,
+    input: &TypedTensor<S>,
+    stride: usize,
+    target: CastIntegerTarget,
+) -> crate::Result<()>
+where
+    S: CubeElement + Clone,
+    F: CudaCastFloat,
+{
+    ensure_resident_on_runtime(backend.runtime(), input, "cast")?;
+    let n = input.n_elements();
+    let _validated_input = typed_tensor_array_arg(input, "cast")?;
+    if n == 0 {
+        return Ok(());
+    }
+    u32::try_from(n).map_err(|_| {
+        crate::Error::backend_failure("cast", "validation domain exceeds u32::MAX elements")
+    })?;
+    let count = cube_count_for_len(n)?;
+    let input_parts = n
+        .checked_mul(stride)
+        .ok_or_else(|| crate::Error::backend_failure("cast", "validation input length overflow"))?;
+    let input_arg = typed_tensor_array_arg_as::<S, F>(input, input_parts, "cast")?;
+    let flag = alloc_output::<F>(backend.runtime(), &[2])?;
+    let flag_u32_len = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|x| x.checked_div(std::mem::size_of::<u32>()))
+        .ok_or_else(|| crate::Error::backend_failure("cast", "validation flag size overflow"))?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let flag_values = typed_tensor_array_arg(&flag, "cast")?;
+    unsafe {
+        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let (min, max, inclusive) = F::bounds(target);
+    unsafe {
+        structural::validate_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            count,
+            cube_dim_1d(),
+            input_arg,
+            flag_atomic,
+            min,
+            max,
+            stride,
+            inclusive,
+        );
+    }
+    let input_arg = typed_tensor_array_arg_as::<S, F>(input, input_parts, "cast")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let flag_values = typed_tensor_array_arg(&flag, "cast")?;
+    unsafe {
+        structural::extract_invalid_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            input_arg,
+            flag_atomic,
+            flag_values,
+            stride,
+        );
+    }
+    let value = F::read_flag(backend, &flag)?;
+    let (min, max, inclusive) = F::bounds(target);
+    if value.is_nonfinite() || value < min || if inclusive { value > max } else { value >= max } {
+        return Err(value.invalid_error(target));
+    }
+    Ok(())
 }
 
 fn checked_integer_domain_error(
@@ -3535,46 +3871,129 @@ impl TensorStructural for CudaBackend {
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
-            (Tensor::F32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::F32(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I32)?;
+                self.convert_numeric::<f32, i32>(t).map(Tensor::I32)
             }
-            (Tensor::F32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::F32(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I64)?;
+                self.convert_numeric::<f32, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::F32(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
             (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
             (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
             (Tensor::F64(t), crate::DType::F32) => {
                 self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
             }
             (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
-            (Tensor::F64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::F64(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I32)?;
+                self.convert_numeric::<f64, i32>(t).map(Tensor::I32)
             }
-            (Tensor::F64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::F64(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I64)?;
+                self.convert_numeric::<f64, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::F64(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
             (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
             (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
             (Tensor::I32(t), crate::DType::I32) => Ok(Tensor::I32(t.clone())),
-            (Tensor::I32(_), _) => Err(unsupported_dtype("cast", input.dtype())),
-            (Tensor::I64(_), crate::DType::I64) => Ok(input.clone()),
-            (Tensor::I64(_), _) => Err(unsupported_dtype("cast", input.dtype())),
+            (Tensor::I32(t), crate::DType::F32) => {
+                self.convert_numeric::<i32, f32>(t).map(Tensor::F32)
+            }
+            (Tensor::I32(t), crate::DType::F64) => {
+                self.convert_numeric::<i32, f64>(t).map(Tensor::F64)
+            }
+            (Tensor::I32(t), crate::DType::I64) => {
+                self.convert_numeric::<i32, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::I32(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
+            (Tensor::I32(t), crate::DType::C32) => self
+                .convert_numeric_to_complex::<i32, Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::I32(t), crate::DType::C64) => self
+                .convert_numeric_to_complex::<i32, Complex64, f64>(t)
+                .map(Tensor::C64),
+            (Tensor::I64(t), crate::DType::F32) => {
+                self.convert_numeric::<i64, f32>(t).map(Tensor::F32)
+            }
+            (Tensor::I64(t), crate::DType::F64) => {
+                self.convert_numeric::<i64, f64>(t).map(Tensor::F64)
+            }
+            (Tensor::I64(t), crate::DType::I32) => {
+                self.convert_numeric::<i64, i32>(t).map(Tensor::I32)
+            }
+            (Tensor::I64(t), crate::DType::I64) => Ok(Tensor::I64(t.clone())),
+            (Tensor::I64(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
+            (Tensor::I64(t), crate::DType::C32) => self
+                .convert_numeric_to_complex::<i64, Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::I64(t), crate::DType::C64) => self
+                .convert_numeric_to_complex::<i64, Complex64, f64>(t)
+                .map(Tensor::C64),
             (Tensor::Bool(t), crate::DType::Bool) => Ok(Tensor::Bool(t.clone())),
-            (Tensor::Bool(_), _) => Err(unsupported_dtype("cast", input.dtype())),
+            (Tensor::Bool(t), crate::DType::F32) => {
+                self.convert_bool_to_numeric::<f32>(t).map(Tensor::F32)
+            }
+            (Tensor::Bool(t), crate::DType::F64) => {
+                self.convert_bool_to_numeric::<f64>(t).map(Tensor::F64)
+            }
+            (Tensor::Bool(t), crate::DType::I32) => {
+                self.convert_bool_to_numeric::<i32>(t).map(Tensor::I32)
+            }
+            (Tensor::Bool(t), crate::DType::I64) => {
+                self.convert_bool_to_numeric::<i64>(t).map(Tensor::I64)
+            }
+            (Tensor::Bool(t), crate::DType::C32) => self
+                .convert_bool_to_complex::<Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::Bool(t), crate::DType::C64) => self
+                .convert_bool_to_complex::<Complex64, f64>(t)
+                .map(Tensor::C64),
             (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
             (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
-            (Tensor::C32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::C32(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I32)?;
+                self.convert_complex_to_numeric::<Complex32, i32>(t)
+                    .map(Tensor::I32)
             }
-            (Tensor::C32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::C32(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I64)?;
+                self.convert_complex_to_numeric::<Complex32, i64>(t)
+                    .map(Tensor::I64)
+            }
+            (Tensor::C32(t), crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex32, f32>(t)
+                .map(Tensor::Bool),
             (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
             (Tensor::C32(t), crate::DType::C64) => self
-                .convert_complex_to_complex::<Complex32, Complex64>(t)
+                .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(t)
                 .map(Tensor::C64),
             (Tensor::C64(t), crate::DType::F32) => self.convert_c64_to_f32(t).map(Tensor::F32),
             (Tensor::C64(t), crate::DType::F64) => self.convert_c64_to_f64(t).map(Tensor::F64),
-            (Tensor::C64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::C64(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I32)?;
+                self.convert_complex_to_numeric::<Complex64, i32>(t)
+                    .map(Tensor::I32)
             }
-            (Tensor::C64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::C64(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I64)?;
+                self.convert_complex_to_numeric::<Complex64, i64>(t)
+                    .map(Tensor::I64)
+            }
+            (Tensor::C64(t), crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex64, f64>(t)
+                .map(Tensor::Bool),
             (Tensor::C64(t), crate::DType::C32) => self
-                .convert_complex_to_complex::<Complex64, Complex32>(t)
+                .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(t)
                 .map(Tensor::C32),
             (Tensor::C64(t), crate::DType::C64) => Ok(Tensor::C64(t.clone())),
         }
