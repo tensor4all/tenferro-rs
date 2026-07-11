@@ -443,9 +443,15 @@ fn float_div_rem_preserve_ieee_special_values() {
     assert!(f64_rem[4].is_nan());
     assert_eq!(f64_rem[5].to_bits(), (-0.0_f64).to_bits());
 
-    for zero_rhs in [
-        Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+    for (zero_rhs, expected_dtype) in [
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+            DType::I32,
+        ),
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+            DType::I64,
+        ),
     ] {
         let lhs = match zero_rhs.dtype() {
             DType::I32 => Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
@@ -454,11 +460,11 @@ fn float_div_rem_preserve_ieee_special_values() {
         };
         assert!(matches!(
             div(&lhs, &zero_rhs),
-            Err(Error::DivisionByZero { .. })
+            Err(Error::DivisionByZero { op: "div", dtype }) if dtype == expected_dtype
         ));
         assert!(matches!(
             rem(&lhs, &zero_rhs),
-            Err(Error::DivisionByZero { .. })
+            Err(Error::DivisionByZero { op: "rem", dtype }) if dtype == expected_dtype
         ));
     }
 }
