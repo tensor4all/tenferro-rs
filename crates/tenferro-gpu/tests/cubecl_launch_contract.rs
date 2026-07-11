@@ -916,9 +916,22 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
         "pub fn scalar_div_int_checked",
     );
     assert!(kernel.contains("let complex_idx = ABSOLUTE_POS * 2"));
-    assert!(kernel.contains("let norm_sqr = re * re + im * im"));
-    assert!(kernel.contains("scalar * re / norm_sqr"));
-    assert!(kernel.contains("-(scalar * im / norm_sqr)"));
+    for generic_complex_term in [
+        "zero + im",
+        "im + zero",
+        "scalar * re - zero * im",
+        "re * scalar - im * zero",
+        "let norm_sqr = scalar * scalar + zero * zero",
+        "(re * scalar + im * zero) / norm_sqr",
+        "let norm_sqr = re * re + im * im",
+        "(scalar * re + zero * im) / norm_sqr",
+        "(zero * re - scalar * im) / norm_sqr",
+    ] {
+        assert!(
+            kernel.contains(generic_complex_term),
+            "mixed scalar kernel must preserve generic complex operation order: {generic_complex_term}"
+        );
+    }
 }
 
 #[test]

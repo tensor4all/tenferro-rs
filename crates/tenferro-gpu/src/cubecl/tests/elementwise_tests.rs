@@ -74,7 +74,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 vec![
                     Complex32::new(1.0, 2.0),
                     Complex32::new(0.0, -2.0),
-                    Complex32::new(0.0, 0.0),
+                    Complex32::new(0.0, -0.0),
                     Complex32::new(-3.0, 4.0),
                 ],
             ),
@@ -87,7 +87,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 vec![
                     Complex64::new(1.0, 2.0),
                     Complex64::new(0.0, -2.0),
-                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, -0.0),
                     Complex64::new(-3.0, 4.0),
                 ],
             ),
@@ -194,6 +194,92 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         let expected = cpu.div(&scalar, &complex).unwrap();
         let actual = gpu
             .div(&upload(&gpu, &scalar), &upload(&gpu, &complex))
+            .map(|value| download(&gpu, &value))
+            .unwrap();
+        assert_complex_classes_and_values_match(&actual, &expected);
+    }
+
+    for (scalar, complex) in [
+        (
+            tensor_f32(vec![], vec![2.0]),
+            tensor_c32(
+                vec![4],
+                vec![
+                    Complex32::new(0.0, -0.0),
+                    Complex32::new(f32::INFINITY, 1.0),
+                    Complex32::new(f32::NAN, 0.0),
+                    Complex32::new(0.0, f32::INFINITY),
+                ],
+            ),
+        ),
+        (
+            tensor_f64(vec![], vec![2.0]),
+            tensor_c64(
+                vec![4],
+                vec![
+                    Complex64::new(0.0, -0.0),
+                    Complex64::new(f64::INFINITY, 1.0),
+                    Complex64::new(f64::NAN, 0.0),
+                    Complex64::new(0.0, f64::INFINITY),
+                ],
+            ),
+        ),
+    ] {
+        let gpu_scalar = upload(&gpu, &scalar);
+        let gpu_complex = upload(&gpu, &complex);
+        for (expected, actual) in [
+            (
+                cpu.add(&scalar, &complex),
+                gpu.add(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.add(&complex, &scalar),
+                gpu.add(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.sub(&scalar, &complex),
+                gpu.sub(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.sub(&complex, &scalar),
+                gpu.sub(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.mul(&scalar, &complex),
+                gpu.mul(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.mul(&complex, &scalar),
+                gpu.mul(&gpu_complex, &gpu_scalar),
+            ),
+            (
+                cpu.div(&scalar, &complex),
+                gpu.div(&gpu_scalar, &gpu_complex),
+            ),
+            (
+                cpu.div(&complex, &scalar),
+                gpu.div(&gpu_complex, &gpu_scalar),
+            ),
+        ] {
+            let expected = expected.unwrap();
+            let actual = download(&gpu, &actual.unwrap());
+            assert_complex_classes_and_values_match(&actual, &expected);
+        }
+    }
+
+    for (complex, scalar) in [
+        (
+            tensor_c32(vec![1], vec![Complex32::new(1.0, 1.0)]),
+            tensor_f32(vec![], vec![1.0e38]),
+        ),
+        (
+            tensor_c64(vec![1], vec![Complex64::new(1.0, 1.0)]),
+            tensor_f64(vec![], vec![1.0e308]),
+        ),
+    ] {
+        let expected = cpu.div(&complex, &scalar).unwrap();
+        let actual = gpu
+            .div(&upload(&gpu, &complex), &upload(&gpu, &scalar))
             .map(|value| download(&gpu, &value))
             .unwrap();
         assert_complex_classes_and_values_match(&actual, &expected);

@@ -168,20 +168,35 @@ pub fn scalar_real_complex_binary<F: Float>(
         let im = complex[complex_idx + 1];
         let zero = F::new(0.0f32);
         let (out_re, out_im) = if mode == MIXED_ADD {
-            (re + scalar, im)
+            if real_lhs {
+                (scalar + re, zero + im)
+            } else {
+                (re + scalar, im + zero)
+            }
         } else if mode == MIXED_SUB {
             if real_lhs {
                 (scalar - re, zero - im)
             } else {
-                (re - scalar, im)
+                (re - scalar, im - zero)
             }
         } else if mode == MIXED_MUL {
-            (re * scalar, im * scalar)
+            if real_lhs {
+                (scalar * re - zero * im, scalar * im + zero * re)
+            } else {
+                (re * scalar - im * zero, re * zero + im * scalar)
+            }
         } else if !real_lhs {
-            (re / scalar, im / scalar)
+            let norm_sqr = scalar * scalar + zero * zero;
+            (
+                (re * scalar + im * zero) / norm_sqr,
+                (im * scalar - re * zero) / norm_sqr,
+            )
         } else {
             let norm_sqr = re * re + im * im;
-            (scalar * re / norm_sqr, -(scalar * im / norm_sqr))
+            (
+                (scalar * re + zero * im) / norm_sqr,
+                (zero * re - scalar * im) / norm_sqr,
+            )
         };
         out[complex_idx] = out_re;
         out[complex_idx + 1] = out_im;
