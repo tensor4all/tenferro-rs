@@ -122,7 +122,8 @@ impl GraphCompiler {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.input_count(), 1);
     /// ```
     pub fn compile(&mut self, output: &TracedTensor) -> Result<GraphProgram> {
@@ -137,7 +138,7 @@ impl GraphCompiler {
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let y = x.neg();
+    /// let y = x.neg().unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
     /// assert_eq!(program.output_count(), 2);
@@ -169,8 +170,9 @@ impl GraphCompiler {
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
     /// let program = compiler
-    ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[3])])
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[3]);
     /// ```

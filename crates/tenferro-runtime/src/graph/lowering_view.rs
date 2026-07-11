@@ -19,7 +19,8 @@ use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&x.neg()).unwrap();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
 /// let view = program.lowering_view();
 /// assert_eq!(view.output_slots().len(), 1);
 /// ```
@@ -53,7 +54,8 @@ impl<'a> GraphProgramLoweringView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert!(program.lowering_view().slot_count() >= 1);
     /// ```
     pub fn slot_count(&self) -> usize {
@@ -69,7 +71,8 @@ impl<'a> GraphProgramLoweringView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.lowering_view().input_slots().len(), 1);
     /// ```
     pub fn input_slots(&self) -> &'a [usize] {
@@ -85,7 +88,8 @@ impl<'a> GraphProgramLoweringView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.lowering_view().output_slots().len(), 1);
     /// ```
     pub fn output_slots(&self) -> &'a [usize] {
@@ -101,7 +105,8 @@ impl<'a> GraphProgramLoweringView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert!(program.lowering_view().instructions().count() >= 1);
     /// ```
     pub fn instructions(&self) -> impl ExactSizeIterator<Item = GraphInstructionView<'a>> + '_ {
@@ -118,7 +123,8 @@ impl<'a> GraphProgramLoweringView<'a> {
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&x.neg()).unwrap();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
 /// let inst = program.lowering_view().instructions().next().unwrap();
 /// assert_eq!(inst.output_slots().len(), 1);
 /// ```
@@ -152,7 +158,8 @@ impl<'a> GraphInstructionView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert!(matches!(inst.op(), GraphOpView::Negate));
     /// ```
@@ -199,7 +206,8 @@ impl<'a> GraphInstructionView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert_eq!(inst.op_name(), "Negate");
     /// ```
@@ -234,7 +242,8 @@ impl<'a> GraphInstructionView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert_eq!(inst.output_slots().len(), 1);
     /// ```
@@ -251,7 +260,8 @@ impl<'a> GraphInstructionView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert_eq!(inst.dtype(), DType::F64);
     /// ```
@@ -270,7 +280,8 @@ impl<'a> GraphInstructionView<'a> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert_eq!(inst.static_output_shape(0, &[&[1]]).unwrap(), vec![1]);
     /// ```
@@ -331,7 +342,8 @@ impl<'a> GraphInstructionView<'a> {
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&x.neg()).unwrap();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
 /// let op = program.lowering_view().instructions().next().unwrap().op();
 /// assert!(matches!(op, GraphOpView::Negate));
 /// ```
@@ -443,7 +455,8 @@ impl GraphOpView<'_> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let op = program.lowering_view().instructions().next().unwrap().op();
     /// assert_eq!(op.name(), "Negate");
     /// ```
