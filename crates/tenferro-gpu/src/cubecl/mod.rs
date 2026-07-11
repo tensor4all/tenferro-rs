@@ -1899,6 +1899,9 @@ where
     let lhs_scalar = lhs.shape().is_empty();
     let output_shape = if lhs_scalar { rhs.shape() } else { lhs.shape() };
     let output = alloc_output::<I>(backend.runtime(), output_shape)?;
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
     if output.n_elements() == 0 {
         return Ok(output);
     }
@@ -1906,9 +1909,9 @@ where
         backend.runtime().client(),
         cube_count_for_len(output.n_elements())?,
         cube_dim_1d(),
-        typed_tensor_array_arg(&output, op)?,
-        typed_tensor_array_arg(lhs, op)?,
-        typed_tensor_array_arg(rhs, op)?,
+        output_arg,
+        lhs_arg,
+        rhs_arg,
         lhs_scalar,
     );
     Ok(output)
@@ -1935,7 +1938,27 @@ fn launch_checked_integer_scalar_binary<I>(
 where
     I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
 {
+    if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        });
+    }
+    ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
+
+    let lhs_scalar = lhs.shape().is_empty();
+    let output_shape = if lhs_scalar { rhs.shape() } else { lhs.shape() };
+    let output = alloc_output::<I>(backend.runtime(), output_shape)?;
     let flag = alloc_output::<i32>(backend.runtime(), &[1])?;
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    let flag_arg = typed_tensor_array_arg(&flag, op)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
     launch_nullary_into(
         backend.runtime(),
         &flag,
@@ -1949,19 +1972,17 @@ where
         },
     )?;
 
-    let flag_arg = typed_tensor_array_arg(&flag, op)?;
-    let output = launch_scalar_binary(
-        backend,
-        lhs,
-        rhs,
-        op,
-        |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| {
-            launch(
-                client, count, dim, out, lhs_arg, rhs_arg, flag_arg, lhs_scalar,
-            );
-        },
-    )?;
-    if output.n_elements() != 0 && read_checked_integer_flag(backend, &flag, op)? != 0 {
+    launch(
+        backend.runtime().client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+        flag_arg,
+        lhs_scalar,
+    );
+    if read_checked_integer_flag(backend, &flag, op)? != 0 {
         return Err(checked_integer_domain_error(domain, op, dtype));
     }
     Ok(output)

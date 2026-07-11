@@ -790,10 +790,40 @@ fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
         helper,
         &[
             "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
             "let lhs_scalar = lhs.shape().is_empty()",
             "if lhs_scalar",
             "rhs.shape()",
             "lhs.shape()",
+            "let output = alloc_output::<I>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "if output.n_elements() == 0",
+        ],
+    );
+
+    let checked_helper = source_section(
+        &mod_source,
+        "fn launch_checked_integer_scalar_binary",
+        "impl TensorElementwise for CudaBackend",
+    );
+    assert_ordered_needles(
+        "checked scalar binary launch validation",
+        checked_helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
+            "let output = alloc_output::<I>",
+            "let flag = alloc_output::<i32>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "typed_tensor_array_arg(&flag, op)?",
+            "if output.n_elements() == 0",
+            "launch_nullary_into(",
         ],
     );
 

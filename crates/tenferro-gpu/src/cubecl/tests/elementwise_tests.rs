@@ -124,6 +124,26 @@ fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {
         let actual_rem = download(&gpu, &gpu_rem);
         assert_tensor_close(&actual_div, &expected_div, 0.0);
         assert_tensor_close(&actual_rem, &expected_rem, 0.0);
+
+        let (min_scalar, minus_one_rhs) = match dtype {
+            DType::I32 => (
+                tensor_i32(vec![], vec![i32::MIN]),
+                tensor_i32(vec![2], vec![-1, -1]),
+            ),
+            DType::I64 => (
+                tensor_i64(vec![], vec![i64::MIN]),
+                tensor_i64(vec![2], vec![-1, -1]),
+            ),
+            _ => unreachable!(),
+        };
+        let gpu_min_scalar = upload(&gpu, &min_scalar);
+        let gpu_minus_one_rhs = upload(&gpu, &minus_one_rhs);
+        let expected_div = cpu.div(&min_scalar, &minus_one_rhs).unwrap();
+        let expected_rem = cpu.rem(&min_scalar, &minus_one_rhs).unwrap();
+        let gpu_div = gpu.div(&gpu_min_scalar, &gpu_minus_one_rhs).unwrap();
+        let gpu_rem = gpu.rem(&gpu_min_scalar, &gpu_minus_one_rhs).unwrap();
+        assert_tensor_close(&download(&gpu, &gpu_div), &expected_div, 0.0);
+        assert_tensor_close(&download(&gpu, &gpu_rem), &expected_rem, 0.0);
     }
 
     for (tensor, scalar) in [
