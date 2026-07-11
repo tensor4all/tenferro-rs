@@ -920,21 +920,68 @@ pub(crate) fn compare_mode(dir: &CompareDir) -> usize {
 }
 
 macro_rules! launch_binary_elementwise_kernel {
-    ($backend:expr, $lhs:ident, $rhs:ident, $op:expr, $kernel:ident, $scalar:ty, $variant:ident) => {
-        launch_binary(
-            $backend.runtime(),
-            $lhs,
-            $rhs,
-            $lhs.shape(),
-            $op,
-            |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CubeclCudaRuntime>(
-                    client, count, dim, out, lhs_arg, rhs_arg,
-                );
-            },
-        )
-        .map(Tensor::$variant)
-    };
+    ($backend:expr, $lhs:ident, $rhs:ident, $op:expr, $kernel:ident, $scalar:ty, $variant:ident) => {{
+        let result = if $lhs.shape() == $rhs.shape() {
+            launch_binary(
+                $backend.runtime(),
+                $lhs,
+                $rhs,
+                $lhs.shape(),
+                $op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    crate::kernels::elementwise::$kernel::launch_unchecked::<
+                        $scalar,
+                        CubeclCudaRuntime,
+                    >(client, count, dim, out, lhs_arg, rhs_arg);
+                },
+            )
+        } else if $lhs.shape().is_empty() {
+            let lhs = $backend.broadcast_typed($lhs, $rhs.shape(), &[])?;
+            launch_binary(
+                $backend.runtime(),
+                &lhs,
+                $rhs,
+                $rhs.shape(),
+                $op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    crate::kernels::elementwise::$kernel::launch_unchecked::<
+                        $scalar,
+                        CubeclCudaRuntime,
+                    >(client, count, dim, out, lhs_arg, rhs_arg);
+                },
+            )
+        } else if $rhs.shape().is_empty() {
+            let rhs = $backend.broadcast_typed($rhs, $lhs.shape(), &[])?;
+            launch_binary(
+                $backend.runtime(),
+                $lhs,
+                &rhs,
+                $lhs.shape(),
+                $op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    crate::kernels::elementwise::$kernel::launch_unchecked::<
+                        $scalar,
+                        CubeclCudaRuntime,
+                    >(client, count, dim, out, lhs_arg, rhs_arg);
+                },
+            )
+        } else {
+            launch_binary(
+                $backend.runtime(),
+                $lhs,
+                $rhs,
+                $lhs.shape(),
+                $op,
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    crate::kernels::elementwise::$kernel::launch_unchecked::<
+                        $scalar,
+                        CubeclCudaRuntime,
+                    >(client, count, dim, out, lhs_arg, rhs_arg);
+                },
+            )
+        };
+        result.map(Tensor::$variant)
+    }};
 }
 
 macro_rules! launch_unary_elementwise_kernel {

@@ -206,6 +206,35 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
 }
 
 #[test]
+fn cubecl_binary_elementwise_kernels_broadcast_zero_dim_scalars() {
+    let dispatch_source = cubecl_source("dispatch.rs");
+    let binary_macro = source_section(
+        &dispatch_source,
+        "macro_rules! launch_binary_elementwise_kernel",
+        "macro_rules! dispatch_binary_float_complex_int",
+    );
+
+    assert_ordered_needles(
+        "launch_binary_elementwise_kernel scalar lhs broadcast",
+        binary_macro,
+        &[
+            "$lhs.shape().is_empty()",
+            "let lhs = $backend.broadcast_typed($lhs, $rhs.shape(), &[])?;",
+            "launch_binary(",
+        ],
+    );
+    assert_ordered_needles(
+        "launch_binary_elementwise_kernel scalar rhs broadcast",
+        binary_macro,
+        &[
+            "$rhs.shape().is_empty()",
+            "let rhs = $backend.broadcast_typed($rhs, $lhs.shape(), &[])?;",
+            "launch_binary(",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
     let interop_source = cubecl_source("interop.rs");
     let download_source = source_section(
