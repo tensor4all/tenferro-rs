@@ -220,8 +220,14 @@ pub fn log1p_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 pub fn abs_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
-        let zero = F::new(0.0);
-        out[ABSOLUTE_POS] = if value < zero { -value } else { value };
+        let zero = F::new(0.0_f32);
+        out[ABSOLUTE_POS] = if value == zero {
+            zero
+        } else if value < zero {
+            -value
+        } else {
+            value
+        };
     }
 }
 
@@ -238,13 +244,16 @@ pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
 pub fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
-        let zero = F::new(0.0);
-        out[ABSOLUTE_POS] = if value == zero {
+        let zero = F::new(0.0_f32);
+        let one = F::new(1.0_f32);
+        out[ABSOLUTE_POS] = if value != value {
+            value
+        } else if value == zero {
             zero
         } else if value > zero {
-            F::new(1.0)
+            one
         } else {
-            -F::new(1.0)
+            -one
         };
     }
 }

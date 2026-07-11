@@ -264,6 +264,66 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_float_unary_special_values_match_cpu() {
+    if !gpu_available() {
+        eprintln!("skipping test_float_unary_special_values_match_cpu — no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let cases = [
+        super::tensor_f32(vec![5], vec![-0.0, 0.0, -2.5, 3.0, f32::NAN]),
+        tensor_f64(vec![5], vec![-0.0, 0.0, -2.5, 3.0, f64::NAN]),
+    ];
+
+    for input in cases {
+        let gpu_input = upload(&gpu, &input);
+
+        let expected_abs = cpu.abs(&input).unwrap();
+        let gpu_abs = gpu.abs(&gpu_input).unwrap();
+        let actual_abs = download(&gpu, &gpu_abs);
+        match (&actual_abs, &expected_abs) {
+            (Tensor::F32(actual), Tensor::F32(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(actual[0].to_bits(), expected[0].to_bits());
+                assert_eq!(actual[1..4], expected[1..4]);
+                assert!(actual[4].is_nan());
+            }
+            (Tensor::F64(actual), Tensor::F64(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(actual[0].to_bits(), expected[0].to_bits());
+                assert_eq!(actual[1..4], expected[1..4]);
+                assert!(actual[4].is_nan());
+            }
+            _ => panic!("expected matching F32 or F64 abs tensors"),
+        }
+
+        let expected_sign = cpu.sign(&input).unwrap();
+        let gpu_sign = gpu.sign(&gpu_input).unwrap();
+        let actual_sign = download(&gpu, &gpu_sign);
+        match (&actual_sign, &expected_sign) {
+            (Tensor::F32(actual), Tensor::F32(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(actual[..4], expected[..4]);
+                assert!(actual[4].is_nan());
+            }
+            (Tensor::F64(actual), Tensor::F64(expected)) => {
+                let actual = actual.as_slice().unwrap();
+                let expected = expected.as_slice().unwrap();
+                assert_eq!(actual[..4], expected[..4]);
+                assert!(actual[4].is_nan());
+            }
+            _ => panic!("expected matching F32 or F64 sign tensors"),
+        }
+    }
+}
+
+#[test]
 #[ignore]
 fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let positive = tensor_f64(vec![4], vec![0.25, 0.5, 1.5, 3.0]);
