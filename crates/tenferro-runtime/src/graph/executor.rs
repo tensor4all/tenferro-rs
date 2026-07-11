@@ -108,7 +108,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let out = executor.run(&program).unwrap();
@@ -206,7 +207,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-3.0]);
@@ -256,7 +258,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    /// let y = x.neg();
+    /// let y = x.neg().unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -573,7 +575,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-2.0]);
@@ -639,7 +642,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.shape(), &[1]);

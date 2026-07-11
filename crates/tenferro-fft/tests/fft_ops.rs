@@ -212,6 +212,37 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 }
 
 #[test]
+fn fft_cpu_execution_propagates_plan_cache_errors() {
+    let source = include_str!("../src/lib.rs");
+    let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
+    let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
+    let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
+
+    for (name, section) in [
+        ("execute_c2c", c2c),
+        ("execute_r2c", r2c),
+        ("execute_c2r", c2r),
+    ] {
+        let call_start = section
+            .find("cached_fft_plan::<T>")
+            .unwrap_or_else(|| panic!("{name} must call cached_fft_plan::<T>"));
+        let call_end = section[call_start..]
+            .find(';')
+            .map(|offset| call_start + offset + 1)
+            .unwrap_or_else(|| panic!("{name} cached_fft_plan call must end in a statement"));
+        let normalized_call = section[call_start..call_end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(
+            normalized_call.ends_with("?;"),
+            "{name} must propagate its cached_fft_plan error: {normalized_call}"
+        );
+    }
+}
+
+#[test]
 fn fft_c64_matches_numpy_convention() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],

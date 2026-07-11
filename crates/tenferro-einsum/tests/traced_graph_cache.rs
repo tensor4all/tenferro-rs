@@ -459,7 +459,8 @@ fn compiler_and_executor_clear_caches_clear_extension_einsum_entries() {
     run_static_matmul(&mut compiler, 2, 2, 3);
     let out = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])
         .unwrap()
-        .neg();
+        .neg()
+        .unwrap();
     let _ = compiler.compile(&out).unwrap();
     assert!(compiler.cache_stats().compile.entries > 0);
     assert!(compiler.cache_stats().extensions.entries > 0);

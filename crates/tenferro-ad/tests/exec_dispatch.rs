@@ -657,7 +657,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
 #[test]
 fn graph_executor_does_not_reclaim_borrowed_input_slots() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = (&x + &x).unwrap().neg();
+    let y = (&x + &x).unwrap().neg().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])

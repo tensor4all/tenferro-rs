@@ -14,12 +14,22 @@ fn pjrt_executes_phase_one_elementwise_from_rust_when_configured() {
     };
 
     let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
-    let positive = x.abs().exp();
-    let analytic = positive.log().sqrt().rsqrt().expm1().log1p();
-    let trig = positive.sin().cos().tanh();
+    let positive = x.abs().unwrap().exp().unwrap();
+    let analytic = positive
+        .log()
+        .unwrap()
+        .sqrt()
+        .unwrap()
+        .rsqrt()
+        .unwrap()
+        .expm1()
+        .unwrap()
+        .log1p()
+        .unwrap();
+    let trig = positive.sin().unwrap().cos().unwrap().tanh().unwrap();
     let combined = (&analytic + &trig).unwrap();
     let divided = combined.div(&positive).unwrap();
-    let y = divided.abs().pow(&positive).unwrap();
+    let y = divided.abs().unwrap().pow(&positive).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -95,7 +105,15 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
     let product = compiler
         .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
         .unwrap();
-    let y = product.abs().sqrt().log1p().exp();
+    let y = product
+        .abs()
+        .unwrap()
+        .sqrt()
+        .unwrap()
+        .log1p()
+        .unwrap()
+        .exp()
+        .unwrap();
     let program = compiler
         .compile_with_input_specs(
             &y,

@@ -138,7 +138,7 @@ fn test_pow_broadcast_vector_with_scalar_exponent() {
 fn test_neg() {
     let a = f64_tensor(vec![3], vec![1.0, -2.0, 3.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
-    let tb = -&ta;
+    let tb = (-&ta).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tb.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[-1.0, 2.0, -3.0]);
@@ -156,7 +156,7 @@ fn traced_abs_of_complex_tensor_returns_real_tensor() {
         .unwrap(),
     )
     .unwrap();
-    let y = x.abs();
+    let y = x.abs().unwrap();
     assert_eq!(y.dtype, DType::F64);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());

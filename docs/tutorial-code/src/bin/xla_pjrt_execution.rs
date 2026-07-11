@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let product = compiler.einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")?;
-    let y = product.abs().sqrt().log1p().exp();
+    let y = product.abs()?.sqrt()?.log1p()?.exp()?;
     let program = compiler.compile_with_input_specs(
         &y,
         &[

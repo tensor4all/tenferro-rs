@@ -80,7 +80,7 @@ fn jvp_mixed_variable_second_derivative() -> TestResult {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let u = z.exp();
+    let u = z.exp()?;
     let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
@@ -196,7 +196,10 @@ fn kdv_residual_of_exact_solution_is_small() -> TestResult {
     let z = x.add(&t.scale_real(-4.0)?)?;
     let one = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let two = TracedTensor::from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
-    let cosh = z.exp().add(&z.neg().exp())?.div(&two)?;
+    let exp_z = z.exp()?;
+    let neg_z = z.neg()?;
+    let exp_neg_z = neg_z.exp()?;
+    let cosh = exp_z.add(&exp_neg_z)?.div(&two)?;
     let sech2 = one.div(&cosh.pow(&two)?)?;
     let u = sech2.scale_real(2.0)?;
     let r = kdv_residual(&u, &x, &t)?;

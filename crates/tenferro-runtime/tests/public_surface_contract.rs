@@ -145,3 +145,28 @@ fn traced_dtype_inference_must_not_fall_back_in_release_builds() {
         "traced dtype inference must not silently return a fallback dtype"
     );
 }
+
+#[test]
+fn traced_metadata_registration_is_fallible_without_panic_helpers() {
+    let traced = repo_file("crates/tenferro-runtime/src/traced.rs");
+    let registration = traced
+        .split_once("fn register_single_output_metadata(")
+        .and_then(|(_, rest)| rest.split_once("impl TracedTensor").map(|(body, _)| body))
+        .expect("single-output metadata helper should exist");
+    assert!(registration.contains(") -> Result<GlobalMetadataScope>"));
+    assert!(!registration.contains(".expect("));
+
+    let packing = repo_file("crates/tenferro-runtime/src/shape_packing.rs");
+    let concatenate = packing
+        .split_once("fn apply_nary_concatenate(")
+        .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
+        .expect("concatenate graph helper should exist");
+    assert!(
+        concatenate.contains(") -> Result<TracedTensor>"),
+        "concatenate graph construction must preserve metadata errors"
+    );
+    assert!(
+        !concatenate.contains(".expect("),
+        "concatenate metadata registration must not panic"
+    );
+}

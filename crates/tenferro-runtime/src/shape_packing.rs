@@ -425,14 +425,14 @@ impl TracedTensor {
         })?;
         let (indices_tensor, config, out_shape) = index_select_config(&shape, axis, positions)?;
         let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor)?;
-        Ok(apply_binary_preserve_input_dtypes(
+        apply_binary_preserve_input_dtypes(
             StdTensorOp::Gather(config),
             self,
             &indices,
             out_shape.len(),
             Some(out_shape.into_iter().map(SymDim::from).collect()),
             self.dtype,
-        ))
+        )
     }
 
     /// Stack tensors along a newly inserted axis.
@@ -490,11 +490,11 @@ impl TracedTensor {
             .map(|tensor| tensor.reshape(&expanded_shape))
             .collect::<Result<Vec<_>>>()?;
         let refs = expanded.iter().collect::<Vec<_>>();
-        Ok(apply_nary_concatenate(
+        apply_nary_concatenate(
             &refs,
             axis,
             out_shape.into_iter().map(SymDim::from).collect(),
-        ))
+        )
     }
 
     /// Concatenate tensors along one existing axis.
@@ -533,7 +533,7 @@ impl TracedTensor {
         let out_shape = out_shape_hint.ok_or_else(|| {
             Error::Internal("concatenate shape inference returned no shape hint".into())
         })?;
-        Ok(apply_nary_concatenate(tensors, axis, out_shape))
+        apply_nary_concatenate(tensors, axis, out_shape)
     }
 }
 
@@ -541,7 +541,7 @@ fn apply_nary_concatenate(
     tensors: &[&TracedTensor],
     axis: usize,
     out_shape: Vec<SymDim>,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let out_dtype = promote_dtypes(tensors.iter().map(|tensor| tensor.dtype));
     let tensors = tensors
         .iter()
@@ -549,10 +549,10 @@ fn apply_nary_concatenate(
             if tensor.dtype != out_dtype {
                 tensor.cast(out_dtype)
             } else {
-                (*tensor).clone()
+                Ok((*tensor).clone())
             }
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut builder = GraphBuilder::new();
     for tensor in &tensors {
@@ -573,11 +573,11 @@ fn apply_nary_concatenate(
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     // Callers route through shape inference before graph construction.
-    let metadata_scope = register_scoped_value_metadata(
-        graph.values()[outputs[0]].key.clone(),
-        tensor_meta(out_dtype, out_shape.clone()),
-    )
-    .expect("fresh concatenate output metadata registration failed");
+    let metadata_scope =
+        super::traced::register_metadata_or_internal(register_scoped_value_metadata(
+            graph.values()[outputs[0]].key.clone(),
+            tensor_meta(out_dtype, out_shape.clone()),
+        ))?;
 
     let inputs_map = merge_traced_inputs_map(tensors.iter());
     let mut extra_roots = Vec::new();
@@ -587,7 +587,7 @@ fn apply_nary_concatenate(
         checkpoint_chain =
             CheckpointNode::merge_chains(checkpoint_chain, tensor.checkpoint_chain.clone());
     }
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank: out_shape.len(),
         dtype: out_dtype,
@@ -602,7 +602,7 @@ fn apply_nary_concatenate(
             metadata_scope,
             tensors.iter().map(|tensor| &tensor.metadata_scopes),
         ),
-    }
+    })
 }
 
 #[cfg(test)]

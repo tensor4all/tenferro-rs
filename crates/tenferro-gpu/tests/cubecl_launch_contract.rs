@@ -1,4 +1,408 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
+    for entry in fs::read_dir(dir).expect("source directory should be readable") {
+        let path = entry.expect("source entry should be readable").path();
+        if path.is_dir() {
+            rust_sources_under(&path, sources);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("source {path:?} should be readable: {err}"));
+            sources.push((path, source));
+        }
+    }
+}
+
+fn production_rust_sources() -> Vec<(PathBuf, String)> {
+    let mut sources = Vec::new();
+    rust_sources_under(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    sources
+}
+
+#[derive(Debug)]
+struct Lexeme {
+    text: String,
+    offset: usize,
+}
+
+fn rust_code_lexemes(source: &str) -> Vec<Lexeme> {
+    let bytes = source.as_bytes();
+    let mut lexemes = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"//") {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        let raw = if bytes[i] == b'r' {
+            Some(i + 1)
+        } else if bytes[i..].starts_with(b"br") {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(mut cursor) = raw {
+            let mut hashes = 0;
+            while cursor < bytes.len() && bytes[cursor] == b'#' {
+                hashes += 1;
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'"' {
+                i = cursor + 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'"' && bytes[i + 1..].starts_with(&vec![b'#'; hashes]) {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        let quote = if bytes[i] == b'"' {
+            Some(i)
+        } else if bytes[i..].starts_with(b"b\"") {
+            Some(i + 1)
+        } else {
+            None
+        };
+        if let Some(quote) = quote {
+            i = quote + 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if bytes[i] == b'\'' {
+            let mut end = i + 1;
+            if end < bytes.len() && bytes[end] == b'\\' {
+                end += 2;
+            } else {
+                end += 1;
+            }
+            if end < bytes.len() && bytes[end] == b'\'' {
+                i = end + 1;
+                continue;
+            }
+        }
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        } else {
+            i += if bytes[i..].starts_with(b"::") { 2 } else { 1 };
+        }
+        lexemes.push(Lexeme {
+            text: source[start..i].to_owned(),
+            offset: start,
+        });
+    }
+    lexemes
+}
+
+fn lexeme_positions(lexemes: &[Lexeme], sequence: &[&str]) -> Vec<usize> {
+    lexemes
+        .windows(sequence.len())
+        .filter(|window| {
+            window
+                .iter()
+                .zip(sequence)
+                .all(|(lexeme, expected)| lexeme.text == *expected)
+        })
+        .map(|window| window[0].offset)
+        .collect()
+}
+
+fn contains_lexeme_subsequence(lexemes: &[Lexeme], sequence: &[&str]) -> bool {
+    let mut next = 0;
+    for lexeme in lexemes {
+        if lexeme.text == sequence[next] {
+            next += 1;
+            if next == sequence.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn forbidden_scatter_aliases(lexemes: &[Lexeme]) -> Vec<usize> {
+    let protected = [
+        "update_window_len",
+        "scatter_float_kernel",
+        "scatter_complex_kernel",
+        "indexing",
+    ];
+    let mut violations = Vec::new();
+    let mut index = 0;
+    while index < lexemes.len() {
+        if lexemes[index].text != "use" {
+            index += 1;
+            continue;
+        }
+        let end = lexemes[index..]
+            .iter()
+            .position(|lexeme| lexeme.text == ";")
+            .map_or(lexemes.len(), |offset| index + offset);
+        let statement = &lexemes[index..end];
+        if statement.iter().any(|lexeme| lexeme.text == "as")
+            && statement
+                .iter()
+                .any(|lexeme| protected.contains(&lexeme.text.as_str()))
+        {
+            violations.push(lexemes[index].offset);
+        }
+        index = end.saturating_add(1);
+    }
+    violations
+}
+
+fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), String> {
+    let invariants = [
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_complex_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+    ];
+    let mut product_calls = Vec::new();
+    let mut definitions = Vec::new();
+    let mut launches = Vec::new();
+    let mut aliases = Vec::new();
+    for (path, source) in sources {
+        let lexemes = rust_code_lexemes(source);
+        for offset in forbidden_scatter_aliases(&lexemes) {
+            aliases.push((path, offset));
+        }
+        let local_definitions: Vec<_> = lexemes
+            .windows(2)
+            .filter(|window| window[0].text == "fn" && window[1].text == "update_window_len")
+            .map(|window| window[1].offset)
+            .collect();
+        definitions.extend(local_definitions.iter().copied());
+        for offset in lexeme_positions(&lexemes, &["update_window_len", "("]) {
+            if local_definitions.contains(&offset) {
+                continue;
+            }
+            let line_start = source[..offset]
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            let before = source[..line_start].trim_end_matches('\n');
+            let context_start = before
+                .rmatch_indices('\n')
+                .nth(1)
+                .map_or(0, |(newline, _)| newline + 1);
+            let call_end = source[offset..]
+                .find(';')
+                .map_or(source.len(), |end| offset + end + 1);
+            let context = &source[context_start..call_end];
+            product_calls.push((
+                path,
+                offset,
+                invariants.iter().position(|item| context.contains(item)),
+            ));
+        }
+        for sequence in [
+            &["scatter_float_kernel", "::", "launch_unchecked"][..],
+            &["scatter_complex_kernel", "::", "launch_unchecked"][..],
+        ] {
+            for offset in lexeme_positions(&lexemes, sequence) {
+                launches.push((path, offset));
+            }
+        }
+    }
+
+    if !aliases.is_empty() {
+        return Err(format!(
+            "scatter update-window proof symbols must not be imported or re-exported with aliases: {aliases:?}"
+        ));
+    }
+
+    if definitions.len() != 1 {
+        return Err(format!(
+            "expected one update_window_len definition, found {definitions:?}"
+        ));
+    }
+
+    if product_calls.len() != 2 {
+        return Err(format!(
+            "expected exactly two update_window_len call sites, found {product_calls:?}"
+        ));
+    }
+    let mut seen_invariants = Vec::new();
+    for (path, line, invariant_index) in product_calls {
+        let Some(invariant_index) = invariant_index else {
+            return Err(format!(
+                "{path:?}:{line} lacks the adjacent checked host invariant"
+            ));
+        };
+        seen_invariants.push(invariant_index);
+    }
+    seen_invariants.sort_unstable();
+    if seen_invariants != [0, 1] {
+        return Err(format!(
+            "expected one concrete invariant per kernel, found {seen_invariants:?}"
+        ));
+    }
+
+    if launches.len() != 2 {
+        return Err(format!(
+            "expected exactly two scatter update kernel launches, found {launches:?}"
+        ));
+    }
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .ok_or_else(|| "cubecl/mod.rs was not inventoried".to_owned())?;
+    let meta_lexemes = rust_code_lexemes(source_section(
+        mod_source,
+        "fn scatter_launch_meta(",
+        "impl TensorIndexing for CudaBackend",
+    ));
+    for required in [
+        &[
+            "ensure_axes_unique",
+            "(",
+            ",",
+            ",",
+            "&",
+            "config",
+            ".",
+            "update_window_dims",
+            ",",
+            "updates_shape",
+            ".",
+            "len",
+            "(",
+            ")",
+        ][..],
+        &[
+            "window_shape_updates",
+            "=",
+            "config",
+            ".",
+            "update_window_dims",
+            ".",
+            "iter",
+            "(",
+            ")",
+            ".",
+            "map",
+            "(",
+            "|",
+            "&",
+            "axis",
+            "|",
+            "updates_shape",
+            "[",
+            "axis",
+            "]",
+            ")",
+            ".",
+            "collect",
+            "(",
+            ")",
+        ][..],
+    ] {
+        if lexeme_positions(&meta_lexemes, required).is_empty() {
+            return Err(format!(
+                "scatter_launch_meta lacks update-window derivation proof {required:?}"
+            ));
+        }
+    }
+    for (name, start, end, launch) in [
+        (
+            "scatter_float_typed",
+            "    fn scatter_float_typed<",
+            "    fn scatter_complex_typed<",
+            "indexing::scatter_float_kernel::launch_unchecked",
+        ),
+        (
+            "scatter_complex_typed",
+            "    fn scatter_complex_typed<",
+            "impl BackendRuntimeCache for CudaBackend",
+            "indexing::scatter_complex_kernel::launch_unchecked",
+        ),
+    ] {
+        let section = source_section(mod_source, start, end);
+        let section_lexemes = rust_code_lexemes(section);
+        let kernel = launch
+            .strip_prefix("indexing::")
+            .and_then(|launch| launch.strip_suffix("::launch_unchecked"))
+            .expect("launch descriptor should be qualified");
+        let required = [
+            "scatter_launch_meta",
+            "(",
+            "let",
+            "update_len",
+            "=",
+            "scatter_update_len",
+            "(",
+            "&",
+            "meta",
+            ")",
+            "?",
+            ";",
+            "if",
+            "update_len",
+            "=",
+            "=",
+            "0",
+            "{",
+            "return",
+            "Ok",
+            "(",
+            "output",
+            ")",
+            ";",
+            "}",
+            "indexing",
+            "::",
+            kernel,
+            "::",
+            "launch_unchecked",
+        ];
+        if !contains_lexeme_subsequence(&section_lexemes, &required) {
+            return Err(format!("{name} lacks ordered checked launch proof"));
+        }
+    }
+    Ok(())
+}
 
 fn cubecl_source(file: &str) -> String {
     fs::read_to_string(
@@ -74,6 +478,137 @@ fn cubecl_scatter_does_not_use_single_thread_launch_fallback() {
         "CubeCL scatter launch must not use a single-thread fallback:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
+    let sources = production_rust_sources();
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .expect("cubecl/mod.rs should be inventoried");
+    let update_len = source_section(
+        mod_source,
+        "fn scatter_update_len(",
+        "/// CubeCL-based GPU backend.",
+    );
+    assert_ordered_needles(
+        "scatter_update_len",
+        update_len,
+        &[
+            "checked_dim_product(\"scatter\", \"batch shape\", &meta.batch_shape)?",
+            "checked_dim_product(\"scatter\", \"window update shape\", &meta.window_shape_updates)?",
+            "batch_len.checked_mul(window_len)",
+        ],
+    );
+
+    scatter_update_window_contract(&sources).unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn rust_lexeme_inventory_ignores_literals_and_accepts_multiline_calls() {
+    let source = r####"
+        // update_window_len(fake)
+        /* scatter_float_kernel::launch_unchecked(fake) */
+        let normal = "update_window_len(fake)";
+        let raw = r#"scatter_complex_kernel::launch_unchecked(fake)"#;
+        let byte = b"update_window_len(fake)";
+        let character = '(';
+        update_window_len
+            (
+                updates,
+                dims,
+            );
+        scatter_float_kernel
+            ::
+            launch_unchecked
+            ();
+    "####;
+    let lexemes = rust_code_lexemes(source);
+    assert_eq!(
+        lexeme_positions(&lexemes, &["update_window_len", "("]).len(),
+        1
+    );
+    assert_eq!(
+        lexeme_positions(
+            &lexemes,
+            &["scatter_float_kernel", "::", "launch_unchecked", "("]
+        )
+        .len(),
+        1
+    );
+    assert!(lexeme_positions(
+        &lexemes,
+        &["scatter_complex_kernel", "::", "launch_unchecked", "("]
+    )
+    .is_empty());
+}
+
+#[test]
+fn scatter_update_window_inventory_rejects_unproved_new_paths() {
+    let sources = production_rust_sources();
+
+    let invariant = "// INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let bare_call = "let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let mut one_unmarked = sources.clone();
+    let indexing_source = one_unmarked
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("kernels/indexing.rs").then_some(source))
+        .expect("indexing.rs should be inventoried");
+    *indexing_source = indexing_source.replacen(invariant, bare_call, 1);
+    assert!(scatter_update_window_contract(&one_unmarked).is_err());
+
+    let mut divergent_derivation = sources.clone();
+    let mod_source = divergent_derivation
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen("updates_shape[axis]", "operand_shape[axis]", 1);
+    assert!(scatter_update_window_contract(&divergent_derivation).is_err());
+
+    let mut divergent_axes = sources.clone();
+    let mod_source = divergent_axes
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen(
+        "&config.update_window_dims,\n        updates_shape.len(),",
+        "&config.inserted_window_dims,\n        updates_shape.len(),",
+        1,
+    );
+    assert!(scatter_update_window_contract(&divergent_axes).is_err());
+
+    let mut extra_product = sources.clone();
+    extra_product.push((
+        PathBuf::from("synthetic/unmarked.rs"),
+        "let third = update_window_len(updates, dims);".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_product).is_err());
+
+    let mut aliased_product = sources.clone();
+    aliased_product.push((
+        PathBuf::from("synthetic/aliased_product.rs"),
+        "use crate::kernels::indexing::update_window_len as checked_window;\n\
+         let third = checked_window(updates, dims);"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_product).is_err());
+
+    let mut aliased_scatter_module = sources.clone();
+    aliased_scatter_module.push((
+        PathBuf::from("synthetic/aliased_launch.rs"),
+        "use crate::kernels::indexing as scatter_kernels;\n\
+         scatter_kernels::scatter_float_kernel::launch_unchecked();"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_scatter_module).is_err());
+
+    let mut extra_launch = sources;
+    extra_launch.push((
+        PathBuf::from("synthetic/launch.rs"),
+        "indexing::scatter_float_kernel::launch_unchecked();".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_launch).is_err());
 }
 
 #[test]
@@ -422,6 +957,27 @@ fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
     assert!(
         !pad_shape.contains("input_shape[axis] as i64"),
         "GPU pad output shape must use checked conversion before signed arithmetic"
+    );
+}
+
+#[test]
+fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
+    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
+    let pad_kernel = source_section(
+        &indexing_source,
+        "pub fn pad_kernel",
+        "pub fn gather_kernel",
+    );
+    assert!(!pad_kernel.contains("out_idx[axis] as i64 - low"));
+    assert!(pad_kernel.contains("low.unsigned_abs()"));
+    assert_ordered_needles(
+        "pad_kernel candidate bounds check",
+        pad_kernel,
+        &[
+            "let candidate = shifted / spacing;",
+            "if candidate >= input.shape(axis) as u64",
+            "input_idx[axis] = candidate as usize;",
+        ],
     );
 }
 

@@ -51,6 +51,64 @@ fn test_cubecl_slice_dynamic_slice_and_pad_match_cpu() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_signed_pad_cropping_matches_cpu_values() {
+    let cases = [
+        (
+            tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]),
+            PadConfig {
+                edge_padding_low: vec![-1],
+                edge_padding_high: vec![0],
+                interior_padding: vec![0],
+            },
+            tensor_f64(vec![3], vec![2.0, 3.0, 4.0]),
+        ),
+        (
+            tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]),
+            PadConfig {
+                edge_padding_low: vec![0],
+                edge_padding_high: vec![-1],
+                interior_padding: vec![0],
+            },
+            tensor_f64(vec![3], vec![1.0, 2.0, 3.0]),
+        ),
+        (
+            tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]),
+            PadConfig {
+                edge_padding_low: vec![-1],
+                edge_padding_high: vec![0],
+                interior_padding: vec![1],
+            },
+            tensor_f64(vec![6], vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0]),
+        ),
+        (
+            tensor_f64(vec![2], vec![1.0, 2.0]),
+            PadConfig {
+                edge_padding_low: vec![i64::MIN],
+                edge_padding_high: vec![i64::MAX],
+                interior_padding: vec![0],
+            },
+            tensor_f64(vec![1], vec![0.0]),
+        ),
+    ];
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for (input, config, expected_values) in cases {
+        let expected = cpu.pad(&input, &config).unwrap();
+        assert_eq!(expected.shape(), expected_values.shape());
+        assert_tensor_close(&expected, &expected_values, 0.0);
+
+        let gpu_input = upload(&gpu, &input);
+        let gpu_output = gpu.pad(&gpu_input, &config).unwrap();
+        let actual = download(&gpu, &gpu_output);
+        assert_eq!(actual.shape(), expected_values.shape());
+        assert_tensor_close(&actual, &expected_values, 0.0);
+        assert_tensor_close(&actual, &expected, 0.0);
+    }
+}
+
+#[test]
 #[ignore]
 fn test_cubecl_gather_and_scatter_match_cpu() {
     let operand = tensor_f64(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]);

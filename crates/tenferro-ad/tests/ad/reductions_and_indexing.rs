@@ -263,7 +263,7 @@ fn grad_transpose() {
 fn grad_exp() {
     let x_data = vec![0.2, -0.7, 1.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.exp().reduce_sum(&[0]).unwrap();
+    let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -273,7 +273,7 @@ fn grad_exp() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.exp().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.exp().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -282,7 +282,7 @@ fn grad_exp() {
 fn grad_log() {
     let x_data = vec![0.8, 1.5, 2.4];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.log().reduce_sum(&[0]).unwrap();
+    let loss = x.log().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -292,7 +292,7 @@ fn grad_log() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.log().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.log().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -303,7 +303,7 @@ fn grad_sin_cos() {
 
     let x_sin =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let sin_loss = x_sin.sin().reduce_sum(&[0]).unwrap();
+    let sin_loss = x_sin.sin().unwrap().reduce_sum(&[0]).unwrap();
     let sin_grad = sin_loss.grad(&x_sin).unwrap();
     let sin_grad_tensor = eval_tensor(sin_grad);
     let sin_grad_data = get_f64_data(&sin_grad_tensor);
@@ -312,13 +312,13 @@ fn grad_sin_cos() {
 
     let f_sin = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.sin().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.sin().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(sin_grad_data, &x_data, f_sin);
 
     let x_cos =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let cos_loss = x_cos.cos().reduce_sum(&[0]).unwrap();
+    let cos_loss = x_cos.cos().unwrap().reduce_sum(&[0]).unwrap();
     let cos_grad = cos_loss.grad(&x_cos).unwrap();
     let cos_grad_tensor = eval_tensor(cos_grad);
     let cos_grad_data = get_f64_data(&cos_grad_tensor);
@@ -327,7 +327,7 @@ fn grad_sin_cos() {
 
     let f_cos = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.cos().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.cos().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(cos_grad_data, &x_data, f_cos);
 }
@@ -372,7 +372,7 @@ fn grad_div() {
 fn grad_sqrt() {
     let x_data = vec![0.8, 1.5, 3.2];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.sqrt().reduce_sum(&[0]).unwrap();
+    let loss = x.sqrt().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -382,7 +382,7 @@ fn grad_sqrt() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.sqrt().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.sqrt().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -391,7 +391,7 @@ fn grad_sqrt() {
 fn grad_tanh() {
     let x_data = vec![0.2, -0.7, 1.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.tanh().reduce_sum(&[0]).unwrap();
+    let loss = x.tanh().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -401,7 +401,7 @@ fn grad_tanh() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.tanh().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.tanh().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -486,7 +486,7 @@ fn grad_pow_wrt_exponent() {
 fn grad_abs() {
     let x_data = vec![-1.7, 0.8, 2.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.abs().reduce_sum(&[0]).unwrap();
+    let loss = x.abs().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -496,7 +496,7 @@ fn grad_abs() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.abs().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.abs().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -505,7 +505,7 @@ fn grad_abs() {
 fn grad_sign() {
     let x_data = vec![-1.7, 0.8, 2.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.sign().reduce_sum(&[0]).unwrap();
+    let loss = x.sign().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -514,7 +514,7 @@ fn grad_sign() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.sign().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.sign().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -523,7 +523,7 @@ fn grad_sign() {
 fn grad_rsqrt() {
     let x_data = vec![0.8, 1.5, 3.2];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.rsqrt().reduce_sum(&[0]).unwrap();
+    let loss = x.rsqrt().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -533,7 +533,7 @@ fn grad_rsqrt() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.rsqrt().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.rsqrt().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -542,7 +542,7 @@ fn grad_rsqrt() {
 fn grad_expm1() {
     let x_data = vec![0.2, -0.7, 1.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.expm1().reduce_sum(&[0]).unwrap();
+    let loss = x.expm1().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -552,7 +552,7 @@ fn grad_expm1() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.expm1().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.expm1().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
@@ -561,7 +561,7 @@ fn grad_expm1() {
 fn grad_log1p() {
     let x_data = vec![0.2, 0.7, 1.3];
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x_data.clone())).unwrap();
-    let loss = x.log1p().reduce_sum(&[0]).unwrap();
+    let loss = x.log1p().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -571,7 +571,7 @@ fn grad_log1p() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], xs.to_vec())).unwrap();
-        eval_scalar(x.log1p().reduce_sum(&[0]).unwrap())
+        eval_scalar(x.log1p().unwrap().reduce_sum(&[0]).unwrap())
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }

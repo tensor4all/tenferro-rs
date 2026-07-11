@@ -91,7 +91,7 @@ fn fixed_point_traced(
 
     for iter in 1..=max_iter {
         // Build graph: x_new = a * cos(x)
-        let x_new = (a * &x.cos()).unwrap();
+        let x_new = (a * &x.cos().unwrap()).unwrap();
 
         // Convergence check — eval() must NOT break the graph
         let x_check = x_new.clone();
@@ -212,7 +212,7 @@ fn graph_size_grows_linearly() {
         let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
         let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5)).unwrap();
         for _ in 0..k {
-            x = (&a * &x.cos()).unwrap();
+            x = (&a * &x.cos().unwrap()).unwrap();
         }
         total_ops(x.graph())
     }

@@ -32,7 +32,7 @@ fn traced_jvp_zero_propagation_returns_none_without_dead_graph() {
     let x = f64_vec(vec![1.0, 2.0]);
     let y = f64_vec(vec![3.0, 4.0]);
     let tangent = f64_vec(vec![1.0, 1.0]);
-    let output = y.neg();
+    let output = y.neg().unwrap();
 
     assert!(output.jvp_optional(&x, &tangent).unwrap().is_none());
 }
@@ -41,7 +41,7 @@ fn traced_jvp_zero_propagation_returns_none_without_dead_graph() {
 fn traced_jvp_optimizer_removes_identity_chain_before_compile() {
     let x = f64_vec(vec![2.0, -3.0]);
     let tangent = f64_vec(vec![0.25, -0.5]);
-    let y = x.neg().neg();
+    let y = x.neg().unwrap().neg().unwrap();
 
     let dy = y.jvp(&x, &tangent).unwrap();
     assert_eq!(

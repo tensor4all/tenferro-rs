@@ -173,16 +173,25 @@ pub fn pad_kernel<E: CubePrimitive>(
         #[unroll]
         for axis in 0..rank {
             let low = comptime! { *edge_padding_low.index(axis) };
-            let spacing = comptime! { *interior_padding.index(axis) } + 1;
-            let shifted = out_idx[axis] as i64 - low;
-            if shifted < 0 || shifted % spacing != 0 {
+            let low_magnitude = comptime! { low.unsigned_abs() };
+            let spacing = comptime! { (*interior_padding.index(axis) + 1) as u64 };
+            let out_pos = out_idx[axis] as u64;
+            let mut shifted = 0_u64;
+            if comptime! { low < 0 } {
+                shifted = out_pos + low_magnitude;
+            } else if out_pos < low_magnitude {
                 in_bounds = false;
             } else {
-                let candidate = (shifted / spacing) as usize;
-                if candidate >= input.shape(axis) {
+                shifted = out_pos - low_magnitude;
+            }
+            if shifted % spacing != 0 {
+                in_bounds = false;
+            } else {
+                let candidate = shifted / spacing;
+                if candidate >= input.shape(axis) as u64 {
                     in_bounds = false;
                 } else {
-                    input_idx[axis] = candidate;
+                    input_idx[axis] = candidate as usize;
                 }
             }
         }
@@ -297,6 +306,8 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_float_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {
@@ -399,6 +410,8 @@ pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimiti
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_complex_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {
