@@ -309,13 +309,17 @@ fn test_float_unary_special_values_match_cpu() {
             (Tensor::F32(actual), Tensor::F32(expected)) => {
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
-                assert_eq!(actual[..4], expected[..4]);
+                assert_eq!(actual[0].to_bits(), expected[0].to_bits());
+                assert_eq!(actual[1].to_bits(), expected[1].to_bits());
+                assert_eq!(actual[2..4], expected[2..4]);
                 assert!(actual[4].is_nan());
             }
             (Tensor::F64(actual), Tensor::F64(expected)) => {
                 let actual = actual.as_slice().unwrap();
                 let expected = expected.as_slice().unwrap();
-                assert_eq!(actual[..4], expected[..4]);
+                assert_eq!(actual[0].to_bits(), expected[0].to_bits());
+                assert_eq!(actual[1].to_bits(), expected[1].to_bits());
+                assert_eq!(actual[2..4], expected[2..4]);
                 assert!(actual[4].is_nan());
             }
             _ => panic!("expected matching F32 or F64 sign tensors"),
