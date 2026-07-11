@@ -37,6 +37,52 @@ fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
     assert!(!source.contains("(Tensor::Bool(input), Tensor::F64(starts))"));
 }
 
+#[test]
+fn bool_launch_domains_are_checked_before_output_allocation() {
+    let dispatch = std::fs::read_to_string("src/cubecl/dispatch.rs").unwrap();
+    for (start, end) in [
+        (
+            "pub(crate) fn launch_unary_bool_tensor(",
+            "pub(crate) fn launch_binary_bool_tensor",
+        ),
+        (
+            "pub(crate) fn launch_binary_bool_tensor",
+            "pub(crate) fn launch_bool_tensor_into",
+        ),
+    ] {
+        let body = source_section(&dispatch, start, end);
+        let checked_len = body.find("checked_shape_product(op, out_shape)?").unwrap();
+        let checked_count = body.find("cube_count_for_len(output_len)?").unwrap();
+        let allocation = body.find("alloc_bool_output(rt, out_shape)?").unwrap();
+        assert!(checked_len < checked_count && checked_count < allocation);
+        assert!(body.contains("let Some(launch_count) = launch_count else"));
+    }
+
+    let backend = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let embed = source_section(&backend, "fn embed_diagonal_bool(", "pub fn tril_typed");
+    assert!(embed.find("checked_dim_product").unwrap() < embed.find("alloc_bool_output").unwrap());
+    assert!(
+        embed.find("cube_count_for_len(output_len)?").unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        embed
+            .find("cube_count_for_len(input.n_elements())?")
+            .unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+
+    let concatenate = source_section(&backend, "fn concatenate_bool(", "fn gather_typed");
+    assert!(
+        concatenate.find("checked_dim_product").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        concatenate.find("let launch_counts").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+}
+
 fn production_rust_sources() -> Vec<(PathBuf, String)> {
     let mut sources = Vec::new();
     rust_sources_under(

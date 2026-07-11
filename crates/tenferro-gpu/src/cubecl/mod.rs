@@ -1195,12 +1195,15 @@ impl CudaBackend {
         let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
         ensure_resident_on_runtime(self.runtime(), input, "embed_diagonal")?;
         typed_tensor_binding(input, "embed_diagonal")?;
+        let output_len = checked_dim_product("embed_diagonal", "output shape", &output_shape)?;
+        let output_count = cube_count_for_len(output_len)?;
+        let input_count = cube_count_for_len(input.n_elements())?;
         let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
         launch_nullary_bool_into(
             self.runtime(),
             &output,
             "embed_diagonal",
-            cube_count_for_len(output.n_elements())?,
+            output_count,
             cube_dim_1d(),
             |client, count, dim, out| unsafe {
                 structural::fill_zero_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
@@ -1213,7 +1216,7 @@ impl CudaBackend {
             &output,
             input,
             "embed_diagonal",
-            cube_count_for_len(input.n_elements())?,
+            input_count,
             cube_dim_1d(),
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
@@ -1875,15 +1878,20 @@ impl CudaBackend {
             ensure_resident_on_runtime(self.runtime(), input, "concatenate")?;
             typed_tensor_binding(input, "concatenate")?;
         }
+        checked_dim_product("concatenate", "output shape", &output_shape)?;
+        let launch_counts = inputs
+            .iter()
+            .map(|input| cube_count_for_len(input.n_elements()))
+            .collect::<crate::Result<Vec<_>>>()?;
         let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
         let mut offset = 0usize;
-        for input in inputs {
+        for (input, launch_count) in inputs.iter().zip(launch_counts) {
             launch_bool_tensor_into(
                 self.runtime(),
                 &output,
                 input,
                 "concatenate",
-                cube_count_for_len(input.n_elements())?,
+                launch_count,
                 cube_dim_1d(),
                 |client, count, dim, out, input_arg| unsafe {
                     structural::concatenate_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(

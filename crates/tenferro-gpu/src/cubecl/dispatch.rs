@@ -231,14 +231,20 @@ pub(crate) fn launch_unary_bool_tensor(
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, input, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
+    let output_len = checked_shape_product(op, out_shape)?;
+    let launch_count = if output_len == 0 {
+        None
+    } else {
+        Some(cube_count_for_len(output_len)?)
+    };
     let output = alloc_bool_output(rt, out_shape)?;
-    if output.n_elements() == 0 {
+    let Some(launch_count) = launch_count else {
         return Ok(output);
-    }
+    };
     let output_arg = typed_tensor_binding(&output, op)?;
     launch(
         rt.client(),
-        cube_count_for_len(output.n_elements())?,
+        launch_count,
         cube_dim_1d(),
         output_arg,
         input_arg,
@@ -265,14 +271,20 @@ pub(crate) fn launch_binary_bool_tensor<I: CubeElement + Clone>(
     ensure_resident_on_runtime(rt, indices, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
     let indices_arg = typed_tensor_binding(indices, op)?;
+    let output_len = checked_shape_product(op, out_shape)?;
+    let launch_count = if output_len == 0 {
+        None
+    } else {
+        Some(cube_count_for_len(output_len)?)
+    };
     let output = alloc_bool_output(rt, out_shape)?;
-    if output.n_elements() == 0 {
+    let Some(launch_count) = launch_count else {
         return Ok(output);
-    }
+    };
     let output_arg = typed_tensor_binding(&output, op)?;
     launch(
         rt.client(),
-        cube_count_for_len(output.n_elements())?,
+        launch_count,
         cube_dim_1d(),
         output_arg,
         input_arg,
