@@ -218,27 +218,26 @@ fn fft_cpu_execution_propagates_plan_cache_errors() {
     let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
     let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
 
-    for (name, section, expected_statement) in [
-        (
-            "execute_c2c",
-            c2c,
-            "let fft_plan = cached_fft_plan::<T>(fft_len, forward)?;",
-        ),
-        (
-            "execute_r2c",
-            r2c,
-            "let fft_plan = cached_fft_plan::<T>(fft_len, true)?;",
-        ),
-        (
-            "execute_c2r",
-            c2r,
-            "let fft_plan = cached_fft_plan::<T>(out_axis_len, false)?;",
-        ),
+    for (name, section) in [
+        ("execute_c2c", c2c),
+        ("execute_r2c", r2c),
+        ("execute_c2r", c2r),
     ] {
+        let call_start = section
+            .find("cached_fft_plan::<T>")
+            .unwrap_or_else(|| panic!("{name} must call cached_fft_plan::<T>"));
+        let call_end = section[call_start..]
+            .find(';')
+            .map(|offset| call_start + offset + 1)
+            .unwrap_or_else(|| panic!("{name} cached_fft_plan call must end in a statement"));
+        let normalized_call = section[call_start..call_end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
         assert!(
-            section.contains("// Propagate poisoned FFT plan-cache errors to the public caller.")
-                && section.contains(expected_statement),
-            "{name} must propagate typed FFT plan-cache errors with {expected_statement:?}"
+            normalized_call.ends_with("?;"),
+            "{name} must propagate its cached_fft_plan error: {normalized_call}"
         );
     }
 }

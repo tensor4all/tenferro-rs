@@ -1939,6 +1939,20 @@ impl TracedTensor {
     }
 
     /// Keep the lower triangle and zero the rest.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let lower = matrix.tril(0)?;
+    /// assert_eq!(lower.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traced output metadata registration fails.
     pub fn tril(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Tril { k },
@@ -1949,6 +1963,20 @@ impl TracedTensor {
     }
 
     /// Keep the upper triangle and zero the rest.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let upper = matrix.triu(0)?;
+    /// assert_eq!(upper.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traced output metadata registration fails.
     pub fn triu(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Triu { k },
