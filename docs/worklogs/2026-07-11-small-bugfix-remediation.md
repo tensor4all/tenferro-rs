@@ -7,11 +7,12 @@ source, then grouped the confirmed repairs by owning subsystem. Seven findings
 remain `Auto Fix` items implemented on `codex/batch-small-bugfixes`; one GPU
 finding is a false positive whose host-side proof is now explicit and guarded;
 and one additional issue was found stale because an earlier change on `main`
-already removed the reported pattern. No GitHub issue was closed or otherwise
-mutated during this session.
+already removed the reported pattern. Issue #1309 was closed after that source
+and test evidence was verified.
 
-This is an in-progress ledger. The implementation commits are present, but the
-full PR checklist, issue closure, PR creation, and merge are still pending.
+The implementation and required verification are complete. PR creation, merge,
+and closure of #1325, #1351, #1290, #1350, #1349, #1330, and #1352 remain
+pending.
 
 ## Context And Rules Read
 
@@ -33,14 +34,14 @@ full PR checklist, issue closure, PR creation, and merge are still pending.
 
 | Issue | Classification | Current evidence | Close criterion and current result | Recurrence prevention |
 | --- | --- | --- | --- | --- |
-| #1325 | Auto Fix | Commits `0570bad9` and `3525c61e` make faer/LAPACK tensor assembly and scratch refill helpers fallible and propagate errors through their callers. | No production `.expect()` remains in the reported helpers; focused linalg tests and the full PR checklist must pass before closure. **Implemented; final verification pending.** | Unit tests exercise overflow helpers, and `cpu_linalg_source_contract.rs` guards the fallible helper boundary. |
-| #1351 | Auto Fix | Commits `0570bad9` and `3525c61e` replace reported allocation products across faer and LAPACK assembly/workspace paths with checked element/byte calculations and typed errors. | Every reported `rows * cols` or equivalent allocation length is checked before allocation or FFI use. **Implemented; final verification pending.** | Helper unit tests cover overflow, while source-contract tests inventory the LAPACK allocation sites that are impractical to execute at extreme dimensions. |
-| #1290 | Auto Fix | Commits `9ae171dd`, `2f103426`, and `c36c2c08` make single-output metadata registration and concatenate graph construction return `Result`, migrate workspace callers, and document fallible triangular traced methods. | Metadata registration failures reach callers without `.expect()` or a fallback value, with all affected callers and docs migrated. **Implemented; final verification pending.** | `runtime/tests/public_surface_contract.rs` requires fallible helpers and forbids `.expect()` in the reported registration bodies. |
-| #1350 | Auto Fix | Commits `87c0979e`, `966ab814`, and `cd1a3b14` replace FFT cache poison recovery through `into_inner()` with an exact typed cache error and propagate it through FFT plan resolution. | A deliberately poisoned cache must produce the expected error through the public FFT path, and silent recovery must be absent. **Implemented; final verification pending.** | Concrete poison coverage plus public FFT source-contract/error-propagation tests require the exact failure path. |
-| #1349 | Auto Fix | Commit `9f593ecd` routes `I64` DynamicTruncate sizes through integer clamping, keeping only floating dtypes on the finite/rounding path. | `2^53 + 1` remains exact on 64-bit hosts, negative values clamp to zero, and oversized values clamp to the axis extent. **Implemented; final verification pending.** | A focused unit test covers the value immediately above binary64 integer precision and the ordinary clamp boundaries. |
-| #1330 | Auto Fix | Commits `7961fb8e`, `09b3b9d3`, `b1b834be`, and `2d2ef5ec` remove the CPU sign-only rejection, harden signed position calculations before narrowing, and align CPU/CUDA cropping behavior. | Valid negative edge padding crops on CPU and CUDA while invalid dimensions and index conversions remain checked. **Implemented; CUDA hardware verification pending.** | CPU value tests cover low/high cropping and overflow edges; GPU source contracts and ignored CubeCL value tests cover signed mapping and parity. |
-| #1352 | False Positive | The kernel-local `update_window_len` product is bounded by host launch validation. Commits `81bcf014`, `5fb5e5bb`, `579a138d`, and `8c003f5e` add concrete `// INVARIANT:` markers and lexically prove every scatter launch reaches the checked window/batch calculation without proof aliases. | Each launch path must preserve a checked host product before the kernel's unchecked multiplication, and the marker must remain adjacent and re-verifiable. **Evidence recorded and guarded; final suite pending.** | `cubecl_launch_contract.rs` inventories launch sites, rejects unchecked or aliased proofs, and ties the kernel marker to host validation. |
-| #1309 | Stale / Out Of Scope | This was already resolved on `main` by `9ad0fb1a` (`Enforce AD graph emission invariants (#1324)`). Current `one_like_fixed` at `crates/tenferro-linalg/src/ad/rules/support.rs:306` calls `ad_support::one_like`; the former `scalar_one_fixed` no longer exists, and `identity_matrix_fixed` calls `ad_support::identity_matrix`. | Neither reported helper emits `StdTensorOp::Exp` for a constant. Tests at `support.rs:829` and `support.rs:844` assert `Constant`/`BroadcastInDim` structure and reject analytic constant shortcuts. **Close as already fixed by #1324 after maintainer review; no batch code change needed.** | Shared semantic constant builders centralize dtype-aware emission, and graph-structure tests reject `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Expm1`, or `Log1p` as constant shortcuts. |
+| #1325 | Auto Fix | Commits `0570bad9` and `3525c61e` make faer/LAPACK tensor assembly and scratch refill helpers fallible and propagate errors through their callers. | No production `.expect()` remains in the reported helpers, and the full verification suite passes. **Ready to close when the remediation PR merges.** | Unit tests exercise overflow helpers, and `cpu_linalg_source_contract.rs` guards the fallible helper boundary. |
+| #1351 | Auto Fix | Commits `0570bad9` and `3525c61e` replace reported allocation products across faer and LAPACK assembly/workspace paths with checked element/byte calculations and typed errors. | Every reported `rows * cols` or equivalent allocation length is checked before allocation or FFI use, and the full verification suite passes. **Ready to close when the remediation PR merges.** | Helper unit tests cover overflow, while source-contract tests inventory the LAPACK allocation sites that are impractical to execute at extreme dimensions. |
+| #1290 | Auto Fix | Commits `9ae171dd`, `2f103426`, and `c36c2c08` make single-output metadata registration and concatenate graph construction return `Result`, migrate workspace callers, and document fallible triangular traced methods. | Metadata registration failures reach callers without `.expect()` or a fallback value; affected callers, runtime/XLA doctests, and docs are migrated. **Ready to close when the remediation PR merges.** | `runtime/tests/public_surface_contract.rs` requires fallible helpers and forbids `.expect()` in the reported registration bodies. |
+| #1350 | Auto Fix | Commits `87c0979e`, `966ab814`, and `cd1a3b14` replace FFT cache poison recovery through `into_inner()` with an exact typed cache error and propagate it through FFT plan resolution. | A deliberately poisoned cache produces the expected error through the public FFT path, silent recovery is absent, and the full verification suite passes. **Ready to close when the remediation PR merges.** | Concrete poison coverage plus public FFT source-contract/error-propagation tests require the exact failure path. |
+| #1349 | Auto Fix | Commit `9f593ecd` routes `I64` DynamicTruncate sizes through integer clamping, keeping only floating dtypes on the finite/rounding path. | `2^53 + 1` remains exact on 64-bit hosts, negative values clamp to zero, oversized values clamp to the axis extent, and the full verification suite passes. **Ready to close when the remediation PR merges.** | A focused unit test covers the value immediately above binary64 integer precision and the ordinary clamp boundaries. |
+| #1330 | Auto Fix | Commits `7961fb8e`, `09b3b9d3`, `b1b834be`, and `2d2ef5ec` remove the CPU sign-only rejection, harden signed position calculations before narrowing, and align CPU/CUDA cropping behavior. | Valid negative edge padding crops on CPU and CUDA while invalid dimensions and index conversions remain checked; the A100 ignored test passed after RED/GREEN mutation. **Ready to close when the remediation PR merges.** | CPU value tests cover low/high cropping and overflow edges; GPU source contracts and ignored CubeCL value tests cover signed mapping and parity. |
+| #1352 | False Positive | The kernel-local `update_window_len` product is bounded by host launch validation. Commits `81bcf014`, `5fb5e5bb`, `579a138d`, and `8c003f5e` add concrete `// INVARIANT:` markers and lexically prove every scatter launch reaches the checked window/batch calculation without proof aliases. | Each launch path preserves a checked host product before the kernel's unchecked multiplication; CUDA checks and the full verification suite pass. **Ready to close with the remediation PR as a guarded false positive.** | `cubecl_launch_contract.rs` inventories launch sites, rejects unchecked or aliased proofs, and ties the kernel marker to host validation. |
+| #1309 | Stale / Out Of Scope | This was already resolved on `main` by `9ad0fb1a` (`Enforce AD graph emission invariants (#1324)`). Current `one_like_fixed` at `crates/tenferro-linalg/src/ad/rules/support.rs:306` calls `ad_support::one_like`; the former `scalar_one_fixed` no longer exists, and `identity_matrix_fixed` calls `ad_support::identity_matrix`. | Neither reported helper emits `StdTensorOp::Exp` for a constant. Tests at `support.rs:829` and `support.rs:844` assert `Constant`/`BroadcastInDim` structure and reject analytic constant shortcuts. **Closed as already fixed by #1324 after source and test verification.** | Shared semantic constant builders centralize dtype-aware emission, and graph-structure tests reject `Exp`, `Log`, `Sin`, `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Expm1`, or `Log1p` as constant shortcuts. |
 
 ## Issue #1309 Evidence
 
@@ -60,9 +61,8 @@ into `zeros.rs`:
 - `identity_matrix_fixed_uses_semantic_constant_not_analytic_shortcut` uses the
   same analytic-shortcut rejection helper.
 
-This supports closing #1309 as stale/already fixed, citing commit
-`9ad0fb1a96112bd1e0ee33a3c581198745923635` and its regression tests. This work
-log does not perform that GitHub mutation.
+Issue #1309 was closed as stale/already fixed, citing commit
+`9ad0fb1a96112bd1e0ee33a3c581198745923635` and its regression tests.
 
 ## Scope And Design Exclusions
 
@@ -77,46 +77,51 @@ The batch does not change those policies or APIs. It also does not introduce a
 new backend, operation family, dependency, feature flag, AD convention, or
 coverage policy.
 
-## Verification Status
+## Verification Performed
 
-The implementation commits contain focused unit, source-contract, and ignored
-CUDA regression coverage described in the ledger. During work-log preparation,
-the #1309 source and commit history were inspected directly, and the following
-narrow checks were run:
+- `cargo fmt --all --check`: passed.
+- The CI-parity workspace and tropical clippy commands passed with warnings
+  denied.
+- `cargo test --workspace --release`: passed after migrating the remaining
+  runtime and XLA doctest call sites to the fallible traced API.
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+  followed by `python3 scripts/check-coverage.py coverage.json`: passed for all
+  150 measured files; three configured files were excluded.
+- `cargo doc --workspace --no-deps` followed by
+  `python3 scripts/check-docs-site.py`: passed, including four guide dependency
+  checks and rustdoc output for all 13 workspace crates checked by the script.
+- `python3 scripts/repository-rules-review.py --base origin/main --head HEAD
+  --output-json /tmp/repository-rules-review.json` on the committed head:
+  passed with zero findings and no waiver.
+- The sensitive-detector finding in the GPU source-contract test was a lexical
+  false positive. Renaming the incidental lexeme resolved it; no detector
+  suppression, baseline entry, or waiver was added.
+- On an NVIDIA A100, the signed-padding ignored regression test was mutation
+  checked RED/GREEN and passed with the fix restored. The associated CUDA
+  checks also passed.
+- The focused #1309 semantic-constant regression test passed, and the issue was
+  closed as already fixed by #1324.
+- `git diff --check`: passed for the implementation state before this final
+  work-log update and is rerun for the documentation commit.
 
-- `cargo test -p tenferro-linalg --features autodiff
-  one_like_fixed_uses_semantic_constant_not_analytic_shortcut --lib`: passed,
-  one test.
-- `git diff --check`: passed.
-- `python3 scripts/check-docs-site.py`: snippet and guide dependency checks
-  passed, but the overall command stopped because workspace rustdoc output had
-  not yet been generated. It must be rerun after `cargo doc --workspace
-  --no-deps` during final verification.
-
-The following repository-required checks are **pending** and must not be
-inferred from this ledger: release workspace tests, CI-parity clippy, LLVM
-coverage plus the per-file threshold check, workspace rustdoc, the committed
-repository-rules review, and CUDA ignored tests on supported NVIDIA hardware.
-Issue closure, PR creation, branch-protection confirmation, non-squash
-auto-merge configuration, and merge are also pending.
+PR creation, merge, and closure of #1325, #1351, #1290, #1350, #1349, #1330,
+and #1352 remain pending until the remediation branch is merged.
 
 ## Environment Notes
 
-The linalg changes cover faer and LAPACK allocation/error paths. Full release
-tests may depend on the host BLAS/LAPACK linker configuration; no result is
-claimed here until that command is run. Coverage generation can require
-substantial target-directory and JSON disk space, so available disk should be
-checked before the final coverage run. CUDA value tests require the documented
-CUDA toolkit and runtime libraries; source-contract coverage does not replace
-that hardware run.
+The linalg changes cover faer and LAPACK allocation/error paths. The final
+release test and coverage runs completed with the available BLAS/LAPACK linker
+configuration. Coverage generation required substantial target-directory and
+JSON disk space but completed successfully. CUDA value verification used an
+NVIDIA A100 with the documented CUDA runtime setup.
 
 ## Residual Risks
 
 - The broad fallible traced-API migration touched runtime, AD, einsum, XLA,
-  tutorials, and tests; only the full release workspace test can establish
-  cross-crate completeness.
-- GPU signed-padding tests are ignored without CUDA, so runtime parity remains
-  hardware-gated even though CPU tests and source contracts cover the mapping.
+  tutorials, and tests. The release workspace test passed, but downstream code
+  outside this workspace may still require the same source migration.
+- GPU signed-padding runtime parity was verified on an A100; other CUDA device
+  generations remain covered by the same CubeCL path but were not sampled.
 - #1352 remains correct only while every scatter launch preserves the checked
   host proof; the lexical contract tests intentionally fail when a new launch
   path or proof alias is introduced.
