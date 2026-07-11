@@ -1951,14 +1951,14 @@ where
     let lhs_scalar = lhs.shape().is_empty();
     let output_shape = if lhs_scalar { rhs.shape() } else { lhs.shape() };
     let output = alloc_output::<I>(backend.runtime(), output_shape)?;
-    let flag = alloc_output::<i32>(backend.runtime(), &[1])?;
     let output_arg = typed_tensor_array_arg(&output, op)?;
     let lhs_arg = typed_tensor_array_arg(lhs, op)?;
     let rhs_arg = typed_tensor_array_arg(rhs, op)?;
-    let flag_arg = typed_tensor_array_arg(&flag, op)?;
     if output.n_elements() == 0 {
         return Ok(output);
     }
+    let flag = alloc_output::<i32>(backend.runtime(), &[1])?;
+    let flag_arg = typed_tensor_array_arg(&flag, op)?;
     launch_nullary_into(
         backend.runtime(),
         &flag,
