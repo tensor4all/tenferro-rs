@@ -1,4 +1,121 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
+    for entry in fs::read_dir(dir).expect("source directory should be readable") {
+        let path = entry.expect("source entry should be readable").path();
+        if path.is_dir() {
+            rust_sources_under(&path, sources);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("source {path:?} should be readable: {err}"));
+            sources.push((path, source));
+        }
+    }
+}
+
+fn production_rust_sources() -> Vec<(PathBuf, String)> {
+    let mut sources = Vec::new();
+    rust_sources_under(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    sources
+}
+
+fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), String> {
+    let invariants = [
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_complex_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+    ];
+    let mut product_calls = Vec::new();
+    let mut launches = Vec::new();
+    for (path, source) in sources {
+        let lines: Vec<_> = source.lines().collect();
+        for (line_index, line) in lines.iter().enumerate() {
+            if line.contains("update_window_len(") && !line.contains("fn update_window_len(") {
+                let context =
+                    (line_index >= 2).then(|| lines[line_index - 2..=line_index].join("\n"));
+                let adjacent = context
+                    .as_deref()
+                    .is_some_and(|context| invariants.contains(&context));
+                product_calls.push((path, line_index + 1, adjacent));
+            }
+            if line.contains("scatter_float_kernel::launch_unchecked")
+                || line.contains("scatter_complex_kernel::launch_unchecked")
+            {
+                launches.push((path, line_index + 1));
+            }
+        }
+    }
+
+    if product_calls.len() != 2 {
+        return Err(format!(
+            "expected exactly two update_window_len call sites, found {product_calls:?}"
+        ));
+    }
+    for (path, line, adjacent) in product_calls {
+        if !adjacent {
+            return Err(format!(
+                "{path:?}:{line} lacks the adjacent checked host invariant"
+            ));
+        }
+    }
+    let all_source = sources
+        .iter()
+        .map(|(_, source)| source.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for invariant in invariants {
+        if all_source.matches(invariant.trim_start()).count() != 1 {
+            return Err(format!(
+                "expected exactly one concrete invariant {invariant:?}"
+            ));
+        }
+    }
+
+    if launches.len() != 2 {
+        return Err(format!(
+            "expected exactly two scatter update kernel launches, found {launches:?}"
+        ));
+    }
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .ok_or_else(|| "cubecl/mod.rs was not inventoried".to_owned())?;
+    for (name, start, end, launch) in [
+        (
+            "scatter_float_typed",
+            "    fn scatter_float_typed<",
+            "    fn scatter_complex_typed<",
+            "indexing::scatter_float_kernel::launch_unchecked",
+        ),
+        (
+            "scatter_complex_typed",
+            "    fn scatter_complex_typed<",
+            "impl BackendRuntimeCache for CudaBackend",
+            "indexing::scatter_complex_kernel::launch_unchecked",
+        ),
+    ] {
+        let section = source_section(mod_source, start, end);
+        let required = [
+            "scatter_launch_meta(",
+            "let update_len = scatter_update_len(&meta)?;",
+            "if update_len == 0 {\n            return Ok(output);\n        }",
+            launch,
+        ];
+        let mut offset = 0;
+        for needle in required {
+            let Some(found) = section[offset..].find(needle) else {
+                return Err(format!("{name} lacks ordered launch proof {needle:?}"));
+            };
+            offset += found + needle.len();
+        }
+    }
+    Ok(())
+}
 
 fn cubecl_source(file: &str) -> String {
     fs::read_to_string(
@@ -78,7 +195,11 @@ fn cubecl_scatter_does_not_use_single_thread_launch_fallback() {
 
 #[test]
 fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
-    let mod_source = cubecl_source("mod.rs");
+    let sources = production_rust_sources();
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .expect("cubecl/mod.rs should be inventoried");
     let update_len = source_section(
         &mod_source,
         "fn scatter_update_len(",
@@ -94,56 +215,36 @@ fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
         ],
     );
 
-    let launch_paths = [
-        (
-            "scatter_float_typed",
-            source_section(
-                &mod_source,
-                "    fn scatter_float_typed<",
-                "    fn scatter_complex_typed<",
-            ),
-            "indexing::scatter_float_kernel::launch_unchecked",
-        ),
-        (
-            "scatter_complex_typed",
-            source_section(
-                &mod_source,
-                "    fn scatter_complex_typed<",
-                "impl BackendRuntimeCache for CudaBackend",
-            ),
-            "indexing::scatter_complex_kernel::launch_unchecked",
-        ),
-    ];
-    assert_eq!(
-        mod_source
-            .matches("scatter_float_kernel::launch_unchecked")
-            .count()
-            + mod_source
-                .matches("scatter_complex_kernel::launch_unchecked")
-                .count(),
-        launch_paths.len(),
-        "every scatter update kernel launch path must be covered below"
-    );
-    for (name, source, launch) in launch_paths {
-        assert_ordered_needles(
-            name,
-            source,
-            &[
-                "scatter_launch_meta(",
-                "let update_len = scatter_update_len(&meta)?;",
-                "if update_len == 0 {\n            return Ok(output);\n        }",
-                launch,
-            ],
-        );
-    }
+    scatter_update_window_contract(&sources).unwrap_or_else(|err| panic!("{err}"));
+}
 
-    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
-    let invariant = "// INVARIANT: `scatter_update_len` checked the batch and window products,\n    // checked their combined update-domain bound, and returned before launch when it was zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());";
-    assert_eq!(
-        indexing_source.matches(invariant).count(),
-        2,
-        "both scatter kernels must keep the checked host-domain proof adjacent to update_window_len"
-    );
+#[test]
+fn scatter_update_window_inventory_rejects_unproved_new_paths() {
+    let sources = production_rust_sources();
+
+    let invariant = "// INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let bare_call = "let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let mut one_unmarked = sources.clone();
+    let indexing_source = one_unmarked
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("kernels/indexing.rs").then_some(source))
+        .expect("indexing.rs should be inventoried");
+    *indexing_source = indexing_source.replacen(invariant, bare_call, 1);
+    assert!(scatter_update_window_contract(&one_unmarked).is_err());
+
+    let mut extra_product = sources.clone();
+    extra_product.push((
+        PathBuf::from("synthetic/unmarked.rs"),
+        "let third = update_window_len(updates, dims);".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_product).is_err());
+
+    let mut extra_launch = sources;
+    extra_launch.push((
+        PathBuf::from("synthetic/launch.rs"),
+        "indexing::scatter_float_kernel::launch_unchecked();".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_launch).is_err());
 }
 
 #[test]

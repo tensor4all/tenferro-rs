@@ -306,8 +306,8 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
-    // INVARIANT: `scatter_update_len` checked the batch and window products,
-    // checked their combined update-domain bound, and returned before launch when it was zero.
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_float_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {
@@ -410,8 +410,8 @@ pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimiti
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
-    // INVARIANT: `scatter_update_len` checked the batch and window products,
-    // checked their combined update-domain bound, and returned before launch when it was zero.
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_complex_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {
