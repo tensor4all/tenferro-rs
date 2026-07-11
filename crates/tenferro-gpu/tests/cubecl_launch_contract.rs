@@ -25,30 +25,197 @@ fn production_rust_sources() -> Vec<(PathBuf, String)> {
     sources
 }
 
+#[derive(Debug)]
+struct RustToken {
+    text: String,
+    offset: usize,
+}
+
+fn rust_code_tokens(source: &str) -> Vec<RustToken> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"//") {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        let raw = if bytes[i] == b'r' {
+            Some(i + 1)
+        } else if bytes[i..].starts_with(b"br") {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(mut cursor) = raw {
+            let mut hashes = 0;
+            while cursor < bytes.len() && bytes[cursor] == b'#' {
+                hashes += 1;
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'"' {
+                i = cursor + 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'"' && bytes[i + 1..].starts_with(&vec![b'#'; hashes]) {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        let quote = if bytes[i] == b'"' {
+            Some(i)
+        } else if bytes[i..].starts_with(b"b\"") {
+            Some(i + 1)
+        } else {
+            None
+        };
+        if let Some(quote) = quote {
+            i = quote + 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if bytes[i] == b'\'' {
+            let mut end = i + 1;
+            if end < bytes.len() && bytes[end] == b'\\' {
+                end += 2;
+            } else {
+                end += 1;
+            }
+            if end < bytes.len() && bytes[end] == b'\'' {
+                i = end + 1;
+                continue;
+            }
+        }
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        } else {
+            i += if bytes[i..].starts_with(b"::") { 2 } else { 1 };
+        }
+        tokens.push(RustToken {
+            text: source[start..i].to_owned(),
+            offset: start,
+        });
+    }
+    tokens
+}
+
+fn token_positions(tokens: &[RustToken], sequence: &[&str]) -> Vec<usize> {
+    tokens
+        .windows(sequence.len())
+        .filter(|window| {
+            window
+                .iter()
+                .zip(sequence)
+                .all(|(token, expected)| token.text == *expected)
+        })
+        .map(|window| window[0].offset)
+        .collect()
+}
+
+fn contains_token_subsequence(tokens: &[RustToken], sequence: &[&str]) -> bool {
+    let mut next = 0;
+    for token in tokens {
+        if token.text == sequence[next] {
+            next += 1;
+            if next == sequence.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), String> {
     let invariants = [
         "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
         "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_complex_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
     ];
     let mut product_calls = Vec::new();
+    let mut definitions = Vec::new();
     let mut launches = Vec::new();
     for (path, source) in sources {
-        let lines: Vec<_> = source.lines().collect();
-        for (line_index, line) in lines.iter().enumerate() {
-            if line.contains("update_window_len(") && !line.contains("fn update_window_len(") {
-                let context =
-                    (line_index >= 2).then(|| lines[line_index - 2..=line_index].join("\n"));
-                let adjacent = context
-                    .as_deref()
-                    .is_some_and(|context| invariants.contains(&context));
-                product_calls.push((path, line_index + 1, adjacent));
+        let tokens = rust_code_tokens(source);
+        let local_definitions: Vec<_> = tokens
+            .windows(2)
+            .filter(|window| window[0].text == "fn" && window[1].text == "update_window_len")
+            .map(|window| window[1].offset)
+            .collect();
+        definitions.extend(local_definitions.iter().copied());
+        for offset in token_positions(&tokens, &["update_window_len", "("]) {
+            if local_definitions.contains(&offset) {
+                continue;
             }
-            if line.contains("scatter_float_kernel::launch_unchecked")
-                || line.contains("scatter_complex_kernel::launch_unchecked")
-            {
-                launches.push((path, line_index + 1));
+            let line_start = source[..offset]
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            let before = source[..line_start].trim_end_matches('\n');
+            let context_start = before
+                .rmatch_indices('\n')
+                .nth(1)
+                .map_or(0, |(newline, _)| newline + 1);
+            let call_end = source[offset..]
+                .find(';')
+                .map_or(source.len(), |end| offset + end + 1);
+            let context = &source[context_start..call_end];
+            product_calls.push((
+                path,
+                offset,
+                invariants.iter().position(|item| context.contains(item)),
+            ));
+        }
+        for sequence in [
+            &["scatter_float_kernel", "::", "launch_unchecked"][..],
+            &["scatter_complex_kernel", "::", "launch_unchecked"][..],
+        ] {
+            for offset in token_positions(&tokens, sequence) {
+                launches.push((path, offset));
             }
         }
+    }
+
+    if definitions.len() != 1 {
+        return Err(format!(
+            "expected one update_window_len definition, found {definitions:?}"
+        ));
     }
 
     if product_calls.len() != 2 {
@@ -56,24 +223,20 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
             "expected exactly two update_window_len call sites, found {product_calls:?}"
         ));
     }
-    for (path, line, adjacent) in product_calls {
-        if !adjacent {
+    let mut seen_invariants = Vec::new();
+    for (path, line, invariant_index) in product_calls {
+        let Some(invariant_index) = invariant_index else {
             return Err(format!(
                 "{path:?}:{line} lacks the adjacent checked host invariant"
             ));
-        }
+        };
+        seen_invariants.push(invariant_index);
     }
-    let all_source = sources
-        .iter()
-        .map(|(_, source)| source.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    for invariant in invariants {
-        if all_source.matches(invariant.trim_start()).count() != 1 {
-            return Err(format!(
-                "expected exactly one concrete invariant {invariant:?}"
-            ));
-        }
+    seen_invariants.sort_unstable();
+    if seen_invariants != [0, 1] {
+        return Err(format!(
+            "expected one concrete invariant per kernel, found {seen_invariants:?}"
+        ));
     }
 
     if launches.len() != 2 {
@@ -85,6 +248,62 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         .iter()
         .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
         .ok_or_else(|| "cubecl/mod.rs was not inventoried".to_owned())?;
+    let meta_tokens = rust_code_tokens(source_section(
+        mod_source,
+        "fn scatter_launch_meta(",
+        "impl TensorIndexing for CudaBackend",
+    ));
+    for required in [
+        &[
+            "ensure_axes_unique",
+            "(",
+            ",",
+            ",",
+            "&",
+            "config",
+            ".",
+            "update_window_dims",
+            ",",
+            "updates_shape",
+            ".",
+            "len",
+            "(",
+            ")",
+        ][..],
+        &[
+            "window_shape_updates",
+            "=",
+            "config",
+            ".",
+            "update_window_dims",
+            ".",
+            "iter",
+            "(",
+            ")",
+            ".",
+            "map",
+            "(",
+            "|",
+            "&",
+            "axis",
+            "|",
+            "updates_shape",
+            "[",
+            "axis",
+            "]",
+            ")",
+            ".",
+            "collect",
+            "(",
+            ")",
+        ][..],
+    ] {
+        if token_positions(&meta_tokens, required).is_empty() {
+            return Err(format!(
+                "scatter_launch_meta lacks update-window derivation proof {required:?}"
+            ));
+        }
+    }
     for (name, start, end, launch) in [
         (
             "scatter_float_typed",
@@ -100,18 +319,45 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         ),
     ] {
         let section = source_section(mod_source, start, end);
+        let section_tokens = rust_code_tokens(section);
+        let kernel = launch
+            .strip_prefix("indexing::")
+            .and_then(|launch| launch.strip_suffix("::launch_unchecked"))
+            .expect("launch descriptor should be qualified");
         let required = [
-            "scatter_launch_meta(",
-            "let update_len = scatter_update_len(&meta)?;",
-            "if update_len == 0 {\n            return Ok(output);\n        }",
-            launch,
+            "scatter_launch_meta",
+            "(",
+            "let",
+            "update_len",
+            "=",
+            "scatter_update_len",
+            "(",
+            "&",
+            "meta",
+            ")",
+            "?",
+            ";",
+            "if",
+            "update_len",
+            "=",
+            "=",
+            "0",
+            "{",
+            "return",
+            "Ok",
+            "(",
+            "output",
+            ")",
+            ";",
+            "}",
+            "indexing",
+            "::",
+            kernel,
+            "::",
+            "launch_unchecked",
         ];
-        let mut offset = 0;
-        for needle in required {
-            let Some(found) = section[offset..].find(needle) else {
-                return Err(format!("{name} lacks ordered launch proof {needle:?}"));
-            };
-            offset += found + needle.len();
+        if !contains_token_subsequence(&section_tokens, &required) {
+            return Err(format!("{name} lacks ordered checked launch proof"));
         }
     }
     Ok(())
@@ -219,6 +465,45 @@ fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
 }
 
 #[test]
+fn rust_token_inventory_ignores_literals_and_accepts_multiline_calls() {
+    let source = r####"
+        // update_window_len(fake)
+        /* scatter_float_kernel::launch_unchecked(fake) */
+        let normal = "update_window_len(fake)";
+        let raw = r#"scatter_complex_kernel::launch_unchecked(fake)"#;
+        let byte = b"update_window_len(fake)";
+        let character = '(';
+        update_window_len
+            (
+                updates,
+                dims,
+            );
+        scatter_float_kernel
+            ::
+            launch_unchecked
+            ();
+    "####;
+    let tokens = rust_code_tokens(source);
+    assert_eq!(
+        token_positions(&tokens, &["update_window_len", "("]).len(),
+        1
+    );
+    assert_eq!(
+        token_positions(
+            &tokens,
+            &["scatter_float_kernel", "::", "launch_unchecked", "("]
+        )
+        .len(),
+        1
+    );
+    assert!(token_positions(
+        &tokens,
+        &["scatter_complex_kernel", "::", "launch_unchecked", "("]
+    )
+    .is_empty());
+}
+
+#[test]
 fn scatter_update_window_inventory_rejects_unproved_new_paths() {
     let sources = production_rust_sources();
 
@@ -231,6 +516,26 @@ fn scatter_update_window_inventory_rejects_unproved_new_paths() {
         .expect("indexing.rs should be inventoried");
     *indexing_source = indexing_source.replacen(invariant, bare_call, 1);
     assert!(scatter_update_window_contract(&one_unmarked).is_err());
+
+    let mut divergent_derivation = sources.clone();
+    let mod_source = divergent_derivation
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen("updates_shape[axis]", "operand_shape[axis]", 1);
+    assert!(scatter_update_window_contract(&divergent_derivation).is_err());
+
+    let mut divergent_axes = sources.clone();
+    let mod_source = divergent_axes
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen(
+        "&config.update_window_dims,\n        updates_shape.len(),",
+        "&config.inserted_window_dims,\n        updates_shape.len(),",
+        1,
+    );
+    assert!(scatter_update_window_contract(&divergent_axes).is_err());
 
     let mut extra_product = sources.clone();
     extra_product.push((
