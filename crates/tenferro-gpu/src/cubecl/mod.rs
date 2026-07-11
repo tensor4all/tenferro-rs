@@ -2810,6 +2810,9 @@ impl TensorAnalytic for CudaBackend {
             PrimitiveOpKind::Pow,
             op_descriptor::GpuLaunchKind::BinaryFloatInt,
         )?;
+        if lhs.dtype() != rhs.dtype() {
+            return Err(dtype_mismatch(op, lhs, rhs));
+        }
         dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(

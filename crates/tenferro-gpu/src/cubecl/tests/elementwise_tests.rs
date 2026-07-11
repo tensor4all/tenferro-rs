@@ -20,7 +20,11 @@ fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
         } else {
             assert_eq!(actual, expected);
             if expected == T::zero() {
-                assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
+                assert_eq!(
+                    actual.is_sign_negative(),
+                    expected.is_sign_negative(),
+                    "zero sign mismatch: actual={actual:?}, expected={expected:?}"
+                );
             }
         }
     }
@@ -94,36 +98,44 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
     for (scalar, complex, expected_dtype) in cases {
         let gpu_scalar = upload(&gpu, &scalar);
         let gpu_complex = upload(&gpu, &complex);
-        for (expected, actual) in [
+        for (case, expected, actual) in [
             (
+                "scalar+complex",
                 cpu.add(&scalar, &complex),
                 gpu.add(&gpu_scalar, &gpu_complex),
             ),
             (
+                "complex+scalar",
                 cpu.add(&complex, &scalar),
                 gpu.add(&gpu_complex, &gpu_scalar),
             ),
             (
+                "scalar-complex",
                 cpu.sub(&scalar, &complex),
                 gpu.sub(&gpu_scalar, &gpu_complex),
             ),
             (
+                "complex-scalar",
                 cpu.sub(&complex, &scalar),
                 gpu.sub(&gpu_complex, &gpu_scalar),
             ),
             (
+                "scalar*complex",
                 cpu.mul(&scalar, &complex),
                 gpu.mul(&gpu_scalar, &gpu_complex),
             ),
             (
+                "complex*scalar",
                 cpu.mul(&complex, &scalar),
                 gpu.mul(&gpu_complex, &gpu_scalar),
             ),
             (
+                "scalar/complex",
                 cpu.div(&scalar, &complex),
                 gpu.div(&gpu_scalar, &gpu_complex),
             ),
             (
+                "complex/scalar",
                 cpu.div(&complex, &scalar),
                 gpu.div(&gpu_complex, &gpu_scalar),
             ),
@@ -131,9 +143,60 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             let expected = expected.unwrap();
             let actual = download(&gpu, &actual.unwrap());
             assert_eq!(actual.dtype(), expected_dtype);
-            assert_eq!(actual.shape(), &[4]);
+            assert_eq!(actual.shape(), &[4], "unexpected shape for {case}");
             assert_complex_classes_and_values_match(&actual, &expected);
         }
+
+        for (op, result, expected_lhs, expected_rhs) in [
+            (
+                "pow",
+                gpu.pow(&gpu_scalar, &gpu_complex),
+                scalar.dtype(),
+                complex.dtype(),
+            ),
+            (
+                "pow",
+                gpu.pow(&gpu_complex, &gpu_scalar),
+                complex.dtype(),
+                scalar.dtype(),
+            ),
+            (
+                "rem",
+                gpu.rem(&gpu_scalar, &gpu_complex),
+                scalar.dtype(),
+                complex.dtype(),
+            ),
+            (
+                "rem",
+                gpu.rem(&gpu_complex, &gpu_scalar),
+                complex.dtype(),
+                scalar.dtype(),
+            ),
+        ] {
+            assert!(matches!(
+                result,
+                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
+                    if actual == op && lhs == expected_lhs && rhs == expected_rhs
+            ));
+        }
+    }
+
+    for (scalar, complex) in [
+        (
+            tensor_f32(vec![], vec![2.0]),
+            tensor_c32(vec![1], vec![Complex32::new(1.0e38, 1.0e38)]),
+        ),
+        (
+            tensor_f64(vec![], vec![2.0]),
+            tensor_c64(vec![1], vec![Complex64::new(1.0e308, 1.0e308)]),
+        ),
+    ] {
+        let expected = cpu.div(&scalar, &complex).unwrap();
+        let actual = gpu
+            .div(&upload(&gpu, &scalar), &upload(&gpu, &complex))
+            .map(|value| download(&gpu, &value))
+            .unwrap();
+        assert_complex_classes_and_values_match(&actual, &expected);
     }
 
     for (lhs, rhs, expected_lhs, expected_rhs) in [

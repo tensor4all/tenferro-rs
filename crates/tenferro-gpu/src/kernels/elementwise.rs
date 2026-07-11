@@ -179,16 +179,9 @@ pub fn scalar_real_complex_binary<F: Float>(
             (re * scalar, im * scalar)
         } else if !real_lhs {
             (re / scalar, im / scalar)
-        } else if (if re >= zero { re } else { zero - re })
-            >= (if im >= zero { im } else { zero - im })
-        {
-            let ratio = im / re;
-            let denom = re + im * ratio;
-            (scalar / denom, (zero - scalar) * ratio / denom)
         } else {
-            let ratio = re / im;
-            let denom = im + re * ratio;
-            (scalar * ratio / denom, (zero - scalar) / denom)
+            let norm_sqr = re * re + im * im;
+            (scalar * re / norm_sqr, -(scalar * im / norm_sqr))
         };
         out[complex_idx] = out_re;
         out[complex_idx + 1] = out_im;
