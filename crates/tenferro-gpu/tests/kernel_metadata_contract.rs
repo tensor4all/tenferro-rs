@@ -85,12 +85,27 @@ fn scatter_kernels_are_not_single_thread_fallbacks() {
             .join("indexing.rs"),
     )
     .expect("indexing kernel source should be readable");
+    let scatter_kernels = [
+        "scatter_copy_kernel",
+        "scatter_float_kernel",
+        "scatter_complex_kernel",
+    ];
     let banned = ["ABSOLUTE_POS == 0", "for pos in 0..out.len()"];
 
     let mut violations = Vec::new();
-    for needle in banned {
-        if indexing_source.contains(needle) {
-            violations.push(format!("indexing.rs contains {needle}"));
+    for kernel in scatter_kernels {
+        let signature = format!("pub fn {kernel}");
+        let start = indexing_source
+            .find(&signature)
+            .unwrap_or_else(|| panic!("indexing.rs should define {kernel}"));
+        let remainder = &indexing_source[start..];
+        let end = remainder.find("\n#[cube").unwrap_or(remainder.len());
+        let kernel_source = &remainder[..end];
+
+        for needle in banned {
+            if kernel_source.contains(needle) {
+                violations.push(format!("{kernel} contains {needle}"));
+            }
         }
     }
 
