@@ -2,9 +2,77 @@
 use tenferro_tensor::TensorReduction;
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c64, tensor_f64,
-    tensor_i32, tensor_i64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
+    tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+
+#[test]
+#[ignore]
+fn test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values() {
+    let inputs = [
+        tensor_f32(vec![2, 2], vec![1.0, -2.0, 3.0, 4.0]),
+        tensor_f64(vec![2, 2], vec![1.0, -2.0, 3.0, 4.0]),
+        tensor_i32(vec![2, 2], vec![1, -2, 3, 4]),
+        tensor_i64(vec![2, 2], vec![1, -2, 3, 4]),
+        tensor_c32(
+            vec![2, 2],
+            vec![
+                num_complex::Complex32::new(1.0, 1.0),
+                num_complex::Complex32::new(2.0, -1.0),
+                num_complex::Complex32::new(-0.5, 0.25),
+                num_complex::Complex32::new(3.0, 2.0),
+            ],
+        ),
+        tensor_c64(
+            vec![2, 2],
+            vec![
+                num_complex::Complex64::new(1.0, 1.0),
+                num_complex::Complex64::new(2.0, -1.0),
+                num_complex::Complex64::new(-0.5, 0.25),
+                num_complex::Complex64::new(3.0, 2.0),
+            ],
+        ),
+    ];
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for input in &inputs {
+        let gpu_input = upload(&gpu, input);
+        for (expected, gpu_out) in [
+            (
+                cpu.reduce_sum(input, &[0, 1]).unwrap(),
+                gpu.reduce_sum(&gpu_input, &[0, 1]).unwrap(),
+            ),
+            (
+                cpu.reduce_prod(input, &[0, 1]).unwrap(),
+                gpu.reduce_prod(&gpu_input, &[0, 1]).unwrap(),
+            ),
+        ] {
+            assert!(expected.shape().is_empty());
+            assert!(gpu_out.shape().is_empty());
+            let actual = download(&gpu, &gpu_out);
+            assert_tensor_close(&actual, &expected, 1e-5);
+        }
+
+        if !matches!(input, crate::Tensor::C32(_) | crate::Tensor::C64(_)) {
+            for (expected, gpu_out) in [
+                (
+                    cpu.reduce_min(input, &[0, 1]).unwrap(),
+                    gpu.reduce_min(&gpu_input, &[0, 1]).unwrap(),
+                ),
+                (
+                    cpu.reduce_max(input, &[0, 1]).unwrap(),
+                    gpu.reduce_max(&gpu_input, &[0, 1]).unwrap(),
+                ),
+            ] {
+                assert!(expected.shape().is_empty());
+                assert!(gpu_out.shape().is_empty());
+                let actual = download(&gpu, &gpu_out);
+                assert_tensor_close(&actual, &expected, 0.0);
+            }
+        }
+    }
+}
 
 #[test]
 #[ignore]

@@ -79,8 +79,10 @@ CUDA GPU support is implemented through the feature-gated CubeCL backend across
 the concrete tensor, eager, and traced execution surfaces. Performance
 optimization is still active work. The remaining CUDA limitations are specific:
 `eig`, `full_piv_lu`, `full_piv_lu_solve`, `dynamic_update_slice`, integer
-numeric/linalg gaps beyond add/mul/compare/select and sum/prod reductions, and
-selected complex analytic or ordering operations.
+numeric/linalg gaps outside the currently supported add/sub/mul/div/rem,
+neg/abs/sign/pow, comparison/selection/minimum/maximum, and
+sum/product/minimum/maximum reductions, `Bool` arithmetic/reduction/linalg and
+additive-scatter gaps, and selected complex analytic or ordering operations.
 HIP/ROCm remains stubbed. Outside explicit GPU implementation tasks, check
 `docs/guides/devices-and-gpu.md` and the current CUDA/CubeCL backend tests
 before assuming a specific op/dtype/backend combination is supported.

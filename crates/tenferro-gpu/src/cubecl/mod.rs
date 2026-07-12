@@ -124,11 +124,13 @@ pub(crate) mod op_descriptor;
 mod runtime;
 
 use dispatch::{
-    alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
-    ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_binary,
-    launch_binary_tensor, launch_compare_bool, launch_nullary_into, launch_select_bool,
-    launch_ternary, launch_unary, launch_unary_tensor, launch_unary_tensor_into,
+    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
+    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
+    launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
+    launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
+    launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
@@ -580,6 +582,31 @@ impl CudaBackend {
         )
     }
 
+    fn transpose_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        perm: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        validate_permutation("transpose", perm, input.shape().len())?;
+        let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "transpose",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::transpose_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(perm),
+                );
+            },
+        )
+    }
+
     fn broadcast_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -609,6 +636,32 @@ impl CudaBackend {
         )
     }
 
+    fn broadcast_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        validate_broadcast_in_dim(input.shape(), shape, dims)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            shape,
+            "broadcast_in_dim",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::broadcast_in_dim_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(dims),
+                    shape.len(),
+                );
+            },
+        )
+    }
+
     fn reverse_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -625,6 +678,31 @@ impl CudaBackend {
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
                 structural::reverse_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(axes),
+                    input.shape().len(),
+                );
+            },
+        )
+    }
+
+    fn reverse_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<bool>> {
+        ensure_axes_unique("reverse", "axes", axes, input.shape().len())?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "reverse",
+            |client, count, dim, out, input_arg| unsafe {
+                structural::reverse_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -783,92 +861,329 @@ impl CudaBackend {
         )
     }
 
+    fn convert_numeric<In, Out>(&self, input: &TypedTensor<In>) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
+            structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                client, count, dim, out, input,
+            );
+        })
+    }
+
+    fn launch_cast_unary<In, Out>(
+        &self,
+        input: &TypedTensor<In>,
+        launch: impl FnOnce(
+            &ComputeClient<CubeclCudaRuntime>,
+            CubeCount,
+            CubeDim,
+            ArrayArg<CubeclCudaRuntime>,
+            ArrayArg<CubeclCudaRuntime>,
+        ),
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + Clone,
+        Out: CubeElement + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = typed_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = typed_tensor_array_arg(&output, "cast")?;
+        launch(
+            self.runtime().client(),
+            count,
+            cube_dim_1d(),
+            output_arg,
+            input_arg,
+        );
+        Ok(output)
+    }
+
+    fn convert_numeric_to_bool<In>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = typed_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_bool_output(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = bool_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_numeric_to_bool::launch_unchecked::<In, CubeclCudaRuntime>(
+                self.runtime().client(),
+                count,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_bool_to_numeric<Out>(
+        &self,
+        input: &TypedTensor<bool>,
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = bool_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = typed_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_bool_to_numeric::launch_unchecked::<Out, CubeclCudaRuntime>(
+                self.runtime().client(),
+                count,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_numeric_to_complex<In, OutComplex, OutFloat>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<OutComplex>>
+    where
+        In: CubeElement + CubeNumeric + Clone,
+        OutComplex: CubeElement + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
+    {
+        self.convert_float_to_complex_raw::<In, OutComplex, OutFloat>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    structural::convert_numeric_to_complex_raw::launch_unchecked::<
+                        OutFloat,
+                        In,
+                        CubeclCudaRuntime,
+                    >(client, count, cube_dim_1d(), out, input);
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn convert_bool_to_complex<OutComplex, OutFloat>(
+        &self,
+        input: &TypedTensor<bool>,
+    ) -> crate::Result<TypedTensor<OutComplex>>
+    where
+        OutComplex: CubeElement + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let n = input.n_elements();
+        let part_len = n.checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex output part length overflow")
+        })?;
+        let input_arg = bool_tensor_array_arg(input, "cast")?;
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let out = typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, part_len, "cast")?;
+        unsafe {
+            structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat, CubeclCudaRuntime>(
+                self.runtime().client(),
+                count,
+                cube_dim_1d(),
+                out,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
+    fn convert_complex_to_numeric<In, Out>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + CubeComplex + Clone,
+        Out: CubeElement + CubeNumeric + Clone,
+    {
+        self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
+            structural::convert_complex_to_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                client, count, dim, out, input,
+            );
+        })
+    }
+
+    fn convert_complex_to_bool<In, F>(
+        &self,
+        input: &TypedTensor<In>,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        In: CubeElement + CubeComplex<FloatElem = F> + Clone,
+        F: CubeElement + CubeFloat,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let part_len = input.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex input part length overflow")
+        })?;
+        let input_arg = typed_tensor_array_arg_as::<In, F>(input, part_len, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_bool_output(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = bool_tensor_array_arg(&output, "cast")?;
+        unsafe {
+            structural::convert_complex_raw_to_bool::launch_unchecked::<F, CubeclCudaRuntime>(
+                self.runtime().client(),
+                count,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    }
+
     fn convert_f32_to_c32(
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f32, Complex32, f32>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f32, Complex32, f32>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f32_to_c64(
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f32, Complex64, f64>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f32, Complex64, f64>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f64_to_c32(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f64, Complex32, f32>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f64, Complex32, f32>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f64_to_c64(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f64, Complex64, f64>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f64, Complex64, f64>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Generic float-to-complex conversion via raw interleaved kernel.
@@ -882,7 +1197,7 @@ impl CudaBackend {
             &cubecl::client::ComputeClient<CubeclCudaRuntime>,
             ArrayArg<CubeclCudaRuntime>,
             ArrayArg<CubeclCudaRuntime>,
-            usize,
+            CubeCount,
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
@@ -890,21 +1205,27 @@ impl CudaBackend {
         OutComplex: CubeElement + Clone,
         OutFloat: CubeElement + Clone,
     {
+        ensure_resident_on_runtime(self.runtime(), input, "convert")?;
+        let input_arg = typed_tensor_array_arg(input, "convert")?;
         let n = input.n_elements();
-        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
-        if n == 0 {
-            return Ok(output);
-        }
         let output_part_len = n.checked_mul(2).ok_or_else(|| {
             crate::Error::backend_failure("convert", "complex output part length overflow")
         })?;
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
         let output_parts =
             typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, output_part_len, "convert")?;
-        let input_arg = typed_tensor_array_arg(input, "convert")?;
         // SAFETY: The checked raw-array helpers prove that `input_arg` covers
         // exactly the dense input shape and `output_parts` covers the complete
         // real/imaginary scalar representation of the output allocation.
-        launch(self.runtime().client(), output_parts, input_arg, n)?;
+        launch(self.runtime().client(), output_parts, input_arg, count)?;
         Ok(output)
     }
 
@@ -976,27 +1297,41 @@ impl CudaBackend {
         )
     }
 
-    fn convert_complex_to_complex<In, Out>(
+    fn convert_complex_to_complex<In, Out, InFloat, OutFloat>(
         &self,
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<Out>>
     where
         In: CubeElement + CubeComplex + Clone,
         Out: CubeElement + CubeComplex + Clone,
+        InFloat: CubeElement + CubeFloat + Clone,
+        OutFloat: CubeElement + CubeFloat + Clone,
     {
-        launch_unary(
-            self.runtime(),
-            input,
-            input.shape(),
-            "convert",
-            |client, count, dim, out, input_arg| unsafe {
-                structural::convert_complex_to_complex::launch_unchecked::<
-                    Out,
-                    In,
-                    CubeclCudaRuntime,
-                >(client, count, dim, out, input_arg);
-            },
-        )
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let parts = input.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("cast", "complex component length overflow")
+        })?;
+        let input_arg = typed_tensor_array_arg_as::<In, InFloat>(input, parts, "cast")?;
+        let count = if parts == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(parts)?)
+        };
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = typed_tensor_array_arg_as::<Out, OutFloat>(&output, parts, "cast")?;
+        unsafe {
+            structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat, CubeclCudaRuntime>(
+                self.runtime().client(),
+                count,
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
     }
 
     fn extract_diagonal_typed<T>(
@@ -1017,6 +1352,36 @@ impl CudaBackend {
             "extract_diagonal",
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::extract_diagonal_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    axis_a,
+                    axis_b,
+                    diag_output_axis,
+                    input.shape().len(),
+                    output_shape.len(),
+                );
+            },
+        )
+    }
+
+    fn extract_diagonal_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let (output_shape, diag_output_axis) =
+            extract_diagonal_shape(input.shape(), axis_a, axis_b)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "extract_diagonal",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::extract_diagonal_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1079,6 +1444,55 @@ impl CudaBackend {
         Ok(output)
     }
 
+    fn embed_diagonal_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
+        ensure_resident_on_runtime(self.runtime(), input, "embed_diagonal")?;
+        typed_tensor_binding(input, "embed_diagonal")?;
+        let output_len = checked_dim_product("embed_diagonal", "output shape", &output_shape)?;
+        let output_count = cube_count_for_len(output_len)?;
+        let input_count = cube_count_for_len(input.n_elements())?;
+        let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
+        launch_nullary_bool_into(
+            self.runtime(),
+            &output,
+            "embed_diagonal",
+            output_count,
+            cube_dim_1d(),
+            |client, count, dim, out| unsafe {
+                structural::fill_zero_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client, count, dim, out,
+                );
+            },
+        )?;
+        launch_bool_tensor_into(
+            self.runtime(),
+            &output,
+            input,
+            "embed_diagonal",
+            input_count,
+            cube_dim_1d(),
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::embed_diagonal_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    axis_a,
+                    axis_b,
+                    input.shape().len(),
+                    output_shape.len(),
+                );
+            },
+        )?;
+        Ok(output)
+    }
+
     #[doc(hidden)]
     pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
@@ -1098,6 +1512,32 @@ impl CudaBackend {
             "tril",
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::tril_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    k,
+                );
+            },
+        )
+    }
+
+    fn tril_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
+        if input.shape().len() < 2 {
+            return Err(crate::Error::RankMismatch {
+                op: "tril",
+                expected: 2,
+                actual: input.shape().len(),
+            });
+        }
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "tril",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::tril_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1139,6 +1579,32 @@ impl CudaBackend {
         )
     }
 
+    fn triu_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
+        if input.shape().len() < 2 {
+            return Err(crate::Error::RankMismatch {
+                op: "triu",
+                expected: 2,
+                actual: input.shape().len(),
+            });
+        }
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            "triu",
+            |client, count, dim, out, input_arg| unsafe {
+                diagonal::triu_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    k,
+                );
+            },
+        )
+    }
+
     fn launch_reduce_axis_typed<T>(
         &self,
         input: &TypedTensor<T>,
@@ -1154,12 +1620,12 @@ impl CudaBackend {
         T: CubeElement + Clone,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
+        let input_binding = typed_tensor_binding(input, op)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
         if output.n_elements() == 0 {
             return Ok(output);
         }
 
-        let input_binding = typed_tensor_binding(input, op)?;
         let output_binding = typed_tensor_binding(&output, op)?;
         launch(self.runtime().client(), input_binding, output_binding)
             .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
@@ -1442,6 +1908,31 @@ impl CudaBackend {
         )
     }
 
+    fn slice_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        config: &SliceConfig,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = validate_slice(input.shape(), config)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "slice",
+            |client, count, dim, out, input_arg| unsafe {
+                indexing::slice_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(&config.starts),
+                    comptime_sequence(&config.strides),
+                );
+            },
+        )
+    }
+
     fn dynamic_slice_typed<T, I>(
         &self,
         input: &TypedTensor<T>,
@@ -1450,7 +1941,7 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape().len())?;
@@ -1469,6 +1960,15 @@ impl CudaBackend {
                 });
             }
         }
+        let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), input, "dynamic_slice")?;
+        typed_tensor_binding(input, "dynamic_slice")?;
+        ensure_resident_on_runtime(self.runtime(), starts, "dynamic_slice")?;
+        typed_tensor_binding(starts, "dynamic_slice")?;
+        I::validate(self, starts)?;
         launch_binary_tensor(
             self.runtime(),
             input,
@@ -1477,6 +1977,69 @@ impl CudaBackend {
             "dynamic_slice",
             |client, count, dim, out, input_arg, starts_arg| unsafe {
                 indexing::dynamic_slice_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    starts_arg.into_tensor_arg(),
+                    comptime_sequence(slice_sizes),
+                );
+            },
+        )
+    }
+
+    fn dynamic_slice_bool<I>(
+        &self,
+        input: &TypedTensor<bool>,
+        starts: &TypedTensor<I>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+    {
+        ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
+        if starts.shape().len() != 1 {
+            return Err(crate::Error::InvalidConfig {
+                op: "dynamic_slice",
+                message: "starts must be a rank-1 tensor".into(),
+            });
+        }
+        if starts.shape()[0] != input.shape().len() {
+            return Err(crate::Error::InvalidConfig {
+                op: "dynamic_slice",
+                message: format!(
+                    "starts length {} must match input rank {}",
+                    starts.shape()[0],
+                    input.shape().len()
+                ),
+            });
+        }
+        for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
+            if window > dim {
+                return Err(crate::Error::InvalidConfig {
+                    op: "dynamic_slice",
+                    message: format!("slice size exceeds dimension on axis {axis}"),
+                });
+            }
+        }
+        let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), input, "dynamic_slice")?;
+        bool_tensor_array_arg(input, "dynamic_slice")?;
+        ensure_resident_on_runtime(self.runtime(), starts, "dynamic_slice")?;
+        typed_tensor_binding(starts, "dynamic_slice")?;
+        I::validate(self, starts)?;
+        launch_binary_bool_tensor(
+            self.runtime(),
+            input,
+            starts,
+            slice_sizes,
+            "dynamic_slice",
+            |client, count, dim, out, input_arg, starts_arg| unsafe {
+                indexing::dynamic_slice_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1505,6 +2068,31 @@ impl CudaBackend {
             "pad",
             |client, count, dim, out, input_arg| unsafe {
                 indexing::pad_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    comptime_sequence(&config.edge_padding_low),
+                    comptime_sequence(&config.interior_padding),
+                );
+            },
+        )
+    }
+
+    fn pad_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        config: &PadConfig,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = pad_output_shape(input.shape(), config)?;
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            &output_shape,
+            "pad",
+            |client, count, dim, out, input_arg| unsafe {
+                indexing::pad_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1556,6 +2144,49 @@ impl CudaBackend {
         Ok(output)
     }
 
+    fn concatenate_bool(
+        &self,
+        inputs: &[&TypedTensor<bool>],
+        axis: usize,
+    ) -> crate::Result<TypedTensor<bool>> {
+        let output_shape = concatenate_output_shape(inputs, axis)?;
+        for input in inputs {
+            ensure_resident_on_runtime(self.runtime(), input, "concatenate")?;
+            typed_tensor_binding(input, "concatenate")?;
+        }
+        checked_dim_product("concatenate", "output shape", &output_shape)?;
+        let launch_counts = inputs
+            .iter()
+            .map(|input| cube_count_for_len(input.n_elements()))
+            .collect::<crate::Result<Vec<_>>>()?;
+        let output = dispatch::alloc_bool_output(self.runtime(), &output_shape)?;
+        let mut offset = 0usize;
+        for (input, launch_count) in inputs.iter().zip(launch_counts) {
+            launch_bool_tensor_into(
+                self.runtime(),
+                &output,
+                input,
+                "concatenate",
+                launch_count,
+                cube_dim_1d(),
+                |client, count, dim, out, input_arg| unsafe {
+                    structural::concatenate_copy_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out.into_tensor_arg(),
+                        input_arg.into_tensor_arg(),
+                        axis,
+                        offset,
+                        input.shape().len(),
+                    );
+                },
+            )?;
+            offset += input.shape()[axis];
+        }
+        Ok(output)
+    }
+
     fn gather_typed<T, I>(
         &self,
         operand: &TypedTensor<T>,
@@ -1564,9 +2195,18 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), operand, "gather")?;
+        typed_tensor_binding(operand, "gather")?;
+        ensure_resident_on_runtime(self.runtime(), start_indices, "gather")?;
+        typed_tensor_binding(start_indices, "gather")?;
+        I::validate(self, start_indices)?;
         launch_binary_tensor(
             self.runtime(),
             operand,
@@ -1575,6 +2215,52 @@ impl CudaBackend {
             "gather",
             |client, count, dim, out, operand_arg, indices_arg| unsafe {
                 indexing::gather_kernel::launch_unchecked::<T, I, CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    indices_arg.into_tensor_arg(),
+                    comptime_sequence(&meta.window_dims),
+                    comptime_sequence(&config.offset_dims),
+                    comptime_sequence(&config.start_index_map),
+                    comptime_sequence(&config.slice_sizes),
+                    config.index_vector_dim,
+                    operand.shape().len(),
+                    meta.output_shape.len(),
+                    start_indices.shape().len(),
+                );
+            },
+        )
+    }
+
+    fn gather_bool<I>(
+        &self,
+        operand: &TypedTensor<bool>,
+        start_indices: &TypedTensor<I>,
+        config: &GatherConfig,
+    ) -> crate::Result<TypedTensor<bool>>
+    where
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+    {
+        let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), operand, "gather")?;
+        bool_tensor_array_arg(operand, "gather")?;
+        ensure_resident_on_runtime(self.runtime(), start_indices, "gather")?;
+        typed_tensor_binding(start_indices, "gather")?;
+        I::validate(self, start_indices)?;
+        launch_binary_bool_tensor(
+            self.runtime(),
+            operand,
+            start_indices,
+            &meta.output_shape,
+            "gather",
+            |client, count, dim, out, operand_arg, indices_arg| unsafe {
+                indexing::gather_kernel::launch_unchecked::<u8, I, CubeclCudaRuntime>(
                     client,
                     count,
                     dim,
@@ -1603,7 +2289,7 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = scatter_launch_meta(
             operand.shape(),
@@ -1611,6 +2297,23 @@ impl CudaBackend {
             updates.shape(),
             config,
         )?;
+        let update_len = scatter_update_len(&meta)?;
+        let output_len = checked_dim_product("scatter", "output shape", operand.shape())?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        if update_len != 0 {
+            cube_count_for_len(update_len)?;
+        }
+        let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), operand, "scatter")?;
+        typed_tensor_binding(operand, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        typed_tensor_binding(scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
+        typed_tensor_binding(updates, "scatter")?;
+        ensure_atomic_add_supported::<T>(client, "scatter")?;
+        I::validate(self, scatter_indices)?;
         let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
@@ -1634,14 +2337,9 @@ impl CudaBackend {
             },
         )?;
 
-        let update_len = scatter_update_len(&meta)?;
         if update_len == 0 {
             return Ok(output);
         }
-        let client = self.runtime().client();
-        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
-        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
-        ensure_atomic_add_supported::<T>(client, "scatter")?;
         let output_parts =
             typed_tensor_array_arg_as::<T, T>(&output, output.n_elements(), "scatter")?;
         let operand_arg = typed_tensor_binding(operand, "scatter")?;
@@ -1685,7 +2383,7 @@ impl CudaBackend {
     where
         T: CubeElement + CubeComplex + Clone,
         F: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = scatter_launch_meta(
             operand.shape(),
@@ -1693,6 +2391,30 @@ impl CudaBackend {
             updates.shape(),
             config,
         )?;
+        let update_len = scatter_update_len(&meta)?;
+        let output_len = checked_dim_product("scatter", "output shape", operand.shape())?;
+        let output_part_len = output_len.checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex output part length overflow")
+        })?;
+        let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex update part length overflow")
+        })?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        if update_len != 0 {
+            cube_count_for_len(update_len)?;
+        }
+        let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), operand, "scatter")?;
+        typed_tensor_binding(operand, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        typed_tensor_binding(scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
+        typed_tensor_binding(updates, "scatter")?;
+        typed_tensor_array_arg_as::<T, F>(updates, update_part_len, "scatter")?;
+        ensure_atomic_add_supported::<F>(client, "scatter")?;
+        I::validate(self, scatter_indices)?;
         let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
@@ -1716,20 +2438,9 @@ impl CudaBackend {
             },
         )?;
 
-        let update_len = scatter_update_len(&meta)?;
         if update_len == 0 {
             return Ok(output);
         }
-        let client = self.runtime().client();
-        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
-        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
-        ensure_atomic_add_supported::<F>(client, "scatter")?;
-        let output_part_len = output.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex output part length overflow")
-        })?;
-        let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex update part length overflow")
-        })?;
         // num_complex::Complex<T> is repr(C) as { re: T, im: T }, so the
         // complex buffers can be viewed as real scalar parts for atomic add.
         let output_parts = typed_tensor_array_arg_as::<T, F>(&output, output_part_len, "scatter")?;
@@ -1777,6 +2488,172 @@ enum CheckedIntegerDomain {
     NegativeExponent,
 }
 
+#[derive(Clone, Copy)]
+enum CastIntegerTarget {
+    I32,
+    I64,
+}
+
+trait CudaCastFloat:
+    CubeElement
+    + CubeFloat
+    + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + Clone
+    + Send
+    + Sync
+    + Copy
+    + fmt::Display
+    + 'static
+{
+    fn bounds(target: CastIntegerTarget) -> (Self, Self, bool);
+    fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+    fn invalid_error(self, target: CastIntegerTarget) -> crate::Error;
+    fn is_nonfinite(self) -> bool;
+    fn cpu_real_display(self) -> String;
+}
+
+macro_rules! impl_cuda_cast_float {
+    ($ty:ty, $variant:ident, $i32_max_inclusive:expr, $display:expr) => {
+        impl CudaCastFloat for $ty {
+            fn bounds(target: CastIntegerTarget) -> (Self, Self, bool) {
+                match target {
+                    CastIntegerTarget::I32 => (
+                        i32::MIN as Self,
+                        if $i32_max_inclusive {
+                            i32::MAX as Self
+                        } else {
+                            2_147_483_648.0 as Self
+                        },
+                        $i32_max_inclusive,
+                    ),
+                    CastIntegerTarget::I64 => (
+                        -9_223_372_036_854_775_808.0 as Self,
+                        9_223_372_036_854_775_808.0 as Self,
+                        false,
+                    ),
+                }
+            }
+            fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+                match download_tensor(backend.runtime(), &Tensor::$variant(flag.clone()))? {
+                    Tensor::$variant(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                        crate::Error::backend_failure("cast", "validation flag was malformed")
+                    }),
+                    _ => Err(crate::Error::backend_failure(
+                        "cast",
+                        "validation flag had unexpected dtype",
+                    )),
+                }
+            }
+            fn invalid_error(self, target: CastIntegerTarget) -> crate::Error {
+                let name = match target {
+                    CastIntegerTarget::I32 => "i32",
+                    CastIntegerTarget::I64 => "i64",
+                };
+                let message = if !self.is_finite() {
+                    format!(
+                        "real value must be finite when casting to {name}, got {}",
+                        self.cpu_real_display()
+                    )
+                } else {
+                    format!(
+                        "real value {} is out of {name} range",
+                        self.cpu_real_display()
+                    )
+                };
+                crate::Error::InvalidConfig {
+                    op: "cast",
+                    message,
+                }
+            }
+            fn is_nonfinite(self) -> bool {
+                !self.is_finite()
+            }
+            fn cpu_real_display(self) -> String {
+                ($display)(self)
+            }
+        }
+    };
+}
+impl_cuda_cast_float!(f32, F32, false, |value: f32| format!("{}", value as f64));
+impl_cuda_cast_float!(f64, F64, true, |value: f64| format!("{value}"));
+
+fn validate_cuda_real_cast<S, F>(
+    backend: &CudaBackend,
+    input: &TypedTensor<S>,
+    stride: usize,
+    target: CastIntegerTarget,
+) -> crate::Result<()>
+where
+    S: CubeElement + Clone,
+    F: CudaCastFloat,
+{
+    ensure_resident_on_runtime(backend.runtime(), input, "cast")?;
+    let n = input.n_elements();
+    let _validated_input = typed_tensor_array_arg(input, "cast")?;
+    if n == 0 {
+        return Ok(());
+    }
+    u32::try_from(n).map_err(|_| {
+        crate::Error::backend_failure("cast", "validation domain exceeds u32::MAX elements")
+    })?;
+    let count = cube_count_for_len(n)?;
+    let input_parts = n
+        .checked_mul(stride)
+        .ok_or_else(|| crate::Error::backend_failure("cast", "validation input length overflow"))?;
+    let input_arg = typed_tensor_array_arg_as::<S, F>(input, input_parts, "cast")?;
+    let flag = alloc_output::<F>(backend.runtime(), &[2])?;
+    let flag_u32_len = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|x| x.checked_div(std::mem::size_of::<u32>()))
+        .ok_or_else(|| crate::Error::backend_failure("cast", "validation flag size overflow"))?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let flag_values = typed_tensor_array_arg(&flag, "cast")?;
+    unsafe {
+        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let (min, max, inclusive) = F::bounds(target);
+    unsafe {
+        structural::validate_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            count,
+            cube_dim_1d(),
+            input_arg,
+            flag_atomic,
+            min,
+            max,
+            stride,
+            inclusive,
+        );
+    }
+    let input_arg = typed_tensor_array_arg_as::<S, F>(input, input_parts, "cast")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
+    let flag_values = typed_tensor_array_arg(&flag, "cast")?;
+    unsafe {
+        structural::extract_invalid_real_cast::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            input_arg,
+            flag_atomic,
+            flag_values,
+            stride,
+        );
+    }
+    let value = F::read_flag(backend, &flag)?;
+    let (min, max, inclusive) = F::bounds(target);
+    if value.is_nonfinite() || value < min || if inclusive { value > max } else { value >= max } {
+        return Err(value.invalid_error(target));
+    }
+    Ok(())
+}
+
 fn checked_integer_domain_error(
     domain: CheckedIntegerDomain,
     op: &'static str,
@@ -1803,6 +2680,166 @@ fn read_checked_integer_flag(
             "integer domain flag download returned unexpected dtype",
         )),
     }
+}
+
+trait CudaFloatIndex:
+    CubeElement
+    + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
+    + CubeFloat
+    + Clone
+    + Send
+    + Sync
+    + fmt::Display
+    + Copy
+    + 'static
+{
+    const MAX_EXACT_INTEGER: Self;
+    fn is_invalid_index(self) -> bool;
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+}
+
+trait CudaIndexValidation: Sized {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()>;
+}
+
+impl CudaIndexValidation for f32 {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+        validate_float_index_tensor(backend, indices)
+    }
+}
+
+impl CudaIndexValidation for f64 {
+    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+        validate_float_index_tensor(backend, indices)
+    }
+}
+
+impl CudaIndexValidation for i32 {
+    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+impl CudaIndexValidation for i64 {
+    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+impl CudaFloatIndex for f32 {
+    const MAX_EXACT_INTEGER: Self = 16_777_216.0;
+
+    fn is_invalid_index(self) -> bool {
+        !self.is_finite() || self.fract() != 0.0 || self.abs() > 16_777_216.0
+    }
+
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        match download_tensor(backend.runtime(), &Tensor::F32(flag.clone()))? {
+            Tensor::F32(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+            }),
+            _ => Err(crate::Error::backend_failure(
+                "index_tensor",
+                "validation flag had unexpected dtype",
+            )),
+        }
+    }
+}
+
+impl CudaFloatIndex for f64 {
+    const MAX_EXACT_INTEGER: Self = 9_007_199_254_740_992.0;
+
+    fn is_invalid_index(self) -> bool {
+        !self.is_finite() || self.fract() != 0.0 || self.abs() > 9_007_199_254_740_992.0
+    }
+
+    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        match download_tensor(backend.runtime(), &Tensor::F64(flag.clone()))? {
+            Tensor::F64(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
+                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+            }),
+            _ => Err(crate::Error::backend_failure(
+                "index_tensor",
+                "validation flag had unexpected dtype",
+            )),
+        }
+    }
+}
+
+fn validate_float_index_tensor<F>(
+    backend: &CudaBackend,
+    indices: &TypedTensor<F>,
+) -> crate::Result<()>
+where
+    F: CudaFloatIndex,
+{
+    ensure_resident_on_runtime(backend.runtime(), indices, "index_tensor")?;
+    let indices_arg = typed_tensor_binding(indices, "index_tensor")?;
+    if indices.n_elements() == 0 {
+        return Ok(());
+    }
+    u32::try_from(indices.n_elements()).map_err(|_| {
+        crate::Error::backend_failure(
+            "index_tensor",
+            "float index validation domain exceeds u32::MAX elements",
+        )
+    })?;
+    let count = cube_count_for_len(indices.n_elements())?;
+    let flag_u32_len = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_div(std::mem::size_of::<u32>()))
+        .ok_or_else(|| crate::Error::backend_failure("index_tensor", "flag size overflow"))?;
+    let flag = alloc_output::<F>(backend.runtime(), &[2])?;
+    let flag_values = typed_tensor_array_arg(&flag, "index_tensor")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    unsafe {
+        // SAFETY: the flag allocation has two `F` elements, and the checked
+        // reinterpretation above proves the atomic-u32 view fits that buffer.
+        indexing::init_float_index_validation_flag::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    unsafe {
+        // SAFETY: the input binding was validated before allocation, the
+        // launch domain is the checked input length, and the scalar flag view
+        // was bounds-checked above.
+        indexing::validate_float_indices_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            count,
+            cube_dim_1d(),
+            indices_arg.into_tensor_arg(),
+            flag_atomic,
+            F::MAX_EXACT_INTEGER,
+        );
+    }
+    let indices_arg = typed_tensor_binding(indices, "index_tensor")?;
+    let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
+    let flag_values = typed_tensor_array_arg(&flag, "index_tensor")?;
+    unsafe {
+        // SAFETY: one worker reads the atomically selected in-range index and
+        // copies that single value into the second element of the same flag.
+        indexing::extract_invalid_float_index_kernel::launch_unchecked::<F, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            CubeCount::Static(1, 1, 1),
+            cube_dim_1d(),
+            indices_arg.into_tensor_arg(),
+            flag_atomic,
+            flag_values,
+        );
+    }
+    let invalid = F::read_invalid_flag(backend, &flag)?;
+    if invalid.is_invalid_index() {
+        return Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: format!("index value {invalid} is not an exactly representable i64"),
+        });
+    }
+    Ok(())
 }
 
 fn launch_checked_integer_binary<I>(
@@ -1868,8 +2905,220 @@ where
     Ok(output)
 }
 
+fn launch_scalar_binary<I>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<I>,
+    rhs: &TypedTensor<I>,
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        bool,
+    ),
+) -> crate::Result<TypedTensor<I>>
+where
+    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        });
+    }
+    ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
+
+    let lhs_scalar = lhs.shape().is_empty();
+    let output_shape = if lhs_scalar { rhs.shape() } else { lhs.shape() };
+    let output = alloc_output::<I>(backend.runtime(), output_shape)?;
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    launch(
+        backend.runtime().client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+        lhs_scalar,
+    );
+    Ok(output)
+}
+
+fn launch_real_complex_scalar_binary<R, C>(
+    backend: &CudaBackend,
+    real: &TypedTensor<R>,
+    complex: &TypedTensor<C>,
+    op: &'static str,
+    real_lhs: bool,
+    mode: usize,
+) -> crate::Result<TypedTensor<C>>
+where
+    R: CubeFloat + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    C: CubeComplex<FloatElem = R> + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    if !real.shape().is_empty() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: if real_lhs {
+                real.shape().to_vec()
+            } else {
+                complex.shape().to_vec()
+            },
+            rhs: if real_lhs {
+                complex.shape().to_vec()
+            } else {
+                real.shape().to_vec()
+            },
+        });
+    }
+    ensure_resident_on_runtime(backend.runtime(), real, op)?;
+    ensure_resident_on_runtime(backend.runtime(), complex, op)?;
+    let component_len = complex
+        .n_elements()
+        .checked_mul(2)
+        .ok_or_else(|| crate::Error::backend_failure(op, "complex component length overflow"))?;
+    let real_arg = typed_tensor_array_arg(real, op)?;
+    // INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`
+    // fields; the checked `2 * n_elements` length and binding validator prove this
+    // real-component view covers exactly the resident complex allocation.
+    let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?;
+
+    let output = alloc_output::<C>(backend.runtime(), complex.shape())?;
+    let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    unsafe {
+        elementwise::scalar_real_complex_binary::launch_unchecked::<R, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            cube_count_for_len(output.n_elements())?,
+            cube_dim_1d(),
+            output_arg,
+            real_arg,
+            complex_arg,
+            real_lhs,
+            mode,
+        );
+    }
+    Ok(output)
+}
+
+fn promoted_real_complex_scalar_binary(
+    backend: &CudaBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    op: &'static str,
+    mode: usize,
+) -> Option<crate::Result<Tensor>> {
+    match (lhs, rhs) {
+        (Tensor::F32(real), Tensor::C32(complex)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
+                .map(Tensor::C32),
+        ),
+        (Tensor::C32(complex), Tensor::F32(real)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
+                .map(Tensor::C32),
+        ),
+        (Tensor::F64(real), Tensor::C64(complex)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, true, mode)
+                .map(Tensor::C64),
+        ),
+        (Tensor::C64(complex), Tensor::F64(real)) if real.shape().is_empty() => Some(
+            launch_real_complex_scalar_binary(backend, real, complex, op, false, mode)
+                .map(Tensor::C64),
+        ),
+        _ => None,
+    }
+}
+
+fn launch_checked_integer_scalar_binary<I>(
+    backend: &CudaBackend,
+    lhs: &TypedTensor<I>,
+    rhs: &TypedTensor<I>,
+    op: &'static str,
+    dtype: crate::DType,
+    domain: CheckedIntegerDomain,
+    launch: impl FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+        bool,
+    ),
+) -> crate::Result<TypedTensor<I>>
+where
+    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        });
+    }
+    ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
+    ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
+
+    let lhs_scalar = lhs.shape().is_empty();
+    let output_shape = if lhs_scalar { rhs.shape() } else { lhs.shape() };
+    let output = alloc_output::<I>(backend.runtime(), output_shape)?;
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    if output.n_elements() == 0 {
+        return Ok(output);
+    }
+    let flag = alloc_output::<i32>(backend.runtime(), &[1])?;
+    let flag_arg = typed_tensor_array_arg(&flag, op)?;
+    launch_nullary_into(
+        backend.runtime(),
+        &flag,
+        op,
+        cube_count_for_len(flag.n_elements())?,
+        cube_dim_1d(),
+        |client, count, dim, out| unsafe {
+            structural::fill_zero_kernel::launch_unchecked::<i32, CubeclCudaRuntime>(
+                client, count, dim, out,
+            );
+        },
+    )?;
+
+    launch(
+        backend.runtime().client(),
+        cube_count_for_len(output.n_elements())?,
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+        flag_arg,
+        lhs_scalar,
+    );
+    if read_checked_integer_flag(backend, &flag, op)? != 0 {
+        return Err(checked_integer_domain_error(domain, op, dtype));
+    }
+    Ok(output)
+}
+
 impl TensorElementwise for CudaBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "add", elementwise::MIXED_ADD)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -1882,6 +3131,11 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "sub", elementwise::MIXED_SUB)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -1894,6 +3148,11 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, "mul", elementwise::MIXED_MUL)
+        {
+            return result;
+        }
         dispatch::dispatch_binary_float_complex_int!(
             self,
             lhs,
@@ -1965,7 +3224,26 @@ impl TensorElementwise for CudaBackend {
             PrimitiveOpKind::Div,
             op_descriptor::GpuLaunchKind::BinaryFloatComplexInt,
         )?;
+        if let Some(result) =
+            promoted_real_complex_scalar_binary(self, lhs, rhs, op, elementwise::MIXED_DIV)
+        {
+            return result;
+        }
         match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F32)
+            }
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -1979,6 +3257,20 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F64)
+            }
             (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -1992,6 +3284,25 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I32,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_int_checked::launch_unchecked::<
+                            i32,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I32)
+            }
             (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -2006,6 +3317,25 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I64,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_div_int_checked::launch_unchecked::<
+                            i64,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I64)
+            }
             (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -2056,6 +3386,20 @@ impl TensorElementwise for CudaBackend {
             op_descriptor::GpuLaunchKind::BinaryFloatInt,
         )?;
         match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_rem_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F32)
+            }
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -2069,6 +3413,20 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_rem_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F64)
+            }
             (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -2082,6 +3440,25 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I32,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_rem_int_checked::launch_unchecked::<
+                            i32,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I32)
+            }
             (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -2096,6 +3473,25 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I64,
+                    CheckedIntegerDomain::DivisionByZero,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_rem_int_checked::launch_unchecked::<
+                            i64,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I64)
+            }
             (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -2122,7 +3518,55 @@ impl TensorElementwise for CudaBackend {
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        dispatch::dispatch_unary_float_int!(self, input, PrimitiveOpKind::Abs, abs_float, abs_int)
+        let descriptor = op_descriptor::require_gpu_descriptor(
+            PrimitiveOpKind::Abs,
+            op_descriptor::GpuLaunchKind::UnaryFloatInt,
+        )?;
+        let op = descriptor.name;
+        dispatch::require_owned_capability(self, PrimitiveOpKind::Abs, input.dtype())?;
+        match input {
+            Tensor::F32(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f32, F32)
+            }
+            Tensor::F64(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_float, f64, F64)
+            }
+            Tensor::I32(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i32, I32)
+            }
+            Tensor::I64(tensor) => {
+                dispatch::launch_unary_elementwise_kernel!(self, tensor, op, abs_int, i64, I64)
+            }
+            Tensor::C32(tensor) => dispatch::launch_unary(
+                self.runtime(),
+                tensor,
+                tensor.shape(),
+                op,
+                |client, count, dim, out, input_arg| unsafe {
+                    elementwise::abs_complex32::launch_unchecked::<CubeclCudaRuntime>(
+                        client, count, dim, out, input_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            Tensor::C64(tensor) => dispatch::launch_unary(
+                self.runtime(),
+                tensor,
+                tensor.shape(),
+                op,
+                |client, count, dim, out, input_arg| unsafe {
+                    elementwise::abs_complex64::launch_unchecked::<CubeclCudaRuntime>(
+                        client, count, dim, out, input_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            Tensor::Bool(_) => Err(crate::Error::unsupported_op_dtype(
+                op,
+                input.dtype(),
+                tenferro_tensor::BackendId::Cuda,
+            )),
+        }
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -2406,6 +3850,10 @@ impl TensorAnalytic for CudaBackend {
             PrimitiveOpKind::Pow,
             op_descriptor::GpuLaunchKind::BinaryFloatInt,
         )?;
+        if lhs.dtype() != rhs.dtype() {
+            return Err(dtype_mismatch(op, lhs, rhs));
+        }
+        dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
                 self.runtime(),
@@ -2488,7 +3936,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.transpose_typed(t, perm).map(Tensor::F64),
             Tensor::I32(t) => self.transpose_typed(t, perm).map(Tensor::I32),
             Tensor::I64(t) => self.transpose_typed(t, perm).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("transpose", input.dtype())),
+            Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool),
             Tensor::C32(t) => self.transpose_typed(t, perm).map(Tensor::C32),
             Tensor::C64(t) => self.transpose_typed(t, perm).map(Tensor::C64),
         }
@@ -2554,7 +4002,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::F64),
             Tensor::I32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::I32),
             Tensor::I64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("broadcast_in_dim", input.dtype())),
+            Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool),
             Tensor::C32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C32),
             Tensor::C64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C64),
         }
@@ -2566,46 +4014,129 @@ impl TensorStructural for CudaBackend {
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
-            (Tensor::F32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::F32(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I32)?;
+                self.convert_numeric::<f32, i32>(t).map(Tensor::I32)
             }
-            (Tensor::F32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::F32(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<f32, f32>(self, t, 1, CastIntegerTarget::I64)?;
+                self.convert_numeric::<f32, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::F32(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
             (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
             (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
             (Tensor::F64(t), crate::DType::F32) => {
                 self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
             }
             (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
-            (Tensor::F64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::F64(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I32)?;
+                self.convert_numeric::<f64, i32>(t).map(Tensor::I32)
             }
-            (Tensor::F64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::F64(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I64)?;
+                self.convert_numeric::<f64, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::F64(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
             (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
             (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
             (Tensor::I32(t), crate::DType::I32) => Ok(Tensor::I32(t.clone())),
-            (Tensor::I32(_), _) => Err(unsupported_dtype("cast", input.dtype())),
-            (Tensor::I64(_), crate::DType::I64) => Ok(input.clone()),
-            (Tensor::I64(_), _) => Err(unsupported_dtype("cast", input.dtype())),
+            (Tensor::I32(t), crate::DType::F32) => {
+                self.convert_numeric::<i32, f32>(t).map(Tensor::F32)
+            }
+            (Tensor::I32(t), crate::DType::F64) => {
+                self.convert_numeric::<i32, f64>(t).map(Tensor::F64)
+            }
+            (Tensor::I32(t), crate::DType::I64) => {
+                self.convert_numeric::<i32, i64>(t).map(Tensor::I64)
+            }
+            (Tensor::I32(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
+            (Tensor::I32(t), crate::DType::C32) => self
+                .convert_numeric_to_complex::<i32, Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::I32(t), crate::DType::C64) => self
+                .convert_numeric_to_complex::<i32, Complex64, f64>(t)
+                .map(Tensor::C64),
+            (Tensor::I64(t), crate::DType::F32) => {
+                self.convert_numeric::<i64, f32>(t).map(Tensor::F32)
+            }
+            (Tensor::I64(t), crate::DType::F64) => {
+                self.convert_numeric::<i64, f64>(t).map(Tensor::F64)
+            }
+            (Tensor::I64(t), crate::DType::I32) => {
+                self.convert_numeric::<i64, i32>(t).map(Tensor::I32)
+            }
+            (Tensor::I64(t), crate::DType::I64) => Ok(Tensor::I64(t.clone())),
+            (Tensor::I64(t), crate::DType::Bool) => {
+                self.convert_numeric_to_bool(t).map(Tensor::Bool)
+            }
+            (Tensor::I64(t), crate::DType::C32) => self
+                .convert_numeric_to_complex::<i64, Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::I64(t), crate::DType::C64) => self
+                .convert_numeric_to_complex::<i64, Complex64, f64>(t)
+                .map(Tensor::C64),
             (Tensor::Bool(t), crate::DType::Bool) => Ok(Tensor::Bool(t.clone())),
-            (Tensor::Bool(_), _) => Err(unsupported_dtype("cast", input.dtype())),
+            (Tensor::Bool(t), crate::DType::F32) => {
+                self.convert_bool_to_numeric::<f32>(t).map(Tensor::F32)
+            }
+            (Tensor::Bool(t), crate::DType::F64) => {
+                self.convert_bool_to_numeric::<f64>(t).map(Tensor::F64)
+            }
+            (Tensor::Bool(t), crate::DType::I32) => {
+                self.convert_bool_to_numeric::<i32>(t).map(Tensor::I32)
+            }
+            (Tensor::Bool(t), crate::DType::I64) => {
+                self.convert_bool_to_numeric::<i64>(t).map(Tensor::I64)
+            }
+            (Tensor::Bool(t), crate::DType::C32) => self
+                .convert_bool_to_complex::<Complex32, f32>(t)
+                .map(Tensor::C32),
+            (Tensor::Bool(t), crate::DType::C64) => self
+                .convert_bool_to_complex::<Complex64, f64>(t)
+                .map(Tensor::C64),
             (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
             (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
-            (Tensor::C32(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::C32(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I32)?;
+                self.convert_complex_to_numeric::<Complex32, i32>(t)
+                    .map(Tensor::I32)
             }
-            (Tensor::C32(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::C32(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex32, f32>(self, t, 2, CastIntegerTarget::I64)?;
+                self.convert_complex_to_numeric::<Complex32, i64>(t)
+                    .map(Tensor::I64)
+            }
+            (Tensor::C32(t), crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex32, f32>(t)
+                .map(Tensor::Bool),
             (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
             (Tensor::C32(t), crate::DType::C64) => self
-                .convert_complex_to_complex::<Complex32, Complex64>(t)
+                .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(t)
                 .map(Tensor::C64),
             (Tensor::C64(t), crate::DType::F32) => self.convert_c64_to_f32(t).map(Tensor::F32),
             (Tensor::C64(t), crate::DType::F64) => self.convert_c64_to_f64(t).map(Tensor::F64),
-            (Tensor::C64(_), crate::DType::I32 | crate::DType::Bool) => {
-                Err(unsupported_dtype("cast", to))
+            (Tensor::C64(t), crate::DType::I32) => {
+                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I32)?;
+                self.convert_complex_to_numeric::<Complex64, i32>(t)
+                    .map(Tensor::I32)
             }
-            (Tensor::C64(_), crate::DType::I64) => Err(unsupported_dtype("cast", to)),
+            (Tensor::C64(t), crate::DType::I64) => {
+                validate_cuda_real_cast::<Complex64, f64>(self, t, 2, CastIntegerTarget::I64)?;
+                self.convert_complex_to_numeric::<Complex64, i64>(t)
+                    .map(Tensor::I64)
+            }
+            (Tensor::C64(t), crate::DType::Bool) => self
+                .convert_complex_to_bool::<Complex64, f64>(t)
+                .map(Tensor::Bool),
             (Tensor::C64(t), crate::DType::C32) => self
-                .convert_complex_to_complex::<Complex64, Complex32>(t)
+                .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(t)
                 .map(Tensor::C32),
             (Tensor::C64(t), crate::DType::C64) => Ok(Tensor::C64(t.clone())),
         }
@@ -2630,7 +4161,9 @@ impl TensorStructural for CudaBackend {
             Tensor::I64(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("extract_diagonal", input.dtype())),
+            Tensor::Bool(t) => self
+                .extract_diagonal_bool(t, axis_a, axis_b)
+                .map(Tensor::Bool),
             Tensor::C32(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -2659,7 +4192,9 @@ impl TensorStructural for CudaBackend {
             Tensor::I64(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("embed_diagonal", input.dtype())),
+            Tensor::Bool(t) => self
+                .embed_diagonal_bool(t, axis_a, axis_b)
+                .map(Tensor::Bool),
             Tensor::C32(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -2675,7 +4210,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.tril_typed(t, k).map(Tensor::F64),
             Tensor::I32(t) => self.tril_typed(t, k).map(Tensor::I32),
             Tensor::I64(t) => self.tril_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("tril", input.dtype())),
+            Tensor::Bool(t) => self.tril_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.tril_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.tril_typed(t, k).map(Tensor::C64),
         }
@@ -2687,7 +4222,7 @@ impl TensorStructural for CudaBackend {
             Tensor::F64(t) => self.triu_typed(t, k).map(Tensor::F64),
             Tensor::I32(t) => self.triu_typed(t, k).map(Tensor::I32),
             Tensor::I64(t) => self.triu_typed(t, k).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("triu", input.dtype())),
+            Tensor::Bool(t) => self.triu_bool(t, k).map(Tensor::Bool),
             Tensor::C32(t) => self.triu_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
         }
@@ -2874,14 +4409,24 @@ impl TensorIndexing for CudaBackend {
             (Tensor::I32(operand), Tensor::I64(indices)) => {
                 self.gather_typed(operand, indices, config).map(Tensor::I32)
             }
+            (Tensor::Bool(operand), Tensor::F32(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::F64(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::I32(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
+            (Tensor::Bool(operand), Tensor::I64(indices)) => {
+                self.gather_bool(operand, indices, config).map(Tensor::Bool)
+            }
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("gather", start_indices.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "gather",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I64(_) | Tensor::Bool(_), _) => {
-                Err(unsupported_dtype("gather", operand.dtype()))
-            }
+            (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
         }
     }
 
@@ -2946,7 +4491,11 @@ impl TensorIndexing for CudaBackend {
                 "scatter",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) | (Tensor::Bool(_), _, _) => {
+            (Tensor::Bool(_), _, _) => Err(crate::Error::backend_failure(
+                "scatter",
+                "Bool data tensors are not supported by additive scatter",
+            )),
+            (Tensor::I32(_), _, _) | (Tensor::I64(_), _, _) => {
                 Err(unsupported_dtype("scatter", operand.dtype()))
             }
             (_, _, _) => Err(ternary_dtype_mismatch(
@@ -2964,7 +4513,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.slice_typed(t, config).map(Tensor::F64),
             Tensor::I32(t) => self.slice_typed(t, config).map(Tensor::I32),
             Tensor::I64(t) => self.slice_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("slice", input.dtype())),
+            Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.slice_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.slice_typed(t, config).map(Tensor::C64),
         }
@@ -3037,14 +4586,24 @@ impl TensorIndexing for CudaBackend {
             (Tensor::I32(input), Tensor::I64(starts)) => self
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::I32),
+            (Tensor::Bool(input), Tensor::I32(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::I64(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::F32(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::F64(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "dynamic_slice",
                 "complex index tensors are not supported",
             )),
-            (Tensor::I64(_) | Tensor::Bool(_), _) => {
-                Err(unsupported_dtype("dynamic_slice", input.dtype()))
-            }
+            (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
         }
     }
 
@@ -3066,7 +4625,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.pad_typed(t, config).map(Tensor::F64),
             Tensor::I32(t) => self.pad_typed(t, config).map(Tensor::I32),
             Tensor::I64(t) => self.pad_typed(t, config).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("pad", input.dtype())),
+            Tensor::Bool(t) => self.pad_bool(t, config).map(Tensor::Bool),
             Tensor::C32(t) => self.pad_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.pad_typed(t, config).map(Tensor::C64),
         }
@@ -3121,7 +4680,16 @@ impl TensorIndexing for CudaBackend {
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::I64)
             }
-            Tensor::Bool(_) => Err(unsupported_dtype("concatenate", first.dtype())),
+            Tensor::Bool(_) => {
+                let typed: crate::Result<Vec<&TypedTensor<bool>>> = inputs
+                    .iter()
+                    .map(|tensor| match tensor {
+                        Tensor::Bool(t) => Ok(t),
+                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    })
+                    .collect();
+                self.concatenate_bool(&typed?, axis).map(Tensor::Bool)
+            }
             Tensor::C32(_) => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex32>>> = inputs
                     .iter()
@@ -3151,7 +4719,7 @@ impl TensorIndexing for CudaBackend {
             Tensor::F64(t) => self.reverse_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reverse_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reverse_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("reverse", input.dtype())),
+            Tensor::Bool(t) => self.reverse_bool(t, axes).map(Tensor::Bool),
             Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
         }
@@ -3493,18 +5061,11 @@ fn embed_diagonal_shape(
 }
 
 fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    let shape: Vec<usize> = input_shape
+    input_shape
         .iter()
         .enumerate()
         .filter_map(|(axis, &dim)| (!axes.contains(&axis)).then_some(dim))
-        .collect();
-    // cubecl Array::new(0) generates uint32 arr[0] which is invalid CUDA.
-    // When all axes are reduced (scalar output), use shape [1] instead.
-    if shape.is_empty() {
-        vec![1]
-    } else {
-        shape
-    }
+        .collect()
 }
 
 fn reduction_keepdims_shape(input_shape: &[usize], axis: usize) -> Vec<usize> {

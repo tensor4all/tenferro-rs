@@ -16,6 +16,175 @@ fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
     }
 }
 
+#[test]
+fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
+    let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    for needle in [
+        "Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool)",
+        "Tensor::Bool(operand), Tensor::I64(indices)",
+        "Tensor::Bool(input), Tensor::F32(starts)",
+        "Tensor::Bool(input), Tensor::F64(starts)",
+        "Tensor::Bool(input), Tensor::I64(starts)",
+    ] {
+        assert!(
+            source.contains(needle),
+            "missing Bool copy/index dispatch: {needle}"
+        );
+    }
+    assert!(source.contains("Bool data tensors are not supported by additive scatter"));
+    assert!(!source.contains("scatter_bool_typed"));
+}
+
+#[test]
+fn explicit_cast_uses_shared_device_kernel_families_and_keeps_checked_convert() {
+    let kernels = std::fs::read_to_string("src/kernels/structural.rs").unwrap();
+    for family in [
+        "pub fn convert_numeric<",
+        "pub fn convert_numeric_to_bool<",
+        "pub fn convert_bool_to_numeric<",
+        "pub fn convert_numeric_to_complex_raw<",
+        "pub fn convert_complex_to_numeric<",
+        "pub fn validate_real_cast<",
+    ] {
+        assert!(
+            kernels.contains(family),
+            "missing cast kernel family: {family}"
+        );
+    }
+
+    let backend = std::fs::read_to_string("../tenferro-tensor/src/backend.rs").unwrap();
+    let convert = source_section(
+        &backend,
+        "fn convert(&mut self, input: &Tensor, to: crate::DType)",
+        "fn cast(&mut self, input: &Tensor, to: crate::DType)",
+    );
+    assert!(convert.contains("validate_convert_dtype"));
+    assert!(convert.contains("self.cast(input, to)"));
+
+    let cuda = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let validation = source_section(
+        &cuda,
+        "fn validate_cuda_real_cast",
+        "fn checked_integer_domain_error",
+    );
+    assert!(validation.find("if n == 0").unwrap() < validation.find("alloc_output::<F>").unwrap());
+    assert!(!validation.contains("download_tensor(backend.runtime(), input"));
+
+    for (start, end, allocation, binding) in [
+        (
+            "fn launch_cast_unary<",
+            "fn convert_numeric_to_bool<",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_numeric_to_bool<",
+            "fn convert_bool_to_numeric<",
+            "alloc_bool_output",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_numeric<",
+            "fn convert_numeric_to_complex<",
+            "alloc_output::<Out>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_complex<",
+            "fn convert_complex_to_numeric<",
+            "alloc_output::<OutComplex>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_bool<",
+            "fn convert_f32_to_c32",
+            "alloc_bool_output",
+            "typed_tensor_array_arg_as::<In, F>(input",
+        ),
+        (
+            "fn convert_float_to_complex_raw<",
+            "fn convert_c32_to_f32",
+            "alloc_output::<OutComplex>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_complex<",
+            "fn extract_diagonal_typed",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg_as::<In, InFloat>(input",
+        ),
+    ] {
+        let body = source_section(&cuda, start, end);
+        let allocation = body
+            .find(allocation)
+            .unwrap_or_else(|| panic!("missing allocation in {start}"));
+        assert!(
+            body.find("ensure_resident_on_runtime").unwrap() < allocation,
+            "residency after allocation in {start}"
+        );
+        assert!(
+            body.find(binding).unwrap() < allocation,
+            "binding after allocation in {start}"
+        );
+        assert!(
+            body.find("cube_count_for_len").unwrap() < allocation,
+            "launch count after allocation in {start}"
+        );
+        assert!(
+            body.find("if ").unwrap() < allocation,
+            "empty branch must be prepared before allocation in {start}"
+        );
+    }
+}
+
+#[test]
+fn bool_launch_domains_are_checked_before_output_allocation() {
+    let dispatch = std::fs::read_to_string("src/cubecl/dispatch.rs").unwrap();
+    for (start, end) in [
+        (
+            "pub(crate) fn launch_unary_bool_tensor(",
+            "pub(crate) fn launch_binary_bool_tensor",
+        ),
+        (
+            "pub(crate) fn launch_binary_bool_tensor",
+            "pub(crate) fn launch_bool_tensor_into",
+        ),
+    ] {
+        let body = source_section(&dispatch, start, end);
+        let checked_len = body.find("checked_shape_product(op, out_shape)?").unwrap();
+        let checked_count = body.find("cube_count_for_len(output_len)?").unwrap();
+        let allocation = body.find("alloc_bool_output(rt, out_shape)?").unwrap();
+        assert!(checked_len < checked_count && checked_count < allocation);
+        assert!(body.contains("let Some(launch_count) = launch_count else"));
+    }
+
+    let backend = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let embed = source_section(&backend, "fn embed_diagonal_bool(", "pub fn tril_typed");
+    assert!(embed.find("checked_dim_product").unwrap() < embed.find("alloc_bool_output").unwrap());
+    assert!(
+        embed.find("cube_count_for_len(output_len)?").unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        embed
+            .find("cube_count_for_len(input.n_elements())?")
+            .unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+
+    let concatenate = source_section(&backend, "fn concatenate_bool(", "fn gather_typed");
+    assert!(
+        concatenate.find("checked_dim_product").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        concatenate.find("let launch_counts").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+}
+
 fn production_rust_sources() -> Vec<(PathBuf, String)> {
     let mut sources = Vec::new();
     rust_sources_under(
@@ -727,6 +896,22 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
         assert_ordered_needles(name, section, &needles);
     }
 
+    let backend_source = cubecl_source("mod.rs");
+    let reduction_section = source_section(
+        &backend_source,
+        "    fn launch_reduce_axis_typed<T>(",
+        "    fn reduce_axes_typed<T>(",
+    );
+    assert_ordered_needles(
+        "launch_reduce_axis_typed",
+        reduction_section,
+        &[
+            "let input_binding = typed_tensor_binding(input, op)?;",
+            "let output = alloc_output::<T>(self.runtime(), &output_shape)?;",
+            "if output.n_elements() == 0",
+        ],
+    );
+
     let fusion_source = cubecl_source("fusion/launch.rs");
     assert_ordered_needles(
         "fusion::launch",
@@ -774,6 +959,168 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
             "launch_broadcast_multiply_complex_typed",
         ],
     );
+}
+
+#[test]
+fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    assert!(!helper.contains("broadcast_typed"));
+    assert_ordered_needles(
+        "scalar binary shape gate",
+        helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
+            "let lhs_scalar = lhs.shape().is_empty()",
+            "if lhs_scalar",
+            "rhs.shape()",
+            "lhs.shape()",
+            "let output = alloc_output::<I>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "if output.n_elements() == 0",
+        ],
+    );
+
+    let checked_helper = source_section(
+        &mod_source,
+        "fn launch_checked_integer_scalar_binary",
+        "impl TensorElementwise for CudaBackend",
+    );
+    assert_ordered_needles(
+        "checked scalar binary launch validation",
+        checked_helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
+            "let output = alloc_output::<I>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "if output.n_elements() == 0",
+            "let flag = alloc_output::<i32>",
+            "typed_tensor_array_arg(&flag, op)?",
+            "launch_nullary_into(",
+        ],
+    );
+
+    for (op, end) in [("fn div(", "fn rem("), ("fn rem(", "fn abs(")] {
+        let section = source_section(&mod_source, op, end);
+        assert!(
+            section.contains("launch_scalar_binary"),
+            "{op} must use the narrow scalar launcher"
+        );
+        assert!(
+            !section.contains("broadcast_typed"),
+            "{op} must not materialize the scalar"
+        );
+    }
+    let pow = source_section(&mod_source, "fn pow(", "fn transpose(");
+    assert!(!pow.contains("launch_scalar_binary"));
+    assert_ordered_needles(
+        "pow dtype and shape validation",
+        pow,
+        &[
+            "if lhs.dtype() != rhs.dtype()",
+            "return Err(dtype_mismatch(op, lhs, rhs))",
+            "ensure_same_shape(op, lhs.shape(), rhs.shape())?",
+        ],
+    );
+    assert!(pow.contains("launch_binary("));
+}
+
+#[test]
+fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_real_complex_scalar_binary",
+        "fn promoted_real_complex_scalar_binary",
+    );
+    assert_ordered_needles(
+        "mixed real-complex scalar validation",
+        helper,
+        &[
+            "if !real.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), real, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), complex, op)?",
+            "let component_len = complex\n        .n_elements()\n        .checked_mul(2)",
+            "let real_arg = typed_tensor_array_arg(real, op)?",
+            "// INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`",
+            "let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?",
+            "let output = alloc_output::<C>",
+            "let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?",
+            "if output.n_elements() == 0",
+            "scalar_real_complex_binary::launch_unchecked",
+        ],
+    );
+    for banned in [
+        "download_tensor",
+        "upload_tensor",
+        "broadcast_typed",
+        "convert(",
+    ] {
+        assert!(
+            !helper.contains(banned),
+            "mixed scalar promotion must not use host transfer or full-size materialization: {banned}"
+        );
+    }
+
+    let dispatch = source_section(
+        &mod_source,
+        "fn promoted_real_complex_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    for accepted in [
+        "Tensor::F32(real), Tensor::C32(complex)",
+        "Tensor::C32(complex), Tensor::F32(real)",
+        "Tensor::F64(real), Tensor::C64(complex)",
+        "Tensor::C64(complex), Tensor::F64(real)",
+    ] {
+        assert!(
+            dispatch.contains(accepted),
+            "missing accepted pair {accepted}"
+        );
+    }
+    assert_eq!(dispatch.matches("if real.shape().is_empty()").count(), 4);
+
+    let kernel_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/kernels/elementwise.rs"),
+    )
+    .expect("elementwise kernel source should be readable");
+    let kernel = source_section(
+        &kernel_source,
+        "pub fn scalar_real_complex_binary",
+        "pub fn scalar_div_int_checked",
+    );
+    assert!(kernel.contains("let complex_idx = ABSOLUTE_POS * 2"));
+    assert!(kernel
+        .contains("// INVARIANT: These unsimplified component expressions must evaluate in the"));
+    assert!(kernel.contains("Keep zero cross terms"));
+    for generic_complex_term in [
+        "zero + im",
+        "im + zero",
+        "scalar * re - zero * im",
+        "re * scalar - im * zero",
+        "let norm_sqr = scalar * scalar + zero * zero",
+        "(re * scalar + im * zero) / norm_sqr",
+        "let norm_sqr = re * re + im * im",
+        "(scalar * re + zero * im) / norm_sqr",
+        "(zero * re - scalar * im) / norm_sqr",
+    ] {
+        assert!(
+            kernel.contains(generic_complex_term),
+            "mixed scalar kernel must preserve generic complex operation order: {generic_complex_term}"
+        );
+    }
 }
 
 #[test]
@@ -1230,6 +1577,201 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
         "CubeCL I64 index conversion must stay on device; host roundtrips in indexing paths are performance regressions:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn cuda_float_index_validation_stays_device_native_and_preflighted() {
+    let backend = cubecl_source("mod.rs");
+    let validation = source_section(
+        &backend,
+        "fn validate_float_index_tensor<F>(",
+        "fn launch_checked_integer_binary<I>(",
+    );
+    for needle in [
+        "ensure_resident_on_runtime(backend.runtime(), indices, \"index_tensor\")?;",
+        "typed_tensor_binding(indices, \"index_tensor\")?;",
+        "if indices.n_elements() == 0",
+        "u32::try_from(indices.n_elements())",
+        "cube_count_for_len(indices.n_elements())?;",
+        "validate_float_indices_kernel::launch_unchecked",
+        "extract_invalid_float_index_kernel::launch_unchecked",
+        "F::read_invalid_flag(backend, &flag)?",
+    ] {
+        assert!(
+            validation.contains(needle),
+            "missing float-index contract: {needle}"
+        );
+    }
+    let allocation = validation.find("alloc_output::<F>").unwrap();
+    assert!(validation.find("ensure_resident_on_runtime").unwrap() < allocation);
+    assert!(validation.find("typed_tensor_binding").unwrap() < allocation);
+    assert!(validation.find("cube_count_for_len").unwrap() < allocation);
+    assert!(validation.find("u32::try_from").unwrap() < allocation);
+    assert!(!validation.contains("download_tensor(backend.runtime(), indices"));
+
+    for (start, end, index_name) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            "starts",
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            "start_indices",
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            "scatter_indices",
+        ),
+    ] {
+        let operation = source_section(&backend, start, end);
+        assert!(
+            operation
+                .find(&format!("I::validate(self, {index_name})?;"))
+                .unwrap()
+                < operation.find("alloc_output").unwrap_or(operation.len()),
+            "{start} must validate float index values before allocation"
+        );
+    }
+
+    let kernels = std::fs::read_to_string("src/kernels/indexing.rs").unwrap();
+    assert!(kernels.contains("flag[0].fetch_min(ABSOLUTE_POS as u32)"));
+    assert!(kernels.contains("flag_values[1] = indices[invalid_index as usize]"));
+}
+
+#[test]
+fn cuda_dynamic_slice_dispatch_matches_cpu_supported_dtype_matrix() {
+    let backend = cubecl_source("mod.rs");
+    let dispatch = source_section(
+        &backend,
+        "    fn dynamic_slice(\n",
+        "    fn dynamic_update_slice(\n",
+    );
+    for data in ["F32", "F64", "C32", "C64", "I32"] {
+        for starts in ["F32", "F64", "I32", "I64"] {
+            assert!(
+                dispatch.contains(&format!(
+                    "(Tensor::{data}(input), Tensor::{starts}(starts))"
+                )),
+                "dynamic_slice must dispatch CPU-supported {data} data with {starts} starts"
+            );
+        }
+    }
+    for starts in ["F32", "F64", "I32", "I64"] {
+        assert!(
+            dispatch.contains(&format!("(Tensor::Bool(input), Tensor::{starts}(starts))")),
+            "dynamic_slice must dispatch CPU-supported Bool data with {starts} starts"
+        );
+    }
+    assert!(dispatch.contains("(_, Tensor::Bool(_))"));
+    assert!(dispatch.contains("(_, Tensor::C32(_) | Tensor::C64(_))"));
+    assert!(dispatch.contains("(Tensor::I64(_), _)"));
+}
+
+#[test]
+fn cuda_indexing_preflights_structure_and_all_inputs_before_value_scans() {
+    let backend = cubecl_source("mod.rs");
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "typed_tensor_binding(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "typed_tensor_binding(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<T>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
+
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_bool<I>(",
+            "fn pad_typed<T>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "bool_tensor_array_arg(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn gather_bool<I>(",
+            "fn scatter_float_typed<T, I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "bool_tensor_array_arg(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_complex_typed<T, F, I>(",
+            "}\n}\n\nimpl BackendRuntimeCache",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<F>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
 }
 
 #[cfg(feature = "cuda")]

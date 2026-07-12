@@ -71,24 +71,27 @@ CUDA operation and dtype matrix. The high-level categories are:
 
 - explicit upload/download and device pointer bridge,
 - `F32`/`F64` elementwise arithmetic, comparison, selection, clamp, and
-  analytic unary operations, plus `C32`/`C64` add/mul/div/neg/conj,
+  analytic unary operations; `I32`/`I64` add/sub/mul/div/rem, neg/abs/sign/pow,
+  compare/select, and minimum/maximum; plus `C32`/`C64` add/mul/div/neg/conj
+  and real-output magnitude (`abs`),
 - reductions including sum/product for `F32`, `F64`, `I32`, `I64`, `C32`, and
-  `C64`, and min/max for `F32`/`F64`,
+  `C64`, and min/max for `F32`/`F64`/`I32`/`I64`,
 - reshape for all public tensor dtypes, and other structural operations
   including transpose, broadcast, reverse, concatenate, diagonal
-  extraction/embedding, and triangular masks for `F32`, `F64`, `I32`, `I64`,
-  `C32`, and `C64`,
-- slice/pad/concatenate/reverse for `F32`, `F64`, `I32`, `I64`, `C32`, and
-  `C64`, and
-  gather/scatter/dynamic_slice for floating and complex data with numeric
-  index tensors,
+  extraction/embedding, and triangular masks for all public tensor dtypes,
+- slice/pad/concatenate/reverse for all public tensor dtypes; gather for
+  `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with numeric index
+  tensors; dynamic slice for those numeric/complex and `Bool` data dtypes with
+  numeric starts; additive scatter only for
+  floating and complex data (not integer or `Bool` data),
 - cuTENSOR-backed contraction paths for real and complex floating dtypes,
 - cuSOLVER/cuBLAS linalg extension paths for real and complex floating dtypes.
 
 Unsupported GPU operations and unsupported dtypes return `BackendFailure`.
 Known CUDA backend limitations are operation-specific: `eig`,
-`full_piv_lu`, `full_piv_lu_solve`, `dynamic_update_slice`, `I64`
-numeric/linalg gaps, and selected complex analytic or ordering operations.
+`full_piv_lu`, `full_piv_lu_solve`, `dynamic_update_slice`, remaining integer
+numeric/linalg gaps, `Bool` arithmetic/reduction/linalg and additive scatter,
+and selected complex analytic or ordering operations.
 `eig` is not provided by cuSOLVER and permanently returns `BackendFailure` on
 CubeCL. ROCm is only a feature stub.
 

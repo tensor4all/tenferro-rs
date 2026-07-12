@@ -1,0 +1,166 @@
+# CUDA bug remediation ledger
+
+## Session summary
+
+This work log is the classification ledger for issues #1353 and #1356 through
+#1366. It records the scope approved for the single CUDA remediation batch; it
+does not itself claim that any close condition has been met. The baseline
+`cargo test --workspace --release` passed before remediation edits began.
+
+Remote state was refreshed on 2026-07-11: every issue in this ledger is open,
+and no open or closed pull request matched these issue numbers. Historical
+issue reports and CUDA-devcontainer repro comments remain evidence, while the
+working-tree source is the authority for implementation decisions.
+
+## Context and references read
+
+The final documentation reconciliation re-read `AGENTS.md`,
+`REPOSITORY_RULES.md`, the shared tensor4all repository/docs/numerical rules,
+the CUDA capability descriptor and its source-contract tests, the active GPU
+design and user guide, and this ledger. The CPU operation implementations and
+tests were used as the semantic reference for integer wrapping/domain errors,
+Bool structural/indexing support, and additive-scatter rejection; the CUDA
+work deliberately matches those established contracts rather than defining new
+CPU behavior. The active guide's generated core capability table and its
+additional structural/indexing matrix are the detailed capability source.
+
+The same-pattern neighborhood review included commits `d946d404` and
+`cca8d3b3`: scalar-only float-index flag setup/extraction is explicitly scoped
+away from scatter kernels, and the scatter-kernel inventory prevents an added
+kernel from escaping that review. The resulting kernel metadata contracts pass
+4/4. Commits `f6ee7c78` and `ff8bcd1d` provide the source-order and A100 evidence
+that cheap operation metadata and residency/binding checks precede float-index
+value scans, while zero-domain scatter paths cannot bypass those checks.
+
+## Final design decisions
+
+- Keep index validation on the CUDA device and copy back only the small error
+  flag/value; do not introduce host fallback or full index-tensor
+  materialization.
+- Keep operation metadata validation, residency, binding, and atomic
+  capability checks in `CudaBackend`, the owning runtime boundary. Do not
+  duplicate runtime ownership or error precedence in eager/traced wrappers.
+- Extend CUDA only to CPU-established behavior. In particular, Bool supports
+  allocation/transfer, reshape, transpose, broadcast, diagonal
+  extraction/embedding, triangular masks, slice, `dynamic_slice` with
+  `F32`/`F64`/`I32`/`I64` numeric starts, pad, concatenate, reverse, and gather
+  with numeric index tensors. Float starts use the same exact-value validation
+  as other data dtypes; Bool arithmetic, reductions, linalg, and additive
+  scatter remain unsupported.
+- Describe integer CUDA support from the implemented capability descriptor:
+  add/sub/mul/div/rem, neg/abs/sign/pow, compare/select/minimum/maximum, and
+  sum/product/minimum/maximum reductions. Remaining integer gaps are stated as
+  operation-specific rather than as the stale narrower list.
+
+Rejected alternatives were host-side validation fallback, whole-tensor
+downloads or promoted/materialized wrapper temporaries, per-wrapper runtime
+ownership, and changing CPU semantics to broaden the parity target. Each would
+either violate placement/performance contracts, duplicate the owning backend
+policy, or silently turn this remediation into CPU-new behavior.
+
+## Documentation reconciliation verification
+
+The reconciliation ran `cargo fmt --all --check`, the generated CUDA
+capability-table source contract, all four kernel-metadata contracts,
+`cargo doc --workspace --no-deps`, `scripts/check-docs-site.py`, and
+`git diff --check`. These focused documentation checks passed. They do not
+replace the fresh committed-head repository checklist recorded as pending
+below.
+
+## Scope decisions
+
+- #1353 is maintainer-approved in the interactive session: floating-point
+  operations preserve IEEE/NumPy/JAX-style exceptional values rather than
+  converting them to typed domain errors. Integer domain errors remain
+  unchanged.
+- #1362, #1363, and #1364 are explicitly approved capability-parity work, but
+  only for behavior already implemented by the CPU backend. They must not add
+  CPU-new behavior. In particular, Bool additive scatter is excluded because
+  CPU rejects Bool data tensors.
+- #1360 was narrowed from `Verify First` and implemented for the three confirmed
+  CUDA paths: `dynamic_slice`, `gather`, and `scatter`. Its contract is exact
+  CPU parity, including the float-index bounds `F32: 2^24` and `F64: 2^53` and
+  the exact `InvalidConfig` variant, operation label, and message parity.
+
+## Classification ledger
+
+| Issue | Classification | Current evidence | Close condition and verification target | Residual risk |
+| --- | --- | --- | --- | --- |
+| #1353 | Implemented locally; focused and full-suite A100 verification passed | Active tensor/primitive specs now state the approved IEEE-style value-propagation policy. Focused CPU `F32`/`F64` tests cover division and remainder with signed-zero divisors, NaN, infinity, and signed-zero results; integer `I32`/`I64` zero divisors remain typed `DivisionByZero`. The CUDA parity test covers the same floating classes and signs plus negative exact multiples. CUDA float remainder now restores the dividend's sign when the truncation-based result is zero, for both same-shape and scalar launches. | The focused CUDA regression first exposed `F32 -0.0 % 2.0` as CUDA `+0.0` (`0x00000000`) versus CPU `-0.0` (`0x80000000`), then passed for `F32` and `F64` after the kernel fix. The full ignored `tenferro-gpu` CUDA suite passed on an NVIDIA A100 (`93/93`) with CUDA 12.6. Overall batch verification remains incomplete. | Other analytic operations can have independent IEEE edge discrepancies; scan them, but do not silently expand this issue. |
+| #1356 | Implemented locally; focused verification passed | Generic CubeCL `F::new(0.0)` / `F::new(1.0)` literals in the float unary kernels were replaced with explicitly typed `f32` literals. | The focused ignored CUDA test passed on an NVIDIA A100, the CUDA feature test build emitted no fallback warning for these sites, and a source check found no remaining untyped `F::new(0.0)` / `F::new(1.0)` literals in `kernels/elementwise.rs`. Overall batch verification remains incomplete. | CubeCL or rustc upgrades may expose equivalent literals in other kernel families. |
+| #1357 | Implemented locally; focused A100 verification passed | CUDA `div`/`rem` now use a private scalar-indexed launch only when exactly one same-dtype operand is rank-0. The kernel maps the scalar to index zero without `broadcast_typed` or a full-size temporary. Integer scalar paths retain the device error flag and exact `DivisionByZero` fields, plus wrapping `MIN / -1` and `MIN % -1` behavior. | The ignored regression passes on an NVIDIA A100 for scalar LHS/RHS with `F32`, `F64`, `I32`, and `I64`; the source contract and CUDA feature compilation pass. The A100 run used `CUDA_PATH=/usr/local/cuda-12.6`, `CUBECL_DEBUG_LOG=0`, and CUDA/cuTENSOR library paths in `LD_LIBRARY_PATH`. Overall batch verification remains incomplete. | The special path is intentionally limited to exactly one rank-0 operand; arbitrary implicit broadcasting remains rejected. |
+| #1358 | Stale / Out of Scope (false positive guarded) | Current CPU `pow` requires equal shapes in `typed_pow_with_pool` and rejects both rank-0/vector operand orders with exact `ShapeMismatch { op: "pow", lhs, rhs }`. The historical claim that CPU accepts scalar `pow` is false at the working hash. CUDA now performs the same operand-order shape preflight before its raw launcher. | An ignored CPU/CUDA regression covers both operand orders and `F32`, `F64`, `I32`, and `I64`; a source contract prevents `pow` from entering the CUDA scalar launcher and preserves the exact preflight. | No scalar `pow` behavior was added. A future change requires an accepted CPU/public semantic contract first. |
+| #1359 | Implemented locally; focused A100 verification passed | Before the fix, the focused A100 regression failed because a full-axis CUDA reduction exposed public shape `[1]` while CPU and the expected scalar contract returned `[]`. CUDA reduction public metadata now retains the exact rank-0 `[]` shape when all axes are reduced. The existing CubeCL binding boundary continues to translate rank-0 tensors into private one-element shape/stride metadata, so no invalid zero-length CUDA metadata or buffer reinterpretation is introduced. Reduction input binding validation now precedes the zero-output shortcut. | After separating public and launch metadata, the ignored A100 regression passes with CPU/CUDA shape and value parity for full-axis sum/prod over `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`, and min/max over their supported real/integer dtypes. A focused metadata test guards the public/private shape separation. The A100 RED/GREEN runs used `CUDA_PATH=/usr/local/cuda-12.6`, `CUBECL_DEBUG_LOG=0`, and CUDA/cuTENSOR library paths in `LD_LIBRARY_PATH`. Overall batch verification remains incomplete. | CubeCL still receives `[1]` as private launch metadata for rank-0 bindings; that workaround must remain confined to the dispatch boundary. |
+| #1360 | Implemented locally; narrowed current paths; focused A100 verification passed | The A100 RED matrix confirmed that CUDA `dynamic_slice`, `gather`, and `scatter` all accepted fractional, NaN, positive/negative infinity, and values just outside the exact float-index bounds for both `F32` and `F64`; the earlier report that gather already rejected a fraction was stale. Integral values and both signs of the exact boundaries (`F32`: 2^24, `F64`: 2^53) already matched CPU. CUDA now scans float index tensors on device, atomically selects the first invalid flat index, copies only that value into the same two-element validation flag, and reads that flag after synchronization; it never downloads the index tensor or falls back to CPU. A follow-up source check corrected the earlier false exclusion for Bool data: CPU accepts float starts before dtype dispatch, so CUDA now routes Bool data with `F32`/`F64` starts through the same validation contract and existing byte kernel. | The unchanged A100 matrix now passes all three operations for `F32`/`F64`: integral valid, fractional, NaN, positive/negative infinity, both signed exact boundaries, and both signed just-outside values, with exact CPU `InvalidConfig { op: "index_tensor", message }` parity. The Bool follow-up matrix covers the same boundaries and errors plus empty/zero outputs and validation precedence. RED and GREEN used `CUBECL_DEBUG_LOG=0`, `CUDA_PATH=/usr/local/cuda-12.6`, and CUDA/cuTENSOR paths in `LD_LIBRARY_PATH`. CUDA feature no-run compilation also passes. | The device check adds one small validation flag allocation and synchronization for non-empty float index tensors; empty validated inputs skip the flag entirely. Overall batch verification remains incomplete. |
+| #1361 | Implemented locally; focused verification passed | CUDA `abs` now canonicalizes both zero signs to `+0.0`, and CUDA `sign` explicitly preserves NaN before its zero/finite branches. The ignored CUDA regression test covers `F32`/`F64` `abs(-0.0)` bit parity and `sign(NaN)` plus finite and zero sanity cases. | The regression test first failed on `F32` `abs(-0.0)` (`0x80000000` versus CPU `0x00000000`) and then passed for both dtypes on an NVIDIA A100 after the kernel fix. Overall batch verification remains incomplete. | CubeCL or CUDA fast-math changes could affect NaN/signed-zero semantics; retain the hardware regression test. |
+| #1362 | Implemented locally; focused A100 verification passed | CUDA explicit `cast` now covers all 49 CPU-supported pairs across `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64` through shared numeric, Bool-truthiness, complex projection/injection, and complex-width kernel families. Real or complex-real to integer casts atomically select the first invalid value on device, download only a two-scalar validation flag, and reproduce CPU's exact typed `InvalidConfig`; empty inputs allocate no flag. Checked `convert` remains gated by the existing promotion lattice. | The source-derived 49-pair CPU/CUDA matrix passes on an NVIDIA A100, including positives, negatives, zero, NaN truthiness, complex projection/injection, integer narrowing, and exact NaN/infinity/out-of-range errors. CUDA feature no-run compilation passes. | The validation path adds one small flag allocation and synchronization only for non-empty fallible casts; no full tensor download or host fallback is used. Overall batch verification remains incomplete. |
+| #1363 | Implemented locally; focused A100 verification passed | Before the fix, the A100 repro failed at `transpose(Bool)` with `UnsupportedOpDType { op: "transpose", dtype: Bool, backend: Cuda }`. CUDA now routes CPU-supported Bool shape/data-movement operations through one-byte copy/index kernels rather than numeric traits. CPU and CUDA both reject Bool additive scatter with exact `BackendFailure { op: "scatter", message: "Bool data tensors are not supported by additive scatter" }` parity. The follow-up audit found CPU also supports Bool `dynamic_slice` with `F32`/`F64` starts, and CUDA now dispatches those combinations through the existing byte kernel and #1360 float-index validation. | Focused Bool A100 tests cover non-empty values/shapes, empty/zero-length outputs, exact invalid-config error parity, signed exact float boundaries, fractional/non-finite/out-of-bound float errors, and validation precedence across the CPU-supported structural/indexing matrix. The complete CUDA indexing module passes 12/12; launch contracts pass 31/31, kernel metadata contracts 4/4, public-surface contracts 12/12, CUDA feature no-run compilation passes, and the docs site check reports `doc-snippets-ok`. Runs use `CUBECL_DEBUG_LOG=0`, `CUDA_PATH=/usr/local/cuda-12.6`, and `LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:/usr/local/cuda-12.6/targets/x86_64-linux/lib:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH`. This closes the CPU-supported Bool structural/indexing gap. | Bool arithmetic, reductions, linalg, additive scatter, and CPU-new behavior remain excluded. |
+| #1364 | Implemented locally; focused A100 verification passed | CUDA `abs` now maps `C32 -> F32` and `C64 -> F64` through CubeCL's native complex `abs` intrinsic, which lowers to stable CUDA `hypotf`/`hypot`; no CPU behavior or other complex analytic operation changed. The ignored parity test covers zero, `(3,4)`, `(5,12)`, scaled very large/small components, and CPU-relevant NaN/infinity cases. | The focused regression first failed with `UnsupportedOpDType { op: "abs", dtype: C32, backend: Cuda }`, then passed on an NVIDIA A100 for both complex dtypes with real output dtype and CPU value/class parity. Overall batch verification remains incomplete. | CubeCL/CUDA intrinsic edge semantics could change across toolchain upgrades; retain the hardware parity test. No broader complex analytic support is implied. |
+| #1365 | Implemented locally; narrowed current contract; focused A100 verification passed | The current bug is confined to the optional CUDA `TensorFusion` hook: classification now returns `Ok(None)` for identity-view inputs with incompatible runtime shapes. The direct regression first failed with `ShapeMismatch { op: "fused_elementwise", lhs: [3], rhs: [] }`, then passed for `[3]` and `[]`; a companion regression confirms a plan/runtime dtype descriptor mismatch remains a typed `BackendFailure`. The reported user-visible scalar-broadcast fallback path is stale/unproven: current segmented scalar broadcasting uses explicit `BroadcastInDim` metadata, which exits fusion classification earlier as a nonidentity view, while ordinary unfused CUDA `add`/`mul` do not themselves accept `[3]` with `[]`. | Direct fusion shape-defusal and dtype-corruption regressions pass on an NVIDIA A100; the full CUDA fusion module, CUDA feature compilation, and relevant launch contracts pass. Overall batch verification remains incomplete. | `Ok(None)` only declines this optional backend optimization; it does not promise that every shape combination is executable by the caller's fallback path. Malformed plans and corrupted tensor descriptors remain hard errors. |
+| #1366 | Implemented locally; focused A100 verification passed | CUDA now accepts the CPU-established matching-precision `F32` rank-0/`C32` and `F64` rank-0/`C64` cases for `add`, `sub`, `mul`, and `div` in both operand positions. A shared private kernel reads the real scalar once and promotes it in registers while operating directly on interleaved complex components; it performs no host transfer and allocates no full-size promoted scalar tensor. Every operation preserves CPU's explicit `Complex(real, +0)` promotion and generic `num_complex` component operation order, including zero cross terms and division norm squares, so overflow, underflow, NaN, infinity, and signed-zero behavior remains aligned. | The focused regression first failed with `DTypeMismatch { op: "add", lhs: F32, rhs: C32 }`, then passed on an NVIDIA A100 for both dtype pairs, all four operations, both operand orders, signed zero, NaN/infinity cross terms, ordinary finite and overflow-scale complex values, output dtype/shape, and exact rejection of mixed non-scalars, cross-precision scalars, and matching-precision mixed `pow`/`rem` in both orders. The CUDA no-run build and launch/source contracts pass. Overall batch verification remains incomplete. | Promotion is intentionally limited to matching-precision real rank-0 scalars. General mixed non-scalar broadcasting, cross-precision promotion, `pow`, and `rem` remain unsupported. |
+
+## Final-review indexing preflight follow-up
+
+Final review found that CUDA float-index value validation could allocate a
+device flag and synchronize before operation metadata was validated, and that
+scatter zero-domain returns could bypass operand/index/update binding and
+atomic-capability checks. The source-order regression was RED before the fix:
+`dynamic_slice_typed` reached the checked output-domain assertion only after
+`I::validate`. After reordering, metadata and checked launch counts precede all
+input residency/binding and capability checks, which precede nonempty float
+index scans; allocation, copy, zero-domain returns, and launches follow.
+
+The A100 evidence covers exact structural errors for mixed invalid
+configuration plus NaN/fractional indices across `F32`/`F64` dynamic slice,
+float/complex/Bool gather data, and float/complex scatter. Separate valid-config
+cases assert exact CPU/CUDA invalid-index `Error` equality. Bool dynamic slice
+covers all four numeric start dtypes, including exact float-value validation,
+and checks exact invalid-config parity.
+CPU currently converts float index values before operation-specific config
+validation, so when both inputs are independently invalid its error precedence
+intentionally differs from the CUDA cheap-metadata-before-device-scan contract;
+CPU behavior was not changed.
+
+Zero-output and zero-update scatter tests cover float and complex data,
+cuda:1 placement metadata over real cuda:0 buffers, malformed device-placement
+host buffers, and a second same-device `CudaBackend`. Runtime residency is by
+CUDA device ordinal, not wrapper identity, because same-device CubeCL clients
+share the primary context. The focused tests and the full CUDA indexing module
+passed on an NVIDIA A100 (`12/12`) with `CUBECL_DEBUG_LOG=0`,
+`CUDA_PATH=/usr/local/cuda-12.6`, and CUDA/cuTENSOR paths in
+`LD_LIBRARY_PATH`. Launch and kernel-metadata contracts plus CUDA no-run
+compilation also passed. Final overall batch verification remains pending.
+
+## Batch close conditions
+
+An issue receives `Closes #...` only after its row's focused verification
+passes. The final batch also requires the repository checklist, the ignored
+CUDA suite in the supported CUDA environment, a same-pattern neighborhood
+scan, updated active capability documentation, and reconciliation of this
+ledger with the latest issue comments before the PR is opened. Partially
+resolved or deferred items remain `Refs #...` with the residual risk stated
+explicitly. A narrowed issue may still receive `Closes #...` when its narrowed,
+current close condition is fully resolved.
+
+## Final repository checklist
+
+The fresh final verification run completed on the implementation head after
+the scalar remainder signed-zero regression was added:
+
+- `cargo fmt --all --check`: **passed**
+- `cargo test --workspace --release`: **passed**, including doctests
+- workspace release coverage plus `scripts/check-coverage.py`: **passed,
+  150/150 included files met their thresholds**
+- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py`: **passed;
+  13 workspace library crates verified**
+- CI-parity clippy (`--workspace --all-targets -- -D warnings` plus the
+  tropical extension manifest): **passed**
+- ignored CUDA suite on the supported CUDA environment: **passed on NVIDIA A100
+  (`93/93`) with CUDA 12.6**
+- committed-head repository-rules review: **passed with no findings**
+- final side review: **passed after all findings were resolved**
+- issue-comment reconciliation and close-keyword audit: **passed**. The latest
+  issue comments add confirmed evidence for #1357 and #1360 without changing
+  the implemented contracts. PR #1355 is already merged into the current
+  `origin/main`. The PR closes #1353, #1356, #1357, and #1359--#1366; #1358
+  remains a referenced false positive because CPU rejects scalar `pow` too.

@@ -386,6 +386,90 @@ fn test_integer_div_rem_pow_domain_errors_are_structured() {
 }
 
 #[test]
+fn float_div_rem_preserve_ieee_special_values() {
+    let f32_lhs = Tensor::from_vec_col_major(
+        vec![6],
+        vec![1.0_f32, 1.0, 0.0, f32::NAN, f32::INFINITY, -0.0],
+    )
+    .unwrap();
+    let f32_div_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f32, -0.0, 0.0, 1.0, f32::INFINITY, 2.0])
+            .unwrap();
+    let f32_div = div(&f32_lhs, &f32_div_rhs).unwrap();
+    let f32_div = f32_div.as_slice::<f32>().unwrap();
+    assert!(f32_div[0].is_infinite() && f32_div[0].is_sign_positive());
+    assert!(f32_div[1].is_infinite() && f32_div[1].is_sign_negative());
+    assert!(f32_div[2].is_nan());
+    assert!(f32_div[3].is_nan());
+    assert!(f32_div[4].is_nan());
+    assert_eq!(f32_div[5].to_bits(), (-0.0_f32).to_bits());
+
+    let f32_rem_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f32, -0.0, 2.0, 2.0, 2.0, 2.0]).unwrap();
+    let f32_rem = rem(&f32_lhs, &f32_rem_rhs).unwrap();
+    let f32_rem = f32_rem.as_slice::<f32>().unwrap();
+    assert!(f32_rem[0].is_nan());
+    assert!(f32_rem[1].is_nan());
+    assert_eq!(f32_rem[2].to_bits(), 0.0_f32.to_bits());
+    assert!(f32_rem[3].is_nan());
+    assert!(f32_rem[4].is_nan());
+    assert_eq!(f32_rem[5].to_bits(), (-0.0_f32).to_bits());
+
+    let f64_lhs = Tensor::from_vec_col_major(
+        vec![6],
+        vec![1.0_f64, 1.0, 0.0, f64::NAN, f64::INFINITY, -0.0],
+    )
+    .unwrap();
+    let f64_div_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f64, -0.0, 0.0, 1.0, f64::INFINITY, 2.0])
+            .unwrap();
+    let f64_div = div(&f64_lhs, &f64_div_rhs).unwrap();
+    let f64_div = f64_div.as_slice::<f64>().unwrap();
+    assert!(f64_div[0].is_infinite() && f64_div[0].is_sign_positive());
+    assert!(f64_div[1].is_infinite() && f64_div[1].is_sign_negative());
+    assert!(f64_div[2].is_nan());
+    assert!(f64_div[3].is_nan());
+    assert!(f64_div[4].is_nan());
+    assert_eq!(f64_div[5].to_bits(), (-0.0_f64).to_bits());
+
+    let f64_rem_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f64, -0.0, 2.0, 2.0, 2.0, 2.0]).unwrap();
+    let f64_rem = rem(&f64_lhs, &f64_rem_rhs).unwrap();
+    let f64_rem = f64_rem.as_slice::<f64>().unwrap();
+    assert!(f64_rem[0].is_nan());
+    assert!(f64_rem[1].is_nan());
+    assert_eq!(f64_rem[2].to_bits(), 0.0_f64.to_bits());
+    assert!(f64_rem[3].is_nan());
+    assert!(f64_rem[4].is_nan());
+    assert_eq!(f64_rem[5].to_bits(), (-0.0_f64).to_bits());
+
+    for (zero_rhs, expected_dtype) in [
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+            DType::I32,
+        ),
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+            DType::I64,
+        ),
+    ] {
+        let lhs = match zero_rhs.dtype() {
+            DType::I32 => Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
+            DType::I64 => Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            div(&lhs, &zero_rhs),
+            Err(Error::DivisionByZero { op: "div", dtype }) if dtype == expected_dtype
+        ));
+        assert!(matches!(
+            rem(&lhs, &zero_rhs),
+            Err(Error::DivisionByZero { op: "rem", dtype }) if dtype == expected_dtype
+        ));
+    }
+}
+
+#[test]
 fn test_float_rem_matches_rust_remainder_sign() {
     let lhs =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![4], vec![7.0, -7.0, 7.0, -7.0]).unwrap());

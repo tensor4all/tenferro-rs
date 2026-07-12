@@ -5,6 +5,56 @@ use crate::kernels::helpers::{
     zero_value,
 };
 
+#[cube(launch_unchecked)]
+pub fn init_float_index_validation_flag<F: Float>(
+    flag: &mut Array<Atomic<u32>>,
+    flag_values: &mut Array<F>,
+) {
+    // INVARIANT: exactly one worker initializes two scalar validation outputs; this is O(1)
+    // setup and does not perform tensor-sized serial work.
+    if ABSOLUTE_POS == 0 {
+        flag[0].store(u32::MAX);
+        flag_values[1] = F::new(0.0_f32);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn validate_float_indices_kernel<
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+>(
+    indices: &Tensor<F>,
+    flag: &mut Array<Atomic<u32>>,
+    max_exact_integer: F,
+) {
+    if ABSOLUTE_POS < indices.len() {
+        let value = indices[ABSOLUTE_POS];
+        if value.is_nan()
+            || value.is_inf()
+            || value != value.floor()
+            || value > max_exact_integer
+            || value < -max_exact_integer
+        {
+            flag[0].fetch_min(ABSOLUTE_POS as u32);
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn extract_invalid_float_index_kernel<F: Float>(
+    indices: &Tensor<F>,
+    flag: &Array<Atomic<u32>>,
+    flag_values: &mut Array<F>,
+) {
+    // INVARIANT: exactly one worker reads the scalar flag and, when invalid, extracts one
+    // selected index value; this is O(1) work and does not scan the tensor serially.
+    if ABSOLUTE_POS == 0 {
+        let invalid_index = flag[0].load();
+        if invalid_index != u32::MAX {
+            flag_values[1] = indices[invalid_index as usize];
+        }
+    }
+}
+
 #[cube]
 pub(crate) fn clamp_window_start<I: Numeric + CubePrimitive>(
     start: I,
