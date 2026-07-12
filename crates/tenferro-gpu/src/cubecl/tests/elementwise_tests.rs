@@ -563,7 +563,7 @@ fn test_cubecl_complex_abs_matches_cpu() {
         let actual = download(&gpu, &gpu_output);
 
         assert_eq!(actual.dtype(), expected.dtype());
-        assert_float_classes_and_zero_signs_match(&actual, &expected);
+        assert_float_classes_and_zero_signs_match("abs", &actual, &expected);
         match (&actual, &expected) {
             (Tensor::F32(actual), Tensor::F32(expected)) => {
                 let actual = actual.as_slice().unwrap();
@@ -749,47 +749,77 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 }
 
-fn assert_float_classes_and_zero_signs_match(actual: &Tensor, expected: &Tensor) {
+fn assert_float_classes_and_zero_signs_match(op: &str, actual: &Tensor, expected: &Tensor) {
     match (actual, expected) {
         (Tensor::F32(actual), Tensor::F32(expected)) => {
             assert_eq!(actual.shape(), expected.shape());
             assert_eq!(actual.n_elements(), expected.n_elements());
-            for (actual, expected) in actual
+            for (index, (actual, expected)) in actual
                 .as_slice()
                 .unwrap()
                 .iter()
                 .zip(expected.as_slice().unwrap())
+                .enumerate()
             {
-                assert_eq!(actual.is_nan(), expected.is_nan());
-                assert_eq!(actual.is_infinite(), expected.is_infinite());
+                let context = || {
+                    format!(
+                        "{op} F32 index {index}: actual={actual:?} ({:#010x}), expected={expected:?} ({:#010x})",
+                        actual.to_bits(),
+                        expected.to_bits()
+                    )
+                };
+                assert_eq!(actual.is_nan(), expected.is_nan(), "{}", context());
+                assert_eq!(
+                    actual.is_infinite(),
+                    expected.is_infinite(),
+                    "{}",
+                    context()
+                );
                 if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
-                    assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
-                } else if actual.is_finite() && expected.is_finite() {
-                    assert!(
-                        (actual - expected).abs() <= 1e-6,
-                        "expected {expected}, got {actual}"
+                    assert_eq!(
+                        actual.is_sign_negative(),
+                        expected.is_sign_negative(),
+                        "{}",
+                        context()
                     );
+                } else if actual.is_finite() && expected.is_finite() {
+                    assert!((actual - expected).abs() <= 1e-6, "{}", context());
                 }
             }
         }
         (Tensor::F64(actual), Tensor::F64(expected)) => {
             assert_eq!(actual.shape(), expected.shape());
             assert_eq!(actual.n_elements(), expected.n_elements());
-            for (actual, expected) in actual
+            for (index, (actual, expected)) in actual
                 .as_slice()
                 .unwrap()
                 .iter()
                 .zip(expected.as_slice().unwrap())
+                .enumerate()
             {
-                assert_eq!(actual.is_nan(), expected.is_nan());
-                assert_eq!(actual.is_infinite(), expected.is_infinite());
+                let context = || {
+                    format!(
+                        "{op} F64 index {index}: actual={actual:?} ({:#018x}), expected={expected:?} ({:#018x})",
+                        actual.to_bits(),
+                        expected.to_bits()
+                    )
+                };
+                assert_eq!(actual.is_nan(), expected.is_nan(), "{}", context());
+                assert_eq!(
+                    actual.is_infinite(),
+                    expected.is_infinite(),
+                    "{}",
+                    context()
+                );
                 if actual.is_infinite() || (*actual == 0.0 && *expected == 0.0) {
-                    assert_eq!(actual.is_sign_negative(), expected.is_sign_negative());
-                } else if actual.is_finite() && expected.is_finite() {
-                    assert!(
-                        (actual - expected).abs() <= 1e-12,
-                        "expected {expected}, got {actual}"
+                    assert_eq!(
+                        actual.is_sign_negative(),
+                        expected.is_sign_negative(),
+                        "{}",
+                        context()
                     );
+                } else if actual.is_finite() && expected.is_finite() {
+                    assert!((actual - expected).abs() <= 1e-12, "{}", context());
                 }
             }
         }
@@ -811,14 +841,20 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
     let mut gpu = gpu_backend();
     let cases = [
         (
-            super::tensor_f32(vec![6], vec![1.0, 1.0, 0.0, f32::NAN, f32::INFINITY, -0.0]),
-            super::tensor_f32(vec![6], vec![0.0, -0.0, 0.0, 1.0, f32::INFINITY, 2.0]),
-            super::tensor_f32(vec![6], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0]),
+            super::tensor_f32(
+                vec![7],
+                vec![1.0, 1.0, 0.0, f32::NAN, f32::INFINITY, -0.0, -4.0],
+            ),
+            super::tensor_f32(vec![7], vec![0.0, -0.0, 0.0, 1.0, f32::INFINITY, 2.0, 2.0]),
+            super::tensor_f32(vec![7], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0, 2.0]),
         ),
         (
-            tensor_f64(vec![6], vec![1.0, 1.0, 0.0, f64::NAN, f64::INFINITY, -0.0]),
-            tensor_f64(vec![6], vec![0.0, -0.0, 0.0, 1.0, f64::INFINITY, 2.0]),
-            tensor_f64(vec![6], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0]),
+            tensor_f64(
+                vec![7],
+                vec![1.0, 1.0, 0.0, f64::NAN, f64::INFINITY, -0.0, -4.0],
+            ),
+            tensor_f64(vec![7], vec![0.0, -0.0, 0.0, 1.0, f64::INFINITY, 2.0, 2.0]),
+            tensor_f64(vec![7], vec![0.0, -0.0, 2.0, 2.0, 2.0, 2.0, 2.0]),
         ),
     ];
 
@@ -830,12 +866,12 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
         let expected = cpu.div(&lhs, &div_rhs).unwrap();
         let gpu_out = gpu.div(&gpu_lhs, &gpu_div_rhs).unwrap();
         let actual = download(&gpu, &gpu_out);
-        assert_float_classes_and_zero_signs_match(&actual, &expected);
+        assert_float_classes_and_zero_signs_match("div", &actual, &expected);
 
         let expected = cpu.rem(&lhs, &rem_rhs).unwrap();
         let gpu_out = gpu.rem(&gpu_lhs, &gpu_rem_rhs).unwrap();
         let actual = download(&gpu, &gpu_out);
-        assert_float_classes_and_zero_signs_match(&actual, &expected);
+        assert_float_classes_and_zero_signs_match("rem", &actual, &expected);
     }
 }
 
@@ -1235,15 +1271,10 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let err = gpu.abs(&gpu_lhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::UnsupportedOpDType {
-            op: "abs",
-            dtype: DType::C64,
-            backend: tenferro_tensor::BackendId::Cuda,
-        }
-    ));
+    let expected = cpu.abs(&lhs).unwrap();
+    let gpu_out = gpu.abs(&gpu_lhs).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu.exp(&gpu_lhs).unwrap_err();
     assert!(matches!(

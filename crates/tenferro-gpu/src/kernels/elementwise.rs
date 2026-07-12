@@ -151,7 +151,14 @@ macro_rules! scalar_binary_float_kernel {
 }
 
 scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
-scalar_binary_float_kernel!(scalar_rem_float, |x, y| x - (x / y).trunc() * y);
+scalar_binary_float_kernel!(scalar_rem_float, |x, y| {
+    let remainder = x - (x / y).trunc() * y;
+    if remainder == F::new(0.0f32) {
+        x * F::new(0.0f32)
+    } else {
+        remainder
+    }
+});
 
 #[cube(launch_unchecked)]
 pub fn scalar_real_complex_binary<F: Float>(
@@ -287,7 +294,12 @@ pub fn rem_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
-        out[ABSOLUTE_POS] = x - (x / y).trunc() * y;
+        let remainder = x - (x / y).trunc() * y;
+        out[ABSOLUTE_POS] = if remainder == F::new(0.0f32) {
+            x * F::new(0.0f32)
+        } else {
+            remainder
+        };
     }
 }
 
