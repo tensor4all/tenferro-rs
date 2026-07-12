@@ -44,6 +44,37 @@ working-tree source is the authority for implementation decisions.
 | #1365 | Implemented locally; narrowed current contract; focused A100 verification passed | The current bug is confined to the optional CUDA `TensorFusion` hook: classification now returns `Ok(None)` for identity-view inputs with incompatible runtime shapes. The direct regression first failed with `ShapeMismatch { op: "fused_elementwise", lhs: [3], rhs: [] }`, then passed for `[3]` and `[]`; a companion regression confirms a plan/runtime dtype descriptor mismatch remains a typed `BackendFailure`. The reported user-visible scalar-broadcast fallback path is stale/unproven: current segmented scalar broadcasting uses explicit `BroadcastInDim` metadata, which exits fusion classification earlier as a nonidentity view, while ordinary unfused CUDA `add`/`mul` do not themselves accept `[3]` with `[]`. | Direct fusion shape-defusal and dtype-corruption regressions pass on an NVIDIA A100; the full CUDA fusion module, CUDA feature compilation, and relevant launch contracts pass. Overall batch verification remains incomplete. | `Ok(None)` only declines this optional backend optimization; it does not promise that every shape combination is executable by the caller's fallback path. Malformed plans and corrupted tensor descriptors remain hard errors. |
 | #1366 | Implemented locally; focused A100 verification passed | CUDA now accepts the CPU-established matching-precision `F32` rank-0/`C32` and `F64` rank-0/`C64` cases for `add`, `sub`, `mul`, and `div` in both operand positions. A shared private kernel reads the real scalar once and promotes it in registers while operating directly on interleaved complex components; it performs no host transfer and allocates no full-size promoted scalar tensor. Every operation preserves CPU's explicit `Complex(real, +0)` promotion and generic `num_complex` component operation order, including zero cross terms and division norm squares, so overflow, underflow, NaN, infinity, and signed-zero behavior remains aligned. | The focused regression first failed with `DTypeMismatch { op: "add", lhs: F32, rhs: C32 }`, then passed on an NVIDIA A100 for both dtype pairs, all four operations, both operand orders, signed zero, NaN/infinity cross terms, ordinary finite and overflow-scale complex values, output dtype/shape, and exact rejection of mixed non-scalars, cross-precision scalars, and matching-precision mixed `pow`/`rem` in both orders. The CUDA no-run build and launch/source contracts pass. Overall batch verification remains incomplete. | Promotion is intentionally limited to matching-precision real rank-0 scalars. General mixed non-scalar broadcasting, cross-precision promotion, `pow`, and `rem` remain unsupported. |
 
+## Final-review indexing preflight follow-up
+
+Final review found that CUDA float-index value validation could allocate a
+device flag and synchronize before operation metadata was validated, and that
+scatter zero-domain returns could bypass operand/index/update binding and
+atomic-capability checks. The source-order regression was RED before the fix:
+`dynamic_slice_typed` reached the checked output-domain assertion only after
+`I::validate`. After reordering, metadata and checked launch counts precede all
+input residency/binding and capability checks, which precede nonempty float
+index scans; allocation, copy, zero-domain returns, and launches follow.
+
+The A100 evidence covers exact structural errors for mixed invalid
+configuration plus NaN/fractional indices across `F32`/`F64` dynamic slice,
+float/complex/Bool gather data, and float/complex scatter. Separate valid-config
+cases assert exact CPU/CUDA invalid-index `Error` equality. Bool dynamic slice
+uses its permitted integer start dtype and checks exact invalid-config parity.
+CPU currently converts float index values before operation-specific config
+validation, so when both inputs are independently invalid its error precedence
+intentionally differs from the CUDA cheap-metadata-before-device-scan contract;
+CPU behavior was not changed.
+
+Zero-output and zero-update scatter tests cover float and complex data,
+cuda:1 placement metadata over real cuda:0 buffers, malformed device-placement
+host buffers, and a second same-device `CudaBackend`. Runtime residency is by
+CUDA device ordinal, not wrapper identity, because same-device CubeCL clients
+share the primary context. The focused tests and the full CUDA indexing module
+passed on an NVIDIA A100 (`11/11`) with `CUBECL_DEBUG_LOG=0`,
+`CUDA_PATH=/usr/local/cuda-12.6`, and CUDA/cuTENSOR paths in
+`LD_LIBRARY_PATH`. Launch and kernel-metadata contracts plus CUDA no-run
+compilation also passed. Final overall batch verification remains pending.
+
 ## Batch close conditions
 
 An issue receives `Closes #...` only after its row's focused verification
