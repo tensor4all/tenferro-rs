@@ -4592,9 +4592,12 @@ impl TensorIndexing for CudaBackend {
             (Tensor::Bool(input), Tensor::I64(starts)) => self
                 .dynamic_slice_bool(input, starts, slice_sizes)
                 .map(Tensor::Bool),
-            (Tensor::Bool(_), Tensor::F32(_) | Tensor::F64(_)) => {
-                Err(unsupported_dtype("dynamic_slice", input.dtype()))
-            }
+            (Tensor::Bool(input), Tensor::F32(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
+            (Tensor::Bool(input), Tensor::F64(starts)) => self
+                .dynamic_slice_bool(input, starts, slice_sizes)
+                .map(Tensor::Bool),
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
                 "dynamic_slice",

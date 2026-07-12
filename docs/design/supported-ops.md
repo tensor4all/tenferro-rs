@@ -81,8 +81,8 @@ CUDA operation and dtype matrix. The high-level categories are:
   extraction/embedding, and triangular masks for all public tensor dtypes,
 - slice/pad/concatenate/reverse for all public tensor dtypes; gather for
   `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with numeric index
-  tensors; dynamic slice for those numeric/complex data dtypes with numeric
-  starts and for `Bool` data with `I32`/`I64` starts; additive scatter only for
+  tensors; dynamic slice for those numeric/complex and `Bool` data dtypes with
+  numeric starts; additive scatter only for
   floating and complex data (not integer or `Bool` data),
 - cuTENSOR-backed contraction paths for real and complex floating dtypes,
 - cuSOLVER/cuBLAS linalg extension paths for real and complex floating dtypes.

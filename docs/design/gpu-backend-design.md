@@ -369,7 +369,7 @@ CUDA library calls:
 | Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`, `F64`, `I32`, and `I64` |
 | Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; Bool data movement uses its one-byte device representation |
 | DType conversion | checked `convert` and explicit `cast` cover every CPU-supported pair among the seven public dtypes; explicit real/complex-to-integer validation uses a small device flag and never downloads the input tensor |
-| Indexing | gather supports `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; dynamic_slice supports those numeric/complex data dtypes with numeric starts, but Bool data only with `I32`/`I64` starts; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
+| Indexing | gather and dynamic_slice support `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
 
@@ -412,10 +412,10 @@ The following are intentionally outside the current batch:
 - integer numeric/linalg CUDA kernels outside the supported add/sub/mul/div/rem,
   neg/abs/sign/pow, compare/select/minimum/maximum, structural/indexing paths,
   and sum/product/minimum/maximum reductions,
-- `Bool` CUDA arithmetic, reductions, linalg, additive scatter, and float-start
-  dynamic slice. Allocation/transfer, reshape, transpose, broadcast, diagonal
+- `Bool` CUDA arithmetic, reductions, linalg, and additive scatter.
+  Allocation/transfer, reshape, transpose, broadcast, diagonal
   extraction/embedding, triangular masks, slice, `dynamic_slice` with
-  `I32`/`I64` starts, pad, concatenate, reverse, and gather with numeric index
+  numeric starts, pad, concatenate, reverse, and gather with numeric index
   tensors are implemented,
 - changing the public placement contract,
 - WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit

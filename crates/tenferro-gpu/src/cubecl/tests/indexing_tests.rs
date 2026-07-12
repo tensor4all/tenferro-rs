@@ -159,6 +159,116 @@ fn cuda_float_index_validation_matches_cpu() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
+    let input = tensor_bool(vec![4], vec![true, false, true, false]);
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+
+    for (label, starts) in [
+        ("F32 integral", tensor_f32(vec![1], vec![1.0])),
+        (
+            "F32 positive exact boundary",
+            tensor_f32(vec![1], vec![16_777_216.0]),
+        ),
+        (
+            "F32 negative exact boundary",
+            tensor_f32(vec![1], vec![-16_777_216.0]),
+        ),
+        ("F64 integral", tensor_f64(vec![1], vec![2.0])),
+        (
+            "F64 positive exact boundary",
+            tensor_f64(vec![1], vec![9_007_199_254_740_992.0]),
+        ),
+        (
+            "F64 negative exact boundary",
+            tensor_f64(vec![1], vec![-9_007_199_254_740_992.0]),
+        ),
+    ] {
+        let expected = cpu.dynamic_slice(&input, &starts, &[2]).unwrap();
+        let actual_gpu = gpu
+            .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
+            .unwrap_or_else(|err| panic!("{label}: {err:?}"));
+        assert_tensor_close(&download(&gpu, &actual_gpu), &expected, 0.0);
+    }
+
+    for (label, starts) in [
+        ("F32 fractional", tensor_f32(vec![1], vec![1.5])),
+        ("F32 NaN", tensor_f32(vec![1], vec![f32::NAN])),
+        (
+            "F32 positive infinity",
+            tensor_f32(vec![1], vec![f32::INFINITY]),
+        ),
+        (
+            "F32 negative infinity",
+            tensor_f32(vec![1], vec![f32::NEG_INFINITY]),
+        ),
+        (
+            "F32 positive outside exact bounds",
+            tensor_f32(vec![1], vec![16_777_218.0]),
+        ),
+        (
+            "F32 negative outside exact bounds",
+            tensor_f32(vec![1], vec![-16_777_218.0]),
+        ),
+        ("F64 fractional", tensor_f64(vec![1], vec![1.5])),
+        ("F64 NaN", tensor_f64(vec![1], vec![f64::NAN])),
+        (
+            "F64 positive infinity",
+            tensor_f64(vec![1], vec![f64::INFINITY]),
+        ),
+        (
+            "F64 negative infinity",
+            tensor_f64(vec![1], vec![f64::NEG_INFINITY]),
+        ),
+        (
+            "F64 positive outside exact bounds",
+            tensor_f64(vec![1], vec![9_007_199_254_740_994.0]),
+        ),
+        (
+            "F64 negative outside exact bounds",
+            tensor_f64(vec![1], vec![-9_007_199_254_740_994.0]),
+        ),
+    ] {
+        assert_eq!(
+            gpu.dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
+                .unwrap_err(),
+            cpu.dynamic_slice(&input, &starts, &[2]).unwrap_err(),
+            "{label}"
+        );
+    }
+
+    let invalid_starts = tensor_f64(vec![1], vec![f64::NAN]);
+    assert_eq!(
+        gpu.dynamic_slice(&gpu_input, &upload(&gpu, &invalid_starts), &[5])
+            .unwrap_err(),
+        Error::InvalidConfig {
+            op: "dynamic_slice",
+            message: "slice size exceeds dimension on axis 0".into(),
+        },
+        "invalid slice metadata must precede float value validation"
+    );
+
+    let empty = tensor_bool(vec![0], vec![]);
+    for starts in [
+        tensor_f32(vec![1], vec![0.0]),
+        tensor_f64(vec![1], vec![0.0]),
+    ] {
+        let expected = cpu.dynamic_slice(&empty, &starts, &[0]).unwrap();
+        let actual_gpu = gpu
+            .dynamic_slice(&upload(&gpu, &empty), &upload(&gpu, &starts), &[0])
+            .unwrap();
+        assert_tensor_close(&download(&gpu, &actual_gpu), &expected, 0.0);
+        let expected = cpu.dynamic_slice(&input, &starts, &[0]).unwrap();
+        let actual_gpu = gpu
+            .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[0])
+            .unwrap();
+        assert_tensor_close(&download(&gpu, &actual_gpu), &expected, 0.0);
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     fn assert_error_parity(
         cpu: tenferro_tensor::Result<crate::Tensor>,
@@ -362,6 +472,51 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
             op: "dynamic_slice",
             message: wrong_device_message.clone(),
         }
+    );
+
+    let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
+    let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
+        match &upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
+            crate::Tensor::F32(tensor) => tensor,
+            _ => unreachable!(),
+        },
+        1,
+    ));
+    assert_eq!(
+        gpu.dynamic_slice(&empty_bool, &wrong_float_starts, &[0])
+            .unwrap_err(),
+        Error::BackendFailure {
+            op: "dynamic_slice",
+            message: wrong_device_message.clone(),
+        }
+    );
+
+    let malformed_bool = crate::Tensor::Bool(
+        TypedTensor::from_buffer_col_major(
+            vec![0],
+            Buffer::Host(vec![]),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        gpu.dynamic_slice(
+            &malformed_bool,
+            &upload(&gpu, &tensor_f64(vec![1], vec![f64::NAN])),
+            &[0],
+        )
+        .unwrap_err(),
+        Error::BackendFailure {
+            op: "dynamic_slice",
+            message: "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.".into(),
+        },
+        "malformed Bool input must be rejected before scanning float starts"
     );
 
     let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(

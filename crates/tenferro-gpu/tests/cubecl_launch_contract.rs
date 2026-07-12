@@ -17,13 +17,15 @@ fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
 }
 
 #[test]
-fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
+fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
     let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
     for needle in [
         "Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool)",
         "Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool)",
         "Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool)",
         "Tensor::Bool(operand), Tensor::I64(indices)",
+        "Tensor::Bool(input), Tensor::F32(starts)",
+        "Tensor::Bool(input), Tensor::F64(starts)",
         "Tensor::Bool(input), Tensor::I64(starts)",
     ] {
         assert!(
@@ -33,8 +35,6 @@ fn bool_structural_support_is_copy_only_and_scatter_stays_excluded() {
     }
     assert!(source.contains("Bool data tensors are not supported by additive scatter"));
     assert!(!source.contains("scatter_bool_typed"));
-    assert!(!source.contains("(Tensor::Bool(input), Tensor::F32(starts))"));
-    assert!(!source.contains("(Tensor::Bool(input), Tensor::F64(starts))"));
 }
 
 #[test]
@@ -1639,6 +1639,35 @@ fn cuda_float_index_validation_stays_device_native_and_preflighted() {
     let kernels = std::fs::read_to_string("src/kernels/indexing.rs").unwrap();
     assert!(kernels.contains("flag[0].fetch_min(ABSOLUTE_POS as u32)"));
     assert!(kernels.contains("flag_values[1] = indices[invalid_index as usize]"));
+}
+
+#[test]
+fn cuda_dynamic_slice_dispatch_matches_cpu_supported_dtype_matrix() {
+    let backend = cubecl_source("mod.rs");
+    let dispatch = source_section(
+        &backend,
+        "    fn dynamic_slice(\n",
+        "    fn dynamic_update_slice(\n",
+    );
+    for data in ["F32", "F64", "C32", "C64", "I32"] {
+        for starts in ["F32", "F64", "I32", "I64"] {
+            assert!(
+                dispatch.contains(&format!(
+                    "(Tensor::{data}(input), Tensor::{starts}(starts))"
+                )),
+                "dynamic_slice must dispatch CPU-supported {data} data with {starts} starts"
+            );
+        }
+    }
+    for starts in ["F32", "F64", "I32", "I64"] {
+        assert!(
+            dispatch.contains(&format!("(Tensor::Bool(input), Tensor::{starts}(starts))")),
+            "dynamic_slice must dispatch CPU-supported Bool data with {starts} starts"
+        );
+    }
+    assert!(dispatch.contains("(_, Tensor::Bool(_))"));
+    assert!(dispatch.contains("(_, Tensor::C32(_) | Tensor::C64(_))"));
+    assert!(dispatch.contains("(Tensor::I64(_), _)"));
 }
 
 #[test]
