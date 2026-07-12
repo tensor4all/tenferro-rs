@@ -142,18 +142,19 @@ resolved or deferred items remain `Refs #...` with the residual risk stated
 explicitly. A narrowed issue may still receive `Closes #...` when its narrowed,
 current close condition is fully resolved.
 
-## Final repository checklist (pending)
+## Final repository checklist
 
-The documentation checks run during reconciliation are recorded separately
-from the final repository checklist. A subsequent fresh run on the committed PR
-head must still complete every required item; this ledger does not claim they
-pass:
+The fresh final verification run completed on the implementation head after
+the scalar remainder signed-zero regression was added:
 
-- `cargo fmt --all --check`: **pending fresh final run**
-- `cargo test --workspace --release`: **pending fresh final run**
-- workspace release coverage plus `scripts/check-coverage.py`: **pending fresh final run**
-- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py`: **pending fresh final run**
-- CI-parity clippy: **pending fresh final run**
+- `cargo fmt --all --check`: **passed**
+- `cargo test --workspace --release`: **passed**, including doctests
+- workspace release coverage plus `scripts/check-coverage.py`: **passed,
+  150/150 included files met their thresholds**
+- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py`: **passed;
+  13 workspace library crates verified**
+- CI-parity clippy (`--workspace --all-targets -- -D warnings` plus the
+  tropical extension manifest): **passed**
 - ignored CUDA suite on the supported CUDA environment: **passed on NVIDIA A100
   (`93/93`) with CUDA 12.6**
 - committed-head repository-rules review, final side review, issue-comment
