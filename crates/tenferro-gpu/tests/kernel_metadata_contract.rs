@@ -1,5 +1,31 @@
 use std::{fs, path::Path};
 
+fn scatter_kernel_names(source: &str) -> Vec<&str> {
+    const PREFIX: &str = "pub fn scatter_";
+
+    source
+        .match_indices(PREFIX)
+        .filter_map(|(start, _)| {
+            let name_start = start + "pub fn ".len();
+            let name_end = source[name_start..]
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .map_or(source.len(), |offset| name_start + offset);
+            let name = &source[name_start..name_end];
+            name.ends_with("_kernel").then_some(name)
+        })
+        .collect()
+}
+
+#[test]
+fn scatter_kernel_inventory_discovers_unreviewed_definitions() {
+    let source = "pub fn scatter_copy_kernel() {}\npub fn scatter_new_kernel() {}";
+
+    assert_eq!(
+        scatter_kernel_names(source),
+        ["scatter_copy_kernel", "scatter_new_kernel"]
+    );
+}
+
 #[test]
 fn logical_kernels_do_not_take_tensor_shapes_as_comptime_parameters() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -85,11 +111,16 @@ fn scatter_kernels_are_not_single_thread_fallbacks() {
             .join("indexing.rs"),
     )
     .expect("indexing kernel source should be readable");
-    let scatter_kernels = [
+    let reviewed_scatter_kernels = [
         "scatter_copy_kernel",
         "scatter_float_kernel",
         "scatter_complex_kernel",
     ];
+    let scatter_kernels = scatter_kernel_names(&indexing_source);
+    assert_eq!(
+        scatter_kernels, reviewed_scatter_kernels,
+        "review every added or removed pub fn scatter_*_kernel before updating this inventory"
+    );
     let banned = ["ABSOLUTE_POS == 0", "for pos in 0..out.len()"];
 
     let mut violations = Vec::new();
