@@ -159,5 +159,8 @@ the scalar remainder signed-zero regression was added:
   (`93/93`) with CUDA 12.6**
 - committed-head repository-rules review: **passed with no findings**
 - final side review: **passed after all findings were resolved**
-- issue-comment reconciliation and close-keyword audit: **pending before PR
-  creation**
+- issue-comment reconciliation and close-keyword audit: **passed**. The latest
+  issue comments add confirmed evidence for #1357 and #1360 without changing
+  the implemented contracts. PR #1355 is already merged into the current
+  `origin/main`. The PR closes #1353, #1356, #1357, and #1359--#1366; #1358
+  remains a referenced false positive because CPU rejects scalar `pow` too.
