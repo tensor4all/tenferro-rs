@@ -157,5 +157,7 @@ the scalar remainder signed-zero regression was added:
   tropical extension manifest): **passed**
 - ignored CUDA suite on the supported CUDA environment: **passed on NVIDIA A100
   (`93/93`) with CUDA 12.6**
-- committed-head repository-rules review, final side review, issue-comment
-  reconciliation, and close-keyword audit: **pending fresh final run**
+- committed-head repository-rules review: **passed with no findings**
+- final side review: **passed after all findings were resolved**
+- issue-comment reconciliation and close-keyword audit: **pending before PR
+  creation**
