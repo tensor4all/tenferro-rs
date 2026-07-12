@@ -866,17 +866,49 @@ impl CudaBackend {
         In: CubeElement + CubeNumeric + Clone,
         Out: CubeElement + CubeNumeric + Clone,
     {
-        launch_unary(
-            self.runtime(),
-            input,
-            input.shape(),
-            "cast",
-            |client, count, dim, out, input| unsafe {
-                structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
-                    client, count, dim, out, input,
-                );
-            },
-        )
+        self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
+            structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                client, count, dim, out, input,
+            );
+        })
+    }
+
+    fn launch_cast_unary<In, Out>(
+        &self,
+        input: &TypedTensor<In>,
+        launch: impl FnOnce(
+            &ComputeClient<CubeclCudaRuntime>,
+            CubeCount,
+            CubeDim,
+            ArrayArg<CubeclCudaRuntime>,
+            ArrayArg<CubeclCudaRuntime>,
+        ),
+    ) -> crate::Result<TypedTensor<Out>>
+    where
+        In: CubeElement + Clone,
+        Out: CubeElement + Clone,
+    {
+        ensure_resident_on_runtime(self.runtime(), input, "cast")?;
+        let input_arg = typed_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
+        let output_arg = typed_tensor_array_arg(&output, "cast")?;
+        launch(
+            self.runtime().client(),
+            count,
+            cube_dim_1d(),
+            output_arg,
+            input_arg,
+        );
+        Ok(output)
     }
 
     fn convert_numeric_to_bool<In>(
@@ -888,15 +920,21 @@ impl CudaBackend {
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let input_arg = typed_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
         let output = alloc_bool_output(self.runtime(), input.shape())?;
-        if output.n_elements() == 0 {
+        let Some(count) = count else {
             return Ok(output);
-        }
+        };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
             structural::convert_numeric_to_bool::launch_unchecked::<In, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(output.n_elements())?,
+                count,
                 cube_dim_1d(),
                 output_arg,
                 input_arg,
@@ -914,15 +952,21 @@ impl CudaBackend {
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let input_arg = bool_tensor_array_arg(input, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
         let output = alloc_output::<Out>(self.runtime(), input.shape())?;
-        if output.n_elements() == 0 {
+        let Some(count) = count else {
             return Ok(output);
-        }
+        };
         let output_arg = typed_tensor_array_arg(&output, "cast")?;
         unsafe {
             structural::convert_bool_to_numeric::launch_unchecked::<Out, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(output.n_elements())?,
+                count,
                 cube_dim_1d(),
                 output_arg,
                 input_arg,
@@ -942,13 +986,13 @@ impl CudaBackend {
     {
         self.convert_float_to_complex_raw::<In, OutComplex, OutFloat>(
             input,
-            |client, out, input, n| {
+            |client, out, input, count| {
                 unsafe {
                     structural::convert_numeric_to_complex_raw::launch_unchecked::<
                         OutFloat,
                         In,
                         CubeclCudaRuntime,
-                    >(client, cube_count_for_len(n)?, cube_dim_1d(), out, input);
+                    >(client, count, cube_dim_1d(), out, input);
                 }
                 Ok(())
             },
@@ -965,22 +1009,27 @@ impl CudaBackend {
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let n = input.n_elements();
-        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
-        if n == 0 {
-            return Ok(output);
-        }
         let part_len = n.checked_mul(2).ok_or_else(|| {
             crate::Error::backend_failure("cast", "complex output part length overflow")
         })?;
+        let input_arg = bool_tensor_array_arg(input, "cast")?;
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
         let out = typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, part_len, "cast")?;
-        let input = bool_tensor_array_arg(input, "cast")?;
         unsafe {
             structural::convert_bool_to_complex_raw::launch_unchecked::<OutFloat, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(n)?,
+                count,
                 cube_dim_1d(),
                 out,
-                input,
+                input_arg,
             );
         }
         Ok(output)
@@ -994,19 +1043,11 @@ impl CudaBackend {
         In: CubeElement + CubeComplex + Clone,
         Out: CubeElement + CubeNumeric + Clone,
     {
-        launch_unary(
-            self.runtime(),
-            input,
-            input.shape(),
-            "cast",
-            |client, count, dim, out, input| unsafe {
-                structural::convert_complex_to_numeric::launch_unchecked::<
-                    Out,
-                    In,
-                    CubeclCudaRuntime,
-                >(client, count, dim, out, input);
-            },
-        )
+        self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
+            structural::convert_complex_to_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
+                client, count, dim, out, input,
+            );
+        })
     }
 
     fn convert_complex_to_bool<In, F>(
@@ -1022,15 +1063,21 @@ impl CudaBackend {
             crate::Error::backend_failure("cast", "complex input part length overflow")
         })?;
         let input_arg = typed_tensor_array_arg_as::<In, F>(input, part_len, "cast")?;
+        let n = input.n_elements();
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
         let output = alloc_bool_output(self.runtime(), input.shape())?;
-        if output.n_elements() == 0 {
+        let Some(count) = count else {
             return Ok(output);
-        }
+        };
         let output_arg = bool_tensor_array_arg(&output, "cast")?;
         unsafe {
             structural::convert_complex_raw_to_bool::launch_unchecked::<F, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(output.n_elements())?,
+                count,
                 cube_dim_1d(),
                 output_arg,
                 input_arg,
@@ -1043,88 +1090,100 @@ impl CudaBackend {
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f32, Complex32, f32>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f32, Complex32, f32>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f32_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f32_to_c64(
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f32, Complex64, f64>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f32, Complex64, f64>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f32_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f64_to_c32(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f64, Complex32, f32>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f64, Complex32, f32>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f64_to_c32_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     fn convert_f64_to_c64(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f64, Complex64, f64>(input, |client, out, input, n| {
-            unsafe {
-                // SAFETY: `convert_float_to_complex_raw` validated that
-                // `input` has `n` elements and `out` has `2 * n` scalar
-                // components. The kernel launches exactly `n` logical input
-                // positions and guards with `ABSOLUTE_POS < input.len()`.
-                structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
-                    client,
-                    cube_count_for_len(n)?,
-                    cube_dim_1d(),
-                    out,
-                    input,
-                );
-            }
-            Ok(())
-        })
+        self.convert_float_to_complex_raw::<f64, Complex64, f64>(
+            input,
+            |client, out, input, count| {
+                unsafe {
+                    // SAFETY: `convert_float_to_complex_raw` validated that
+                    // `input` has `n` elements and `out` has `2 * n` scalar
+                    // components. The kernel launches exactly `n` logical input
+                    // positions and guards with `ABSOLUTE_POS < input.len()`.
+                    structural::convert_f64_to_c64_raw::launch_unchecked::<CubeclCudaRuntime>(
+                        client,
+                        count,
+                        cube_dim_1d(),
+                        out,
+                        input,
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Generic float-to-complex conversion via raw interleaved kernel.
@@ -1138,7 +1197,7 @@ impl CudaBackend {
             &cubecl::client::ComputeClient<CubeclCudaRuntime>,
             ArrayArg<CubeclCudaRuntime>,
             ArrayArg<CubeclCudaRuntime>,
-            usize,
+            CubeCount,
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
@@ -1146,21 +1205,27 @@ impl CudaBackend {
         OutComplex: CubeElement + Clone,
         OutFloat: CubeElement + Clone,
     {
+        ensure_resident_on_runtime(self.runtime(), input, "convert")?;
+        let input_arg = typed_tensor_array_arg(input, "convert")?;
         let n = input.n_elements();
-        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
-        if n == 0 {
-            return Ok(output);
-        }
         let output_part_len = n.checked_mul(2).ok_or_else(|| {
             crate::Error::backend_failure("convert", "complex output part length overflow")
         })?;
+        let count = if n == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(n)?)
+        };
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
         let output_parts =
             typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, output_part_len, "convert")?;
-        let input_arg = typed_tensor_array_arg(input, "convert")?;
         // SAFETY: The checked raw-array helpers prove that `input_arg` covers
         // exactly the dense input shape and `output_parts` covers the complete
         // real/imaginary scalar representation of the output allocation.
-        launch(self.runtime().client(), output_parts, input_arg, n)?;
+        launch(self.runtime().client(), output_parts, input_arg, count)?;
         Ok(output)
     }
 
@@ -1243,19 +1308,24 @@ impl CudaBackend {
         OutFloat: CubeElement + CubeFloat + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
-        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
         let parts = input.n_elements().checked_mul(2).ok_or_else(|| {
             crate::Error::backend_failure("cast", "complex component length overflow")
         })?;
-        if parts == 0 {
-            return Ok(output);
-        }
         let input_arg = typed_tensor_array_arg_as::<In, InFloat>(input, parts, "cast")?;
+        let count = if parts == 0 {
+            None
+        } else {
+            Some(cube_count_for_len(parts)?)
+        };
+        let output = alloc_output::<Out>(self.runtime(), input.shape())?;
+        let Some(count) = count else {
+            return Ok(output);
+        };
         let output_arg = typed_tensor_array_arg_as::<Out, OutFloat>(&output, parts, "cast")?;
         unsafe {
             structural::convert_complex_raw::launch_unchecked::<OutFloat, InFloat, CubeclCudaRuntime>(
                 self.runtime().client(),
-                cube_count_for_len(parts)?,
+                count,
                 cube_dim_1d(),
                 output_arg,
                 input_arg,
@@ -2384,14 +2454,23 @@ trait CudaCastFloat:
     fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
     fn invalid_error(self, target: CastIntegerTarget) -> crate::Error;
     fn is_nonfinite(self) -> bool;
+    fn cpu_real_display(self) -> String;
 }
 
 macro_rules! impl_cuda_cast_float {
-    ($ty:ty, $variant:ident) => {
+    ($ty:ty, $variant:ident, $i32_max_inclusive:expr, $display:expr) => {
         impl CudaCastFloat for $ty {
             fn bounds(target: CastIntegerTarget) -> (Self, Self, bool) {
                 match target {
-                    CastIntegerTarget::I32 => (i32::MIN as Self, i32::MAX as Self, true),
+                    CastIntegerTarget::I32 => (
+                        i32::MIN as Self,
+                        if $i32_max_inclusive {
+                            i32::MAX as Self
+                        } else {
+                            2_147_483_648.0 as Self
+                        },
+                        $i32_max_inclusive,
+                    ),
                     CastIntegerTarget::I64 => (
                         -9_223_372_036_854_775_808.0 as Self,
                         9_223_372_036_854_775_808.0 as Self,
@@ -2416,9 +2495,15 @@ macro_rules! impl_cuda_cast_float {
                     CastIntegerTarget::I64 => "i64",
                 };
                 let message = if !self.is_finite() {
-                    format!("real value must be finite when casting to {name}, got {self}")
+                    format!(
+                        "real value must be finite when casting to {name}, got {}",
+                        self.cpu_real_display()
+                    )
                 } else {
-                    format!("real value {self} is out of {name} range")
+                    format!(
+                        "real value {} is out of {name} range",
+                        self.cpu_real_display()
+                    )
                 };
                 crate::Error::InvalidConfig {
                     op: "cast",
@@ -2428,11 +2513,14 @@ macro_rules! impl_cuda_cast_float {
             fn is_nonfinite(self) -> bool {
                 !self.is_finite()
             }
+            fn cpu_real_display(self) -> String {
+                ($display)(self)
+            }
         }
     };
 }
-impl_cuda_cast_float!(f32, F32);
-impl_cuda_cast_float!(f64, F64);
+impl_cuda_cast_float!(f32, F32, false, |value: f32| format!("{}", value as f64));
+impl_cuda_cast_float!(f64, F64, true, |value: f64| format!("{value}"));
 
 fn validate_cuda_real_cast<S, F>(
     backend: &CudaBackend,

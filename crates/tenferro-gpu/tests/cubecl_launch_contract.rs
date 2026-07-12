@@ -71,6 +71,72 @@ fn explicit_cast_uses_shared_device_kernel_families_and_keeps_checked_convert() 
     );
     assert!(validation.find("if n == 0").unwrap() < validation.find("alloc_output::<F>").unwrap());
     assert!(!validation.contains("download_tensor(backend.runtime(), input"));
+
+    for (start, end, allocation, binding) in [
+        (
+            "fn launch_cast_unary<",
+            "fn convert_numeric_to_bool<",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_numeric_to_bool<",
+            "fn convert_bool_to_numeric<",
+            "alloc_bool_output",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_numeric<",
+            "fn convert_numeric_to_complex<",
+            "alloc_output::<Out>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_complex<",
+            "fn convert_complex_to_numeric<",
+            "alloc_output::<OutComplex>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_bool<",
+            "fn convert_f32_to_c32",
+            "alloc_bool_output",
+            "typed_tensor_array_arg_as::<In, F>(input",
+        ),
+        (
+            "fn convert_float_to_complex_raw<",
+            "fn convert_c32_to_f32",
+            "alloc_output::<OutComplex>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_complex<",
+            "fn extract_diagonal_typed",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg_as::<In, InFloat>(input",
+        ),
+    ] {
+        let body = source_section(&cuda, start, end);
+        let allocation = body
+            .find(allocation)
+            .unwrap_or_else(|| panic!("missing allocation in {start}"));
+        assert!(
+            body.find("ensure_resident_on_runtime").unwrap() < allocation,
+            "residency after allocation in {start}"
+        );
+        assert!(
+            body.find(binding).unwrap() < allocation,
+            "binding after allocation in {start}"
+        );
+        assert!(
+            body.find("cube_count_for_len").unwrap() < allocation,
+            "launch count after allocation in {start}"
+        );
+        assert!(
+            body.find("if ").unwrap() < allocation,
+            "empty branch must be prepared before allocation in {start}"
+        );
+    }
 }
 
 #[test]

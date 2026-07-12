@@ -443,6 +443,73 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
             cpu.cast(&source, target).unwrap_err()
         );
     }
+
+    for source in [
+        tensor_f32(vec![2], vec![-2_147_483_648.0, 2_147_483_520.0]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(-2_147_483_648.0, 11.0),
+                Complex32::new(2_147_483_520.0, -9.0),
+            ],
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        let expected = cpu.cast(&source, DType::I32).unwrap();
+        let actual = gpu.cast(&gpu_source, DType::I32).unwrap();
+        assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
+    }
+
+    for source in [
+        tensor_f32(vec![2], vec![2_147_483_648.0, f32::NAN]),
+        tensor_f32(vec![1], vec![-2_147_483_904.0]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(2_147_483_648.0, 3.0),
+                Complex32::new(f32::NAN, 0.0),
+            ],
+        ),
+        tensor_c32(vec![1], vec![Complex32::new(-2_147_483_904.0, 3.0)]),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        assert_eq!(
+            gpu.cast(&gpu_source, DType::I32).unwrap_err(),
+            cpu.cast(&source, DType::I32).unwrap_err()
+        );
+    }
+
+    let i64_upper_exclusive = 9_223_372_036_854_775_808.0_f32;
+    let i64_upper_valid = f32::from_bits(i64_upper_exclusive.to_bits() - 1);
+    let i64_lower_valid = -i64_upper_exclusive;
+    let i64_lower_invalid = f32::from_bits(i64_lower_valid.to_bits() + 1);
+    for source in [
+        tensor_f32(vec![2], vec![i64_lower_valid, i64_upper_valid]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(i64_lower_valid, 2.0),
+                Complex32::new(i64_upper_valid, -2.0),
+            ],
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        let expected = cpu.cast(&source, DType::I64).unwrap();
+        let actual = gpu.cast(&gpu_source, DType::I64).unwrap();
+        assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
+    }
+    for source in [
+        tensor_f32(vec![1], vec![i64_upper_exclusive]),
+        tensor_f32(vec![1], vec![i64_lower_invalid]),
+        tensor_c32(vec![1], vec![Complex32::new(i64_upper_exclusive, 2.0)]),
+        tensor_c32(vec![1], vec![Complex32::new(i64_lower_invalid, 2.0)]),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        assert_eq!(
+            gpu.cast(&gpu_source, DType::I64).unwrap_err(),
+            cpu.cast(&source, DType::I64).unwrap_err()
+        );
+    }
 }
 
 fn assert_cast_tensor_equal(actual: &Tensor, expected: &Tensor) {
