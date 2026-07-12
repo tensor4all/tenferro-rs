@@ -43,9 +43,10 @@ value scans, while zero-domain scatter paths cannot bypass those checks.
 - Extend CUDA only to CPU-established behavior. In particular, Bool supports
   allocation/transfer, reshape, transpose, broadcast, diagonal
   extraction/embedding, triangular masks, slice, `dynamic_slice` with
-  `I32`/`I64` starts, pad, concatenate, reverse, and gather with numeric index
-  tensors; Bool arithmetic, reductions, linalg, float-start dynamic slice, and
-  additive scatter remain unsupported.
+  `F32`/`F64`/`I32`/`I64` numeric starts, pad, concatenate, reverse, and gather
+  with numeric index tensors. Float starts use the same exact-value validation
+  as other data dtypes; Bool arithmetic, reductions, linalg, and additive
+  scatter remain unsupported.
 - Describe integer CUDA support from the implemented capability descriptor:
   add/sub/mul/div/rem, neg/abs/sign/pow, compare/select/minimum/maximum, and
   sum/product/minimum/maximum reductions. Remaining integer gaps are stated as
@@ -113,7 +114,8 @@ The A100 evidence covers exact structural errors for mixed invalid
 configuration plus NaN/fractional indices across `F32`/`F64` dynamic slice,
 float/complex/Bool gather data, and float/complex scatter. Separate valid-config
 cases assert exact CPU/CUDA invalid-index `Error` equality. Bool dynamic slice
-uses its permitted integer start dtype and checks exact invalid-config parity.
+covers all four numeric start dtypes, including exact float-value validation,
+and checks exact invalid-config parity.
 CPU currently converts float index values before operation-specific config
 validation, so when both inputs are independently invalid its error precedence
 intentionally differs from the CUDA cheap-metadata-before-device-scan contract;
