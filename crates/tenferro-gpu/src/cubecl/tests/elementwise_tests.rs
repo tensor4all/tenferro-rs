@@ -398,6 +398,41 @@ fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {
         }
     }
 
+    for (tensor, negative_zero, negative_multiple, divisor) in [
+        (
+            tensor_f32(vec![2], vec![-0.0, -4.0]),
+            tensor_f32(vec![], vec![-0.0]),
+            tensor_f32(vec![], vec![-4.0]),
+            tensor_f32(vec![], vec![2.0]),
+        ),
+        (
+            tensor_f64(vec![2], vec![-0.0, -4.0]),
+            tensor_f64(vec![], vec![-0.0]),
+            tensor_f64(vec![], vec![-4.0]),
+            tensor_f64(vec![], vec![2.0]),
+        ),
+    ] {
+        let gpu_tensor = upload(&gpu, &tensor);
+        let gpu_negative_zero = upload(&gpu, &negative_zero);
+        let gpu_negative_multiple = upload(&gpu, &negative_multiple);
+        let gpu_divisor = upload(&gpu, &divisor);
+
+        let expected = cpu.rem(&tensor, &divisor).unwrap();
+        let actual = gpu.rem(&gpu_tensor, &gpu_divisor).unwrap();
+        let actual = download(&gpu, &actual);
+        assert_float_classes_and_zero_signs_match("scalar rhs rem", &actual, &expected);
+
+        for (scalar, gpu_scalar) in [
+            (&negative_zero, &gpu_negative_zero),
+            (&negative_multiple, &gpu_negative_multiple),
+        ] {
+            let expected = cpu.rem(scalar, &tensor).unwrap();
+            let actual = gpu.rem(gpu_scalar, &gpu_tensor).unwrap();
+            let actual = download(&gpu, &actual);
+            assert_float_classes_and_zero_signs_match("scalar lhs rem", &actual, &expected);
+        }
+    }
+
     for (dtype, lhs, zero) in [
         (
             DType::I32,
