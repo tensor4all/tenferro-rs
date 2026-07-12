@@ -22,8 +22,10 @@ allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
 kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
 Performance optimization is still active work. The remaining unsupported CUDA
 cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
-`dynamic_update_slice`, integer numeric/linalg gaps beyond add/mul/compare/select
-and sum/prod reductions, `Bool` arithmetic/reduction/linalg gaps, and
+`dynamic_update_slice`, integer numeric/linalg gaps outside the currently
+supported add/sub/mul/div/rem, neg/abs/sign/pow,
+comparison/selection/minimum/maximum, and sum/product/minimum/maximum
+reductions, `Bool` arithmetic/reduction/linalg and additive-scatter gaps, and
 selected complex analytic or ordering operations.
 WebGPU is being introduced incrementally. The implemented path covers explicit
 transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
@@ -363,8 +365,8 @@ CUDA library calls:
 | Category | Current status |
 | --- | --- |
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
-| Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/mul/compare/select; `C32`/`C64` add/mul/div/neg/conj |
-| Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`/`F64` |
+| Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/sub/mul/div/rem, neg/abs/sign/pow, compare/select, and minimum/maximum; `C32`/`C64` add/mul/div/neg/conj and real-output `abs` |
+| Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`, `F64`, `I32`, and `I64` |
 | Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; Bool data movement uses its one-byte device representation |
 | DType conversion | checked `convert` and explicit `cast` cover every CPU-supported pair among the seven public dtypes; explicit real/complex-to-integer validation uses a small device flag and never downloads the input tensor |
 | Indexing | gather supports `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; dynamic_slice supports those numeric/complex data dtypes with numeric starts, but Bool data only with `I32`/`I64` starts; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
@@ -407,10 +409,14 @@ The following are intentionally outside the current batch:
 - selected complex analytic kernels and ordering operations,
 - CUDA implementations for `full_piv_lu`, `full_piv_lu_solve`, and
   `dynamic_update_slice`,
-- integer numeric/linalg CUDA kernels beyond add/mul/compare/select,
-  structural paths, and sum/prod reductions,
-- `Bool` CUDA arithmetic, reductions, linalg, and additive scatter beyond allocation, upload/download, metadata-only
-  reshape,
+- integer numeric/linalg CUDA kernels outside the supported add/sub/mul/div/rem,
+  neg/abs/sign/pow, compare/select/minimum/maximum, structural/indexing paths,
+  and sum/product/minimum/maximum reductions,
+- `Bool` CUDA arithmetic, reductions, linalg, additive scatter, and float-start
+  dynamic slice. Allocation/transfer, reshape, transpose, broadcast, diagonal
+  extraction/embedding, triangular masks, slice, `dynamic_slice` with
+  `I32`/`I64` starts, pad, concatenate, reverse, and gather with numeric index
+  tensors are implemented,
 - changing the public placement contract,
 - WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit
   transfer and CubeK-backed `F32`/`C32` contraction.

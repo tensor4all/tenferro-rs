@@ -12,6 +12,60 @@ and no open or closed pull request matched these issue numbers. Historical
 issue reports and CUDA-devcontainer repro comments remain evidence, while the
 working-tree source is the authority for implementation decisions.
 
+## Context and references read
+
+The final documentation reconciliation re-read `AGENTS.md`,
+`REPOSITORY_RULES.md`, the shared tensor4all repository/docs/numerical rules,
+the CUDA capability descriptor and its source-contract tests, the active GPU
+design and user guide, and this ledger. The CPU operation implementations and
+tests were used as the semantic reference for integer wrapping/domain errors,
+Bool structural/indexing support, and additive-scatter rejection; the CUDA
+work deliberately matches those established contracts rather than defining new
+CPU behavior. The active guide's generated core capability table and its
+additional structural/indexing matrix are the detailed capability source.
+
+The same-pattern neighborhood review included commits `d946d404` and
+`cca8d3b3`: scalar-only float-index flag setup/extraction is explicitly scoped
+away from scatter kernels, and the scatter-kernel inventory prevents an added
+kernel from escaping that review. The resulting kernel metadata contracts pass
+4/4. Commits `f6ee7c78` and `ff8bcd1d` provide the source-order and A100 evidence
+that cheap operation metadata and residency/binding checks precede float-index
+value scans, while zero-domain scatter paths cannot bypass those checks.
+
+## Final design decisions
+
+- Keep index validation on the CUDA device and copy back only the small error
+  flag/value; do not introduce host fallback or full index-tensor
+  materialization.
+- Keep operation metadata validation, residency, binding, and atomic
+  capability checks in `CudaBackend`, the owning runtime boundary. Do not
+  duplicate runtime ownership or error precedence in eager/traced wrappers.
+- Extend CUDA only to CPU-established behavior. In particular, Bool supports
+  allocation/transfer, reshape, transpose, broadcast, diagonal
+  extraction/embedding, triangular masks, slice, `dynamic_slice` with
+  `I32`/`I64` starts, pad, concatenate, reverse, and gather with numeric index
+  tensors; Bool arithmetic, reductions, linalg, float-start dynamic slice, and
+  additive scatter remain unsupported.
+- Describe integer CUDA support from the implemented capability descriptor:
+  add/sub/mul/div/rem, neg/abs/sign/pow, compare/select/minimum/maximum, and
+  sum/product/minimum/maximum reductions. Remaining integer gaps are stated as
+  operation-specific rather than as the stale narrower list.
+
+Rejected alternatives were host-side validation fallback, whole-tensor
+downloads or promoted/materialized wrapper temporaries, per-wrapper runtime
+ownership, and changing CPU semantics to broaden the parity target. Each would
+either violate placement/performance contracts, duplicate the owning backend
+policy, or silently turn this remediation into CPU-new behavior.
+
+## Documentation reconciliation verification
+
+The reconciliation ran `cargo fmt --all --check`, the generated CUDA
+capability-table source contract, all four kernel-metadata contracts,
+`cargo doc --workspace --no-deps`, `scripts/check-docs-site.py`, and
+`git diff --check`. These focused documentation checks passed. They do not
+replace the fresh committed-head repository checklist recorded as pending
+below.
+
 ## Scope decisions
 
 - #1353 is maintainer-approved in the interactive session: floating-point
@@ -85,3 +139,19 @@ ledger with the latest issue comments before the PR is opened. Partially
 resolved or deferred items remain `Refs #...` with the residual risk stated
 explicitly. A narrowed issue may still receive `Closes #...` when its narrowed,
 current close condition is fully resolved.
+
+## Final repository checklist (pending)
+
+The documentation checks run during reconciliation are recorded separately
+from the final repository checklist. A subsequent fresh run on the committed PR
+head must still complete every required item; this ledger does not claim they
+pass:
+
+- `cargo fmt --all --check`: **pending fresh final run**
+- `cargo test --workspace --release`: **pending fresh final run**
+- workspace release coverage plus `scripts/check-coverage.py`: **pending fresh final run**
+- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py`: **pending fresh final run**
+- CI-parity clippy: **pending fresh final run**
+- ignored CUDA suite on the supported CUDA environment: **pending fresh final run**
+- committed-head repository-rules review, final side review, issue-comment
+  reconciliation, and close-keyword audit: **pending fresh final run**
