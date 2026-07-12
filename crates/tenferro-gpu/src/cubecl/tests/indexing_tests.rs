@@ -1,7 +1,10 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use num_complex::Complex64;
-use tenferro_tensor::{Error, TensorIndexing};
+use tenferro_tensor::{
+    Buffer, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, TensorIndexing,
+    TypedTensor,
+};
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
@@ -134,6 +137,100 @@ fn cuda_float_index_validation_matches_cpu() {
         );
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
+    let mut gpu = gpu_backend();
+    let operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));
+    let invalid_starts = upload(&gpu, &tensor_f64(vec![1], vec![f64::NAN]));
+    let invalid_indices = upload(&gpu, &tensor_f64(vec![1, 1], vec![f64::NAN]));
+    let updates = upload(&gpu, &tensor_f64(vec![1], vec![3.0]));
+
+    let dynamic_err = gpu
+        .dynamic_slice(&operand, &invalid_starts, &[3])
+        .unwrap_err();
+    assert!(matches!(
+        dynamic_err,
+        Error::InvalidConfig {
+            op: "dynamic_slice",
+            ..
+        }
+    ));
+
+    let bad_gather = crate::config::GatherConfig {
+        start_index_map: vec![1],
+        ..simple_gather_config()
+    };
+    let gather_err = gpu
+        .gather(&operand, &invalid_indices, &bad_gather)
+        .unwrap_err();
+    assert!(matches!(
+        gather_err,
+        Error::AxisOutOfBounds { op: "gather", .. }
+    ));
+
+    let bad_scatter = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![1],
+        index_vector_dim: 1,
+    };
+    let scatter_err = gpu
+        .scatter(&operand, &invalid_indices, &updates, &bad_scatter)
+        .unwrap_err();
+    assert!(matches!(
+        scatter_err,
+        Error::AxisOutOfBounds { op: "scatter", .. }
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_scatter_zero_domains_still_validate_all_input_residency() {
+    let mut gpu = gpu_backend();
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let empty_operand = upload(&gpu, &tensor_f64(vec![0], vec![]));
+    let indices = upload(&gpu, &tensor_i32(vec![0, 1], vec![]));
+    let host_updates = tensor_f64(vec![0], vec![]);
+    assert!(matches!(
+        gpu.scatter(&empty_operand, &indices, &host_updates, &config),
+        Err(Error::BackendFailure { op: "scatter", .. })
+    ));
+
+    let operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));
+    let host_indices = tensor_i32(vec![0, 1], vec![]);
+    let updates = upload(&gpu, &tensor_f64(vec![0], vec![]));
+    assert!(matches!(
+        gpu.scatter(&operand, &host_indices, &updates, &config),
+        Err(Error::BackendFailure { op: "scatter", .. })
+    ));
+
+    let malformed_updates = crate::Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![0],
+            Buffer::Host(vec![]),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        gpu.scatter(&empty_operand, &indices, &malformed_updates, &config),
+        Err(Error::BackendFailure { op: "scatter", .. })
+    ));
 }
 
 #[test]

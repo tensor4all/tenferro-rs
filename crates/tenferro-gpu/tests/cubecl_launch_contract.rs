@@ -1641,6 +1641,110 @@ fn cuda_float_index_validation_stays_device_native_and_preflighted() {
     assert!(kernels.contains("flag_values[1] = indices[invalid_index as usize]"));
 }
 
+#[test]
+fn cuda_indexing_preflights_structure_and_all_inputs_before_value_scans() {
+    let backend = cubecl_source("mod.rs");
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "typed_tensor_binding(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "typed_tensor_binding(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<T>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
+
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_bool<I>(",
+            "fn pad_typed<T>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "bool_tensor_array_arg(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn gather_bool<I>(",
+            "fn scatter_float_typed<T, I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "bool_tensor_array_arg(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_complex_typed<T, F, I>(",
+            "}\n}\n\nimpl BackendRuntimeCache",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<F>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cubecl_runtime_exposes_explicit_synchronize() {

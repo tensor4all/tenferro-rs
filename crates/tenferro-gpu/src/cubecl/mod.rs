@@ -1943,7 +1943,6 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, starts)?;
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape().len())?;
         if starts.shape()[0] != input.shape().len() {
@@ -1961,6 +1960,15 @@ impl CudaBackend {
                 });
             }
         }
+        let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), input, "dynamic_slice")?;
+        typed_tensor_binding(input, "dynamic_slice")?;
+        ensure_resident_on_runtime(self.runtime(), starts, "dynamic_slice")?;
+        typed_tensor_binding(starts, "dynamic_slice")?;
+        I::validate(self, starts)?;
         launch_binary_tensor(
             self.runtime(),
             input,
@@ -1990,7 +1998,6 @@ impl CudaBackend {
     where
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, starts)?;
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         if starts.shape().len() != 1 {
             return Err(crate::Error::InvalidConfig {
@@ -2016,6 +2023,15 @@ impl CudaBackend {
                 });
             }
         }
+        let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), input, "dynamic_slice")?;
+        bool_tensor_array_arg(input, "dynamic_slice")?;
+        ensure_resident_on_runtime(self.runtime(), starts, "dynamic_slice")?;
+        typed_tensor_binding(starts, "dynamic_slice")?;
+        I::validate(self, starts)?;
         launch_binary_bool_tensor(
             self.runtime(),
             input,
@@ -2181,8 +2197,16 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, start_indices)?;
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), operand, "gather")?;
+        typed_tensor_binding(operand, "gather")?;
+        ensure_resident_on_runtime(self.runtime(), start_indices, "gather")?;
+        typed_tensor_binding(start_indices, "gather")?;
+        I::validate(self, start_indices)?;
         launch_binary_tensor(
             self.runtime(),
             operand,
@@ -2219,8 +2243,16 @@ impl CudaBackend {
     where
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, start_indices)?;
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
+        let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        ensure_resident_on_runtime(self.runtime(), operand, "gather")?;
+        bool_tensor_array_arg(operand, "gather")?;
+        ensure_resident_on_runtime(self.runtime(), start_indices, "gather")?;
+        typed_tensor_binding(start_indices, "gather")?;
+        I::validate(self, start_indices)?;
         launch_binary_bool_tensor(
             self.runtime(),
             operand,
@@ -2259,13 +2291,29 @@ impl CudaBackend {
         T: CubeElement + CubeFloat + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, scatter_indices)?;
         let meta = scatter_launch_meta(
             operand.shape(),
             scatter_indices.shape(),
             updates.shape(),
             config,
         )?;
+        let update_len = scatter_update_len(&meta)?;
+        let output_len = checked_dim_product("scatter", "output shape", operand.shape())?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        if update_len != 0 {
+            cube_count_for_len(update_len)?;
+        }
+        let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), operand, "scatter")?;
+        typed_tensor_binding(operand, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        typed_tensor_binding(scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
+        typed_tensor_binding(updates, "scatter")?;
+        ensure_atomic_add_supported::<T>(client, "scatter")?;
+        I::validate(self, scatter_indices)?;
         let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
@@ -2289,14 +2337,9 @@ impl CudaBackend {
             },
         )?;
 
-        let update_len = scatter_update_len(&meta)?;
         if update_len == 0 {
             return Ok(output);
         }
-        let client = self.runtime().client();
-        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
-        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
-        ensure_atomic_add_supported::<T>(client, "scatter")?;
         let output_parts =
             typed_tensor_array_arg_as::<T, T>(&output, output.n_elements(), "scatter")?;
         let operand_arg = typed_tensor_binding(operand, "scatter")?;
@@ -2342,13 +2385,36 @@ impl CudaBackend {
         F: CubeElement + CubeFloat + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
-        I::validate(self, scatter_indices)?;
         let meta = scatter_launch_meta(
             operand.shape(),
             scatter_indices.shape(),
             updates.shape(),
             config,
         )?;
+        let update_len = scatter_update_len(&meta)?;
+        let output_len = checked_dim_product("scatter", "output shape", operand.shape())?;
+        let output_part_len = output_len.checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex output part length overflow")
+        })?;
+        let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex update part length overflow")
+        })?;
+        if output_len != 0 {
+            cube_count_for_len(output_len)?;
+        }
+        if update_len != 0 {
+            cube_count_for_len(update_len)?;
+        }
+        let client = self.runtime().client();
+        ensure_resident_on_runtime(self.runtime(), operand, "scatter")?;
+        typed_tensor_binding(operand, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
+        typed_tensor_binding(scatter_indices, "scatter")?;
+        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
+        typed_tensor_binding(updates, "scatter")?;
+        typed_tensor_array_arg_as::<T, F>(updates, update_part_len, "scatter")?;
+        ensure_atomic_add_supported::<F>(client, "scatter")?;
+        I::validate(self, scatter_indices)?;
         let output = alloc_output::<T>(self.runtime(), operand.shape())?;
         if output.n_elements() == 0 {
             return Ok(output);
@@ -2372,20 +2438,9 @@ impl CudaBackend {
             },
         )?;
 
-        let update_len = scatter_update_len(&meta)?;
         if update_len == 0 {
             return Ok(output);
         }
-        let client = self.runtime().client();
-        ensure_resident_on_runtime(self.runtime(), scatter_indices, "scatter")?;
-        ensure_resident_on_runtime(self.runtime(), updates, "scatter")?;
-        ensure_atomic_add_supported::<F>(client, "scatter")?;
-        let output_part_len = output.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex output part length overflow")
-        })?;
-        let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex update part length overflow")
-        })?;
         // num_complex::Complex<T> is repr(C) as { re: T, im: T }, so the
         // complex buffers can be viewed as real scalar parts for atomic add.
         let output_parts = typed_tensor_array_arg_as::<T, F>(&output, output_part_len, "scatter")?;
