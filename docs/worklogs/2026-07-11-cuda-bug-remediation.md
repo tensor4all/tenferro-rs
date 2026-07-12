@@ -126,7 +126,7 @@ cuda:1 placement metadata over real cuda:0 buffers, malformed device-placement
 host buffers, and a second same-device `CudaBackend`. Runtime residency is by
 CUDA device ordinal, not wrapper identity, because same-device CubeCL clients
 share the primary context. The focused tests and the full CUDA indexing module
-passed on an NVIDIA A100 (`11/11`) with `CUBECL_DEBUG_LOG=0`,
+passed on an NVIDIA A100 (`12/12`) with `CUBECL_DEBUG_LOG=0`,
 `CUDA_PATH=/usr/local/cuda-12.6`, and CUDA/cuTENSOR paths in
 `LD_LIBRARY_PATH`. Launch and kernel-metadata contracts plus CUDA no-run
 compilation also passed. Final overall batch verification remains pending.
