@@ -151,6 +151,7 @@ macro_rules! scalar_binary_float_kernel {
 }
 
 scalar_binary_float_kernel!(scalar_div_float, |x, y| x / y);
+scalar_binary_float_kernel!(scalar_pow_float, |x, y| x.powf(y));
 scalar_binary_float_kernel!(scalar_rem_float, |x, y| {
     let remainder = x - (x / y).trunc() * y;
     if remainder == F::new(0.0f32) {
@@ -481,6 +482,43 @@ pub fn pow_int_checked<I: Int>(
             out[ABSOLUTE_POS] = zero;
         } else {
             let mut base = lhs[ABSOLUTE_POS];
+            let mut acc = one;
+            while exp > zero {
+                let quotient = exp / two;
+                let remainder = exp - quotient * two;
+                if remainder != zero {
+                    acc = acc * base;
+                }
+                exp = quotient;
+                if exp > zero {
+                    base = base * base;
+                }
+            }
+            out[ABSOLUTE_POS] = acc;
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn scalar_pow_int_checked<I: Int>(
+    out: &mut Array<I>,
+    lhs: &Array<I>,
+    rhs: &Array<I>,
+    err: &mut Array<i32>,
+    #[comptime] lhs_scalar: bool,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let lhs_idx = if lhs_scalar { 0 } else { ABSOLUTE_POS };
+        let rhs_idx = if lhs_scalar { ABSOLUTE_POS } else { 0 };
+        let zero = I::new(0);
+        let one = I::new(1);
+        let two = I::new(2);
+        let mut exp = rhs[rhs_idx];
+        if exp < zero {
+            err[0] = 1;
+            out[ABSOLUTE_POS] = zero;
+        } else {
+            let mut base = lhs[lhs_idx];
             let mut acc = one;
             while exp > zero {
                 let quotient = exp / two;

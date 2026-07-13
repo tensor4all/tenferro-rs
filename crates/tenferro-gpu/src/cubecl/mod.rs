@@ -3853,8 +3853,21 @@ impl TensorAnalytic for CudaBackend {
         if lhs.dtype() != rhs.dtype() {
             return Err(dtype_mismatch(op, lhs, rhs));
         }
-        dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
         match (lhs, rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_pow_float::launch_unchecked::<f32, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F32)
+            }
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -3868,6 +3881,20 @@ impl TensorAnalytic for CudaBackend {
                 },
             )
             .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    |client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_pow_float::launch_unchecked::<f64, CubeclCudaRuntime>(
+                            client, count, dim, out, lhs_arg, rhs_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::F64)
+            }
             (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
                 self.runtime(),
                 lhs,
@@ -3881,6 +3908,25 @@ impl TensorAnalytic for CudaBackend {
                 },
             )
             .map(Tensor::F64),
+            (Tensor::I32(lhs), Tensor::I32(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I32,
+                    CheckedIntegerDomain::NegativeExponent,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_pow_int_checked::launch_unchecked::<
+                            i32,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I32)
+            }
             (Tensor::I32(lhs), Tensor::I32(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -3895,6 +3941,25 @@ impl TensorAnalytic for CudaBackend {
                 },
             )
             .map(Tensor::I32),
+            (Tensor::I64(lhs), Tensor::I64(rhs)) if lhs.shape() != rhs.shape() => {
+                launch_checked_integer_scalar_binary(
+                    self,
+                    lhs,
+                    rhs,
+                    op,
+                    crate::DType::I64,
+                    CheckedIntegerDomain::NegativeExponent,
+                    |client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar| unsafe {
+                        elementwise::scalar_pow_int_checked::launch_unchecked::<
+                            i64,
+                            CubeclCudaRuntime,
+                        >(
+                            client, count, dim, out, lhs_arg, rhs_arg, err_arg, lhs_scalar,
+                        );
+                    },
+                )
+                .map(Tensor::I64)
+            }
             (Tensor::I64(lhs), Tensor::I64(rhs)) => launch_checked_integer_binary(
                 self,
                 lhs,
@@ -3909,14 +3974,26 @@ impl TensorAnalytic for CudaBackend {
                 },
             )
             .map(Tensor::I64),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+                dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
                 Err(crate::Error::unsupported_op_dtype(
                     op,
-                    lhs.dtype(),
+                    crate::DType::C32,
                     tenferro_tensor::BackendId::Cuda,
                 ))
             }
-            _ => Err(dtype_mismatch(op, lhs, rhs)),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+                dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
+                Err(crate::Error::unsupported_op_dtype(
+                    op,
+                    crate::DType::C64,
+                    tenferro_tensor::BackendId::Cuda,
+                ))
+            }
+            _ => {
+                dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
+                Err(dtype_mismatch(op, lhs, rhs))
+            }
         }
     }
 
