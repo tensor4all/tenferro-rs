@@ -13,11 +13,12 @@ use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::{
     checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
+    constraint_scopes as tensor_constraint_scopes, constraint_scopes_with_new,
     extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,
     linear_input_key, metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new,
-    ones_tensor, push_metadata_scope, register_scoped_graph_metadata, registered_meta,
-    resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
-    tensor_meta_from_tensor, GlobalMetadataScope, TracedTensorParts,
+    ones_tensor, push_constraint_scope, push_metadata_scope, register_scoped_graph_analysis,
+    registered_meta, resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint,
+    tensor_from_parts, tensor_meta_from_tensor, RegisteredGraphAnalysis, TracedTensorParts,
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
@@ -632,7 +633,7 @@ fn jvp_optional_impl(
                 op: "jvp",
                 message: "jvp tangent must have concrete tensor data".to_string(),
             })?;
-    let metadata_scope = register_scoped_graph_metadata(
+    let analysis = register_scoped_graph_analysis(
         linear.as_graph(),
         vec![(
             ValueKey::Input(tangent_input_key.clone()),
@@ -661,11 +662,19 @@ fn jvp_optional_impl(
         extra_roots,
         checkpoint_chain,
         metadata_scopes: metadata_scopes_with_new(
-            metadata_scope,
+            analysis.metadata,
             [
                 tensor_metadata_scopes(output),
                 tensor_metadata_scopes(wrt),
                 tensor_metadata_scopes(tangent),
+            ],
+        ),
+        constraint_scopes: constraint_scopes_with_new(
+            analysis.constraints,
+            [
+                tensor_constraint_scopes(output),
+                tensor_constraint_scopes(wrt),
+                tensor_constraint_scopes(tangent),
             ],
         ),
     })))
@@ -678,7 +687,7 @@ enum VjpTransposeGraph {
 
 struct ActiveLinearVjp {
     transposed: Arc<CachedTracedVjpTransform>,
-    metadata_scope: GlobalMetadataScope,
+    residual_analysis: RegisteredGraphAnalysis,
 }
 
 impl VjpTransposeGraph {
@@ -737,7 +746,7 @@ fn compute_linear_vjp_transform(
     }
 
     let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
-    let linear_metadata_scope = register_scoped_graph_metadata(
+    let linear_analysis = register_scoped_graph_analysis(
         linear.as_graph(),
         vec![(
             ValueKey::Input(linear_seed_key),
@@ -750,12 +759,12 @@ fn compute_linear_vjp_transform(
         Err(err) => return Ok(Err(err)),
     };
     let (_linear_graph, residual_graph) = linear.into_graphs();
-    let residual_metadata_scope =
-        register_scoped_graph_metadata(residual_graph.as_ref(), std::iter::empty())?;
-    drop(linear_metadata_scope);
+    let residual_analysis =
+        register_scoped_graph_analysis(residual_graph.as_ref(), std::iter::empty())?;
+    drop(linear_analysis);
     Ok(Ok(Some(ActiveLinearVjp {
         transposed: Arc::new(CachedTracedVjpTransform::new(residual_graph, transposed)),
-        metadata_scope: residual_metadata_scope,
+        residual_analysis,
     })))
 }
 
@@ -839,11 +848,11 @@ fn vjp_optional_impl(
     let linear_attempt = match (ad_transform_cache, cache_key) {
         (Some(cache), Some(key)) => {
             if let Some(cached) = cache.get_traced_vjp(&key)? {
-                let residual_metadata_scope =
-                    register_scoped_graph_metadata(cached.residual_graph(), std::iter::empty())?;
+                let residual_analysis =
+                    register_scoped_graph_analysis(cached.residual_graph(), std::iter::empty())?;
                 Ok(Some(ActiveLinearVjp {
                     transposed: cached,
-                    metadata_scope: residual_metadata_scope,
+                    residual_analysis,
                 }))
             } else {
                 let computed = compute_linear_vjp_transform(
@@ -872,11 +881,11 @@ fn vjp_optional_impl(
         )?,
     };
 
-    let (transposed, linear_metadata_scope) = match linear_attempt {
+    let (transposed, residual_analysis) = match linear_attempt {
         Ok(None) => return Ok(None),
         Ok(Some(active)) => (
             VjpTransposeGraph::Linear(active.transposed),
-            Some(active.metadata_scope),
+            Some(active.residual_analysis),
         ),
         Err(linear_err) => return Err(ad_rule_error(transform, linear_err)),
     };
@@ -886,7 +895,7 @@ fn vjp_optional_impl(
         wrt,
         cotangent,
         transposed,
-        linear_metadata_scope,
+        residual_analysis,
         checkpoint_chain,
         checkpoint_graphs,
     )
@@ -897,7 +906,7 @@ fn build_vjp_tensor(
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     transposed: VjpTransposeGraph,
-    linear_metadata_scope: Option<GlobalMetadataScope>,
+    residual_analysis: Option<RegisteredGraphAnalysis>,
     checkpoint_chain: Option<Arc<tenferro_runtime::ad_support::CheckpointNode>>,
     checkpoint_graphs: Vec<Arc<Graph<StdTensorOp>>>,
 ) -> Result<Option<TracedTensor>> {
@@ -911,7 +920,7 @@ fn build_vjp_tensor(
                 op: "vjp",
                 message: "vjp cotangent must have concrete tensor data".to_string(),
             })?;
-    let transposed_metadata_scope = register_scoped_graph_metadata(
+    let transposed_analysis = register_scoped_graph_analysis(
         transposed.as_graph(),
         vec![(
             ValueKey::Input(cotangent_input_key.clone()),
@@ -935,6 +944,15 @@ fn build_vjp_tensor(
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(tensor_extra_roots(output));
 
+    let (residual_metadata_scope, residual_constraint_scope) = match residual_analysis {
+        Some(analysis) => (Some(analysis.metadata), Some(analysis.constraints)),
+        None => (None, None),
+    };
+    let RegisteredGraphAnalysis {
+        metadata: transposed_metadata_scope,
+        constraints: transposed_constraint_scope,
+    } = transposed_analysis;
+
     Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
         dtype: wrt.dtype,
@@ -946,7 +964,7 @@ fn build_vjp_tensor(
         extra_roots,
         checkpoint_chain,
         metadata_scopes: {
-            let mut scopes = if let Some(scope) = linear_metadata_scope {
+            let mut scopes = if let Some(scope) = residual_metadata_scope {
                 metadata_scopes_with_new(
                     scope,
                     [
@@ -969,6 +987,26 @@ fn build_vjp_tensor(
                 scopes
             };
             push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));
+            scopes
+        },
+        constraint_scopes: {
+            let inherited = [
+                tensor_constraint_scopes(output),
+                tensor_constraint_scopes(wrt),
+                tensor_constraint_scopes(cotangent),
+            ];
+            let mut scopes = if let Some(scope) = residual_constraint_scope {
+                constraint_scopes_with_new(scope, inherited)
+            } else {
+                let mut scopes = Vec::new();
+                for source in inherited {
+                    for scope in source {
+                        push_constraint_scope(&mut scopes, Arc::clone(scope));
+                    }
+                }
+                scopes
+            };
+            push_constraint_scope(&mut scopes, Arc::new(transposed_constraint_scope));
             scopes
         },
     })))

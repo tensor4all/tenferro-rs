@@ -294,6 +294,7 @@ fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),
+        constraint_scopes: Vec::new(),
     });
 
     let err = GraphCompiler::new().compile(&output).unwrap_err();

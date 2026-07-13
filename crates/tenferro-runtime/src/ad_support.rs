@@ -38,6 +38,7 @@ pub struct TracedTensorParts {
     pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    pub constraint_scopes: Vec<Arc<ShapeConstraintScope>>,
 }
 
 impl fmt::Debug for TracedTensorParts {
@@ -52,6 +53,7 @@ impl fmt::Debug for TracedTensorParts {
             .field("extra_roots_len", &self.extra_roots.len())
             .field("has_checkpoint_chain", &self.checkpoint_chain.is_some())
             .field("metadata_scopes_len", &self.metadata_scopes.len())
+            .field("constraint_scopes_len", &self.constraint_scopes.len())
             .finish_non_exhaustive()
     }
 }
@@ -70,8 +72,7 @@ pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
         extra_roots: parts.extra_roots,
         checkpoint_chain: parts.checkpoint_chain,
         metadata_scopes: MetadataScopeChain::from_materialized(parts.metadata_scopes),
-        // Task 8 will transfer scopes explicitly through `TracedTensorParts`.
-        constraint_scopes: ConstraintScopeChain::from_materialized(Vec::new()),
+        constraint_scopes: ConstraintScopeChain::from_materialized(parts.constraint_scopes),
     }
 }
 
@@ -111,6 +112,62 @@ pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
 /// ```
 pub fn constraint_scopes(tensor: &TracedTensor) -> &[Arc<ShapeConstraintScope>] {
     tensor.constraint_scopes.as_slice()
+}
+
+/// Merge a newly analyzed graph scope with inherited traced-tensor scopes.
+///
+/// The new scope is first. Inherited scopes keep their source order, and the
+/// same `Arc` is retained only once.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ad_support::{
+///     constraint_scopes_with_new, register_scoped_graph_analysis,
+/// };
+/// use tenferro_runtime::{DType, TracedTensor};
+///
+/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+/// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
+/// let scopes = constraint_scopes_with_new(analysis.constraints, []);
+/// assert_eq!(scopes.len(), 1);
+/// ```
+pub fn constraint_scopes_with_new<'a>(
+    scope: ShapeConstraintScope,
+    inherited: impl IntoIterator<Item = &'a [Arc<ShapeConstraintScope>]>,
+) -> Vec<Arc<ShapeConstraintScope>> {
+    let mut scopes = vec![Arc::new(scope)];
+    let mut seen = std::collections::HashSet::from([Arc::as_ptr(&scopes[0])]);
+    for source in inherited {
+        for inherited_scope in source {
+            if seen.insert(Arc::as_ptr(inherited_scope)) {
+                scopes.push(Arc::clone(inherited_scope));
+            }
+        }
+    }
+    scopes
+}
+
+/// Append a graph-owned constraint scope unless the same `Arc` is present.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use tenferro_runtime::ad_support::{push_constraint_scope, ShapeConstraintScope};
+///
+/// let scope = Arc::new(ShapeConstraintScope::default());
+/// let mut scopes = vec![Arc::clone(&scope)];
+/// push_constraint_scope(&mut scopes, scope);
+/// assert_eq!(scopes.len(), 1);
+/// ```
+pub fn push_constraint_scope(
+    scopes: &mut Vec<Arc<ShapeConstraintScope>>,
+    scope: Arc<ShapeConstraintScope>,
+) {
+    if scopes.iter().all(|existing| !Arc::ptr_eq(existing, &scope)) {
+        scopes.push(scope);
+    }
 }
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {

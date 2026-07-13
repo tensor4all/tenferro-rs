@@ -7,7 +7,10 @@ use tenferro_tensor::{DType, Tensor};
 
 use crate::sym_dim::SymDim;
 
-use super::{allocate_input_key, ones_tensor, tensor_from_parts, TracedTensorParts};
+use super::{
+    allocate_input_key, constraint_scopes, constraint_scopes_with_new, ones_tensor,
+    push_constraint_scope, tensor_from_parts, ShapeConstraintScope, TracedTensorParts,
+};
 
 #[test]
 fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
@@ -29,6 +32,7 @@ fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),
+        constraint_scopes: Vec::new(),
     };
 
     let debug = format!("{parts:?}");
@@ -38,6 +42,7 @@ fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
     assert!(debug.contains("has_data: true"));
     assert!(debug.contains("inputs_len: 1"));
     assert!(debug.contains("extra_roots_len: 0"));
+    assert!(debug.contains("constraint_scopes_len: 0"));
 }
 
 #[test]
@@ -49,6 +54,7 @@ fn tensor_from_parts_preserves_summary_fields() {
     let graph = Arc::new(builder.build());
     let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
     let inputs_map = Arc::new(HashMap::from([(input_key.clone(), Arc::clone(&data))]));
+    let constraint_scope = Arc::new(ShapeConstraintScope::default());
     let parts = TracedTensorParts {
         rank: 1,
         dtype: DType::F64,
@@ -60,6 +66,7 @@ fn tensor_from_parts_preserves_summary_fields() {
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),
+        constraint_scopes: vec![Arc::clone(&constraint_scope)],
     };
 
     let tensor = tensor_from_parts(parts);
@@ -70,7 +77,31 @@ fn tensor_from_parts_preserves_summary_fields() {
         tensor.graph.values()[tensor.val].key,
         ValueKey::Input(_)
     ));
-    assert!(tensor.constraint_scopes.materialize().is_empty());
+    assert_eq!(constraint_scopes(&tensor).len(), 1);
+    assert!(Arc::ptr_eq(
+        &constraint_scopes(&tensor)[0],
+        &constraint_scope
+    ));
+}
+
+#[test]
+fn constraint_scope_helpers_preserve_order_and_pointer_deduplicate() {
+    let new_scope = ShapeConstraintScope::default();
+    let inherited_first = Arc::new(ShapeConstraintScope::default());
+    let inherited_second = Arc::new(ShapeConstraintScope::default());
+    let inherited = [
+        Arc::clone(&inherited_first),
+        Arc::clone(&inherited_second),
+        Arc::clone(&inherited_first),
+    ];
+
+    let mut scopes = constraint_scopes_with_new(new_scope, [&inherited[..], &inherited[..]]);
+
+    assert_eq!(scopes.len(), 3);
+    assert!(Arc::ptr_eq(&scopes[1], &inherited_first));
+    assert!(Arc::ptr_eq(&scopes[2], &inherited_second));
+    push_constraint_scope(&mut scopes, Arc::clone(&inherited_second));
+    assert_eq!(scopes.len(), 3);
 }
 
 #[test]
