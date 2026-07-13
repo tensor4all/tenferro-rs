@@ -898,7 +898,7 @@ fn resolve_inputs(
     }
 
     let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_inputs(selected, backend)
+    materialize_inputs(&program.exec, selected, backend, zeros_tensor)
 }
 
 fn resolve_input_reads<'a>(
@@ -947,7 +947,7 @@ fn resolve_input_reads<'a>(
     }
 
     let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_input_reads(selected, backend)
+    materialize_input_reads(&program.exec, selected, backend, zeros_tensor)
 }
 
 fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &GraphProgramInput> {
@@ -1033,29 +1033,47 @@ fn select_inputs<'program, 'binding, T: InputMetadata>(
         validate_input_metadata(input, value.dtype(), value.shape())?;
         selected.push(value);
     }
-    let input_shapes: Vec<_> = selected.iter().map(SelectedInput::shape).collect();
-    crate::exec::validate_shape_guards(&program.exec, &input_shapes)?;
     Ok(selected)
 }
 
-fn materialize_inputs(
+fn validate_selected_shape_guards<T: InputMetadata>(
+    program: &ExecProgram,
+    selected: &[SelectedInput<'_, '_, T>],
+) -> Result<()> {
+    let input_shapes: Vec<_> = selected.iter().map(SelectedInput::shape).collect();
+    crate::exec::validate_shape_guards(program, &input_shapes)
+}
+
+fn materialize_inputs<F>(
+    program: &ExecProgram,
     selected: Vec<SelectedInput<'_, '_, &Tensor>>,
     backend: &mut impl TensorBackend,
-) -> Result<Vec<Tensor>> {
+    mut deferred_zero_factory: F,
+) -> Result<Vec<Tensor>>
+where
+    F: FnMut(DType, Vec<usize>) -> Result<Tensor>,
+{
+    validate_selected_shape_guards(program, &selected)?;
     selected
         .into_iter()
         .map(|input| match input {
             SelectedInput::Bound(bound) => Ok((**bound).clone()),
             SelectedInput::Default(default) => resolve_default_tensor(default, backend),
-            SelectedInput::DeferredZero { dtype, shape } => zeros_tensor(dtype, shape),
+            SelectedInput::DeferredZero { dtype, shape } => deferred_zero_factory(dtype, shape),
         })
         .collect()
 }
 
-fn materialize_input_reads<'a>(
+fn materialize_input_reads<'a, F>(
+    program: &ExecProgram,
     selected: Vec<SelectedInput<'a, '_, TensorRead<'a>>>,
     backend: &mut impl TensorBackend,
-) -> Result<Vec<ExecSlot<'a>>> {
+    mut deferred_zero_factory: F,
+) -> Result<Vec<ExecSlot<'a>>>
+where
+    F: FnMut(DType, Vec<usize>) -> Result<Tensor>,
+{
+    validate_selected_shape_guards(program, &selected)?;
     selected
         .into_iter()
         .map(|input| match input {
@@ -1068,7 +1086,7 @@ fn materialize_input_reads<'a>(
                 }
             }
             SelectedInput::DeferredZero { dtype, shape } => {
-                Ok(ExecSlot::Owned(zeros_tensor(dtype, shape)?))
+                Ok(ExecSlot::Owned(deferred_zero_factory(dtype, shape)?))
             }
         })
         .collect()

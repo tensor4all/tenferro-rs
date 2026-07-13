@@ -98,9 +98,11 @@ Before dispatching any backend, host, or extension instruction, execution must
 evaluate every retained shape guard against the concrete program-input shapes
 in stored order and return the first typed shape-constraint error on failure.
 This validation is enforced immediately after execution-program input-count
-validation and before segmentation, allocation, backend sessions, host work,
-or extension dispatch. The input-count error therefore takes precedence over a
-guard expression's `MissingInput` evaluation error.
+validation and before segmentation, tensor allocation, backend-buffer
+allocation, execution-output allocation, backend sessions, host work, or
+extension dispatch. Validation may allocate small metadata vectors. The
+input-count error therefore takes precedence over a guard expression's
+`MissingInput` evaluation error.
 
 The guarantee covers owned tensor and owned value-output execution, borrowed
 and non-consuming reads, every `GraphExecutor::run*` convenience wrapper,

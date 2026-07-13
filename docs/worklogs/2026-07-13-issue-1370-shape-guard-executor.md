@@ -48,6 +48,14 @@ test confirms guards evaluate the selected runtime shape, and direct tests of
 the extension execution context and backend-cache lowering helper cover both
 owner-scoped execution paths.
 
+The private owned and borrowed materializers accept an internal deferred-zero
+factory. Module-local regressions inject counted and failing factories into
+that exact production seam: failing guards make zero factory calls, passing
+guards make one call with the selected dtype and shape, and factory errors are
+observable only after metadata and guard validation. The counted backend also
+confirms rejected public wrappers never enter a backend session, while accepted
+wrappers enter exactly once.
+
 ## Verification
 
 - Focused executor, exec, segment, and extension release tests passed.
@@ -63,7 +71,8 @@ owner-scoped execution paths.
 
 ## Residual risk
 
-Guard evaluation allocates only a rank-bounded vector of borrowed shape slices.
+Guard evaluation allocates only a program-input-count-bounded vector of borrowed
+shape slices.
 No tensor data is cloned, uploaded, zero-filled, or otherwise materialized
 until input metadata and all retained guards pass. High-level graph wrappers
 therefore introduce no backend or extension side effect on guard failure.

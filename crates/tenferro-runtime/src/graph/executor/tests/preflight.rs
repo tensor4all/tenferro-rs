@@ -5,14 +5,14 @@ use std::sync::{
 
 use tenferro_ops::{dim_expr::DimExpr, ShapeRelation};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    DotGeneralConfig, GatherConfig, MemoryKind, PadConfig, ScatterConfig, SliceConfig, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
 };
 
 use super::super::GraphExecutor;
-use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
 use crate::extension::execute_lowered_program_with_backend_cache;
 use crate::extension_cache::ExtensionCacheStore;
 use crate::extension_runtime::ExtensionExecutionContext;
@@ -23,6 +23,7 @@ use crate::{Error, GraphCompiler, TracedTensor};
 struct CountingBackend {
     uploads: Arc<AtomicUsize>,
     dispatches: Arc<AtomicUsize>,
+    session_entries: Arc<AtomicUsize>,
 }
 
 macro_rules! unreachable_backend_methods {
@@ -128,19 +129,35 @@ impl TensorDot for CountingBackend {
 impl TensorFusion for CountingBackend {}
 impl TensorBuffer for CountingBackend {}
 impl BackendCachedDot for CountingBackend {}
-impl BackendSessionHost for CountingBackend {}
+impl BackendSessionHost for CountingBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        self.session_entries.fetch_add(1, Ordering::Relaxed);
+        f(self)
+    }
+}
 impl TensorBackend for CountingBackend {}
 
-fn counting_backend() -> (CountingBackend, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+fn counting_backend() -> (
+    CountingBackend,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
     let uploads = Arc::new(AtomicUsize::new(0));
     let dispatches = Arc::new(AtomicUsize::new(0));
+    let session_entries = Arc::new(AtomicUsize::new(0));
     (
         CountingBackend {
             uploads: uploads.clone(),
             dispatches: dispatches.clone(),
+            session_entries: session_entries.clone(),
         },
         uploads,
         dispatches,
+        session_entries,
     )
 }
 
@@ -211,11 +228,17 @@ fn assert_graph_guard_error(error: Error) {
 fn assert_counts(
     uploads: &AtomicUsize,
     dispatches: &AtomicUsize,
+    session_entries: &AtomicUsize,
     expected_uploads: usize,
     expected_dispatches: usize,
+    expected_session_entries: usize,
 ) {
     assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
     assert_eq!(dispatches.load(Ordering::Relaxed), expected_dispatches);
+    assert_eq!(
+        session_entries.load(Ordering::Relaxed),
+        expected_session_entries
+    );
 }
 
 #[test]
@@ -223,53 +246,53 @@ fn graph_run_wrappers_validate_before_default_upload() {
     let bad = scalar_default_program(constant_guard(1, 2, "runtime.graph-preflight.v1"));
     let good = scalar_default_program(constant_guard(2, 2, "runtime.graph-preflight.v1"));
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     assert_graph_guard_error(GraphExecutor::new(backend).run_many(&bad).unwrap_err());
-    assert_counts(&uploads, &dispatches, 0, 0);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     assert_graph_guard_error(
         GraphExecutor::new(backend)
             .run_many_values(&bad)
             .unwrap_err(),
     );
-    assert_counts(&uploads, &dispatches, 0, 0);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     assert_graph_guard_error(
         GraphExecutor::new(backend)
             .run_many_with_input_reads(&bad, &[])
             .unwrap_err(),
     );
-    assert_counts(&uploads, &dispatches, 0, 0);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     assert_graph_guard_error(
         GraphExecutor::new(backend)
             .run_many_values_with_input_reads(&bad, &[])
             .unwrap_err(),
     );
-    assert_counts(&uploads, &dispatches, 0, 0);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend).run_many(&good).unwrap();
-    assert_counts(&uploads, &dispatches, 1, 1);
+    assert_counts(&uploads, &dispatches, &sessions, 1, 1, 1);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend).run_many_values(&good).unwrap();
-    assert_counts(&uploads, &dispatches, 1, 1);
+    assert_counts(&uploads, &dispatches, &sessions, 1, 1, 1);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend)
         .run_many_with_input_reads(&good, &[])
         .unwrap();
-    assert_counts(&uploads, &dispatches, 1, 1);
+    assert_counts(&uploads, &dispatches, &sessions, 1, 1, 1);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend)
         .run_many_values_with_input_reads(&good, &[])
         .unwrap();
-    assert_counts(&uploads, &dispatches, 1, 1);
+    assert_counts(&uploads, &dispatches, &sessions, 1, 1, 1);
 }
 
 #[test]
@@ -298,7 +321,7 @@ fn graph_run_preflight_uses_explicit_input_shape() {
     });
     let bound = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     let error = GraphExecutor::new(backend)
         .run_many_with_inputs(&bad, &[(&input, &bound)])
         .unwrap_err();
@@ -311,13 +334,174 @@ fn graph_run_preflight_uses_explicit_input_shape() {
             ..
         }
     ));
-    assert_counts(&uploads, &dispatches, 0, 0);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let (backend, uploads, dispatches) = counting_backend();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend)
         .run_many_with_inputs(&good, &[(&good_input, &bound)])
         .unwrap();
-    assert_counts(&uploads, &dispatches, 0, 1);
+    assert_counts(&uploads, &dispatches, &sessions, 0, 1, 1);
+}
+
+fn deferred_zero_guard_program(rhs: usize) -> ExecProgram {
+    unary_exec_program(ShapeGuard {
+        source: ConstraintSource {
+            family_id: "runtime.deferred-zero-preflight.v1",
+            instruction_index: Some(0),
+        },
+        relation: ShapeRelation::Equal,
+        lhs: DimExpr::InputDim {
+            input_idx: 0,
+            axis: 0,
+        },
+        rhs: DimExpr::Const(rhs),
+    })
+}
+
+fn owned_deferred_zero_selection(
+) -> Vec<super::super::SelectedInput<'static, 'static, &'static Tensor>> {
+    vec![super::super::SelectedInput::DeferredZero {
+        dtype: DType::F64,
+        shape: vec![2],
+    }]
+}
+
+fn borrowed_deferred_zero_selection(
+) -> Vec<super::super::SelectedInput<'static, 'static, TensorRead<'static>>> {
+    vec![super::super::SelectedInput::DeferredZero {
+        dtype: DType::F64,
+        shape: vec![2],
+    }]
+}
+
+fn assert_deferred_zero_tensor(tensor: &Tensor) {
+    assert_eq!(tensor.dtype(), DType::F64);
+    assert_eq!(tensor.shape(), &[2]);
+    assert_eq!(tensor.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+    assert_eq!(tensor.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(tensor.placement().device, None);
+}
+
+#[test]
+fn owned_deferred_zero_factory_runs_only_after_guard_validation() {
+    let bad = deferred_zero_guard_program(3);
+    let good = deferred_zero_guard_program(2);
+
+    let (mut backend, _, _, _) = counting_backend();
+    let mut factory_calls = 0;
+    let error = super::super::materialize_inputs(
+        &bad,
+        owned_deferred_zero_selection(),
+        &mut backend,
+        |dtype, shape| {
+            factory_calls += 1;
+            super::super::zeros_tensor(dtype, shape)
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ShapeConstraintViolation { .. }));
+    assert_eq!(factory_calls, 0);
+
+    let outputs = super::super::materialize_inputs(
+        &good,
+        owned_deferred_zero_selection(),
+        &mut backend,
+        |dtype, shape| {
+            factory_calls += 1;
+            assert_eq!(dtype, DType::F64);
+            assert_eq!(shape, vec![2]);
+            super::super::zeros_tensor(dtype, shape)
+        },
+    )
+    .unwrap();
+    assert_eq!(factory_calls, 1);
+    assert_deferred_zero_tensor(&outputs[0]);
+}
+
+#[test]
+fn borrowed_deferred_zero_factory_runs_only_after_guard_validation() {
+    let bad = deferred_zero_guard_program(3);
+    let good = deferred_zero_guard_program(2);
+
+    let (mut backend, _, _, _) = counting_backend();
+    let mut factory_calls = 0;
+    let result = super::super::materialize_input_reads(
+        &bad,
+        borrowed_deferred_zero_selection(),
+        &mut backend,
+        |dtype, shape| {
+            factory_calls += 1;
+            super::super::zeros_tensor(dtype, shape)
+        },
+    );
+    let Err(error) = result else {
+        panic!("bad guard must fail before borrowed deferred-zero materialization");
+    };
+    assert!(matches!(error, Error::ShapeConstraintViolation { .. }));
+    assert_eq!(factory_calls, 0);
+
+    let outputs = super::super::materialize_input_reads(
+        &good,
+        borrowed_deferred_zero_selection(),
+        &mut backend,
+        |dtype, shape| {
+            factory_calls += 1;
+            assert_eq!(dtype, DType::F64);
+            assert_eq!(shape, vec![2]);
+            super::super::zeros_tensor(dtype, shape)
+        },
+    )
+    .unwrap();
+    assert_eq!(factory_calls, 1);
+    let ExecSlot::Owned(output) = &outputs[0] else {
+        panic!("deferred borrowed input must materialize into an owned slot");
+    };
+    assert_deferred_zero_tensor(output);
+}
+
+#[test]
+fn deferred_zero_factory_errors_follow_metadata_and_guard_validation() {
+    let (input, mut invalid_metadata) =
+        explicit_input_program(constant_guard(1, 2, "runtime.deferred-zero-error-order.v1"));
+    invalid_metadata.inputs[0].shape = vec![3];
+    let bound = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
+    let (backend, uploads, dispatches, sessions) = counting_backend();
+    let error = GraphExecutor::new(backend)
+        .run_with_inputs(&invalid_metadata, &[(&input, &bound)])
+        .unwrap_err();
+    assert!(matches!(error, Error::PlaceholderShapeMismatch { .. }));
+    assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
+
+    let injected_error = || Error::InvalidCompiledGraph {
+        message: "injected deferred-zero factory failure".to_string(),
+    };
+    let (mut backend, _, _, _) = counting_backend();
+    let mut factory_calls = 0;
+    let error = super::super::materialize_inputs(
+        &deferred_zero_guard_program(3),
+        owned_deferred_zero_selection(),
+        &mut backend,
+        |_, _| {
+            factory_calls += 1;
+            Err(injected_error())
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ShapeConstraintViolation { .. }));
+    assert_eq!(factory_calls, 0);
+
+    let error = super::super::materialize_inputs(
+        &deferred_zero_guard_program(2),
+        owned_deferred_zero_selection(),
+        &mut backend,
+        |_, _| {
+            factory_calls += 1;
+            Err(injected_error())
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::InvalidCompiledGraph { .. }));
+    assert_eq!(factory_calls, 1);
 }
 
 #[test]
@@ -325,7 +509,7 @@ fn owner_scoped_execution_paths_validate_before_dispatch() {
     let bad = unary_exec_program(constant_guard(1, 2, "runtime.owner-preflight.v1"));
     let good = unary_exec_program(constant_guard(2, 2, "runtime.owner-preflight.v1"));
 
-    let (mut backend, uploads, dispatches) = counting_backend();
+    let (mut backend, uploads, dispatches, _) = counting_backend();
     let mut caches = ExtensionCacheStore::new();
     let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
     let error = ctx
@@ -338,7 +522,7 @@ fn owner_scoped_execution_paths_validate_before_dispatch() {
         .unwrap();
     assert_eq!(dispatches.load(Ordering::Relaxed), 1);
 
-    let (mut backend, uploads, dispatches) = counting_backend();
+    let (mut backend, uploads, dispatches, _) = counting_backend();
     let mut backend_cache = ();
     let error = execute_lowered_program_with_backend_cache(
         &mut backend,
