@@ -1,5 +1,12 @@
 use tenferro_ops::{dim_expr::DimExpr, ShapeRelation};
 
+mod solver;
+
+// INVARIANT: Task 3 defines the solver boundary before the compiler and
+// executor integrations in later tasks consume these crate-private items.
+#[allow(unused_imports)]
+pub(crate) use solver::{discharge, ShapeGuard};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ConstraintSource {
     pub(crate) family_id: &'static str,
@@ -23,3 +30,6 @@ pub(crate) struct LocalShapeConstraint {
     pub(crate) lhs: DimExpr,
     pub(crate) rhs: DimExpr,
 }
+
+#[cfg(test)]
+mod tests;
