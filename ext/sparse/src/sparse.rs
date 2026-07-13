@@ -145,7 +145,9 @@ impl SparseCooTracedTensor {
     /// # Errors
     ///
     /// Returns an error if sparse metadata is invalid, values are not `F64`, or
-    /// the traced value shape is not concretely `[nnz]`.
+    /// values are not rank 1. A known concrete value shape must be `[nnz]`.
+    /// An unknown symbolic extent is accepted here and is checked against `nnz`
+    /// later by the sparse extension's shape constraint during graph compilation.
     ///
     /// # Examples
     ///
@@ -155,7 +157,7 @@ impl SparseCooTracedTensor {
     /// use tenferro_tensor::Tensor;
     ///
     /// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
-    /// let values = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
+    /// let values = TracedTensor::input_symbolic_shape(tenferro_tensor::DType::F64, 1)?;
     /// let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values)?;
     /// assert_eq!(sparse.values().rank, 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
