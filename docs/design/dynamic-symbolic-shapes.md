@@ -2,7 +2,8 @@
 
 **Status:** current design and implementation note for issue #829
 **Related:** `../spec/optimizer-passes.md`, `../spec/ad-contract.md`,
-`../spec/primitive-catalog.md`, `../spec/backend-contract.md`
+`../spec/primitive-catalog.md`, `../spec/backend-contract.md`,
+`../spec/extension-op.md`
 
 ## Purpose
 
@@ -69,7 +70,9 @@ some safety checks, but it is not a legal replacement for an exact dimension.
 
 - Do not replace every shape expression user in one PR.
 - Do not require all backend kernels to accept dynamic shape parameters.
-- Do not introduce a constraint solver.
+- Do not introduce a general symbolic algebra solver. The implemented
+  extension equality engine is deliberately limited to the rules described
+  below.
 - Do not add scatter-only or `DynamicTruncate`-only hacks that bypass shared
   metadata invariants.
 - Do not change user-facing tensor operation semantics beyond replacing
@@ -161,6 +164,119 @@ emitter helpers may provide convenience accessors, but they must read from the
 same metadata store and record the same guards. AD rules must not recover
 shape facts by inspecting unrelated op payloads or assuming concrete extents
 from earlier graph-building phases.
+
+## Extension Shape Equality Lifecycle
+
+Extension output metadata and extension input relations share one inference
+callback, but they have different owners after inference:
+
+```text
+ExtensionShapeContext declaration
+  -> graph-owned constraint scope
+  -> compiler proof or disproof
+  -> unresolved ExecProgram guard
+  -> executor metadata preflight
+```
+
+An extension reads dtype and `SymDim` input shapes through
+`ExtensionShapeContext` and records equalities such as `a == b` or
+`a == 2 * b`. The canonical inference driver translates those declarations
+from the extension-local input namespace to `DimExpr` relations. A graph scope
+then stores each relation with its ordered graph inputs and every output of the
+originating operation. Constraints are not extension-payload state and do not
+depend on a process-global registry.
+
+Each `TracedTensor` carries an immutable, shared constraint-scope history.
+Ordinary graph composition merges histories; a scope is skipped when it is
+empty. Extension fast paths that expand directly to core operations attach the
+same inferred contract to their expanded outputs, so replacing a fused node
+does not weaken its shape requirements. The attachment API runs inference once
+and uses the same result for output metadata and constraints.
+
+Graph analysis discovers output metadata and local extension constraints in
+one root-local walk. Already registered external values are resolved directly;
+only an unregistered external value triggers an on-demand parent lookup, backed
+by one lazily built key-to-parent index per analysis. This avoids replaying
+ancestor inference and avoids repeated scans as graph history grows.
+
+### Compiler proof, optimizer liveness, and guards
+
+Compilation lowers reachable scope inputs to SSA slots and evaluates equality
+relations in an order-independent pipeline:
+
+- checked constant folding and structural normalization;
+- canonical ordering for commutative expressions;
+- union of bare axis symbols and binding of a bare symbol to a constant;
+- evaluation when all referenced input extents are concrete.
+
+Proven equalities disappear. Disproven equalities return a typed
+`ShapeConstraintViolation`. An unresolved equality is retained as a normalized
+`ShapeGuard`. Arithmetic overflow, underflow, division by zero, a missing live
+input, or an invalid live axis is a typed `ShapeConstraintEvaluation`, not an
+unknown result.
+
+This is not inverse or general algebraic solving. In particular, symbolic
+`a == 2 * b` remains a guard; the engine does not rearrange it to infer `b`.
+The same relation is folded or rejected when its operands later become
+concrete. Inequalities, divisibility reasoning, and general equation solving
+remain out of scope.
+
+Graph-scoped constraints use pre-optimizer origin slots, so a live constraint
+survives elimination of an identity reshape, transpose, or its originating
+extension carrier. The compiler prunes one only when none of its origin outputs
+is live. Constraints freshly inferred from an extension instruction may be
+pruned if that optimized instruction is dead. A graph-scoped live relation
+with a broken key, slot, or axis is always an error.
+
+The parallel symbolic analysis for `Reshape` and `BroadcastInDim` is
+best-effort. If a deliberately unresolved `InputDim` cannot be resolved in that
+analysis namespace, the expression stays symbolic. The separate executable
+shape path remains authoritative and concrete, preserving its typed validation
+instead of leaking graph-global symbolic indices into instruction-local
+extent resolution.
+
+`GraphCompiler` currently specializes placeholder descriptors to concrete
+shapes, so most graph-level equalities are proved or disproved during compile.
+The lower-level compiler still accepts symbolic input shapes and retains
+guards. Keeping guards in `ExecProgram` is therefore part of the contract for
+low-level and future polymorphic compilation, rather than dead infrastructure.
+
+The executor checks ordered input count and metadata, then all shape guards,
+before upload, deferred-zero synthesis, backend workspace/session creation, or
+extension dispatch. A rejected guard cannot cause partial backend execution.
+
+### Cache, checkpoint, and AD persistence
+
+Normalized guard relation and operands participate in the execution-program
+fingerprint and compile-cache key. Two otherwise identical instruction streams
+with different shape contracts cannot share an entry. Provenance is diagnostic
+rather than semantic: on a hit, the current compilation's guard vector replaces
+the cached vector so family and instruction diagnostics describe the current
+graph.
+
+Checkpoint roots preserve the existing constraint history while replacing the
+materialized leaf and metadata scope. JVP, VJP, and direct primal-VJP graph
+construction cross the runtime/AD boundary through an opaque
+`ConstraintScopeTransfer`. The transfer is a persistent `Arc`-backed chain:
+cloning is constant-time, parent histories remain shared, empty scopes are not
+retained, and pointer deduplication happens once on compiler materialization.
+New linear, residual, and transposed graph scopes are layered over inherited
+primal, tangent, or cotangent histories. Transform-cache cold construction and
+hot reuse therefore preserve the same contract and produce the same typed
+diagnostic.
+
+### Current adopters and defense in depth
+
+- Ordinary einsum records equality for every repeated label, including the
+  direct extension path and core-op expanded fast path.
+- Sparse matmul records payload NNZ requirements and exact primal/tangent/
+  cotangent shape equalities.
+- Tropical einsum records repeated-label equality and its JVP/VJP exact-shape
+  contracts.
+
+Sparse and tropical host-reference implementations also validate concrete
+count, dtype, rank, and shape at their direct execution boundary. Graph guards
+do not replace that host-side defense.
 
 ## Runtime Scalar Dimensions
 

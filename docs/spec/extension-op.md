@@ -551,13 +551,18 @@ store the arity in their payload and are handled by the core enum directly.
 fn infer_output_meta(
     &self,
     ctx: &mut ExtensionShapeContext<'_>,
-) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ctx.require_same_shape(0, 1)?;
+    Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+}
 ```
 
 This method's responsibility mirrors
 `crates/tenferro-runtime/src/shape_infer.rs::infer_output_dtype` and
 `infer_output_shapes` for core ops, packaged as a single method per
-extension.
+extension. The example is a valid method body for a two-input, one-output
+extension; equivalent runnable examples are kept in the
+`ExtensionShapeContext` rustdoc.
 
 ### Contract
 
@@ -568,6 +573,9 @@ extension.
   `ctx.input_axis` rather than indexing raw metadata slices.
 - Implementations MAY record equality requirements with `ctx.require_equal`,
   `ctx.require_axes_equal`, and `ctx.require_same_shape`.
+- A successfully recorded requirement is declarative. The callback MUST NOT
+  assume that the relation was solved or checked merely because the builder
+  returned `Ok`.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>`. `TensorMeta` does not expose a
@@ -581,6 +589,62 @@ extension.
   an unknown symbolic input to `0` or panicking is a contract violation.
 - Invalid arity, rank, dtype, axis, or shape metadata MUST return a typed
   `tenferro_tensor::Error` rather than an empty vector sentinel.
+
+The clean-break context signature is the only supported inference signature.
+There is no adapter from the former separate dtype and shape slices.
+
+### Equality requirements and enforcement
+
+The context records equality between complete `SymDim` expressions, not only
+between bare axes. For example, an extension MAY declare:
+
+```rust
+let a = ctx.input_axis(0, 0)?;
+let b = ctx.input_axis(1, 0)?;
+ctx.require_equal(a, 2 * b)?;
+```
+
+The lifecycle of every recorded equality is normative:
+
+1. The canonical inference driver converts it to an extension-local relation
+   whose operands refer to the callback's ordered inputs.
+2. Graph construction attaches that relation to a graph-owned scope, with all
+   extension outputs as origins. Traced composition, checkpointing, and AD
+   transforms preserve reachable scopes.
+3. Compilation substitutes reachable program inputs and asks the equality
+   engine to prove or disprove the normalized relation. A concrete
+   contradiction returns `ShapeConstraintViolation` before a backend program
+   can execute.
+4. A relation that cannot yet be decided becomes an `ExecProgram` shape guard.
+   The executor evaluates all guards after input-count and input-spec checks,
+   but before uploads, deferred-zero allocation, backend sessions, extension
+   dispatch, or any other backend side effect.
+
+The initial equality engine performs checked constant folding, structural
+normalization, and bare-symbol union and constant binding. It intentionally
+does not rearrange equations, solve for a symbol, prove inequalities, or act as
+a general symbolic algebra system. Thus `a == 2 * b` is folded when both sides
+are concrete and otherwise remains a guard; it is not inverted to derive `b`.
+
+Guard relation and normalized operands are semantic program and compile-cache
+identity. Diagnostic provenance is not semantic identity. On a cache hit the
+current graph's provenance replaces cached provenance, so an equivalent cached
+program reports the current extension family and instruction location.
+
+### Graph expansion and host defense
+
+An extension frontend that replaces a fused extension node with an equivalent
+core-op fast path MUST attach the extension's inferred shape contract to the
+expanded outputs. It MUST NOT lose validation merely because no
+`ExecOp::Extension` remains. The runtime helper
+`apply_expanded_graph_with_shape_contract` is the canonical attachment path and
+runs inference once for both output metadata and constraints.
+
+`HostReference::execute` remains a separate public boundary. A host reference
+MUST validate concrete input count, dtype, rank, and exact shape requirements
+before indexing or computing. Compiled guards are defense in depth for graph
+execution; they do not authorize a direct host-reference caller to bypass
+validation.
 
 ### Symbolic-shape interaction
 
@@ -601,6 +665,12 @@ symbolic inputs. Total means:
   invalid-config error that includes the extension `family_id`.
 - An implementer that panics on public metadata input surfaces as a hard crash
   in symbolic-shape and boundary-safety tests. This is a contract violation.
+- A proven unequal relation returns `Error::ShapeConstraintViolation` with the
+  family, equality relation, normalized expressions, concrete values, and
+  structural instruction provenance.
+- Failure to evaluate a live relation returns
+  `Error::ShapeConstraintEvaluation`; missing inputs, invalid axes, overflow,
+  underflow, and division by zero remain distinct typed causes.
 
 ---
 
@@ -885,6 +955,14 @@ contract; implementers that compare symbolic dimensions via
 `resolve_and_guard`-like helpers are responsible for recording the
 comparisons.
 
+Extension equalities declared through `ExtensionShapeContext` are graph
+contracts distinct from AD's local `ShapeGuardContext` comparisons. JVP, VJP,
+and direct primal-VJP construction MUST transfer the opaque persistent
+constraint history from primal inputs and attach constraints discovered in the
+new linear, residual, or transposed graph. The transform cache MUST preserve
+the same transfer on cold construction and cache hits. Equivalent cold and hot
+paths MUST therefore report the same typed constraint diagnostic.
+
 ### Deferred zero-tangent policy
 
 Extensions MUST NOT materialise zero cotangents for symbolic-shape inputs at
@@ -969,6 +1047,9 @@ these error types / behaviours in the listed scenarios.
 | Duplicate AD rule `(family_id, role)` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule { family_id, role }`. |
 | Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
+| A reachable extension equality is concretely false | `Error::ShapeConstraintViolation` before backend execution, with `family_id`, equality relation, expressions, values, and instruction provenance. |
+| A reachable extension equality cannot be evaluated because its input/axis is missing or arithmetic fails | `Error::ShapeConstraintEvaluation` with a typed `ShapeConstraintEvalError` cause. MUST NOT silently prune the live relation. |
+| An unresolved compiled equality is false for concrete runtime bindings | `Error::ShapeConstraintViolation` before upload, allocation, backend session creation, or extension dispatch. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
 | AD rule registration with malformed `family_id` | `ExtensionRegistryError::MalformedFamilyId`. |
 | Runtime executor registration with malformed `family_id` | `ExtensionRuntimeRegistryError::MalformedFamilyId`. |
@@ -1128,3 +1209,7 @@ without revisiting this document.
   `ext/tropical` binary tropical einsum implementation, its shared
   `tenferro-einsum` lowering dependency, its JVP rule helper, and its
   runtime-registered VJP execution helper.
+- 2026-07-13: Issue #1370 replaced extension metadata inference with
+  `ExtensionShapeContext` and specified declarative equality constraints,
+  graph-owned scope propagation, compiler proof and guard emission, executor
+  preflight, cache identity, and AD/checkpoint preservation.
