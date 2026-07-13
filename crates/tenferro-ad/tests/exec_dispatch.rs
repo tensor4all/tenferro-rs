@@ -82,6 +82,7 @@ fn single_instruction_program(op: ExecOp, input_count: usize) -> ExecProgram {
         input_slots: (0..input_count).collect(),
         output_slots: vec![input_count],
         n_slots: input_count + 1,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -489,6 +490,7 @@ fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
         input_slots: vec![0, 1, 2],
         output_slots: vec![3],
         n_slots: 4,
+        shape_guards: Vec::new(),
     };
     let inputs = vec![
         f64_tensor(vec![4, 5], vec![0.0; 20]),
@@ -523,6 +525,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
         input_slots: vec![],
         output_slots: vec![0],
         n_slots: 1,
+        shape_guards: Vec::new(),
     };
 
     let outputs = executor.eval_exec_ir(&program, vec![]).unwrap();
@@ -555,6 +558,7 @@ fn eval_exec_ir_materializes_complex_constants() {
         input_slots: vec![],
         output_slots: vec![0],
         n_slots: 1,
+        shape_guards: Vec::new(),
     };
 
     let outputs = executor.eval_exec_ir(&program, vec![]).unwrap();
@@ -602,6 +606,7 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
         input_slots: vec![0],
         output_slots: vec![2],
         n_slots: 3,
+        shape_guards: Vec::new(),
     };
 
     let err = executor
@@ -641,6 +646,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
         input_slots: vec![0, 1],
         output_slots: vec![3],
         n_slots: 4,
+        shape_guards: Vec::new(),
     };
 
     let mut executor = GraphExecutor::new(FakeTensorBackend::default());

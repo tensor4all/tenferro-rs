@@ -124,6 +124,7 @@ fn cpu_parity_program() -> ExecProgram {
         input_slots: vec![0, 1, 2, 3],
         output_slots: vec![8, 9, 11, 12],
         n_slots: 13,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -233,6 +234,7 @@ fn terminal_noncompact_broadcast_multiply_program() -> ExecProgram {
         input_slots: vec![0, 1],
         output_slots: vec![4],
         n_slots: 5,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -363,6 +365,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
         input_slots: vec![0, 1, 2],
         output_slots: vec![4, 9, 10],
         n_slots: 11,
+        shape_guards: Vec::new(),
     }
 }
 

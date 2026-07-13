@@ -96,6 +96,7 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     ///     input_slots: vec![0, 1],
     ///     output_slots: vec![2],
     ///     n_slots: 3,
+    ///     shape_guards: Vec::new(),
     /// };
     /// let lhs = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();

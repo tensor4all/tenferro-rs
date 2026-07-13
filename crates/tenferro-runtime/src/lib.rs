@@ -68,6 +68,8 @@ pub use graph::{
     GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
     GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };
+#[doc(hidden)]
+pub use shape_constraint::ShapeGuard;
 pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;

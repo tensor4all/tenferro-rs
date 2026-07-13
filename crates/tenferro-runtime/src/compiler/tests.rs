@@ -7,9 +7,12 @@ use super::{
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::{Error, GraphExecutor};
 use computegraph::compile::{CompiledProgram, Instruction};
+use std::any::Any;
+use std::sync::Arc;
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ShapeExtent;
+use tenferro_ops::{ShapeExtent, ShapeRelation, SymDim};
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 #[path = "tests/dot_decomposer_tests.rs"]
@@ -34,6 +37,7 @@ fn make_exec_program(
         input_slots,
         output_slots,
         n_slots,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -85,6 +89,211 @@ fn make_std_instr(
         inputs,
         outputs,
     }
+}
+
+#[derive(Clone, Debug)]
+struct ScaledAxisEqualityExtension;
+
+impl ExtensionOp for ScaledAxisEqualityExtension {
+    fn family_id(&self) -> &'static str {
+        "test.compiler-scaled-axis-equality.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let lhs = ctx.input_axis(0, 0)?;
+        let rhs = ctx.input_axis(1, 0)?;
+        ctx.require_equal(lhs, rhs * 2)?;
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+}
+
+fn scaled_axis_program(
+    instructions: Vec<Instruction<StdTensorOp>>,
+) -> CompiledProgram<StdTensorOp> {
+    CompiledProgram {
+        instructions,
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    }
+}
+
+fn assert_guard_equation(guard: &crate::ShapeGuard, expected_lhs: DimExpr, expected_rhs: DimExpr) {
+    assert!(
+        (guard.lhs == expected_lhs && guard.rhs == expected_rhs)
+            || (guard.lhs == expected_rhs && guard.rhs == expected_lhs),
+        "unexpected normalized guard: {guard:?}"
+    );
+}
+
+#[test]
+fn compiler_retains_shape_guards_and_rejects_concrete_contradictions() {
+    let extension = StdTensorOp::Extension(Arc::new(ScaledAxisEqualityExtension));
+    let program = scaled_axis_program(vec![make_std_instr(extension, vec![0, 1], vec![2])]);
+    let dtypes = [DType::F64, DType::F64];
+
+    let concrete =
+        compile_std_to_exec(&program, &dtypes, &[dim_shape(&[6]), dim_shape(&[3])]).unwrap();
+    assert!(concrete.shape_guards.is_empty());
+
+    assert!(matches!(
+        compile_std_to_exec(&program, &dtypes, &[dim_shape(&[7]), dim_shape(&[3])],),
+        Err(Error::ShapeConstraintViolation {
+            family: "test.compiler-scaled-axis-equality.v1",
+            instruction_index: Some(0),
+            relation: ShapeRelation::Equal,
+            lhs_value: 7,
+            rhs_value: 6,
+            ..
+        })
+    ));
+
+    let symbolic = compile_std_to_exec(
+        &program,
+        &dtypes,
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    )
+    .unwrap();
+    assert_eq!(symbolic.shape_guards.len(), 1);
+}
+
+#[test]
+fn compiler_retains_shape_guards_with_nested_reordered_input_expressions() {
+    let extension = StdTensorOp::Extension(Arc::new(ScaledAxisEqualityExtension));
+    let program = scaled_axis_program(vec![make_std_instr(extension, vec![1, 0], vec![2])]);
+    let first = DimExpr::add(
+        DimExpr::InputDim {
+            input_idx: 3,
+            axis: 1,
+        },
+        DimExpr::Const(1),
+    );
+    let second = DimExpr::floor_div(
+        DimExpr::mul(
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 0,
+            },
+            DimExpr::Const(4),
+        ),
+        DimExpr::Const(2),
+    );
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[vec![first.clone()], vec![second.clone()]],
+    )
+    .unwrap();
+
+    assert_eq!(exec.shape_guards.len(), 1);
+    let guard = &exec.shape_guards[0];
+    assert_eq!(guard.source.instruction_index, Some(0));
+    let normalized_first = DimExpr::add(
+        DimExpr::Const(1),
+        DimExpr::InputDim {
+            input_idx: 3,
+            axis: 1,
+        },
+    );
+    let normalized_second = DimExpr::floor_div(
+        DimExpr::mul(
+            DimExpr::Const(4),
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 0,
+            },
+        ),
+        DimExpr::Const(2),
+    );
+    assert_guard_equation(
+        guard,
+        normalized_second,
+        DimExpr::mul(DimExpr::Const(2), normalized_first),
+    );
+}
+
+#[test]
+fn compiler_shape_guard_provenance_uses_final_instruction_indices() {
+    let extension = || StdTensorOp::Extension(Arc::new(ScaledAxisEqualityExtension));
+    let program = CompiledProgram {
+        instructions: vec![
+            make_std_instr(StdTensorOp::Neg, vec![0], vec![2]),
+            make_std_instr(extension(), vec![1, 0], vec![3]),
+            make_std_instr(extension(), vec![0, 1], vec![4]),
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![3, 4],
+        n_slots: 5,
+    };
+    let first = DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    };
+    let second = DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[vec![first.clone()], vec![second.clone()]],
+    )
+    .unwrap();
+
+    assert_eq!(exec.instructions.len(), 2);
+    assert_eq!(exec.shape_guards.len(), 2);
+    let first_guard = exec
+        .shape_guards
+        .iter()
+        .find(|guard| guard.source.instruction_index == Some(0))
+        .unwrap();
+    assert_guard_equation(
+        first_guard,
+        second.clone(),
+        DimExpr::mul(DimExpr::Const(2), first.clone()),
+    );
+    let second_guard = exec
+        .shape_guards
+        .iter()
+        .find(|guard| guard.source.instruction_index == Some(1))
+        .unwrap();
+    assert_guard_equation(second_guard, first, DimExpr::mul(DimExpr::Const(2), second));
 }
 
 #[test]

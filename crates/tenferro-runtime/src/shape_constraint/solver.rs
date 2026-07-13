@@ -14,8 +14,12 @@ use crate::error::{Error, Result, ShapeConstraintEvalError};
 
 type Symbol = (usize, usize);
 
+/// A normalized symbolic shape obligation retained by a compiled program.
+///
+/// Guards are produced by the compiler. Runtime evaluation is intentionally
+/// owned by the execution pipeline rather than exposed as a user API.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ShapeGuard {
+pub struct ShapeGuard {
     pub(crate) source: ConstraintSource,
     pub(crate) relation: ShapeRelation,
     pub(crate) lhs: DimExpr,
@@ -236,10 +240,6 @@ pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<Sh
         let (Some(mut lhs), Some(mut rhs)) = (lhs, rhs) else {
             continue;
         };
-        if compare_expression(&lhs, &rhs).is_gt() {
-            std::mem::swap(&mut lhs, &mut rhs);
-        }
-
         if lhs == rhs {
             if is_statically_total(&lhs) {
                 continue;
@@ -262,6 +262,9 @@ pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<Sh
                 *rhs_value,
             ));
             continue;
+        }
+        if compare_expression(&lhs, &rhs).is_gt() {
+            std::mem::swap(&mut lhs, &mut rhs);
         }
         guards.push(ShapeGuard {
             source: constraint.source,

@@ -113,6 +113,7 @@ fn execute_lowered_program_with_backend_cache_rejects_nested_extension_ops() {
         input_slots: vec![0],
         output_slots: vec![1],
         n_slots: 2,
+        shape_guards: Vec::new(),
     };
     let mut backend = tenferro_cpu::CpuBackend::new();
     let mut backend_cache = Default::default();

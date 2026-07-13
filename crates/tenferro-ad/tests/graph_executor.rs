@@ -186,6 +186,7 @@ fn graph_executor_eval_exec_ir_rejects_wrong_input_count() {
         input_slots: vec![0, 1],
         output_slots: vec![2],
         n_slots: 3,
+        shape_guards: Vec::new(),
     };
     let inputs = vec![
         Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),

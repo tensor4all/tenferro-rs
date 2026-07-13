@@ -25,6 +25,7 @@ fn core_exec_program_context_rejects_nested_extension_ops() {
         input_slots: vec![],
         output_slots: vec![0],
         n_slots: 1,
+        shape_guards: Vec::new(),
     };
 
     let mut backend = CpuBackend::new();

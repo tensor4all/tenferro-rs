@@ -196,6 +196,7 @@ fn unary_program(op: ExecOp) -> ExecProgram {
         input_slots: vec![0],
         output_slots: vec![1],
         n_slots: 2,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -219,6 +220,7 @@ fn program_with_ops(ops: Vec<ExecOp>) -> ExecProgram {
         input_slots: vec![0],
         output_slots: vec![n_slots - 1],
         n_slots,
+        shape_guards: Vec::new(),
     }
 }
 

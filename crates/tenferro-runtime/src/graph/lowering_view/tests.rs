@@ -152,6 +152,7 @@ fn lowering_view_debug_and_instruction_accessors_are_stable() {
         input_slots: vec![0],
         output_slots: vec![1],
         n_slots: 2,
+        shape_guards: Vec::new(),
     };
     let view = GraphProgramLoweringView::new(&program);
 

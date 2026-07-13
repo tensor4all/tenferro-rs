@@ -38,6 +38,8 @@ pub struct ExecProgram {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub n_slots: usize,
+    #[doc(hidden)]
+    pub shape_guards: Vec<crate::ShapeGuard>,
 }
 
 impl ExecProgram {

@@ -5,7 +5,8 @@ mod solver;
 // INVARIANT: Task 3 defines the solver boundary before the compiler and
 // executor integrations in later tasks consume these crate-private items.
 #[allow(unused_imports)]
-pub(crate) use solver::{discharge, ShapeGuard};
+pub(crate) use solver::discharge;
+pub use solver::ShapeGuard;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ConstraintSource {

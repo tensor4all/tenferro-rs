@@ -156,6 +156,7 @@ fn segmenter_isolates_consecutive_broadcast_multiply_triples() {
         input_slots: vec![0, 1, 2, 3],
         output_slots: vec![6, 9],
         n_slots: 10,
+        shape_guards: Vec::new(),
     };
 
     let segments = segment_exec_program(&program);
@@ -181,6 +182,7 @@ fn segmenter_keeps_broadcast_multiply_chain_when_outputs_are_reused() {
         input_slots: vec![0, 1],
         output_slots: vec![5],
         n_slots: 6,
+        shape_guards: Vec::new(),
     };
 
     let segments = segment_exec_program(&program);
@@ -204,6 +206,7 @@ fn segmenter_isolates_single_broadcast_multiply_pairs() {
         input_slots: vec![0, 1, 2, 3],
         output_slots: vec![5, 7],
         n_slots: 8,
+        shape_guards: Vec::new(),
     };
 
     let segments = segment_exec_program(&program);
@@ -240,6 +243,7 @@ fn segment_use_summary_tracks_program_outputs_and_future_inputs() {
         input_slots: vec![0, 1],
         output_slots: vec![4],
         n_slots: 5,
+        shape_guards: Vec::new(),
     };
 
     let summary = SegmentUseSummary::new(&program);
@@ -264,6 +268,7 @@ fn segmented_eval_executes_single_broadcast_multiply_pairs() {
         input_slots: vec![0, 1, 2, 3],
         output_slots: vec![5, 7],
         n_slots: 8,
+        shape_guards: Vec::new(),
     };
     let mut backend = CpuBackend::new();
     let inputs = vec![
@@ -292,6 +297,7 @@ fn segmented_eval_executes_reused_broadcast_multiply_pair() {
         input_slots: vec![0],
         output_slots: vec![2],
         n_slots: 3,
+        shape_guards: Vec::new(),
     };
     let mut backend = CpuBackend::new();
     let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()];
@@ -311,6 +317,7 @@ fn segmented_eval_executes_single_broadcast_multiply_with_implicit_scalar_other(
         input_slots: vec![0, 1],
         output_slots: vec![3],
         n_slots: 4,
+        shape_guards: Vec::new(),
     };
     let mut backend = CpuBackend::new();
     let inputs = vec![
