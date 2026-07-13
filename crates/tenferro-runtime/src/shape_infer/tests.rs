@@ -194,6 +194,29 @@ fn extension_shape_context_substitutes_reordered_nested_input_expressions() {
 }
 
 #[test]
+fn extension_shape_context_preserves_canonical_local_axis_mapping() {
+    let first = DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    };
+    let second = DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    };
+
+    let inferred = infer_extension_output_meta_with_constraints(
+        &AxisEqualityExtension,
+        &[DType::F64, DType::F64],
+        &[std::slice::from_ref(&first), std::slice::from_ref(&second)],
+    )
+    .unwrap();
+
+    assert_eq!(inferred.constraints.len(), 1);
+    assert_eq!(inferred.constraints[0].lhs, first);
+    assert_eq!(inferred.constraints[0].rhs, second);
+}
+
+#[test]
 fn extension_shape_context_converts_axis_equality_to_runtime_constraint() {
     let first_shape = [DimExpr::InputDim {
         input_idx: 9,
