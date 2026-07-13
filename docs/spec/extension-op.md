@@ -545,24 +545,44 @@ store the arity in their payload and are handled by the core enum directly.
 
 ## 7. Shape and dtype inference
 
-### Signature
+### Trait signature
 
 ```rust
 fn infer_output_meta(
     &self,
     ctx: &mut ExtensionShapeContext<'_>,
-) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    ctx.require_same_shape(0, 1)?;
-    Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-}
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 ```
 
 This method's responsibility mirrors
 `crates/tenferro-runtime/src/shape_infer.rs::infer_output_dtype` and
 `infer_output_shapes` for core ops, packaged as a single method per
-extension. The example is a valid method body for a two-input, one-output
-extension; equivalent runnable examples are kept in the
-`ExtensionShapeContext` rustdoc.
+extension.
+
+### Minimal implementation example
+
+The following method implementation belongs inside an `ExtensionOp` impl; the
+identity and arity methods are omitted because Section 4 specifies them.
+
+```rust
+#[derive(Debug)]
+struct ExampleOp;
+
+impl ExtensionOp for ExampleOp {
+    // `family_id`, payload identity, cloning, downcasting, and arity omitted.
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        ctx.require_same_shape(0, 1)?;
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+}
+```
+
+Complete runnable context examples are kept in the `ExtensionShapeContext`
+rustdoc, and Section 14 points to a complete extension consumer.
 
 ### Contract
 

@@ -1,16 +1,18 @@
 # Dynamic And Symbolic Shape Metadata
 
-**Status:** current design and implementation note for issue #829
+**Status:** current durable design for dynamic/symbolic metadata (#829) and
+extension shape equality constraints (#1370)
 **Related:** `../spec/optimizer-passes.md`, `../spec/ad-contract.md`,
 `../spec/primitive-catalog.md`, `../spec/backend-contract.md`,
 `../spec/extension-op.md`
 
 ## Purpose
 
-This note defines the shape-metadata contract needed for dimensions that are
-not plain constants or input-axis sizes.
+This note defines the shape-metadata architecture needed for dimensions that
+are not plain constants or input-axis sizes, and the graph/compiler lifecycle
+for equality relations declared by extension operations.
 
-The immediate triggers are:
+The immediate metadata triggers are:
 
 - `DynamicTruncate(input, size_scalar, axis)`, whose output extent depends on a
   runtime scalar tensor value.
@@ -21,7 +23,15 @@ Both expose the same root problem: current metadata can describe concrete
 sizes and symbolic arithmetic over tensor axis sizes, but it cannot say whether
 the result is exact, conservative, or derived from runtime tensor values.
 
-This document is the current shape contract for #829 work.
+Issue #1370 adds a related requirement: extensions must be able to declare
+equalities between independently sourced symbolic axes, preserve those
+relations with the graph, and enforce them before backend execution.
+
+This document is the durable architecture description for both concerns. The
+normative extension API and enforcement rules are owned by the
+[`ExtensionOp` shape and dtype inference contract](../spec/extension-op.md#7-shape-and-dtype-inference),
+its [AD API surface](../spec/extension-op.md#10-ad-api-surface), and the
+[`ExtensionOp` failure modes](../spec/extension-op.md#12-failure-modes).
 
 ## Current Model
 
@@ -166,6 +176,10 @@ shape facts by inspecting unrelated op payloads or assuming concrete extents
 from earlier graph-building phases.
 
 ## Extension Shape Equality Lifecycle
+
+This section describes architecture and implementation ownership. The
+normative contract remains in the linked `ExtensionOp` specification sections
+above.
 
 Extension output metadata and extension input relations share one inference
 callback, but they have different owners after inference:
