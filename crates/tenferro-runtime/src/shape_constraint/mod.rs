@@ -173,25 +173,53 @@ impl ConstraintScopeChain {
             .materialized
             .get_or_init(|| {
                 let mut scopes = Vec::new();
-                let mut seen = HashSet::new();
-                self.extend_materialized(&mut scopes, &mut seen);
+                let mut seen_scopes = HashSet::new();
+                let mut seen_nodes = HashSet::new();
+                let mut visited_nodes = 0;
+                self.extend_materialized(
+                    &mut scopes,
+                    &mut seen_scopes,
+                    &mut seen_nodes,
+                    &mut visited_nodes,
+                );
                 scopes
             })
             .as_slice()
     }
 
+    #[cfg(test)]
+    pub(crate) fn materialize_with_visit_count(&self) -> (Vec<Arc<ShapeConstraintScope>>, usize) {
+        let mut scopes = Vec::new();
+        let mut seen_scopes = HashSet::new();
+        let mut seen_nodes = HashSet::new();
+        let mut visited_nodes = 0;
+        self.extend_materialized(
+            &mut scopes,
+            &mut seen_scopes,
+            &mut seen_nodes,
+            &mut visited_nodes,
+        );
+        (scopes, visited_nodes)
+    }
+
     fn extend_materialized(
         &self,
         scopes: &mut Vec<Arc<ShapeConstraintScope>>,
-        seen: &mut HashSet<*const ShapeConstraintScope>,
+        seen_scopes: &mut HashSet<*const ShapeConstraintScope>,
+        seen_nodes: &mut HashSet<*const ConstraintScopeChainNode>,
+        visited_nodes: &mut usize,
     ) {
+        if !seen_nodes.insert(Arc::as_ptr(&self.node)) {
+            return;
+        }
+        *visited_nodes += 1;
         if let Some(scope) = &self.node.scope {
-            if seen.insert(Arc::as_ptr(scope)) {
+            if seen_scopes.insert(Arc::as_ptr(scope)) {
                 scopes.push(Arc::clone(scope));
             }
         }
         for parent in &self.node.parents {
-            parent.extend_materialized(scopes, seen);
+            parent.extend_materialized(scopes, seen_scopes, seen_nodes, visited_nodes);
         }
     }
 }

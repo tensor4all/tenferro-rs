@@ -295,6 +295,7 @@ fn graph_analysis_registrations(
     append_graph_metadata_registrations(
         graph,
         live_values,
+        true,
         &mut known,
         &mut registrations,
         &mut constraints,
@@ -310,6 +311,7 @@ fn graph_analysis_registrations(
 fn append_graph_metadata_registrations(
     graph: &Graph<StdTensorOp>,
     live_values: Option<&HashSet<LocalValueId>>,
+    collect_constraints: bool,
     known: &mut HashMap<ValueKey<StdTensorOp>, TensorMeta>,
     registrations: &mut Vec<(ValueKey<StdTensorOp>, TensorMeta)>,
     constraints: &mut Vec<ScopedShapeConstraint>,
@@ -324,6 +326,7 @@ fn append_graph_metadata_registrations(
         append_graph_metadata_registrations(
             parent,
             None,
+            false,
             known,
             registrations,
             constraints,
@@ -338,6 +341,23 @@ fn append_graph_metadata_registrations(
                 .iter()
                 .any(|output_id| live_values.contains(output_id))
             {
+                continue;
+            }
+        }
+
+        if !collect_constraints {
+            let mut all_outputs_registered = true;
+            for &output_id in &op_node.outputs {
+                let key = graph.values()[output_id].key.clone();
+                let Some(meta) =
+                    lookup_global_metadata(&key).map_err(|err| metadata_error(err.to_string()))?
+                else {
+                    all_outputs_registered = false;
+                    break;
+                };
+                known.insert(key, meta);
+            }
+            if all_outputs_registered {
                 continue;
             }
         }
@@ -369,16 +389,15 @@ fn append_graph_metadata_registrations(
             .iter()
             .map(|&output_id| graph.values()[output_id].key.clone())
             .collect();
-        constraints.extend(
-            inferred
-                .constraints
-                .into_iter()
-                .map(|local| ScopedShapeConstraint {
+        if collect_constraints {
+            constraints.extend(inferred.constraints.into_iter().map(|local| {
+                ScopedShapeConstraint {
                     origins: origin_keys.clone(),
                     inputs: input_keys.clone(),
                     local,
-                }),
-        );
+                }
+            }));
+        }
         for (&output_id, meta) in op_node.outputs.iter().zip(inferred.output_metas) {
             let key = graph.values()[output_id].key.clone();
             // INVARIANT: both owners are required: `known` feeds later local

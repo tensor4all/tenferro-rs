@@ -63,8 +63,12 @@ impl ExtensionOp for ScopedConstraintExtension {
 }
 
 fn constrained(outputs: usize) -> Vec<TracedTensor> {
-    let lhs = TracedTensor::from_vec_col_major(vec![6], vec![1.0_f64; 6]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![3], vec![2.0_f64; 3]).unwrap();
+    constrained_shapes(outputs, 6, 3)
+}
+
+fn constrained_shapes(outputs: usize, lhs_dim: usize, rhs_dim: usize) -> Vec<TracedTensor> {
+    let lhs = TracedTensor::from_vec_col_major(vec![lhs_dim], vec![1.0_f64; lhs_dim]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![rhs_dim], vec![2.0_f64; rhs_dim]).unwrap();
     crate::extension::apply(
         Arc::new(ScopedConstraintExtension { outputs }),
         &[&lhs, &rhs],
@@ -73,17 +77,44 @@ fn constrained(outputs: usize) -> Vec<TracedTensor> {
 }
 
 #[test]
-fn constraint_scope_survives_unary_and_reshape_and_compiles_one_guard() {
+fn graph_compiler_rejects_concrete_scoped_constraint_contradiction() {
+    let output = constrained_shapes(1, 7, 3).remove(0);
+
+    let error = GraphCompiler::new().compile(&output).unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::ShapeConstraintViolation {
+            family: "test.graph-scope",
+            relation: ShapeRelation::Equal,
+            lhs_value: 7,
+            rhs_value: 6,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn graph_compiler_discharges_equal_concrete_scope_without_guard() {
+    let output = constrained_shapes(1, 6, 3).remove(0);
+
+    let program = GraphCompiler::new().compile(&output).unwrap();
+
+    assert!(program.exec.shape_guards.is_empty());
+}
+
+#[test]
+fn constraint_scope_survives_unary_and_reshape_and_discharges_concretely() {
     let extension = constrained(1).remove(0);
     let output = extension.neg().unwrap().reshape(&[6]).unwrap();
 
     assert_eq!(output.constraint_scopes.materialize().len(), 1);
     let program = GraphCompiler::new().compile(&output).unwrap();
-    assert_eq!(program.exec.shape_guards.len(), 1);
+    assert!(program.exec.shape_guards.is_empty());
 }
 
 #[test]
-fn constraint_scope_shared_unary_branches_binary_merge_without_duplication() {
+fn constraint_scope_shared_unary_branches_merge_and_discharge_without_duplication() {
     let extension = constrained(1).remove(0);
     let left = extension.neg().unwrap();
     let right = extension.neg().unwrap();
@@ -91,14 +122,21 @@ fn constraint_scope_shared_unary_branches_binary_merge_without_duplication() {
 
     assert_eq!(output.constraint_scopes.materialize().len(), 1);
     let program = GraphCompiler::new().compile(&output).unwrap();
-    assert_eq!(program.exec.shape_guards.len(), 1);
+    assert!(program.exec.shape_guards.is_empty());
 }
 
 #[test]
 fn constraint_scope_multi_output_keeps_other_live_and_prunes_all_dead() {
-    let outputs = constrained(2);
-    let live_program = GraphCompiler::new().compile(&outputs[1]).unwrap();
-    assert_eq!(live_program.exec.shape_guards.len(), 1);
+    let outputs = constrained_shapes(2, 7, 3);
+    assert!(matches!(
+        GraphCompiler::new().compile(&outputs[1]),
+        Err(Error::ShapeConstraintViolation {
+            family: "test.graph-scope",
+            lhs_value: 7,
+            rhs_value: 6,
+            ..
+        })
+    ));
 
     let mut unrelated = TracedTensor::from_vec_col_major(vec![1], vec![9.0_f64]).unwrap();
     unrelated.constraint_scopes =

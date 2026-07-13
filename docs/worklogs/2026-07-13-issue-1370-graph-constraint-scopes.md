@@ -20,6 +20,10 @@ constraints to real extension families or transfer scopes through
 
 - One graph analysis walk registers metadata and records extension-local
   constraints with every output origin and the ordered graph input keys.
+  Parent graphs are traversed only for metadata dependencies: their registered
+  output metadata is reused, and only operations owned by the analyzed root
+  contribute to its local constraint scope. Parent constraint scopes arrive
+  exclusively through the traced input chain.
 - Traced tensors carry an immutable `Arc`-backed constraint-scope chain.
   Materialization uses pointer-identity deduplication; semantic deduplication
   remains in the normalized equality solver after lowering.
@@ -27,12 +31,18 @@ constraints to real extension families or transfer scopes through
   value keys to SSA slots once, and prunes a scope only when none of its origin
   keys is live.
 - Scoped `InputDim` expressions are substituted through the complete
-  pre-optimizer symbolic slot-shape table. Executable instruction metadata
-  continues to use a separate concrete shape/extent table. Extension inference
-  runs once against op-local placeholders and its results are explicitly
-  substituted into both tables, so global symbolic indices cannot leak into
-  instruction-local extent resolution. Missing keys, slots, and axes return
-  typed `ShapeConstraintEvaluation` errors.
+  pre-optimizer slot-shape table. `GraphCompiler` supplies its concrete
+  specialized descriptor shapes, so equal relations disappear and concrete
+  contradictions fail before execution. The low-level compiler can still
+  supply symbolic shapes and retain runtime guards. Executable instruction
+  metadata continues to use its concrete shape/extent table. Extension
+  inference runs once against op-local placeholders and its results are
+  explicitly substituted into both tables, so global symbolic indices cannot
+  leak into instruction-local extent resolution. Missing keys, slots, and axes
+  return typed `ShapeConstraintEvaluation` errors.
+- Constraint-chain materialization deduplicates both scope pointers and chain
+  node pointers. Shared diamonds therefore visit each unique chain node once
+  rather than once per path.
 - Compiler-inferred and graph-scoped constraints share the same provenance,
   discharge, normalization, and cache-identity pipeline.
 - `TracedTensorParts` deliberately constructs an empty constraint chain in this
@@ -51,6 +61,14 @@ an XLA tutorial regression: an einsum output's global `InputDim` index was
 misread as instruction-local and propagated an unknown extent into `Abs`.
 The focused tutorial test stayed red until the concrete and symbolic tables
 were separated at the inference boundary described above.
+
+Review follow-up RED tests exposed three remaining issues. Extension and
+expanded-graph children replayed the counted ancestor inference callback
+(`1 -> 2`) before graph-local collection was enforced. Specialized graph
+compilation accepted `7 == 2 * 3` with a guard and retained a guard for
+`6 == 2 * 3` until it used concrete descriptor shapes. A depth-12 shared
+constraint-chain diamond visited 8,191 nodes instead of the 13 unique nodes
+until chain-node identity was tracked.
 
 ## Residual risk
 

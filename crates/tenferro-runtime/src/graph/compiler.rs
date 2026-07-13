@@ -468,8 +468,7 @@ impl GraphCompiler {
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
         let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
         let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        let mut analysis_input_shapes = Vec::with_capacity(graph.inputs.len());
-        for (input_index, key) in graph.inputs.iter().enumerate() {
+        for key in &graph.inputs {
             let ValueKey::Input(input_key) = key else {
                 return Err(Error::Internal(
                     "expected Input key in graph inputs".to_string(),
@@ -478,7 +477,6 @@ impl GraphCompiler {
             let descriptor = descriptor_for_input(input_key, binding_specs, default_inputs)?;
             input_dtypes.push(descriptor.dtype);
             input_shapes.push(DimExpr::from_concrete(&descriptor.shape));
-            analysis_input_shapes.push(DimExpr::input_shape(input_index, descriptor.shape.len()));
             descriptors.push(GraphProgramInput::new(
                 descriptor.key,
                 descriptor.dtype,
@@ -494,7 +492,7 @@ impl GraphCompiler {
             &input_shapes,
             self.compiler_options,
             &scoped_constraints,
-            &analysis_input_shapes,
+            &input_shapes,
         )?;
         let exec = self.get_or_compile(exec);
         Ok(GraphProgram::new(exec, descriptors))

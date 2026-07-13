@@ -58,3 +58,19 @@ fn constraint_scope_materialized_round_trip_preserves_pointer_identity_and_order
     assert!(Arc::ptr_eq(&materialized[0], &first));
     assert!(Arc::ptr_eq(&materialized[1], &second));
 }
+
+#[test]
+fn constraint_scope_deep_shared_dag_visits_each_chain_node_once() {
+    const DEPTH: usize = 12;
+    let shared = scope(50);
+    let mut chain = ConstraintScopeChain::with_scope(Arc::clone(&shared), []);
+    for _ in 0..DEPTH {
+        chain = ConstraintScopeChain::merge([&chain, &chain]);
+    }
+
+    let (materialized, visited_nodes) = chain.materialize_with_visit_count();
+
+    assert_eq!(materialized.len(), 1);
+    assert!(Arc::ptr_eq(&materialized[0], &shared));
+    assert_eq!(visited_nodes, DEPTH + 1);
+}

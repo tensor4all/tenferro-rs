@@ -254,3 +254,68 @@ fn constraint_scope_analysis_invokes_extension_inference_once_and_attaches_one_s
         ]
     );
 }
+
+fn counted_constraint_output(calls: &Arc<AtomicUsize>) -> TracedTensor {
+    let lhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3], vec![2.0_f64; 3]).unwrap();
+    apply(
+        Arc::new(CountedConstraintExtension {
+            calls: Arc::clone(calls),
+        }),
+        &[&lhs, &rhs],
+    )
+    .unwrap()
+    .remove(0)
+}
+
+fn reachable_constraint_count(tensor: &TracedTensor) -> usize {
+    tensor
+        .constraint_scopes
+        .as_slice()
+        .iter()
+        .map(|scope| scope.constraints().len())
+        .sum()
+}
+
+#[test]
+fn graph_local_constraint_scope_extension_child_does_not_reinfer_or_duplicate_ancestor() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ancestor = counted_constraint_output(&calls);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+    let child = apply(
+        Arc::new(TestExtension {
+            input_count: 1,
+            output_count: 1,
+            inferred_outputs: 1,
+        }),
+        &[&ancestor],
+    )
+    .unwrap()
+    .remove(0);
+
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(child.constraint_scopes.materialize().len(), 1);
+    assert_eq!(reachable_constraint_count(&child), 1);
+}
+
+#[test]
+fn graph_local_constraint_scope_expanded_child_does_not_reinfer_or_duplicate_ancestor() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let ancestor = counted_constraint_output(&calls);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+    let child = apply_expanded_graph(
+        &[&ancestor],
+        vec![(DType::F64, vec![SymDim::from(3)])],
+        |builder, inputs| {
+            Ok(builder.add_operation(StdTensorOp::Neg, inputs.to_vec(), OperationRole::Primary))
+        },
+    )
+    .unwrap()
+    .remove(0);
+
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(child.constraint_scopes.materialize().len(), 1);
+    assert_eq!(reachable_constraint_count(&child), 1);
+}
