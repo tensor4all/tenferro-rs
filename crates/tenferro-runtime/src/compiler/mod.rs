@@ -33,6 +33,7 @@ pub fn compile_std_to_exec_with_options(
     input_shapes: &[Vec<DimExpr>],
     options: CompilerOptions,
 ) -> Result<ExecProgram> {
+    validate_unique_output_producers(prog)?;
     if prog.input_slots.len() != input_dtypes.len() {
         return Err(invalid_compiled_graph(format!(
             "input dtype count {} must match input slot count {}",
@@ -51,7 +52,8 @@ pub fn compile_std_to_exec_with_options(
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
     let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; prog.n_slots];
-    let mut pending_constraints: Vec<(usize, Vec<LocalShapeConstraint>)> = Vec::new();
+    let mut pending_constraints: Vec<(Vec<usize>, &'static str, Vec<LocalShapeConstraint>)> =
+        Vec::new();
 
     for (index, &slot) in prog.input_slots.iter().enumerate() {
         slot_dtypes[slot] = Some(input_dtypes[index]);
@@ -102,10 +104,12 @@ pub fn compile_std_to_exec_with_options(
                         &input_shapes_refs,
                     )?;
                     let metas = inferred.output_metas;
-                    if let Some(origin_slot) = instr.outputs.first().copied() {
-                        if !inferred.constraints.is_empty() {
-                            pending_constraints.push((origin_slot, inferred.constraints));
-                        }
+                    if !inferred.constraints.is_empty() {
+                        pending_constraints.push((
+                            instr.outputs.clone(),
+                            ext.family_id(),
+                            inferred.constraints,
+                        ));
                     }
                     if metas.len() != instr.outputs.len() {
                         return Err(invalid_compiled_graph(format!(
@@ -187,16 +191,22 @@ pub fn compile_std_to_exec_with_options(
         shape_guards: Vec::new(),
     };
     optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer)?;
-    let producer_by_slot = producer_index_by_slot(&program)?;
     let mut constraints = Vec::new();
-    for (origin_slot, local_constraints) in pending_constraints {
-        let instruction_index = producer_by_slot
-            .get(origin_slot)
-            .copied()
-            .flatten()
+    for (origin_output_slots, family_id, local_constraints) in pending_constraints {
+        let instruction_index = program
+            .instructions
+            .iter()
+            .position(|instruction| {
+                instruction.output_slots == origin_output_slots
+                    && matches!(
+                        &instruction.op,
+                        ExecOp::Extension(extension) if extension.family_id() == family_id
+                    )
+            })
             .ok_or_else(|| {
                 invalid_compiled_graph(format!(
-                    "extension constraint origin with output slot {origin_slot} \
+                    "extension constraint origin for family {family_id:?} with output slots \
+                     {origin_output_slots:?} \
                      is absent from the final instruction stream"
                 ))
             })?;
@@ -217,6 +227,27 @@ fn invalid_compiled_graph(message: impl Into<String>) -> Error {
 
 fn missing_slot_meta(kind: &'static str, slot: usize) -> Error {
     invalid_compiled_graph(format!("missing {kind} for slot {slot}"))
+}
+
+fn validate_unique_output_producers(prog: &CompiledProgram<StdTensorOp>) -> Result<()> {
+    let mut producer_by_slot = vec![None; prog.n_slots];
+    for (instruction_index, instruction) in prog.instructions.iter().enumerate() {
+        for &slot in &instruction.outputs {
+            let Some(producer) = producer_by_slot.get_mut(slot) else {
+                return Err(invalid_compiled_graph(format!(
+                    "output slot {slot} is outside slot table of length {}",
+                    prog.n_slots
+                )));
+            };
+            if let Some(previous_instruction_index) = producer.replace(instruction_index) {
+                return Err(invalid_compiled_graph(format!(
+                    "output slot {slot} has duplicate producers at instructions \
+                     {previous_instruction_index} and {instruction_index}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn exact_extents_from_shape(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {

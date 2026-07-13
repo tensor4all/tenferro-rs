@@ -12,6 +12,7 @@ use crate::{Error, ShapeGuard};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConstraintFixture {
     ScaledAxisEquality,
+    ScaledAxisEqualityMultiOutput,
     WithoutOutput,
     InvalidAxis,
 }
@@ -20,6 +21,9 @@ impl ExtensionOp for ConstraintFixture {
     fn family_id(&self) -> &'static str {
         match self {
             Self::ScaledAxisEquality => "test.compiler-scaled-axis-equality.v1",
+            Self::ScaledAxisEqualityMultiOutput => {
+                "test.compiler-scaled-axis-equality-multi-output.v1"
+            }
             Self::WithoutOutput => "test.compiler-constraint-without-output.v1",
             Self::InvalidAxis => "test.compiler-invalid-constraint-axis.v1",
         }
@@ -28,8 +32,9 @@ impl ExtensionOp for ConstraintFixture {
     fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
         hasher.write_u8(match self {
             Self::ScaledAxisEquality => 0,
-            Self::WithoutOutput => 1,
-            Self::InvalidAxis => 2,
+            Self::ScaledAxisEqualityMultiOutput => 1,
+            Self::WithoutOutput => 2,
+            Self::InvalidAxis => 3,
         });
     }
 
@@ -47,13 +52,19 @@ impl ExtensionOp for ConstraintFixture {
 
     fn input_count(&self) -> usize {
         match self {
-            Self::ScaledAxisEquality | Self::WithoutOutput => 2,
+            Self::ScaledAxisEquality
+            | Self::ScaledAxisEqualityMultiOutput
+            | Self::WithoutOutput => 2,
             Self::InvalidAxis => 1,
         }
     }
 
     fn output_count(&self) -> usize {
-        usize::from(!matches!(self, Self::WithoutOutput))
+        match self {
+            Self::ScaledAxisEqualityMultiOutput => 2,
+            Self::WithoutOutput => 0,
+            Self::ScaledAxisEquality | Self::InvalidAxis => 1,
+        }
     }
 
     fn infer_output_meta(
@@ -61,11 +72,15 @@ impl ExtensionOp for ConstraintFixture {
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         match self {
-            Self::ScaledAxisEquality => {
+            Self::ScaledAxisEquality | Self::ScaledAxisEqualityMultiOutput => {
                 let lhs = ctx.input_axis(0, 0)?;
                 let rhs = ctx.input_axis(1, 0)?;
                 ctx.require_equal(lhs, rhs * 2)?;
-                Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+                let meta = (ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec());
+                Ok(match self {
+                    Self::ScaledAxisEqualityMultiOutput => vec![meta.clone(), meta],
+                    _ => vec![meta],
+                })
             }
             Self::WithoutOutput => {
                 ctx.require_axes_equal((0, 0), (1, 0))?;
@@ -244,6 +259,61 @@ fn compiler_shape_guard_provenance_uses_final_instruction_indices() {
 }
 
 #[test]
+fn compiler_preserves_multi_output_constraint_when_first_output_is_unused() {
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(
+            StdTensorOp::Extension(Arc::new(ConstraintFixture::ScaledAxisEqualityMultiOutput)),
+            vec![0, 1],
+            vec![2, 3],
+        )],
+        input_slots: vec![0, 1],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(exec.instructions.len(), 1);
+    assert_eq!(exec.instructions[0].output_slots, vec![2, 3]);
+    assert_eq!(exec.shape_guards.len(), 1);
+    assert_eq!(exec.shape_guards[0].source.instruction_index, Some(0));
+}
+
+#[test]
+fn compiler_rejects_duplicate_output_slot_producers_before_optimization() {
+    let program = CompiledProgram {
+        instructions: vec![
+            make_std_instr(StdTensorOp::Neg, vec![0], vec![1]),
+            make_std_instr(StdTensorOp::Neg, vec![0], vec![1]),
+        ],
+        input_slots: vec![0],
+        output_slots: vec![1],
+        n_slots: 2,
+    };
+
+    assert!(matches!(
+        compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]),
+        Err(Error::InvalidCompiledGraph { ref message })
+            if message.contains("output slot 1")
+                && message.contains("instructions 0 and 1")
+    ));
+}
+
+#[test]
 fn compiler_rejects_constraint_origin_eliminated_from_final_stream() {
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
@@ -273,7 +343,7 @@ fn compiler_rejects_constraint_origin_eliminated_from_final_stream() {
         ),
         Err(Error::InvalidCompiledGraph { ref message })
             if message.contains("absent from the final instruction stream")
-                && message.contains("slot 2")
+                && message.contains("output slots [2]")
     ));
 }
 

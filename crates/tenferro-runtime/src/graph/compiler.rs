@@ -438,7 +438,9 @@ impl GraphCompiler {
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
         let key = compute_cache_key(&exec);
         if let Some(cached) = self.compile_cache.get(&key) {
-            return cached.clone();
+            let mut current = cached.clone();
+            current.shape_guards = exec.shape_guards;
+            return current;
         }
         self.compile_cache.put(key, exec.clone());
         exec
@@ -617,14 +619,58 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shape_constraint::ConstraintSource;
+    use crate::ShapeGuard;
     use std::any::Any;
     use std::hash::Hasher;
     use std::sync::Arc;
-    use tenferro_ops::{ext_op::ExtensionOp, SymDim};
+    use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation, SymDim};
     use tenferro_tensor::{
         Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
         TypedTensor,
     };
+
+    #[test]
+    fn compile_cache_hit_preserves_current_guard_provenance() {
+        let mut compiler = GraphCompiler::new();
+        let mut first = ExecProgram {
+            instructions: Vec::new(),
+            input_slots: vec![0],
+            output_slots: vec![0],
+            n_slots: 1,
+            shape_guards: vec![test_guard("example.first.v1", 3)],
+        };
+        let mut second = first.clone();
+        second.shape_guards = vec![test_guard("example.second.v1", 9)];
+
+        first = compiler.get_or_compile(first);
+        let cached = compiler.get_or_compile(second);
+
+        assert_eq!(compiler.compile_cache_len(), 1);
+        assert_eq!(first.shape_guards[0].source.family_id, "example.first.v1");
+        assert_eq!(
+            cached.shape_guards[0].source,
+            ConstraintSource {
+                family_id: "example.second.v1",
+                instruction_index: Some(9),
+            }
+        );
+    }
+
+    fn test_guard(family_id: &'static str, instruction_index: usize) -> ShapeGuard {
+        ShapeGuard {
+            source: ConstraintSource {
+                family_id,
+                instruction_index: Some(instruction_index),
+            },
+            relation: ShapeRelation::Equal,
+            lhs: DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            rhs: DimExpr::Const(2),
+        }
+    }
 
     #[test]
     fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
