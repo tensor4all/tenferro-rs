@@ -537,6 +537,99 @@ fn test_scalar_div_rem_pow_match_cpu() {
             assert_tensor_close(&actual.unwrap(), &expected, 0.0);
         }
     }
+
+    for (empty, scalar) in [
+        (tensor_f32(vec![0], vec![]), tensor_f32(vec![], vec![2.0])),
+        (tensor_f64(vec![0], vec![]), tensor_f64(vec![], vec![2.0])),
+        (tensor_i32(vec![0], vec![]), tensor_i32(vec![], vec![2])),
+        (tensor_i64(vec![0], vec![]), tensor_i64(vec![], vec![2])),
+    ] {
+        let gpu_empty = upload(&gpu, &empty);
+        let gpu_scalar = upload(&gpu, &scalar);
+        for (expected, actual) in [
+            (
+                cpu.pow(&scalar, &empty).unwrap(),
+                gpu.pow(&gpu_scalar, &gpu_empty).unwrap(),
+            ),
+            (
+                cpu.pow(&empty, &scalar).unwrap(),
+                gpu.pow(&gpu_empty, &gpu_scalar).unwrap(),
+            ),
+        ] {
+            assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+            assert_eq!(actual.shape(), &[0]);
+        }
+    }
+
+    for (base, exponent) in [
+        (
+            tensor_i32(vec![2], vec![2, 3]),
+            tensor_i32(vec![], vec![-1]),
+        ),
+        (
+            tensor_i64(vec![2], vec![2, 3]),
+            tensor_i64(vec![], vec![-1]),
+        ),
+        (
+            tensor_i32(vec![], vec![2]),
+            tensor_i32(vec![2], vec![2, -1]),
+        ),
+        (
+            tensor_i64(vec![], vec![2]),
+            tensor_i64(vec![2], vec![2, -1]),
+        ),
+    ] {
+        let dtype = base.dtype();
+        let gpu_base = upload(&gpu, &base);
+        let gpu_exponent = upload(&gpu, &exponent);
+        assert!(matches!(
+            gpu.pow(&gpu_base, &gpu_exponent),
+            Err(crate::Error::NegativeIntegerExponent { op: "pow", dtype: actual })
+                if actual == dtype
+        ));
+    }
+
+    let unequal_lhs = upload(&gpu, &tensor_f32(vec![2], vec![2.0, 3.0]));
+    let unequal_rhs = upload(&gpu, &tensor_f32(vec![3], vec![2.0, 3.0, 4.0]));
+    assert!(matches!(
+        gpu.pow(&unequal_lhs, &unequal_rhs),
+        Err(crate::Error::ShapeMismatch { op: "pow", lhs, rhs })
+            if lhs == vec![2] && rhs == vec![3]
+    ));
+
+    for (tensor, scalar) in [
+        (
+            tensor_f32(
+                vec![6],
+                vec![-0.0, 0.0, f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -1.0],
+            ),
+            tensor_f32(vec![], vec![0.5]),
+        ),
+        (
+            tensor_f64(
+                vec![6],
+                vec![-0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -1.0],
+            ),
+            tensor_f64(vec![], vec![0.5]),
+        ),
+    ] {
+        let gpu_tensor = upload(&gpu, &tensor);
+        let gpu_scalar = upload(&gpu, &scalar);
+        for (label, expected, actual) in [
+            (
+                "scalar exponent pow",
+                cpu.pow(&tensor, &scalar).unwrap(),
+                gpu.pow(&gpu_tensor, &gpu_scalar).unwrap(),
+            ),
+            (
+                "scalar base pow",
+                cpu.pow(&scalar, &tensor).unwrap(),
+                gpu.pow(&gpu_scalar, &gpu_tensor).unwrap(),
+            ),
+        ] {
+            assert_float_classes_and_zero_signs_match(label, &download(&gpu, &actual), &expected);
+        }
+    }
 }
 
 #[test]
