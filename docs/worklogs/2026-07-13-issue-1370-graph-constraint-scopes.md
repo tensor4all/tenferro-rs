@@ -80,6 +80,16 @@ the unconditional parent recursion made both totals exactly 16 graphs and 16
 operations. A raw unregistered multi-output parent test covers the on-demand
 fallback and verifies both sibling outputs remain available to the child.
 
+The quality-review follow-up bounded two remaining repeated-work paths.
+Compiling two outputs that shared one constraint scope cloned that scope twice;
+borrowing each chain's cached slice and cloning only after pointer dedup reduced
+the measured count to one. Metadata fallback rebuilt its direct-parent owner
+lookup eight times for eight distinct missing inputs. Each graph-analysis
+invocation now lazily builds one value-key-to-parent index on its first miss,
+visiting the eight parent values once, while the registered-input fast path
+builds no index. Test-only clone and lookup counters remain in module-local
+support files and are excluded from non-test builds.
+
 ## Residual risk
 
 This stage preserves constraints through ordinary traced composition and

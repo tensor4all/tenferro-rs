@@ -7,9 +7,6 @@ use tenferro_ops::{dim_expr::DimExpr, std_tensor_op::StdTensorOp, ShapeRelation}
 
 mod solver;
 
-// INVARIANT: Task 3 defines the solver boundary before the compiler and
-// executor integrations in later tasks consume these crate-private items.
-#[allow(unused_imports)]
 pub(crate) use solver::discharge;
 pub use solver::ShapeGuard;
 
@@ -20,9 +17,6 @@ pub(crate) struct ConstraintSource {
 }
 
 impl ConstraintSource {
-    // INVARIANT: graph recording assigns instruction provenance after local
-    // inference; the transition remains unused until that pipeline stage.
-    #[allow(dead_code)]
     pub(crate) fn with_instruction(mut self, instruction_index: usize) -> Self {
         self.instruction_index = Some(instruction_index);
         self
@@ -164,6 +158,7 @@ impl ConstraintScopeChain {
         chain
     }
 
+    #[cfg(test)]
     pub(crate) fn materialize(&self) -> Vec<Arc<ShapeConstraintScope>> {
         self.as_slice().to_vec()
     }

@@ -126,6 +126,19 @@ fn constraint_scope_shared_unary_branches_merge_and_discharge_without_duplicatio
 }
 
 #[test]
+fn compile_many_clones_shared_constraint_scope_once() {
+    let outputs = constrained(2);
+    let mut compiler = GraphCompiler::new();
+
+    let (program, scope_clones) = super::test_support::with_constraint_scope_clone_count(|| {
+        compiler.compile_many(&[&outputs[0], &outputs[1]])
+    });
+
+    assert_eq!(program.unwrap().output_count(), 2);
+    assert_eq!(scope_clones, 1);
+}
+
+#[test]
 fn constraint_scope_multi_output_keeps_other_live_and_prunes_all_dead() {
     let outputs = constrained_shapes(2, 7, 3);
     assert!(matches!(

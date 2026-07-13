@@ -140,12 +140,8 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
         });
     }
 
-    // Build the per-input dtype / shape slices the extension's
-    // `infer_output_meta` wants. Symbolic-shape inputs (shape_hint =
-    // None) use per-axis TensorAxis symbolic dims keyed by the input
-    // TracedTensor's id so downstream composition still resolves
-    // correctly via tenferro-internal-ops's SymDim API.
-    // Build the graph that carries the Extension op.
+    // Build the carrier graph first; the graph-analysis pass below resolves
+    // registered input metadata and invokes canonical extension inference once.
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     for input in inputs {
         builder.add_parent(input.graph.clone());

@@ -424,3 +424,73 @@ fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
         );
     }
 }
+
+#[test]
+fn parent_owner_index_is_built_once_for_many_parents_and_missing_inputs() {
+    const PARENTS: usize = 8;
+    let mut inputs = Vec::new();
+    let mut parents = Vec::new();
+    let mut parent_outputs = Vec::new();
+    for _ in 0..PARENTS {
+        let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+        let mut builder = GraphBuilder::new();
+        builder.add_parent(Arc::clone(&input.graph));
+        let output = builder.add_operation(
+            StdTensorOp::Neg,
+            vec![ValueRef::External(
+                input.graph.values()[input.val].key.clone(),
+            )],
+            OperationRole::Primary,
+        )[0];
+        builder.set_outputs(vec![output]);
+        let parent = Arc::new(builder.build());
+        parent_outputs.push(parent.values()[output].key.clone());
+        parents.push(parent);
+        inputs.push(input);
+    }
+
+    let mut root_builder = GraphBuilder::new();
+    for parent in &parents {
+        root_builder.add_parent(Arc::clone(parent));
+    }
+    let mut root_outputs = Vec::new();
+    for parent_output in parent_outputs {
+        root_outputs.extend(root_builder.add_operation(
+            StdTensorOp::Neg,
+            vec![ValueRef::External(parent_output)],
+            OperationRole::Primary,
+        ));
+    }
+    root_builder.set_outputs(root_outputs);
+    let root = root_builder.build();
+
+    let (analysis, index_builds, parent_value_visits) =
+        crate::metadata::test_support::with_parent_owner_index_count(|| {
+            crate::metadata::register_scoped_graph_analysis(&root, [])
+        });
+
+    analysis.unwrap();
+    assert_eq!(index_builds, 1);
+    assert_eq!(parent_value_visits, PARENTS);
+}
+
+#[test]
+fn parent_owner_index_is_not_built_for_registered_inputs() {
+    let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let (output, index_builds, parent_value_visits) =
+        crate::metadata::test_support::with_parent_owner_index_count(|| {
+            apply(
+                Arc::new(TestExtension {
+                    input_count: 1,
+                    output_count: 1,
+                    inferred_outputs: 1,
+                }),
+                &[&input],
+            )
+        });
+
+    output.unwrap();
+    assert_eq!(index_builds, 0);
+    assert_eq!(parent_value_visits, 0);
+}

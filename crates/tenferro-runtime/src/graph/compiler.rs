@@ -396,9 +396,11 @@ impl GraphCompiler {
         let mut constraint_scopes = Vec::new();
         let mut seen_constraint_scopes = std::collections::HashSet::new();
         for output in outputs {
-            for scope in output.constraint_scopes.materialize() {
-                if seen_constraint_scopes.insert(Arc::as_ptr(&scope)) {
-                    constraint_scopes.push(scope);
+            for scope in output.constraint_scopes.as_slice() {
+                if seen_constraint_scopes.insert(Arc::as_ptr(scope)) {
+                    #[cfg(test)]
+                    test_support::record_constraint_scope_clones(1);
+                    constraint_scopes.push(Arc::clone(scope));
                 }
             }
         }
@@ -681,6 +683,9 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
 
 #[cfg(test)]
 mod constraint_scope_tests;
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests {

@@ -326,6 +326,7 @@ fn append_graph_metadata_registrations(
     }
     #[cfg(test)]
     test_support::record_graph_visit();
+    let mut parent_owner_index = None;
 
     for op_node in graph.operations() {
         #[cfg(test)]
@@ -383,16 +384,26 @@ fn append_graph_metadata_registrations(
             // Traced construction normally keeps parent metadata scopes alive,
             // so this is only the compatibility path for manually assembled or
             // otherwise unregistered parent graphs.
-            let Some(parent) = graph
-                .parents()
-                .iter()
-                .find(|parent| parent.values().iter().any(|value| value.key == *key))
-            else {
+            let owner_index = parent_owner_index.get_or_insert_with(|| {
+                #[cfg(test)]
+                test_support::record_parent_owner_index_build();
+                let mut owners = HashMap::new();
+                for (parent_index, parent) in graph.parents().iter().enumerate() {
+                    for value in parent.values() {
+                        #[cfg(test)]
+                        test_support::record_parent_value_visit();
+                        owners.entry(value.key.clone()).or_insert(parent_index);
+                    }
+                }
+                owners
+            });
+            let Some(&parent_index) = owner_index.get(key) else {
                 return Err(metadata_error(format!(
                     "missing input metadata for {:?}",
                     key
                 )));
             };
+            let parent = &graph.parents()[parent_index];
             append_graph_metadata_registrations(
                 parent,
                 None,
