@@ -40,8 +40,8 @@ pub struct ExecProgram {
     pub n_slots: usize,
     /// Normalized symbolic shape obligations retained during compilation.
     ///
-    /// Guard internals are opaque. Execution validates them before backend
-    /// work once runtime guard enforcement is enabled.
+    /// Guard internals are opaque. Execution validates them before backend,
+    /// host, or extension work.
     ///
     /// # Examples
     ///
@@ -404,13 +404,7 @@ pub(crate) fn initialize_exec_slots_in<'input>(
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
 ) -> Result<()> {
-    if inputs.len() != program.input_slots.len() {
-        return Err(invalid_compiled_graph(format!(
-            "initialize_exec_slots_in: expected {} inputs, got {}",
-            program.input_slots.len(),
-            inputs.len()
-        )));
-    }
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
     slots.clear();
     slots.resize_with(program.n_slots, || None);
     for (i, input) in inputs.into_iter().enumerate() {
@@ -603,6 +597,16 @@ pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> R
     Ok(())
 }
 
+pub(crate) fn validate_shape_guards(
+    program: &ExecProgram,
+    input_shapes: &[&[usize]],
+) -> Result<()> {
+    for guard in &program.shape_guards {
+        guard.evaluate(input_shapes)?;
+    }
+    Ok(())
+}
+
 /// Evaluate an [`ExecProgram`] with caller-owned backend runtime cache state.
 pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
     backend: &mut B,
@@ -610,6 +614,9 @@ pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
     inputs: Vec<Tensor>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
+    let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+    validate_shape_guards(program, &input_shapes)?;
     let mut slots = Vec::new();
     crate::segment::eval_exec_segmented_with_cache_and_workspace(
         backend,
@@ -637,6 +644,9 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
     slots: &mut Vec<Option<ExecSlot<'static>>>,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
+    let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+    validate_shape_guards(program, &input_shapes)?;
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace(
         backend,
@@ -645,6 +655,16 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
         slots,
         extension_executor,
     )
+}
+
+fn validate_exec_input_count(program: &ExecProgram, actual: usize, caller: &str) -> Result<()> {
+    let expected = program.input_slots.len();
+    if actual != expected {
+        return Err(invalid_compiled_graph(format!(
+            "{caller}: expected {expected} inputs, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<

@@ -632,6 +632,8 @@ mod tests {
 
     #[test]
     fn compile_cache_hit_preserves_current_guard_provenance() {
+        use tenferro_cpu::CpuBackend;
+
         let mut compiler = GraphCompiler::new();
         let mut first = ExecProgram {
             instructions: Vec::new(),
@@ -655,6 +657,24 @@ mod tests {
                 instruction_index: Some(9),
             }
         );
+
+        let mut executor = crate::GraphExecutor::new(CpuBackend::new());
+        let error = executor
+            .eval_exec_ir(
+                &cached,
+                vec![Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap()],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::ShapeConstraintViolation {
+                family: "example.second.v1",
+                instruction_index: Some(9),
+                lhs_value: 3,
+                rhs_value: 2,
+                ..
+            }
+        ));
     }
 
     fn test_guard(family_id: &'static str, instruction_index: usize) -> ShapeGuard {

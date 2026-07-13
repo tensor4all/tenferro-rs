@@ -18,7 +18,11 @@ use crate::traced::TracedTensor;
 ///
 /// A graph executor owns backend execution state only: backend runtime caches,
 /// extension runtime state, and reusable execution workspace. Compilation
-/// state lives in [`GraphCompiler`](super::GraphCompiler).
+/// state lives in [`GraphCompiler`](super::GraphCompiler). Retained symbolic
+/// shape guards are checked against ordered input shapes before any segmented,
+/// backend, host, or extension dispatch. Failures are returned as typed
+/// [`Error::ShapeConstraintViolation`] or [`Error::ShapeConstraintEvaluation`]
+/// values.
 ///
 /// # Examples
 ///
@@ -587,6 +591,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>> {
         validate_exec_input_count(program, inputs.len())?;
+        let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+        crate::exec::validate_shape_guards(program, &input_shapes)?;
         crate::segment::eval_exec_segmented_with_cache_and_workspace(
             &mut self.backend,
             program,
@@ -621,6 +627,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<Tensor>,
     ) -> Result<Vec<TensorValue>> {
         validate_exec_input_count(program, inputs.len())?;
+        let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+        crate::exec::validate_shape_guards(program, &input_shapes)?;
         let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
         crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
             &mut self.backend,
@@ -696,6 +704,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<ExecSlot<'a>>,
     ) -> Result<Vec<Tensor>> {
         validate_exec_input_count(program, inputs.len())?;
+        let input_shapes: Vec<&[usize]> = inputs.iter().map(ExecSlot::shape).collect();
+        crate::exec::validate_shape_guards(program, &input_shapes)?;
         let mut slot_workspace = Vec::with_capacity(self.borrowed_slot_workspace_capacity);
         let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
             &mut self.backend,
@@ -715,6 +725,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         inputs: Vec<ExecSlot<'a>>,
     ) -> Result<Vec<TensorValue>> {
         validate_exec_input_count(program, inputs.len())?;
+        let input_shapes: Vec<&[usize]> = inputs.iter().map(ExecSlot::shape).collect();
+        crate::exec::validate_shape_guards(program, &input_shapes)?;
         let mut slot_workspace = Vec::with_capacity(self.borrowed_slot_workspace_capacity);
         let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
             &mut self.backend,

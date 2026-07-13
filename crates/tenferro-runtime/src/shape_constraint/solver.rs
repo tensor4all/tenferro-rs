@@ -1,7 +1,3 @@
-// INVARIANT: Task 3 intentionally lands the solver before later compiler and
-// executor tasks connect its crate-private entry points to production flow.
-#![allow(dead_code)]
-
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
