@@ -11,9 +11,59 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tenferro_ops::ShapeRelation;
 use tenferro_tensor::DType;
 
 static NEXT_CONTEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Typed reason that a symbolic shape constraint could not be evaluated.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ShapeConstraintEvalError;
+///
+/// let cause = ShapeConstraintEvalError::MissingInput {
+///     input_idx: 2,
+///     input_count: 1,
+/// };
+/// assert_eq!(
+///     cause.to_string(),
+///     "shape expression references input 2, but only 1 inputs were provided"
+/// );
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ShapeConstraintEvalError {
+    /// An expression referenced an input shape that was not supplied.
+    #[error(
+        "shape expression references input {input_idx}, but only {input_count} inputs were provided"
+    )]
+    MissingInput {
+        /// Referenced input index.
+        input_idx: usize,
+        /// Number of supplied input shapes.
+        input_count: usize,
+    },
+    /// An expression referenced an axis outside the selected input's rank.
+    #[error("shape expression references input {input_idx} axis {axis}, but its rank is {rank}")]
+    AxisOutOfBounds {
+        /// Referenced input index.
+        input_idx: usize,
+        /// Referenced axis.
+        axis: usize,
+        /// Rank of the selected input.
+        rank: usize,
+    },
+    /// Checked dimension arithmetic overflowed `usize`.
+    #[error("shape expression arithmetic overflowed")]
+    Overflow,
+    /// Checked dimension subtraction underflowed `usize`.
+    #[error("shape expression subtraction underflowed")]
+    Underflow,
+    /// A floor-division divisor evaluated to zero.
+    #[error("shape expression divided by zero")]
+    DivisionByZero,
+}
 
 /// Errors produced by einsum, eval, and other tenferro operations.
 ///
@@ -117,6 +167,45 @@ pub enum Error {
     InvalidCompiledGraph {
         /// Validation failure details.
         message: String,
+    },
+
+    /// A symbolic extension shape equality evaluated to unequal dimensions.
+    #[error(
+        "extension family {family:?} shape constraint at instruction {instruction_index:?} failed: {lhs_expr} ({lhs_value}) {relation:?} {rhs_expr} ({rhs_value})"
+    )]
+    ShapeConstraintViolation {
+        /// Stable extension family identifier.
+        family: &'static str,
+        /// Stable compiled instruction provenance, when assigned.
+        instruction_index: Option<usize>,
+        /// Shape relation that failed.
+        relation: ShapeRelation,
+        /// Normalized left-hand expression.
+        lhs_expr: String,
+        /// Normalized right-hand expression.
+        rhs_expr: String,
+        /// Concrete left-hand value.
+        lhs_value: usize,
+        /// Concrete right-hand value.
+        rhs_value: usize,
+    },
+
+    /// A symbolic extension shape expression could not be evaluated safely.
+    #[error(
+        "extension family {family:?} shape constraint at instruction {instruction_index:?} could not evaluate {expression} for {relation:?}: {cause}"
+    )]
+    ShapeConstraintEvaluation {
+        /// Stable extension family identifier.
+        family: &'static str,
+        /// Stable compiled instruction provenance, when assigned.
+        instruction_index: Option<usize>,
+        /// Shape relation whose expression failed.
+        relation: ShapeRelation,
+        /// Normalized expression that failed.
+        expression: String,
+        /// Typed evaluation failure.
+        #[source]
+        cause: ShapeConstraintEvalError,
     },
 
     /// An unexpected internal error.

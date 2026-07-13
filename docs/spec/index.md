@@ -11,6 +11,6 @@ link here rather than re-stating.
 | [ad-contract.md](./ad-contract.md) | Primitive trait signature, linearize/transpose_rule requirements |
 | [optimizer-passes.md](./optimizer-passes.md) | Optimization pass algorithms and ordering |
 | [tensor-semantics.md](./tensor-semantics.md) | Tensor type semantics, stride model, contiguity rules |
-| [extension-op.md](./extension-op.md) | ExtensionOp trait contract (identity, AD, dispatch, registry) |
+| [extension-op.md](./extension-op.md) | ExtensionOp trait contract: identity, shape-equality declarations, graph-scope and compiled-guard enforcement, AD, dispatch, and registry |
 | [api-conventions.md](./api-conventions.md) | Public API naming, module shape, feature naming, documentation-surface checks, and checker mapping |
 | [operation-categories.md](./operation-categories.md) | User-facing operation categories and the Eager/Traced surface-parity contract |

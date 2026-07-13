@@ -5,7 +5,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::tropical_ad_rules;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn run_traced(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
@@ -192,6 +192,46 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
         &fd_gradient_rhs(&a_data, &b_data, &weights_data),
         1.0e-8,
     );
+}
+
+#[test]
+fn tangent_shape_constraint_rejects_independent_tropical_tangent_mismatch() {
+    let symbolic_matrix = |shape: Vec<usize>| {
+        let len = shape.iter().product();
+        TracedTensor::from_tensor_symbolic_shape(
+            Tensor::from_vec_col_major(shape, vec![1.0_f64; len]).unwrap(),
+        )
+        .unwrap()
+    };
+    let lhs = symbolic_matrix(vec![2, 3]);
+    let rhs = symbolic_matrix(vec![3, 4]);
+    let tangent = symbolic_matrix(vec![2, 3]);
+    assert_ne!(
+        lhs.axis_sym_dim(0).unwrap(),
+        tangent.axis_sym_dim(0).unwrap(),
+        "primal and tangent must have independent symbolic origins"
+    );
+    let output = tropical_dot_general_fused(&lhs, &rhs).unwrap();
+    let jvp = tropical_ad().jvp(&output, &lhs, &tangent).unwrap();
+    let mut compiler = GraphCompiler::new();
+    compiler
+        .compile(&jvp)
+        .expect("matching independent tangent shape should compile");
+
+    let mismatched_tangent = symbolic_matrix(vec![5, 3]);
+    let mismatched_jvp = tropical_ad()
+        .jvp(&output, &lhs, &mismatched_tangent)
+        .unwrap();
+    let error = GraphCompiler::new()
+        .compile(&mismatched_jvp)
+        .expect_err("mismatched tropical tangent axis must fail during compilation");
+    assert!(matches!(
+        error,
+        Error::ShapeConstraintViolation {
+            family: "tenferro-ext-tropical.einsum_jvp.v1",
+            ..
+        }
+    ));
 }
 
 #[test]

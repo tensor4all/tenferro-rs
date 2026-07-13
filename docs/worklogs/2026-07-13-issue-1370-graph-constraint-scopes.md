@@ -1,0 +1,106 @@
+# Issue 1370 graph-owned shape-constraint scopes
+
+## Scope
+
+This stage preserves extension shape constraints across traced graph
+composition and lowers reachable scopes in `GraphCompiler`. It does not add
+constraints to real extension families or transfer scopes through
+`TracedTensorParts`; those remain separate follow-up stages.
+
+## Context read
+
+- Shared tensor4all repository, Rust, performance, documentation, testing, and
+  numerical rules.
+- `AGENTS.md`, `REPOSITORY_RULES.md`, and the approved extension shape equality
+  design.
+- CodeGraph call paths for graph metadata registration, extension application,
+  traced unary/binary construction, checkpointing, and graph compilation.
+
+## Design
+
+- One graph analysis walk registers metadata and records extension-local
+  constraints with every output origin and the ordered graph input keys.
+  Analysis is root-local: registered external metadata is resolved directly
+  from the global registry without traversing parent graphs. A parent is
+  analyzed only as an on-demand fallback when an external key is unregistered;
+  multi-output inference registers every sibling output in that walk. Only
+  operations owned by the analyzed root contribute to its local constraint
+  scope. Parent constraint scopes arrive exclusively through the traced input
+  chain.
+- Traced tensors carry an immutable `Arc`-backed constraint-scope chain.
+  Materialization uses pointer-identity deduplication; semantic deduplication
+  remains in the normalized equality solver after lowering.
+- The compiler gathers output chains before graph materialization, maps live
+  value keys to SSA slots once, and prunes a scope only when none of its origin
+  keys is live.
+- Scoped `InputDim` expressions are substituted through the complete
+  pre-optimizer slot-shape table. `GraphCompiler` supplies its concrete
+  specialized descriptor shapes, so equal relations disappear and concrete
+  contradictions fail before execution. The low-level compiler can still
+  supply symbolic shapes and retain runtime guards. Executable instruction
+  metadata continues to use its concrete shape/extent table. Extension
+  inference runs once against op-local placeholders and its results are
+  explicitly substituted into both tables, so global symbolic indices cannot
+  leak into instruction-local extent resolution. Missing keys, slots, and axes
+  return typed `ShapeConstraintEvaluation` errors.
+- Constraint-chain materialization deduplicates both scope pointers and chain
+  node pointers. Shared diamonds therefore visit each unique chain node once
+  rather than once per path.
+- Compiler-inferred and graph-scoped constraints share the same provenance,
+  discharge, normalization, and cache-identity pipeline.
+- `TracedTensorParts` deliberately constructs an empty constraint chain in this
+  stage. Explicit AD transform transfer is deferred.
+
+## TDD evidence
+
+The first focused run failed because the scope types and traced field did not
+exist. After the scope substrate was added, compiler-focused tests failed with
+zero guards for live scoped relations because graph input slot shapes were
+initialized as constants. Separating concrete runtime descriptors from
+program-input shape expressions made the live constraints compile to one
+guard while preserving typed missing-reference failures and all-dead pruning.
+An initial attempt to reuse symbolic slot shapes for executable extents exposed
+an XLA tutorial regression: an einsum output's global `InputDim` index was
+misread as instruction-local and propagated an unknown extent into `Abs`.
+The focused tutorial test stayed red until the concrete and symbolic tables
+were separated at the inference boundary described above.
+
+Review follow-up RED tests exposed three remaining issues. Extension and
+expanded-graph children replayed the counted ancestor inference callback
+(`1 -> 2`) before graph-local collection was enforced. Specialized graph
+compilation accepted `7 == 2 * 3` with a guard and retained a guard for
+`6 == 2 * 3` until it used concrete descriptor shapes. A depth-12 shared
+constraint-chain diamond visited 8,191 nodes instead of the 13 unique nodes
+until chain-node identity was tracked.
+
+A second review follow-up added test-only graph/operation visit counters. Both
+a depth-16 extension chain and a depth-16 expanded-graph chain visited 152
+graphs before the fix, despite each construction owning one operation. Removing
+the unconditional parent recursion made both totals exactly 16 graphs and 16
+operations. A raw unregistered multi-output parent test covers the on-demand
+fallback and verifies both sibling outputs remain available to the child.
+
+The quality-review follow-up bounded two remaining repeated-work paths.
+Compiling two outputs that shared one constraint scope cloned that scope twice;
+borrowing each chain's cached slice and cloning only after pointer dedup reduced
+the measured count to one. Metadata fallback rebuilt its direct-parent owner
+lookup eight times for eight distinct missing inputs. Each graph-analysis
+invocation now lazily builds one value-key-to-parent index on its first miss,
+visiting the eight parent values once, while the registered-input fast path
+builds no index. Test-only clone and lookup counters remain in module-local
+support files and are excluded from non-test builds.
+
+## Residual risk
+
+This stage preserves constraints through ordinary traced composition and
+checkpoint roots. AD transform output parts still initialize an empty chain by
+design until the explicit transfer boundary is implemented.
+
+## Verification
+
+- `cargo test --workspace --all-targets --release`
+- workspace and standalone tropical Clippy parity with `-D warnings`
+- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py`
+- `cargo llvm-cov --workspace --release` and the per-file coverage checker
+- focused constraint-scope, symbolic cache-identity, and XLA tutorial
+  regressions

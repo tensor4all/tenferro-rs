@@ -20,7 +20,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
-| [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape metadata contract. Covers `DynamicTruncate`, `transpose_scatter`, symbolic `slice_sizes`, and the `Exact`/`UpperBound`/`Unknown` extent model. This is the key design doc for understanding how tenferro differs from XLA-style shape-specialized compilation. |
+| [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape architecture. Covers `DynamicTruncate`, `transpose_scatter`, symbolic `slice_sizes`, the `Exact`/`UpperBound`/`Unknown` extent model, and extension equalities from graph-owned scopes through compiled guards. This is the key design doc for understanding how tenferro differs from XLA-style shape-specialized compilation. |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |
 | [xla-backend.md](./xla-backend.md) | Experimental StableHLO lowering and PJRT plugin-loading peer executor over static `GraphProgram` values |
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |

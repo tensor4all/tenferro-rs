@@ -34,7 +34,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ShapeGuardContext, SymDim};
+use tenferro_ops::{ShapeGuardContext, ShapeRelation, SymDim};
 use tenferro_runtime::extension::{apply, HostReferenceRuntime};
 use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TypedTensor};
@@ -80,10 +80,9 @@ impl ExtensionOp for TestScaleBy2 {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -193,6 +192,192 @@ fn scale_by_2_ad_context() -> AdContext {
 }
 
 // ----------------------------------------------------------------------
+// TestExactShapeIdentity: identity whose emitted linear op requires the
+// active primal and tangent/cotangent to have exactly the same shape.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestExactShapeIdentity;
+
+impl ExtensionOp for TestExactShapeIdentity {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.exact_shape_identity.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestExactShapeIdentity>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestExactShapeIdentity {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestExactShapeLinear;
+
+impl ExtensionOp for TestExactShapeLinear {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.exact_shape_linear.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestExactShapeLinear>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        ctx.require_same_shape(0, 1)?;
+        Ok(vec![(ctx.input_dtype(1)?, ctx.input_shape(1)?.to_vec())])
+    }
+
+    fn host_reference(&self) -> Option<&dyn HostReference> {
+        Some(self)
+    }
+}
+
+impl HostReference for TestExactShapeLinear {
+    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[1].clone()])
+    }
+}
+
+#[derive(Debug)]
+struct TestExactShapeRule;
+
+impl ExtensionLinearizeRule for TestExactShapeRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.exact_shape_identity.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        _primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let Some(tangent) = tangent_in[0] else {
+            return Ok(vec![None]);
+        };
+        let output = builder.add_operation(
+            StdTensorOp::Extension(Arc::new(TestExactShapeLinear)),
+            vec![
+                ValueRef::External(primal_in[0].clone()),
+                ValueRef::Local(tangent),
+            ],
+            OperationRole::Linearized {
+                active_mask: vec![false, true],
+            },
+        );
+        Ok(vec![Some(output[0])])
+    }
+}
+
+impl ExtensionLinearTransposeRule for TestExactShapeRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.exact_shape_linear.v1"
+    }
+
+    fn linear_transpose(
+        &self,
+        _op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+        _active_mask: &[bool],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+        let Some(cotangent) = cotangent_out[0] else {
+            return Ok(vec![None, None]);
+        };
+        let output = builder.add_operation(
+            StdTensorOp::Extension(Arc::new(TestExactShapeLinear)),
+            vec![
+                transpose_input_value("exact_shape_linear", 0, &inputs[0])?,
+                ValueRef::Local(cotangent),
+            ],
+            OperationRole::Linearized {
+                active_mask: vec![false, true],
+            },
+        );
+        Ok(vec![None, Some(output[0])])
+    }
+}
+
+fn exact_shape_ad_context() -> AdContext {
+    AdContext::builder()
+        .with_extension_rules(
+            ExtensionRuleSet::new()
+                .with_linearize(Arc::new(TestExactShapeRule))
+                .expect("exact-shape linearize rule registration")
+                .with_linear_transpose(Arc::new(TestExactShapeRule))
+                .expect("exact-shape transpose rule registration"),
+        )
+        .build()
+        .expect("exact-shape AD context")
+}
+
+// ----------------------------------------------------------------------
 // TestSwap: two inputs, two outputs. (a, b) -> (b, a).
 // ----------------------------------------------------------------------
 
@@ -228,18 +413,21 @@ impl ExtensionOp for TestSwap {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         // (a, b) -> (b, a). We report the swapped meta so downstream
         // consumers see the correct shape for each output slot.
-        assert_eq!(
-            input_dtypes[0], input_dtypes[1],
-            "TestSwap expects matching dtypes"
-        );
+        let lhs_dtype = ctx.input_dtype(0)?;
+        let rhs_dtype = ctx.input_dtype(1)?;
+        if lhs_dtype != rhs_dtype {
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op: self.family_id(),
+                message: "TestSwap expects matching dtypes".into(),
+            });
+        }
         Ok(vec![
-            (input_dtypes[1], input_shapes[1].to_vec()),
-            (input_dtypes[0], input_shapes[0].to_vec()),
+            (rhs_dtype, ctx.input_shape(1)?.to_vec()),
+            (lhs_dtype, ctx.input_shape(0)?.to_vec()),
         ])
     }
 
@@ -349,10 +537,9 @@ impl ExtensionOp for TestPreferLinearize {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -397,15 +584,25 @@ impl ExtensionPrimalVjpRule for TestPreferLinearizeRule {
         _op: &dyn ExtensionOp,
         builder: &mut dyn PrimitiveRuleBuilder,
         cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[ValueRef<StdTensorOp>],
+        inputs: &[ValueRef<StdTensorOp>],
         ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let _ = ctx.transpose_primal_outputs();
         match cotangent_out[0] {
             Some(ct) => {
+                let constrained = builder.add_operation(
+                    StdTensorOp::Extension(Arc::new(TestExactShapeLinear)),
+                    vec![inputs[0].clone(), ValueRef::Local(ct)],
+                    OperationRole::Linearized {
+                        active_mask: vec![false, true],
+                    },
+                );
                 let doubled = builder.add_operation(
                     StdTensorOp::Add,
-                    vec![ValueRef::Local(ct), ValueRef::Local(ct)],
+                    vec![
+                        ValueRef::Local(constrained[0]),
+                        ValueRef::Local(constrained[0]),
+                    ],
                     OperationRole::Linearized {
                         active_mask: vec![true, true],
                     },
@@ -473,10 +670,9 @@ impl ExtensionOp for TestCustomVjpInvalid {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -585,10 +781,9 @@ impl ExtensionOp for TestPrimaryTransposeOnly {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -696,10 +891,9 @@ impl ExtensionOp for TestNoAd {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -754,10 +948,9 @@ impl ExtensionOp for TestProbeIdentity {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -807,10 +1000,9 @@ impl ExtensionOp for TestProbeLinear {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -958,10 +1150,9 @@ impl ExtensionOp for TestBadOutputCount {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -1056,6 +1247,43 @@ fn compiled_program_contains_extension_with_specs(
     contains_extension
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ExactShapeViolationDiagnostic {
+    family: &'static str,
+    instruction_index: Option<usize>,
+    relation: ShapeRelation,
+    lhs_expr: String,
+    rhs_expr: String,
+    lhs_value: usize,
+    rhs_value: usize,
+}
+
+fn exact_shape_violation_diagnostic(error: RuntimeError) -> ExactShapeViolationDiagnostic {
+    match error {
+        RuntimeError::ShapeConstraintViolation {
+            family,
+            instruction_index,
+            relation,
+            lhs_expr,
+            rhs_expr,
+            lhs_value,
+            rhs_value,
+        } => {
+            assert_eq!(family, "tenferro-tests.exact_shape_linear.v1");
+            ExactShapeViolationDiagnostic {
+                family,
+                instruction_index,
+                relation,
+                lhs_expr,
+                rhs_expr,
+                lhs_value,
+                rhs_value,
+            }
+        }
+        other => panic!("expected exact-shape violation, got {other:?}"),
+    }
+}
+
 // ----------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------
@@ -1073,6 +1301,106 @@ fn scale_by_2_forward_roundtrip() {
 
     assert_eq!(result.shape(), &[3]);
     assert_eq!(f64_slice(&result), &[2.0, 4.0, 6.0]);
+}
+
+#[test]
+fn shape_constraint_jvp_survives_first_transform_and_cache_hit() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = apply(Arc::new(TestExactShapeIdentity), &[&x])
+        .unwrap()
+        .remove(0);
+    let ad = exact_shape_ad_context();
+    let mut compiler = tenferro_runtime::GraphCompiler::new();
+
+    for values in [[3.0_f64, 5.0], [7.0, 11.0]] {
+        let tangent = TracedTensor::from_vec_col_major(vec![2], values.to_vec()).unwrap();
+        let jvp = ad.jvp(&y, &x, &tangent).expect("exact-shape JVP build");
+        assert!(
+            !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&jvp).is_empty(),
+            "JVP output must own the emitted linear graph constraint scope"
+        );
+        let program = compiler.compile(&jvp).expect("equal JVP shapes compile");
+        let mut executor = GraphExecutor::new(CpuBackend::new());
+        register_test_runtime(&mut executor, "tenferro-tests.exact_shape_linear.v1");
+        let result = executor.run(&program).expect("equal JVP shapes execute");
+        assert_eq!(f64_slice(&result), values.as_slice());
+    }
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let mismatched = TracedTensor::from_vec_col_major(vec![3], vec![13.0_f64, 17.0, 19.0]).unwrap();
+    let jvp = ad
+        .jvp(&y, &x, &mismatched)
+        .expect("cached exact-shape JVP build");
+    let hot_error = compiler
+        .compile(&jvp)
+        .expect_err("mismatched cached JVP shapes must fail");
+    let hot_diagnostic = exact_shape_violation_diagnostic(hot_error);
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let cold_ad = exact_shape_ad_context();
+    let cold_jvp = cold_ad
+        .jvp(&y, &x, &mismatched)
+        .expect("cold exact-shape JVP build");
+    let mut cold_compiler = tenferro_runtime::GraphCompiler::new();
+    let cold_error = cold_compiler
+        .compile(&cold_jvp)
+        .expect_err("mismatched cold JVP shapes must fail");
+    let cold_diagnostic = exact_shape_violation_diagnostic(cold_error);
+    assert_eq!(cold_diagnostic, hot_diagnostic);
+    assert_eq!(cold_ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(cold_compiler.compile_cache_len(), 0);
+}
+
+#[test]
+fn shape_constraint_vjp_survives_first_transform_and_cache_hit() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = apply(Arc::new(TestExactShapeIdentity), &[&x])
+        .unwrap()
+        .remove(0);
+    let ad = exact_shape_ad_context();
+    let mut compiler = tenferro_runtime::GraphCompiler::new();
+
+    for values in [[3.0_f64, 5.0], [7.0, 11.0]] {
+        let cotangent = TracedTensor::from_vec_col_major(vec![2], values.to_vec()).unwrap();
+        let vjp = ad.vjp(&y, &x, &cotangent).expect("exact-shape VJP build");
+        assert!(
+            !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&vjp).is_empty(),
+            "VJP output must own the emitted transposed graph constraint scope"
+        );
+        let program = compiler.compile(&vjp).expect("equal VJP shapes compile");
+        let mut executor = GraphExecutor::new(CpuBackend::new());
+        register_test_runtime(&mut executor, "tenferro-tests.exact_shape_linear.v1");
+        let result = executor.run(&program).expect("equal VJP shapes execute");
+        assert_eq!(f64_slice(&result), values.as_slice());
+    }
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let mismatched = TracedTensor::from_vec_col_major(vec![3], vec![13.0_f64, 17.0, 19.0]).unwrap();
+    let vjp = ad
+        .vjp(&y, &x, &mismatched)
+        .expect("cached exact-shape VJP build");
+    let hot_error = compiler
+        .compile(&vjp)
+        .expect_err("mismatched cached VJP shapes must fail");
+    let hot_diagnostic = exact_shape_violation_diagnostic(hot_error);
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let cold_ad = exact_shape_ad_context();
+    let cold_vjp = cold_ad
+        .vjp(&y, &x, &mismatched)
+        .expect("cold exact-shape VJP build");
+    let mut cold_compiler = tenferro_runtime::GraphCompiler::new();
+    let cold_error = cold_compiler
+        .compile(&cold_vjp)
+        .expect_err("mismatched cold VJP shapes must fail");
+    let cold_diagnostic = exact_shape_violation_diagnostic(cold_error);
+    assert_eq!(cold_diagnostic, hot_diagnostic);
+    assert_eq!(cold_ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(cold_compiler.compile_cache_len(), 0);
 }
 
 #[test]
@@ -1202,7 +1530,12 @@ fn traced_vjp_prefers_custom_primal_vjp_over_linearize_transpose() {
     let vjp = prefer_linearize_ad_context()
         .vjp(&y, &x, &dy)
         .expect("vjp should build through custom primal VJP");
+    assert!(
+        !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&vjp).is_empty(),
+        "custom primal VJP must retain constraints emitted by its graph"
+    );
     let mut engine = GraphExecutor::new(CpuBackend::new());
+    register_test_runtime(&mut engine, "tenferro-tests.exact_shape_linear.v1");
     let vjp_out = vjp.run_with(&mut engine).unwrap();
 
     assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);

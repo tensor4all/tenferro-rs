@@ -17,6 +17,7 @@ fn eval_exec_ir_non_consuming_preserves_caller_inputs() {
         input_slots: vec![0, 1],
         output_slots: vec![2],
         n_slots: 3,
+        shape_guards: Vec::new(),
     };
 
     let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());

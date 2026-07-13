@@ -9,6 +9,7 @@ use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TypedTensor};
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
 use crate::metadata::{register_scoped_value_metadata, tensor_meta, MetadataScopeChain};
+use crate::shape_constraint::ConstraintScopeChain;
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{
@@ -601,6 +602,9 @@ fn apply_nary_concatenate(
         metadata_scopes: MetadataScopeChain::with_new(
             metadata_scope,
             tensors.iter().map(|tensor| &tensor.metadata_scopes),
+        ),
+        constraint_scopes: ConstraintScopeChain::merge(
+            tensors.iter().map(|tensor| &tensor.constraint_scopes),
         ),
     })
 }

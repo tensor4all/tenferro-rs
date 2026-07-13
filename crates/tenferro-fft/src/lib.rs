@@ -515,21 +515,10 @@ impl ExtensionOp for FftOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        let [input_dtype] = input_dtypes else {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "tenferro-fft",
-                message: format!("expected 1 input dtype, got {}", input_dtypes.len()),
-            });
-        };
-        let [input_shape] = input_shapes else {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "tenferro-fft",
-                message: format!("expected 1 input shape, got {}", input_shapes.len()),
-            });
-        };
+        let input_dtype = ctx.input_dtype(0)?;
+        let input_shape = ctx.input_shape(0)?;
         if self.axis >= input_shape.len() {
             return Err(tenferro_tensor::Error::AxisOutOfBounds {
                 op: "tenferro-fft",
@@ -547,7 +536,7 @@ impl ExtensionOp for FftOp {
                         format!("unsupported dtype {input_dtype:?} for complex FFT"),
                     ));
                 }
-                *input_dtype
+                input_dtype
             }
             FftKind::R2C { onesided } => {
                 let len = transform_len_dim(self.n, &input_shape[self.axis]);
@@ -1935,14 +1924,27 @@ mod tests {
         let op = FftOp::new(FftKind::R2C { onesided: true }, 0, None, FftNorm::Backward);
         let shape = [SymDim::from(4usize)];
 
-        assert!(op.infer_output_meta(&[], &[&shape]).is_err());
-        assert!(op.infer_output_meta(&[DType::F64], &[]).is_err());
-        assert!(op.infer_output_meta(&[DType::I64], &[&shape]).is_err());
+        assert!(
+            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[], &[&shape]).is_err()
+        );
+        assert!(
+            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[DType::F64], &[])
+                .is_err()
+        );
+        assert!(tenferro_ops::ext_op::invoke_extension_shape_inference(
+            &op,
+            &[DType::I64],
+            &[&shape]
+        )
+        .is_err());
 
         let bad_axis = FftOp::new(FftKind::C2C { forward: true }, 2, None, FftNorm::Backward);
-        assert!(bad_axis
-            .infer_output_meta(&[DType::C64], &[&shape])
-            .is_err());
+        assert!(tenferro_ops::ext_op::invoke_extension_shape_inference(
+            &bad_axis,
+            &[DType::C64],
+            &[&shape]
+        )
+        .is_err());
     }
 
     #[test]

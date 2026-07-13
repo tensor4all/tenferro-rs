@@ -25,6 +25,7 @@ use crate::metadata::{
     symbolic_input_meta, tensor_meta, MetadataScopeChain,
 };
 use crate::scalar_semantics::{bool_from_real_for_op, round_real_to_i32_for_op, round_real_to_i64};
+use crate::shape_constraint::ConstraintScopeChain;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +57,7 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: MetadataScopeChain,
+    pub(crate) constraint_scopes: ConstraintScopeChain,
 }
 
 impl fmt::Debug for TracedTensor {
@@ -664,6 +666,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -718,6 +721,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -764,6 +768,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -808,6 +813,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -2246,6 +2252,7 @@ pub(crate) fn apply_unary_with_dtype(
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
         metadata_scopes: MetadataScopeChain::with_new(metadata_scope, [&input.metadata_scopes]),
+        constraint_scopes: input.constraint_scopes.clone(),
     })
 }
 
@@ -2312,6 +2319,10 @@ pub(crate) fn apply_unary_with_shape_refs(
             std::iter::once(&input.metadata_scopes)
                 .chain(shape_refs.iter().map(|tensor| &tensor.metadata_scopes)),
         ),
+        constraint_scopes: ConstraintScopeChain::merge(
+            std::iter::once(&input.constraint_scopes)
+                .chain(shape_refs.iter().map(|tensor| &tensor.constraint_scopes)),
+        ),
     })
 }
 
@@ -2340,6 +2351,7 @@ pub(crate) fn apply_nullary(
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+        constraint_scopes: ConstraintScopeChain::empty(),
     })
 }
 
@@ -2537,6 +2549,10 @@ fn apply_binary_with_output_dtype(
             metadata_scope,
             [&lhs.metadata_scopes, &rhs.metadata_scopes],
         ),
+        constraint_scopes: ConstraintScopeChain::merge([
+            &lhs.constraint_scopes,
+            &rhs.constraint_scopes,
+        ]),
     })
 }
 
@@ -2598,6 +2614,11 @@ fn apply_ternary_with_output_dtype(
                 &third.metadata_scopes,
             ],
         ),
+        constraint_scopes: ConstraintScopeChain::merge([
+            &first.constraint_scopes,
+            &second.constraint_scopes,
+            &third.constraint_scopes,
+        ]),
     })
 }
 

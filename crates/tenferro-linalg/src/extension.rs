@@ -546,34 +546,28 @@ impl ExtensionOp for LinalgExtensionOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
-            return Err(Error::InvalidConfig {
-                op: "tenferro-linalg",
-                message: format!(
-                    "expected {} input metadata entries, got dtypes={} shapes={}",
-                    self.input_count(),
-                    input_dtypes.len(),
-                    input_shapes.len()
-                ),
-            });
-        }
+        let input_dtypes = (0..self.input_count())
+            .map(|input| ctx.input_dtype(input))
+            .collect::<Result<Vec<_>, _>>()?;
+        let input_shapes = (0..self.input_count())
+            .map(|input| ctx.input_shape(input))
+            .collect::<Result<Vec<_>, _>>()?;
         let metas = match self.op {
             LinalgOp::Cholesky => {
                 require_matrix_meta("tenferro-linalg.cholesky", input_shapes[0])?;
-                vec![(promote_dtypes(input_dtypes), input_shapes[0].to_vec())]
+                vec![(promote_dtypes(&input_dtypes), input_shapes[0].to_vec())]
             }
             LinalgOp::FullPivLuSolve { .. } => {
                 require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[0])?;
                 require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[1])?;
-                vec![(promote_dtypes(input_dtypes), input_shapes[1].to_vec())]
+                vec![(promote_dtypes(&input_dtypes), input_shapes[1].to_vec())]
             }
             LinalgOp::TriangularSolve { .. } => {
                 require_matrix_meta("tenferro-linalg.triangular_solve", input_shapes[0])?;
                 require_matrix_meta("tenferro-linalg.triangular_solve", input_shapes[1])?;
-                vec![(promote_dtypes(input_dtypes), input_shapes[1].to_vec())]
+                vec![(promote_dtypes(&input_dtypes), input_shapes[1].to_vec())]
             }
             LinalgOp::LuSolvePrepared { .. } => {
                 require_matrix_meta("tenferro-linalg.lu_solve_prepared_lu", input_shapes[0])?;
