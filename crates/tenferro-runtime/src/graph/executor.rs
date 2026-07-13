@@ -897,11 +897,8 @@ fn resolve_inputs(
         }
     }
 
-    program
-        .inputs
-        .iter()
-        .map(|input| resolve_input(input, &binding_map, &default_map, backend))
-        .collect()
+    let selected = select_inputs(program, &binding_map, &default_map)?;
+    materialize_inputs(selected, backend)
 }
 
 fn resolve_input_reads<'a>(
@@ -949,11 +946,8 @@ fn resolve_input_reads<'a>(
         }
     }
 
-    program
-        .inputs
-        .iter()
-        .map(|input| resolve_input_read(input, &binding_map, &default_map, backend))
-        .collect()
+    let selected = select_inputs(program, &binding_map, &default_map)?;
+    materialize_input_reads(selected, backend)
 }
 
 fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &GraphProgramInput> {
@@ -968,50 +962,116 @@ fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &
     specs
 }
 
-fn resolve_input(
-    input: &GraphProgramInput,
-    bindings: &HashMap<TensorInputKey, &Tensor>,
-    defaults: &HashMap<TensorInputKey, &Tensor>,
-    backend: &mut impl TensorBackend,
-) -> Result<Tensor> {
-    let tensor = if let Some(bound) = bindings.get(&input.key) {
-        (*bound).clone()
-    } else if let Some(default) = &input.default_tensor {
-        resolve_default_tensor(default.as_ref(), backend)?
-    } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings, defaults)? {
-        zero
-    } else {
-        return Err(Error::UnboundPlaceholder {
-            input_key: format!("{:?}", input.key),
-        });
-    };
-    validate_input_tensor(input, &tensor)?;
-    Ok(tensor)
+trait InputMetadata {
+    fn dtype(&self) -> DType;
+    fn shape(&self) -> &[usize];
 }
 
-fn resolve_input_read<'a>(
-    input: &GraphProgramInput,
-    bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
-    defaults: &HashMap<TensorInputKey, &'a Tensor>,
-    backend: &mut impl TensorBackend,
-) -> Result<ExecSlot<'a>> {
-    let slot = if let Some(bound) = bindings.get(&input.key) {
-        ExecSlot::Read(bound.clone())
-    } else if let Some(default) = defaults.get(&input.key) {
-        if should_upload_default_tensor(default) {
-            ExecSlot::Owned(backend.upload_host_tensor(default)?)
-        } else {
-            ExecSlot::Read(TensorRead::from_tensor(default))
+impl InputMetadata for &Tensor {
+    fn dtype(&self) -> DType {
+        Tensor::dtype(self)
+    }
+
+    fn shape(&self) -> &[usize] {
+        Tensor::shape(self)
+    }
+}
+
+impl InputMetadata for TensorRead<'_> {
+    fn dtype(&self) -> DType {
+        TensorRead::dtype(self)
+    }
+
+    fn shape(&self) -> &[usize] {
+        TensorRead::shape(self)
+    }
+}
+
+enum SelectedInput<'program, 'binding, T> {
+    Bound(&'binding T),
+    Default(&'program Tensor),
+    DeferredZero { dtype: DType, shape: Vec<usize> },
+}
+
+impl<T: InputMetadata> SelectedInput<'_, '_, T> {
+    fn dtype(&self) -> DType {
+        match self {
+            Self::Bound(value) => value.dtype(),
+            Self::Default(value) => value.dtype(),
+            Self::DeferredZero { dtype, .. } => *dtype,
         }
-    } else if let Some(zero) = deferred_zero_for_tangent_key_read(&input.key, bindings, defaults)? {
-        ExecSlot::Owned(zero)
-    } else {
-        return Err(Error::UnboundPlaceholder {
-            input_key: format!("{:?}", input.key),
-        });
-    };
-    validate_input_slot(input, &slot)?;
-    Ok(slot)
+    }
+
+    fn shape(&self) -> &[usize] {
+        match self {
+            Self::Bound(value) => value.shape(),
+            Self::Default(value) => value.shape(),
+            Self::DeferredZero { shape, .. } => shape,
+        }
+    }
+}
+
+fn select_inputs<'program, 'binding, T: InputMetadata>(
+    program: &'program GraphProgram,
+    bindings: &'binding HashMap<TensorInputKey, T>,
+    defaults: &HashMap<TensorInputKey, &'program Tensor>,
+) -> Result<Vec<SelectedInput<'program, 'binding, T>>> {
+    let mut selected = Vec::with_capacity(program.inputs.len());
+    for input in &program.inputs {
+        let value = if let Some(bound) = bindings.get(&input.key) {
+            SelectedInput::Bound(bound)
+        } else if let Some(default) = &input.default_tensor {
+            SelectedInput::Default(default.as_ref())
+        } else if let Some((dtype, shape)) = deferred_zero_metadata(&input.key, bindings, defaults)
+        {
+            SelectedInput::DeferredZero { dtype, shape }
+        } else {
+            return Err(Error::UnboundPlaceholder {
+                input_key: format!("{:?}", input.key),
+            });
+        };
+        validate_input_metadata(input, value.dtype(), value.shape())?;
+        selected.push(value);
+    }
+    let input_shapes: Vec<_> = selected.iter().map(SelectedInput::shape).collect();
+    crate::exec::validate_shape_guards(&program.exec, &input_shapes)?;
+    Ok(selected)
+}
+
+fn materialize_inputs(
+    selected: Vec<SelectedInput<'_, '_, &Tensor>>,
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<Tensor>> {
+    selected
+        .into_iter()
+        .map(|input| match input {
+            SelectedInput::Bound(bound) => Ok((**bound).clone()),
+            SelectedInput::Default(default) => resolve_default_tensor(default, backend),
+            SelectedInput::DeferredZero { dtype, shape } => zeros_tensor(dtype, shape),
+        })
+        .collect()
+}
+
+fn materialize_input_reads<'a>(
+    selected: Vec<SelectedInput<'a, '_, TensorRead<'a>>>,
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<ExecSlot<'a>>> {
+    selected
+        .into_iter()
+        .map(|input| match input {
+            SelectedInput::Bound(bound) => Ok(ExecSlot::Read(bound.clone())),
+            SelectedInput::Default(default) => {
+                if should_upload_default_tensor(default) {
+                    Ok(ExecSlot::Owned(backend.upload_host_tensor(default)?))
+                } else {
+                    Ok(ExecSlot::Read(TensorRead::from_tensor(default)))
+                }
+            }
+            SelectedInput::DeferredZero { dtype, shape } => {
+                Ok(ExecSlot::Owned(zeros_tensor(dtype, shape)?))
+            }
+        })
+        .collect()
 }
 
 fn resolve_default_tensor(default: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
@@ -1104,69 +1164,41 @@ fn validate_binding_placeholder_read(
     Ok(())
 }
 
-fn validate_input_tensor(input: &GraphProgramInput, tensor: &Tensor) -> Result<()> {
-    if input.dtype != tensor.dtype() {
+fn validate_input_metadata(
+    input: &GraphProgramInput,
+    actual_dtype: DType,
+    actual_shape: &[usize],
+) -> Result<()> {
+    if input.dtype != actual_dtype {
         return Err(Error::PlaceholderDtypeMismatch {
             expected: input.dtype,
-            actual: tensor.dtype(),
+            actual: actual_dtype,
         });
     }
-    if input.shape.as_slice() != tensor.shape() {
+    if input.shape.as_slice() != actual_shape {
         return Err(Error::PlaceholderShapeMismatch {
             expected: input.shape.clone(),
-            actual: tensor.shape().to_vec(),
+            actual: actual_shape.to_vec(),
         });
     }
     Ok(())
 }
 
-fn validate_input_slot(input: &GraphProgramInput, slot: &ExecSlot<'_>) -> Result<()> {
-    if input.dtype != slot.dtype() {
-        return Err(Error::PlaceholderDtypeMismatch {
-            expected: input.dtype,
-            actual: slot.dtype(),
-        });
-    }
-    if input.shape.as_slice() != slot.shape() {
-        return Err(Error::PlaceholderShapeMismatch {
-            expected: input.shape.clone(),
-            actual: slot.shape().to_vec(),
-        });
-    }
-    Ok(())
-}
-
-fn deferred_zero_for_tangent_key(
+fn deferred_zero_metadata<T: InputMetadata>(
     key: &TensorInputKey,
-    bindings: &HashMap<TensorInputKey, &Tensor>,
+    bindings: &HashMap<TensorInputKey, T>,
     defaults: &HashMap<TensorInputKey, &Tensor>,
-) -> Result<Option<Tensor>> {
+) -> Option<(DType, Vec<usize>)> {
     if !key.is_tangent() {
-        return Ok(None);
-    }
-    let root = tangent_primal_root(key);
-    let Some(primal) = bindings.get(root).or_else(|| defaults.get(root)) else {
-        return Ok(None);
-    };
-    zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some)
-}
-
-fn deferred_zero_for_tangent_key_read<'a>(
-    key: &TensorInputKey,
-    bindings: &HashMap<TensorInputKey, TensorRead<'a>>,
-    defaults: &HashMap<TensorInputKey, &'a Tensor>,
-) -> Result<Option<Tensor>> {
-    if !key.is_tangent() {
-        return Ok(None);
+        return None;
     }
     let root = tangent_primal_root(key);
     if let Some(primal) = bindings.get(root) {
-        return zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some);
+        return Some((primal.dtype(), primal.shape().to_vec()));
     }
-    let Some(primal) = defaults.get(root) else {
-        return Ok(None);
-    };
-    zeros_tensor(primal.dtype(), primal.shape().to_vec()).map(Some)
+    defaults
+        .get(root)
+        .map(|primal| (primal.dtype(), primal.shape().to_vec()))
 }
 
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {

@@ -15,6 +15,8 @@ use crate::extension_runtime::{ExtensionExecutionContext, ExtensionRuntime};
 use crate::shape_constraint::{ConstraintSource, ShapeGuard};
 use crate::{Error, GraphCompiler, TracedTensor};
 
+mod preflight;
+
 const COUNTED_FAMILY: &str = "runtime.counted-identity.v1";
 
 #[derive(Clone, Debug)]

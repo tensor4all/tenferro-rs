@@ -127,14 +127,6 @@ pub(crate) enum ExecSlot<'a> {
 }
 
 impl<'a> ExecSlot<'a> {
-    pub(crate) fn dtype(&self) -> DType {
-        match self {
-            Self::Owned(tensor) => tensor.dtype(),
-            Self::Value(value) => value.dtype(),
-            Self::Read(read) => read.dtype(),
-        }
-    }
-
     pub(crate) fn as_read<'slot>(&'slot self) -> TensorRead<'slot>
     where
         'a: 'slot,

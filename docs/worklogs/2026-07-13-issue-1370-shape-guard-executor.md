@@ -24,6 +24,10 @@ extension declarations.
   allocation, segmentation, backend sessions, or extension dispatch.
 - Owned tensor, value-output, borrowed/non-consuming, segmented, nonsegmented
   extension-owned, and zero-instruction roots share the same validator.
+- High-level graph runs first select bound, default, or deferred-zero input
+  metadata in program order, validate input specs and guards, and only then
+  clone, upload, or allocate the selected values. Owned and borrowed wrappers
+  share this source-selection step so their precedence cannot drift.
 - Compile-cache semantic identity remains unchanged. Cache hits restore the
   current program's guard vector, and an executor regression test verifies the
   resulting error uses current provenance.
@@ -36,6 +40,14 @@ counter, and failed at `unwrap_err`. After enforcement, the same input returns
 the typed `ShapeConstraintViolation` with `7` and `6`, leaves the counter at
 zero, and the valid `[6]`, `[3]` case dispatches exactly once.
 
+A follow-up counted-backend regression first failed because a scalar default
+was uploaded before the guard rejected the run. After metadata preflight, bad
+default-backed owned/value and borrowed/value wrappers report zero uploads and
+zero dispatches, while good runs upload and dispatch once. An explicit binding
+test confirms guards evaluate the selected runtime shape, and direct tests of
+the extension execution context and backend-cache lowering helper cover both
+owner-scoped execution paths.
+
 ## Verification
 
 - Focused executor, exec, segment, and extension release tests passed.
@@ -45,13 +57,13 @@ zero, and the valid `[6]`, `[3]` case dispatches exactly once.
   denied.
 - Workspace rustdoc and docs-site checks passed.
 - Workspace coverage passed the repository checker for all 153 included files;
-  `graph/executor.rs` reached 90.34%, `shape_constraint/solver.rs` 97.19%, and
-  `exec.rs` 79.17% against its configured 75% threshold.
+  `graph/executor.rs` reached 91.47% and `exec.rs` 79.51% against its configured
+  75% threshold. Focused coverage also recorded two calls to the counted-backend
+  instantiation of `eval_exec_ir_with_backend_cache`.
 
 ## Residual risk
 
 Guard evaluation allocates only a rank-bounded vector of borrowed shape slices.
-No tensor data is cloned or materialized. High-level binding resolution may
-still perform its pre-existing default-input upload before reaching the
-execution-program boundary; guard validation itself introduces no backend or
-extension side effect.
+No tensor data is cloned, uploaded, zero-filled, or otherwise materialized
+until input metadata and all retained guards pass. High-level graph wrappers
+therefore introduce no backend or extension side effect on guard failure.
