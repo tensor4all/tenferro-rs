@@ -307,8 +307,7 @@ fn test_integer_div_rem_pow_contract() {
 
 #[test]
 fn test_pow_accepts_rank_zero_operands() {
-    let f64_tensor =
-        Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 4.0]).unwrap();
+    let f64_tensor = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 4.0]).unwrap();
     let f64_exponent = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let f64_base = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
 
@@ -331,6 +330,57 @@ fn test_pow_accepts_rank_zero_operands() {
     let scalar_base = pow(&i32_base, &i32_tensor).unwrap();
     assert_eq!(scalar_base.shape(), &[3]);
     assert_eq!(scalar_base.as_slice::<i32>().unwrap(), &[4, 8, 16]);
+}
+
+#[test]
+fn test_pow_rank_zero_read_views_and_domain_contracts() {
+    let tensor = TypedTensor::<f32>::from_vec_col_major(vec![3], vec![2.0, 3.0, 4.0]).unwrap();
+    let exponent = TypedTensor::<f32>::from_vec_col_major(vec![], vec![2.0]).unwrap();
+    let base = TypedTensor::<f32>::from_vec_col_major(vec![], vec![2.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let tensor_base = backend
+        .pow_read(
+            TensorRead::from_view(TensorView::F32(tensor.as_view())),
+            TensorRead::from_view(TensorView::F32(exponent.as_view())),
+        )
+        .unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<f32>().unwrap(), &[4.0, 9.0, 16.0]);
+
+    let scalar_base = backend
+        .pow_read(
+            TensorRead::from_view(TensorView::F32(base.as_view())),
+            TensorRead::from_view(TensorView::F32(tensor.as_view())),
+        )
+        .unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<f32>().unwrap(), &[4.0, 8.0, 16.0]);
+
+    let empty = Tensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap();
+    let scalar = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let empty_out = pow(&empty, &scalar).unwrap();
+    assert_eq!(empty_out.shape(), &[0, 2]);
+    assert!(empty_out.as_slice::<f64>().unwrap().is_empty());
+
+    for (base, exponent) in [
+        (
+            Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap(),
+            Tensor::from_vec_col_major(vec![], vec![-1_i64]).unwrap(),
+        ),
+        (
+            Tensor::from_vec_col_major(vec![], vec![2_i64]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![2_i64, -1]).unwrap(),
+        ),
+    ] {
+        assert!(matches!(
+            pow(&base, &exponent),
+            Err(Error::NegativeIntegerExponent {
+                op: "pow",
+                dtype: DType::I64
+            })
+        ));
+    }
 }
 
 #[test]
