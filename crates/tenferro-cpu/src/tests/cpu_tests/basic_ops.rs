@@ -306,6 +306,34 @@ fn test_integer_div_rem_pow_contract() {
 }
 
 #[test]
+fn test_pow_accepts_rank_zero_operands() {
+    let f64_tensor =
+        Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 4.0]).unwrap();
+    let f64_exponent = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let f64_base = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+
+    let tensor_base = pow(&f64_tensor, &f64_exponent).unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<f64>().unwrap(), &[4.0, 9.0, 16.0]);
+
+    let scalar_base = pow(&f64_base, &f64_tensor).unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<f64>().unwrap(), &[4.0, 8.0, 16.0]);
+
+    let i32_tensor = Tensor::from_vec_col_major(vec![3], vec![2_i32, 3, 4]).unwrap();
+    let i32_exponent = Tensor::from_vec_col_major(vec![], vec![3_i32]).unwrap();
+    let i32_base = Tensor::from_vec_col_major(vec![], vec![2_i32]).unwrap();
+
+    let tensor_base = pow(&i32_tensor, &i32_exponent).unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<i32>().unwrap(), &[8, 27, 64]);
+
+    let scalar_base = pow(&i32_base, &i32_tensor).unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<i32>().unwrap(), &[4, 8, 16]);
+}
+
+#[test]
 fn test_integer_div_rem_pow_read_views_contract() {
     let lhs =
         TypedTensor::<i32>::from_vec_col_major(vec![6], vec![7_i32, -7, 7, -7, i32::MIN, i32::MAX])
