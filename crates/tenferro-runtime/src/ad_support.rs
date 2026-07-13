@@ -26,7 +26,173 @@ use crate::sym_dim::SymDim;
 use crate::traced::{next_input_key, next_traced_id, TracedTensor};
 use crate::{Error, Result};
 
+/// Opaque, persistent shape-constraint history transferred across AD graphs.
+///
+/// Cloning a transfer is constant-time. Combining transfers shares their
+/// existing histories and defers pointer de-duplication to one materialization
+/// walk when the compiler needs the scopes.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ad_support::ConstraintScopeTransfer;
+/// use tenferro_runtime::{DType, TracedTensor};
+///
+/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+/// let transfer = ConstraintScopeTransfer::from_tensor(&input);
+/// assert!(transfer.is_empty());
+/// ```
+#[derive(Clone)]
+pub struct ConstraintScopeTransfer {
+    chain: ConstraintScopeChain,
+}
+
+impl ConstraintScopeTransfer {
+    /// Create an empty transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::ad_support::ConstraintScopeTransfer;
+    ///
+    /// assert!(ConstraintScopeTransfer::empty().is_empty());
+    /// ```
+    pub fn empty() -> Self {
+        Self {
+            chain: ConstraintScopeChain::empty(),
+        }
+    }
+
+    /// Borrow a traced tensor's constraint history through an opaque transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::ad_support::ConstraintScopeTransfer;
+    /// use tenferro_runtime::{DType, TracedTensor};
+    ///
+    /// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    /// assert!(ConstraintScopeTransfer::from_tensor(&input).is_empty());
+    /// ```
+    pub fn from_tensor(tensor: &TracedTensor) -> Self {
+        Self {
+            chain: tensor.constraint_scopes.clone(),
+        }
+    }
+
+    /// Add one analyzed graph scope above inherited persistent histories.
+    ///
+    /// Empty analyzed scopes are not retained. Existing histories remain
+    /// shared, including when the same parent is inherited more than once.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::ad_support::{
+    ///     register_scoped_graph_analysis, ConstraintScopeTransfer,
+    /// };
+    /// use tenferro_runtime::{DType, TracedTensor};
+    ///
+    /// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    /// let parent = ConstraintScopeTransfer::from_tensor(&input);
+    /// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
+    /// let transfer = ConstraintScopeTransfer::with_new(analysis.constraints, [&parent]);
+    /// assert!(transfer.is_empty());
+    /// ```
+    pub fn with_new<'a>(
+        scope: ShapeConstraintScope,
+        inherited: impl IntoIterator<Item = &'a ConstraintScopeTransfer>,
+    ) -> Self {
+        let parents: Vec<_> = inherited
+            .into_iter()
+            .map(|transfer| &transfer.chain)
+            .collect();
+        let chain = if scope.is_empty() {
+            ConstraintScopeChain::merge(parents)
+        } else {
+            ConstraintScopeChain::with_scope(Arc::new(scope), parents)
+        };
+        Self { chain }
+    }
+
+    /// Merge inherited persistent histories without adding a graph scope.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::ad_support::ConstraintScopeTransfer;
+    ///
+    /// let parent = ConstraintScopeTransfer::empty();
+    /// let merged = ConstraintScopeTransfer::merge([&parent, &parent]);
+    /// assert!(merged.is_empty());
+    /// ```
+    pub fn merge<'a>(inherited: impl IntoIterator<Item = &'a ConstraintScopeTransfer>) -> Self {
+        Self {
+            chain: ConstraintScopeChain::merge(
+                inherited.into_iter().map(|transfer| &transfer.chain),
+            ),
+        }
+    }
+
+    /// Return whether the transferred history contains no constraint scopes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::ad_support::ConstraintScopeTransfer;
+    ///
+    /// assert!(ConstraintScopeTransfer::empty().is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.chain.as_slice().is_empty()
+    }
+
+    #[cfg(test)]
+    fn test_scope_and_node_counts(&self) -> (usize, usize) {
+        let (scopes, visited_nodes) = self.chain.materialize_with_visit_count();
+        (scopes.len(), visited_nodes)
+    }
+}
+
+impl fmt::Debug for ConstraintScopeTransfer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConstraintScopeTransfer")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Parts required to construct a traced tensor from an AD transform.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+/// use computegraph::graph::GraphBuilder;
+/// use tenferro_runtime::ad_support::{
+///     allocate_input_key, tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts,
+/// };
+/// use tenferro_runtime::{DType, SymDim};
+///
+/// let key = allocate_input_key();
+/// let mut builder = GraphBuilder::new();
+/// let value = builder.add_input(key);
+/// builder.set_outputs(vec![value]);
+/// let tensor = tensor_from_parts(TracedTensorParts {
+///     rank: 1,
+///     dtype: DType::F64,
+///     graph: Arc::new(builder.build()),
+///     val: value,
+///     data: None,
+///     shape_hint: Some(vec![SymDim::from(2)]),
+///     inputs_map: Arc::new(HashMap::new()),
+///     extra_roots: Vec::new(),
+///     checkpoint_chain: None,
+///     metadata_scopes: Vec::new(),
+///     constraint_scope_transfer: ConstraintScopeTransfer::empty(),
+/// });
+/// assert_eq!(tensor.rank, 1);
+/// ```
 pub struct TracedTensorParts {
     pub rank: usize,
     pub dtype: DType,
@@ -38,7 +204,7 @@ pub struct TracedTensorParts {
     pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-    pub constraint_scopes: Vec<Arc<ShapeConstraintScope>>,
+    pub constraint_scope_transfer: ConstraintScopeTransfer,
 }
 
 impl fmt::Debug for TracedTensorParts {
@@ -53,12 +219,45 @@ impl fmt::Debug for TracedTensorParts {
             .field("extra_roots_len", &self.extra_roots.len())
             .field("has_checkpoint_chain", &self.checkpoint_chain.is_some())
             .field("metadata_scopes_len", &self.metadata_scopes.len())
-            .field("constraint_scopes_len", &self.constraint_scopes.len())
+            .field("constraint_scope_transfer", &self.constraint_scope_transfer)
             .finish_non_exhaustive()
     }
 }
 
 /// Builds a traced tensor from validated AD transform output.
+///
+/// See [`TracedTensorParts`] for a complete runnable example.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+/// use computegraph::graph::GraphBuilder;
+/// use tenferro_runtime::ad_support::{
+///     allocate_input_key, tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts,
+/// };
+/// use tenferro_runtime::{DType, SymDim};
+///
+/// let key = allocate_input_key();
+/// let mut builder = GraphBuilder::new();
+/// let value = builder.add_input(key);
+/// builder.set_outputs(vec![value]);
+/// let tensor = tensor_from_parts(TracedTensorParts {
+///     rank: 1,
+///     dtype: DType::F64,
+///     graph: Arc::new(builder.build()),
+///     val: value,
+///     data: None,
+///     shape_hint: Some(vec![SymDim::from(1)]),
+///     inputs_map: Arc::new(HashMap::new()),
+///     extra_roots: Vec::new(),
+///     checkpoint_chain: None,
+///     metadata_scopes: Vec::new(),
+///     constraint_scope_transfer: ConstraintScopeTransfer::empty(),
+/// });
+/// assert_eq!(tensor.dtype, DType::F64);
+/// ```
 pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
     TracedTensor {
         id: next_traced_id(),
@@ -72,7 +271,7 @@ pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
         extra_roots: parts.extra_roots,
         checkpoint_chain: parts.checkpoint_chain,
         metadata_scopes: MetadataScopeChain::from_materialized(parts.metadata_scopes),
-        constraint_scopes: ConstraintScopeChain::from_materialized(parts.constraint_scopes),
+        constraint_scopes: parts.constraint_scope_transfer.chain,
     }
 }
 
@@ -94,80 +293,6 @@ pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
 
 pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
     tensor.metadata_scopes.as_slice()
-}
-
-/// Borrow graph-owned shape-constraint scopes carried by a traced tensor.
-///
-/// This is the narrow preservation boundary used by `tenferro-ad`. Ordinary
-/// user code should declare constraints through `ExtensionShapeContext`.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_runtime::ad_support::constraint_scopes;
-/// use tenferro_runtime::{DType, TracedTensor};
-///
-/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-/// assert!(constraint_scopes(&input).is_empty());
-/// ```
-pub fn constraint_scopes(tensor: &TracedTensor) -> &[Arc<ShapeConstraintScope>] {
-    tensor.constraint_scopes.as_slice()
-}
-
-/// Merge a newly analyzed graph scope with inherited traced-tensor scopes.
-///
-/// The new scope is first. Inherited scopes keep their source order, and the
-/// same `Arc` is retained only once.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_runtime::ad_support::{
-///     constraint_scopes_with_new, register_scoped_graph_analysis,
-/// };
-/// use tenferro_runtime::{DType, TracedTensor};
-///
-/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-/// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
-/// let scopes = constraint_scopes_with_new(analysis.constraints, []);
-/// assert_eq!(scopes.len(), 1);
-/// ```
-pub fn constraint_scopes_with_new<'a>(
-    scope: ShapeConstraintScope,
-    inherited: impl IntoIterator<Item = &'a [Arc<ShapeConstraintScope>]>,
-) -> Vec<Arc<ShapeConstraintScope>> {
-    let mut scopes = vec![Arc::new(scope)];
-    let mut seen = std::collections::HashSet::from([Arc::as_ptr(&scopes[0])]);
-    for source in inherited {
-        for inherited_scope in source {
-            if seen.insert(Arc::as_ptr(inherited_scope)) {
-                scopes.push(Arc::clone(inherited_scope));
-            }
-        }
-    }
-    scopes
-}
-
-/// Append a graph-owned constraint scope unless the same `Arc` is present.
-///
-/// # Examples
-///
-/// ```rust
-/// use std::sync::Arc;
-/// use tenferro_runtime::ad_support::{push_constraint_scope, ShapeConstraintScope};
-///
-/// let scope = Arc::new(ShapeConstraintScope::default());
-/// let mut scopes = vec![Arc::clone(&scope)];
-/// push_constraint_scope(&mut scopes, scope);
-/// assert_eq!(scopes.len(), 1);
-/// ```
-pub fn push_constraint_scope(
-    scopes: &mut Vec<Arc<ShapeConstraintScope>>,
-    scope: Arc<ShapeConstraintScope>,
-) {
-    if scopes.iter().all(|existing| !Arc::ptr_eq(existing, &scope)) {
-        scopes.push(scope);
-    }
 }
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {

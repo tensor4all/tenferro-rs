@@ -34,7 +34,7 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ShapeGuardContext, SymDim};
+use tenferro_ops::{ShapeGuardContext, ShapeRelation, SymDim};
 use tenferro_runtime::extension::{apply, HostReferenceRuntime};
 use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TypedTensor};
@@ -1247,14 +1247,41 @@ fn compiled_program_contains_extension_with_specs(
     contains_extension
 }
 
-fn assert_exact_shape_violation(error: RuntimeError) {
-    assert!(matches!(
-        error,
+#[derive(Debug, PartialEq, Eq)]
+struct ExactShapeViolationDiagnostic {
+    family: &'static str,
+    instruction_index: Option<usize>,
+    relation: ShapeRelation,
+    lhs_expr: String,
+    rhs_expr: String,
+    lhs_value: usize,
+    rhs_value: usize,
+}
+
+fn exact_shape_violation_diagnostic(error: RuntimeError) -> ExactShapeViolationDiagnostic {
+    match error {
         RuntimeError::ShapeConstraintViolation {
-            family: "tenferro-tests.exact_shape_linear.v1",
-            ..
+            family,
+            instruction_index,
+            relation,
+            lhs_expr,
+            rhs_expr,
+            lhs_value,
+            rhs_value,
+        } => {
+            assert_eq!(family, "tenferro-tests.exact_shape_linear.v1");
+            ExactShapeViolationDiagnostic {
+                family,
+                instruction_index,
+                relation,
+                lhs_expr,
+                rhs_expr,
+                lhs_value,
+                rhs_value,
+            }
         }
-    ));
+        other => panic!("expected exact-shape violation, got {other:?}"),
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -1289,7 +1316,7 @@ fn shape_constraint_jvp_survives_first_transform_and_cache_hit() {
         let tangent = TracedTensor::from_vec_col_major(vec![2], values.to_vec()).unwrap();
         let jvp = ad.jvp(&y, &x, &tangent).expect("exact-shape JVP build");
         assert!(
-            !tenferro_runtime::ad_support::constraint_scopes(&jvp).is_empty(),
+            !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&jvp).is_empty(),
             "JVP output must own the emitted linear graph constraint scope"
         );
         let program = compiler.compile(&jvp).expect("equal JVP shapes compile");
@@ -1305,11 +1332,25 @@ fn shape_constraint_jvp_survives_first_transform_and_cache_hit() {
     let jvp = ad
         .jvp(&y, &x, &mismatched)
         .expect("cached exact-shape JVP build");
-    let error = compiler
+    let hot_error = compiler
         .compile(&jvp)
         .expect_err("mismatched cached JVP shapes must fail");
-    assert_exact_shape_violation(error);
+    let hot_diagnostic = exact_shape_violation_diagnostic(hot_error);
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let cold_ad = exact_shape_ad_context();
+    let cold_jvp = cold_ad
+        .jvp(&y, &x, &mismatched)
+        .expect("cold exact-shape JVP build");
+    let mut cold_compiler = tenferro_runtime::GraphCompiler::new();
+    let cold_error = cold_compiler
+        .compile(&cold_jvp)
+        .expect_err("mismatched cold JVP shapes must fail");
+    let cold_diagnostic = exact_shape_violation_diagnostic(cold_error);
+    assert_eq!(cold_diagnostic, hot_diagnostic);
+    assert_eq!(cold_ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(cold_compiler.compile_cache_len(), 0);
 }
 
 #[test]
@@ -1325,7 +1366,7 @@ fn shape_constraint_vjp_survives_first_transform_and_cache_hit() {
         let cotangent = TracedTensor::from_vec_col_major(vec![2], values.to_vec()).unwrap();
         let vjp = ad.vjp(&y, &x, &cotangent).expect("exact-shape VJP build");
         assert!(
-            !tenferro_runtime::ad_support::constraint_scopes(&vjp).is_empty(),
+            !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&vjp).is_empty(),
             "VJP output must own the emitted transposed graph constraint scope"
         );
         let program = compiler.compile(&vjp).expect("equal VJP shapes compile");
@@ -1341,11 +1382,25 @@ fn shape_constraint_vjp_survives_first_transform_and_cache_hit() {
     let vjp = ad
         .vjp(&y, &x, &mismatched)
         .expect("cached exact-shape VJP build");
-    let error = compiler
+    let hot_error = compiler
         .compile(&vjp)
         .expect_err("mismatched cached VJP shapes must fail");
-    assert_exact_shape_violation(error);
+    let hot_diagnostic = exact_shape_violation_diagnostic(hot_error);
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(compiler.compile_cache_len(), 1);
+
+    let cold_ad = exact_shape_ad_context();
+    let cold_vjp = cold_ad
+        .vjp(&y, &x, &mismatched)
+        .expect("cold exact-shape VJP build");
+    let mut cold_compiler = tenferro_runtime::GraphCompiler::new();
+    let cold_error = cold_compiler
+        .compile(&cold_vjp)
+        .expect_err("mismatched cold VJP shapes must fail");
+    let cold_diagnostic = exact_shape_violation_diagnostic(cold_error);
+    assert_eq!(cold_diagnostic, hot_diagnostic);
+    assert_eq!(cold_ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(cold_compiler.compile_cache_len(), 0);
 }
 
 #[test]
@@ -1476,9 +1531,7 @@ fn traced_vjp_prefers_custom_primal_vjp_over_linearize_transpose() {
         .vjp(&y, &x, &dy)
         .expect("vjp should build through custom primal VJP");
     assert!(
-        tenferro_runtime::ad_support::constraint_scopes(&vjp)
-            .iter()
-            .any(|scope| !scope.is_empty()),
+        !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&vjp).is_empty(),
         "custom primal VJP must retain constraints emitted by its graph"
     );
     let mut engine = GraphExecutor::new(CpuBackend::new());

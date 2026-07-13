@@ -13,12 +13,11 @@ use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::{
     checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
-    constraint_scopes as tensor_constraint_scopes, constraint_scopes_with_new,
     extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,
     linear_input_key, metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new,
-    ones_tensor, push_constraint_scope, push_metadata_scope, register_scoped_graph_analysis,
-    registered_meta, resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint,
-    tensor_from_parts, tensor_meta_from_tensor, RegisteredGraphAnalysis, TracedTensorParts,
+    ones_tensor, push_metadata_scope, register_scoped_graph_analysis, registered_meta,
+    resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
+    tensor_meta_from_tensor, ConstraintScopeTransfer, RegisteredGraphAnalysis, TracedTensorParts,
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
@@ -650,6 +649,11 @@ fn jvp_optional_impl(
     let mut extra_roots = vec![Arc::clone(output.graph())];
     extra_roots.extend(checkpoint_graphs);
     extra_roots.extend(tensor_extra_roots(output));
+    let inherited_constraint_scopes = [
+        ConstraintScopeTransfer::from_tensor(output),
+        ConstraintScopeTransfer::from_tensor(wrt),
+        ConstraintScopeTransfer::from_tensor(tangent),
+    ];
 
     Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: output.rank,
@@ -669,13 +673,9 @@ fn jvp_optional_impl(
                 tensor_metadata_scopes(tangent),
             ],
         ),
-        constraint_scopes: constraint_scopes_with_new(
+        constraint_scope_transfer: ConstraintScopeTransfer::with_new(
             analysis.constraints,
-            [
-                tensor_constraint_scopes(output),
-                tensor_constraint_scopes(wrt),
-                tensor_constraint_scopes(tangent),
-            ],
+            inherited_constraint_scopes.iter(),
         ),
     })))
 }
@@ -952,6 +952,19 @@ fn build_vjp_tensor(
         metadata: transposed_metadata_scope,
         constraints: transposed_constraint_scope,
     } = transposed_analysis;
+    let inherited_constraint_scopes = [
+        ConstraintScopeTransfer::from_tensor(output),
+        ConstraintScopeTransfer::from_tensor(wrt),
+        ConstraintScopeTransfer::from_tensor(cotangent),
+    ];
+    let inherited_constraint_scope = match residual_constraint_scope {
+        Some(scope) => ConstraintScopeTransfer::with_new(scope, inherited_constraint_scopes.iter()),
+        None => ConstraintScopeTransfer::merge(inherited_constraint_scopes.iter()),
+    };
+    let constraint_scope_transfer = ConstraintScopeTransfer::with_new(
+        transposed_constraint_scope,
+        [&inherited_constraint_scope],
+    );
 
     Ok(Some(tensor_from_parts(TracedTensorParts {
         rank: wrt.rank,
@@ -989,25 +1002,6 @@ fn build_vjp_tensor(
             push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));
             scopes
         },
-        constraint_scopes: {
-            let inherited = [
-                tensor_constraint_scopes(output),
-                tensor_constraint_scopes(wrt),
-                tensor_constraint_scopes(cotangent),
-            ];
-            let mut scopes = if let Some(scope) = residual_constraint_scope {
-                constraint_scopes_with_new(scope, inherited)
-            } else {
-                let mut scopes = Vec::new();
-                for source in inherited {
-                    for scope in source {
-                        push_constraint_scope(&mut scopes, Arc::clone(scope));
-                    }
-                }
-                scopes
-            };
-            push_constraint_scope(&mut scopes, Arc::new(transposed_constraint_scope));
-            scopes
-        },
+        constraint_scope_transfer,
     })))
 }

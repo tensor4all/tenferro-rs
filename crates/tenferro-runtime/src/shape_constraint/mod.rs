@@ -150,6 +150,7 @@ impl ConstraintScopeChain {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_materialized(scopes: Vec<Arc<ShapeConstraintScope>>) -> Self {
         let mut chain = Self::empty();
         for scope in scopes.into_iter().rev() {

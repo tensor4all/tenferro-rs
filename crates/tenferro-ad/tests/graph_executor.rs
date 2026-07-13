@@ -9,7 +9,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{
-    ad_support::{tensor_from_parts, TracedTensorParts},
+    ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
     DType, GraphCompiler, GraphExecutor, SymDim, Tensor, TensorRead, TracedTensor,
 };
 use tidu::ADKey;
@@ -294,7 +294,7 @@ fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),
-        constraint_scopes: Vec::new(),
+        constraint_scope_transfer: ConstraintScopeTransfer::empty(),
     });
 
     let err = GraphCompiler::new().compile(&output).unwrap_err();

@@ -14,9 +14,7 @@ fn independent_symbolic_contract_enforces_repeated_einsum_labels() {
     let mut compiler = GraphCompiler::new();
     let output = compiler.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
     assert!(
-        tenferro_runtime::ad_support::constraint_scopes(&output)
-            .iter()
-            .any(|scope| !scope.is_empty()),
+        !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&output).is_empty(),
         "direct einsum lowering must retain the extension shape contract"
     );
 
