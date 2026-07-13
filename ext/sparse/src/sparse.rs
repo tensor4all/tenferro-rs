@@ -328,11 +328,18 @@ pub(crate) fn validate_traced_values(values: &TracedTensor, nnz: usize) -> Runti
             values.dtype
         ))));
     }
-    let shape = values.concrete_shape()?;
-    if shape != [nnz] {
+    if values.rank != 1 {
         return Err(RuntimeError::TensorRuntime(invalid(format!(
-            "value tensor must have shape [{nnz}], got {shape:?}"
+            "value tensor must have rank 1, got rank {}",
+            values.rank
         ))));
+    }
+    if let Some(shape) = values.try_concrete_shape() {
+        if shape != [nnz] {
+            return Err(RuntimeError::TensorRuntime(invalid(format!(
+                "value tensor must have shape [{nnz}], got {shape:?}"
+            ))));
+        }
     }
     Ok(())
 }

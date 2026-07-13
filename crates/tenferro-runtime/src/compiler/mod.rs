@@ -24,6 +24,7 @@ struct PendingShapeConstraints {
     family_id: &'static str,
     constraints: Vec<LocalShapeConstraint>,
     prune_if_dead: bool,
+    require_extension_family: bool,
 }
 
 pub fn compile_std_to_exec(
@@ -181,6 +182,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                             family_id: ext.family_id(),
                             constraints: inferred_constraints,
                             prune_if_dead: false,
+                            require_extension_family: true,
                         });
                     }
                     let metas = inferred.output_metas;
@@ -224,6 +226,21 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                         resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs)?;
                     let analysis_shapes =
                         infer_output_shapes(&instr.operation, &analysis_input_shape_refs)?;
+                    let analysis_shapes = if matches!(
+                        instr.operation,
+                        StdTensorOp::Reshape { .. } | StdTensorOp::BroadcastInDim { .. }
+                    ) {
+                        match resolve_shapes(&analysis_shapes, &analysis_input_shape_refs) {
+                            Ok(resolved) => resolved,
+                            // This parallel analysis is best-effort: expressions such as a
+                            // deliberately unresolved `InputDim` must stay symbolic here. The
+                            // executable output-shape path above remains authoritative and keeps
+                            // its typed validation.
+                            Err(_) => analysis_shapes,
+                        }
+                    } else {
+                        analysis_shapes
+                    };
                     (
                         vec![dtype; instr.outputs.len()],
                         shapes,
@@ -288,6 +305,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
             family_id: local.source.family_id,
             constraints: vec![local],
             prune_if_dead: true,
+            require_extension_family: false,
         });
     }
 
@@ -308,10 +326,12 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
         let instruction_index = pending.origin_output_slots.iter().find_map(|&slot| {
             let index = producer_by_slot.get(slot).copied().flatten()?;
             program.instructions.get(index).and_then(|instruction| {
-                matches!(
-                    &instruction.op,
-                    ExecOp::Extension(extension) if extension.family_id() == pending.family_id
-                )
+                (!pending.require_extension_family
+                    || matches!(
+                        &instruction.op,
+                        ExecOp::Extension(extension)
+                            if extension.family_id() == pending.family_id
+                    ))
                 .then_some(index)
             })
         });

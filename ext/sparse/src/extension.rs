@@ -7,17 +7,16 @@ use std::sync::Arc;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionRegistryError,
-    ExtensionRuleSet,
-};
 use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::{
+    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionRegistryError, ExtensionRuleSet,
+};
 use tenferro_runtime::extension::{
     apply, ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
@@ -253,7 +252,8 @@ impl ExtensionOp for SparseMatmulOp {
     ) -> Result<Vec<(DType, Vec<SymDim>)>> {
         let input_dtypes = [ctx.input_dtype(0)?, ctx.input_dtype(1)?];
         let input_shapes = [ctx.input_shape(0)?, ctx.input_shape(1)?];
-        validate_primal_meta(&self.plan, &input_dtypes, &input_shapes)?;
+        validate_primal_meta(&input_dtypes, &input_shapes)?;
+        require_primal_shape_constraints(ctx, &self.plan)?;
         Ok(vec![(
             input_dtypes[0],
             vec![SymDim::from(self.plan.output_nnz())],
@@ -320,22 +320,27 @@ impl ExtensionOp for SparseMatmulJvpOp {
             .map(|input| ctx.input_dtype(input))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let input_shapes = (0..self.input_count())
-            .map(|input| ctx.input_shape(input))
+            .map(|input| ctx.input_shape(input).map(<[_]>::to_vec))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
+        let primal_shapes = [&input_shapes[0][..], &input_shapes[1][..]];
+        validate_primal_meta(&input_dtypes[..2], &primal_shapes)?;
+        require_primal_shape_constraints(ctx, &self.plan)?;
         for (active_pos, &active) in self.active_inputs.iter().enumerate() {
             if active >= 2 {
                 return Err(invalid(format!("invalid active sparse input {active}")));
             }
             let tangent_idx = 2 + active_pos;
-            if input_dtypes[tangent_idx] != input_dtypes[active]
-                || !is_rank1_shape(input_shapes[tangent_idx])
-                || !metadata_lengths_compatible(input_shapes[tangent_idx], input_shapes[active])
-            {
+            if input_dtypes[tangent_idx] != input_dtypes[active] {
                 return Err(invalid(
-                    "sparse tangent metadata must match active input metadata",
+                    "sparse tangent dtype must match active input dtype",
                 ));
             }
+            if !is_rank1_shape(&input_shapes[tangent_idx]) {
+                return Err(invalid(
+                    "sparse tangent inputs must be rank-1 value tensors",
+                ));
+            }
+            ctx.require_same_shape(tangent_idx, active)?;
         }
         Ok(vec![(
             input_dtypes[0],
@@ -407,22 +412,27 @@ impl ExtensionOp for SparseMatmulVjpOp {
             ctx.input_dtype(2)?,
         ];
         let input_shapes = [
-            ctx.input_shape(0)?,
-            ctx.input_shape(1)?,
-            ctx.input_shape(2)?,
+            ctx.input_shape(0)?.to_vec(),
+            ctx.input_shape(1)?.to_vec(),
+            ctx.input_shape(2)?.to_vec(),
         ];
-        validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
-        if input_dtypes[2] != input_dtypes[self.active_input]
-            || !is_rank1_shape(input_shapes[2])
-            || !matches_const_len(input_shapes[2], self.plan.output_nnz())
-        {
+        let primal_shapes = [&input_shapes[0][..], &input_shapes[1][..]];
+        validate_primal_meta(&input_dtypes[..2], &primal_shapes)?;
+        require_primal_shape_constraints(ctx, &self.plan)?;
+        if input_dtypes[2] != input_dtypes[self.active_input] {
             return Err(invalid(
-                "sparse VJP cotangent metadata does not match output metadata",
+                "sparse VJP cotangent dtype does not match active input dtype",
             ));
         }
+        if !is_rank1_shape(&input_shapes[2]) {
+            return Err(invalid(
+                "sparse VJP cotangent must be a rank-1 value tensor",
+            ));
+        }
+        ctx.require_equal(ctx.input_axis(2, 0)?, SymDim::from(self.plan.output_nnz()))?;
         Ok(vec![(
             input_dtypes[self.active_input],
-            input_shapes[self.active_input].to_vec(),
+            input_shapes[self.active_input].clone(),
         )])
     }
 
@@ -491,7 +501,6 @@ impl ExtensionLinearizeRule for SparseMatmulAdRule {
         );
         Ok(vec![Some(out[0])])
     }
-
 }
 
 #[cfg(feature = "autodiff")]
@@ -624,11 +633,7 @@ fn execute_vjp(plan: &SparseMatmulPlan, inputs: &[&Tensor], active_input: usize)
     Tensor::from_vec_col_major(vec![output.len()], output)
 }
 
-fn validate_primal_meta(
-    plan: &SparseMatmulPlan,
-    input_dtypes: &[DType],
-    input_shapes: &[&[SymDim]],
-) -> Result<()> {
+fn validate_primal_meta(input_dtypes: &[DType], input_shapes: &[&[SymDim]]) -> Result<()> {
     if input_dtypes.len() != 2 || input_shapes.len() != 2 {
         return Err(invalid(format!(
             "sparse matmul expected 2 inputs, got dtypes={} shapes={}",
@@ -645,29 +650,20 @@ fn validate_primal_meta(
     if !is_rank1_shape(input_shapes[0]) || !is_rank1_shape(input_shapes[1]) {
         return Err(invalid("sparse matmul inputs must be rank-1 value tensors"));
     }
-    if !matches_const_len(input_shapes[0], plan.left_nnz())
-        || !matches_const_len(input_shapes[1], plan.right_nnz())
-    {
-        return Err(invalid(
-            "sparse matmul constant input lengths do not match payload nnz",
-        ));
-    }
+    Ok(())
+}
+
+fn require_primal_shape_constraints(
+    ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    plan: &SparseMatmulPlan,
+) -> Result<()> {
+    ctx.require_equal(ctx.input_axis(0, 0)?, SymDim::from(plan.left_nnz()))?;
+    ctx.require_equal(ctx.input_axis(1, 0)?, SymDim::from(plan.right_nnz()))?;
     Ok(())
 }
 
 fn is_rank1_shape(shape: &[SymDim]) -> bool {
     shape.len() == 1
-}
-
-fn matches_const_len(shape: &[SymDim], len: usize) -> bool {
-    shape[0].constant_value().is_none_or(|dim| dim == len)
-}
-
-fn metadata_lengths_compatible(lhs: &[SymDim], rhs: &[SymDim]) -> bool {
-    match (lhs[0].constant_value(), rhs[0].constant_value()) {
-        (Some(lhs), Some(rhs)) => lhs == rhs,
-        _ => true,
-    }
 }
 
 fn validate_primal_inputs(plan: &SparseMatmulPlan, inputs: &[&Tensor]) -> Result<()> {
@@ -683,20 +679,14 @@ fn validate_primal_inputs(plan: &SparseMatmulPlan, inputs: &[&Tensor]) -> Result
 }
 
 #[cfg(feature = "autodiff")]
-fn downcast_matmul_op(
-    op: &dyn ExtensionOp,
-    rule: ADRuleKind,
-) -> ADRuleResult<&SparseMatmulOp> {
+fn downcast_matmul_op(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&SparseMatmulOp> {
     op.as_any()
         .downcast_ref::<SparseMatmulOp>()
         .ok_or_else(|| ADRuleError::unsupported(FAMILY_ID, rule))
 }
 
 #[cfg(feature = "autodiff")]
-fn downcast_jvp_op(
-    op: &dyn ExtensionOp,
-    rule: ADRuleKind,
-) -> ADRuleResult<&SparseMatmulJvpOp> {
+fn downcast_jvp_op(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&SparseMatmulJvpOp> {
     op.as_any()
         .downcast_ref::<SparseMatmulJvpOp>()
         .ok_or_else(|| ADRuleError::unsupported(JVP_FAMILY_ID, rule))

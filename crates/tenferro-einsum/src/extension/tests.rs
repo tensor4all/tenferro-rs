@@ -67,7 +67,7 @@ fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
 }
 
 #[test]
-fn infer_output_meta_returns_error_for_invalid_extension_metadata() {
+fn infer_output_meta_keeps_structural_errors_and_records_extent_equality() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
     let bad_rhs_rank = [SymDim::from(3usize)];
@@ -85,12 +85,13 @@ fn infer_output_meta_returns_error_for_invalid_extension_metadata() {
         &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
     )
     .is_err());
-    assert!(invoke_extension_shape_inference(
+    let inferred = invoke_extension_shape_inference(
         &op,
         &[DType::F64, DType::F64],
-        &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()]
+        &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()],
     )
-    .is_err());
+    .expect("extent mismatch is represented as a shape equality");
+    assert_eq!(inferred.constraints.len(), 1);
 }
 
 #[test]

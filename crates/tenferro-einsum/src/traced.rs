@@ -175,7 +175,12 @@ pub fn einsum_subscripts_with(
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
     if let Some(result) = try_direct_binary_dot_general(inputs, subscripts, &optimize)? {
-        return Ok(result);
+        let contract_op = EinsumExtensionOp::with_output_shape_hint(
+            subscripts.clone(),
+            output_shape_hint,
+            EinsumPlanSpec::LeftToRight,
+        );
+        return extension::attach_expanded_shape_contract(&contract_op, inputs, result);
     }
 
     let subs = Subscripts::from(subscripts);

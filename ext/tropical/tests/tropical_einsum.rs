@@ -1,5 +1,40 @@
-use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
+use tenferro_einsum::Subscripts;
+use tenferro_ext_tropical::{
+    einsum::tropical_einsum_with_argmax, traced::tropical_einsum_subscripts, TropicalKind,
+};
+use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 use tenferro_tensor::{Error, Tensor};
+
+#[test]
+fn independent_symbolic_contract_enforces_repeated_tropical_labels() {
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    assert_ne!(lhs.axis_sym_dim(1).unwrap(), rhs.axis_sym_dim(0).unwrap());
+    let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
+    let output =
+        tropical_einsum_subscripts(TropicalKind::MaxPlus, &[&lhs, &rhs], &subscripts).unwrap();
+    let mut compiler = GraphCompiler::new();
+
+    compiler
+        .compile_with_input_specs(
+            &output,
+            &[(&lhs, DType::F64, &[2, 3]), (&rhs, DType::F64, &[3, 4])],
+        )
+        .expect("equal contracted axes should compile");
+    let error = compiler
+        .compile_with_input_specs(
+            &output,
+            &[(&lhs, DType::F64, &[2, 3]), (&rhs, DType::F64, &[5, 4])],
+        )
+        .expect_err("unequal contracted axes must fail before execution");
+    assert!(matches!(
+        error,
+        tenferro_runtime::Error::ShapeConstraintViolation {
+            family: "tenferro-ext-tropical.einsum.v1",
+            ..
+        }
+    ));
+}
 
 #[test]
 fn maxplus_matmul_uses_shared_einsum_lowering() {

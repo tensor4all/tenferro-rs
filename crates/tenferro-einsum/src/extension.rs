@@ -222,7 +222,7 @@ impl ExtensionOp for EinsumExtensionOp {
             .map(|input| ctx.input_dtype(input))
             .collect::<Result<Vec<_>, _>>()?;
         let input_shapes = (0..self.input_count())
-            .map(|input| ctx.input_shape(input))
+            .map(|input| ctx.input_shape(input).map(<[_]>::to_vec))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
@@ -239,17 +239,7 @@ impl ExtensionOp for EinsumExtensionOp {
             }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
                 if let Some(existing) = label_dims.get(&label) {
-                    if let (Some(lhs), Some(rhs)) =
-                        (existing.constant_value(), dim.constant_value())
-                    {
-                        if lhs != rhs {
-                            return Err(TensorError::ShapeMismatch {
-                                op: "einsum",
-                                lhs: vec![lhs],
-                                rhs: vec![rhs],
-                            });
-                        }
-                    }
+                    ctx.require_equal(existing.clone(), dim.clone())?;
                 } else {
                     label_dims.insert(label, dim.clone());
                 }
