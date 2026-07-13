@@ -8,7 +8,7 @@ use tenferro_tensor::{DType, DotGeneralConfig};
 use crate::shape_constraint::{discharge, LocalShapeConstraint};
 use crate::shape_infer::{
     infer_extension_output_meta, infer_extension_output_meta_with_constraints, infer_output_dtype,
-    infer_output_extents, infer_output_shapes, resolve_dim_expr_from_shapes,
+    infer_output_extents, infer_output_shapes,
 };
 use crate::{Error, Result};
 
@@ -51,7 +51,7 @@ pub fn compile_std_to_exec_with_options(
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
     let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; prog.n_slots];
-    let mut pending_constraints: Vec<(Vec<usize>, Vec<LocalShapeConstraint>)> = Vec::new();
+    let mut pending_constraints: Vec<(usize, Vec<LocalShapeConstraint>)> = Vec::new();
 
     for (index, &slot) in prog.input_slots.iter().enumerate() {
         slot_dtypes[slot] = Some(input_dtypes[index]);
@@ -102,8 +102,10 @@ pub fn compile_std_to_exec_with_options(
                         &input_shapes_refs,
                     )?;
                     let metas = inferred.output_metas;
-                    if !inferred.constraints.is_empty() {
-                        pending_constraints.push((instr.outputs.clone(), inferred.constraints));
+                    if let Some(origin_slot) = instr.outputs.first().copied() {
+                        if !inferred.constraints.is_empty() {
+                            pending_constraints.push((origin_slot, inferred.constraints));
+                        }
                     }
                     if metas.len() != instr.outputs.len() {
                         return Err(invalid_compiled_graph(format!(
@@ -187,27 +189,17 @@ pub fn compile_std_to_exec_with_options(
     optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer)?;
     let producer_by_slot = producer_index_by_slot(&program)?;
     let mut constraints = Vec::new();
-    for (origin_output_slots, local_constraints) in pending_constraints {
-        let origin_slot = origin_output_slots.first().copied().ok_or_else(|| {
-            invalid_compiled_graph("extension constraint origin has no output slots")
-        })?;
+    for (origin_slot, local_constraints) in pending_constraints {
         let instruction_index = producer_by_slot
             .get(origin_slot)
             .copied()
             .flatten()
             .ok_or_else(|| {
                 invalid_compiled_graph(format!(
-                    "extension constraint origin with output slots {origin_output_slots:?} \
+                    "extension constraint origin with output slot {origin_slot} \
                      is absent from the final instruction stream"
                 ))
             })?;
-        if program.instructions[instruction_index].output_slots != origin_output_slots {
-            return Err(invalid_compiled_graph(format!(
-                "extension constraint origin slots {origin_output_slots:?} do not match final \
-                 instruction {instruction_index} outputs {:?}",
-                program.instructions[instruction_index].output_slots
-            )));
-        }
         constraints.extend(local_constraints.into_iter().map(|mut constraint| {
             constraint.source = constraint.source.with_instruction(instruction_index);
             constraint
@@ -261,11 +253,8 @@ fn resolve_extent(
 ) -> Result<ShapeExtent<DimExpr>> {
     match extent {
         ShapeExtent::Exact(dim) => match dim_expr_extent_kind(&dim, input_extents) {
-            ExtentKind::Exact => Ok(ShapeExtent::exact(resolve_dim_expr_from_shapes(
-                &dim,
-                input_shapes,
-            )?)),
-            ExtentKind::UpperBound => Ok(ShapeExtent::upper_bound(resolve_dim_expr_from_shapes(
+            ExtentKind::Exact => Ok(ShapeExtent::exact(resolve_dim_expr(&dim, input_shapes)?)),
+            ExtentKind::UpperBound => Ok(ShapeExtent::upper_bound(resolve_dim_expr(
                 &dim,
                 input_shapes,
             )?)),
@@ -274,10 +263,52 @@ fn resolve_extent(
         ShapeExtent::UpperBound(dim) => match dim_expr_extent_kind(&dim, input_extents) {
             ExtentKind::Unknown => Ok(ShapeExtent::unknown()),
             ExtentKind::Exact | ExtentKind::UpperBound => Ok(ShapeExtent::upper_bound(
-                resolve_dim_expr_from_shapes(&dim, input_shapes)?,
+                resolve_dim_expr(&dim, input_shapes)?,
             )),
         },
         ShapeExtent::Unknown => Ok(ShapeExtent::unknown()),
+    }
+}
+
+fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> Result<DimExpr> {
+    match expr {
+        DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
+        DimExpr::InputDim { input_idx, axis } => input_shapes
+            .get(*input_idx)
+            .and_then(|shape| shape.get(*axis))
+            .cloned()
+            .ok_or_else(|| {
+                invalid_compiled_graph(format!(
+                    "InputDim({}, {}) cannot be resolved from {} input shapes",
+                    input_idx,
+                    axis,
+                    input_shapes.len()
+                ))
+            }),
+        DimExpr::Add(a, b) => Ok(DimExpr::add(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Sub(a, b) => Ok(DimExpr::sub(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Mul(a, b) => Ok(DimExpr::mul(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::FloorDiv(a, b) => Ok(DimExpr::floor_div(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Min(a, b) => Ok(DimExpr::min(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
+        DimExpr::Max(a, b) => Ok(DimExpr::max(
+            resolve_dim_expr(a, input_shapes)?,
+            resolve_dim_expr(b, input_shapes)?,
+        )),
     }
 }
 

@@ -18,6 +18,21 @@ type Symbol = (usize, usize);
 ///
 /// Guards are produced by the compiler. Runtime evaluation is intentionally
 /// owned by the execution pipeline rather than exposed as a user API.
+///
+/// # Examples
+///
+/// Guard internals are opaque; callers can inspect the number of obligations
+/// retained by an [`ExecProgram`](crate::ExecProgram).
+///
+/// ```rust
+/// use tenferro_runtime::ShapeGuard;
+///
+/// fn retained_guard_count(guards: &[ShapeGuard]) -> usize {
+///     guards.len()
+/// }
+///
+/// assert_eq!(retained_guard_count(&[]), 0);
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ShapeGuard {
     pub(crate) source: ConstraintSource,

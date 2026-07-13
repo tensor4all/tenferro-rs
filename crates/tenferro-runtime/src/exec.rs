@@ -38,6 +38,67 @@ pub struct ExecProgram {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub n_slots: usize,
+    /// Normalized symbolic shape obligations retained during compilation.
+    ///
+    /// Guard internals are opaque. Execution validates them before backend
+    /// work once runtime guard enforcement is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::{any::Any, sync::Arc};
+    ///
+    /// use computegraph::compile::{CompiledProgram, Instruction};
+    /// use tenferro_ops::{
+    ///     dim_expr::DimExpr, ext_op::ExtensionOp, std_tensor_op::StdTensorOp,
+    ///     ExtensionShapeContext, SymDim,
+    /// };
+    /// use tenferro_runtime::{extension::compile_std_to_exec, DType};
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct MatchingAxes;
+    ///
+    /// impl ExtensionOp for MatchingAxes {
+    ///     fn family_id(&self) -> &'static str { "example.matching-axes.v1" }
+    ///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().downcast_ref::<Self>().is_some()
+    ///     }
+    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn input_count(&self) -> usize { 2 }
+    ///     fn output_count(&self) -> usize { 1 }
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         ctx: &mut ExtensionShapeContext<'_>,
+    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ///         let lhs = ctx.input_axis(0, 0)?;
+    ///         let rhs = ctx.input_axis(1, 0)?;
+    ///         ctx.require_equal(lhs, rhs * 2)?;
+    ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    ///     }
+    /// }
+    ///
+    /// let program = CompiledProgram {
+    ///     instructions: vec![Instruction {
+    ///         operation: StdTensorOp::Extension(Arc::new(MatchingAxes)),
+    ///         inputs: vec![0, 1],
+    ///         outputs: vec![2],
+    ///     }],
+    ///     input_slots: vec![0, 1],
+    ///     output_slots: vec![2],
+    ///     n_slots: 3,
+    /// };
+    /// let compiled = compile_std_to_exec(
+    ///     &program,
+    ///     &[DType::F64, DType::F64],
+    ///     &[
+    ///         vec![DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    ///         vec![DimExpr::InputDim { input_idx: 1, axis: 0 }],
+    ///     ],
+    /// ).unwrap();
+    /// assert_eq!(compiled.shape_guards.len(), 1);
+    /// ```
     #[doc(hidden)]
     pub shape_guards: Vec<crate::ShapeGuard>,
 }
