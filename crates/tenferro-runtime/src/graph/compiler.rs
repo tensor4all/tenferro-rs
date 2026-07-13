@@ -19,10 +19,11 @@ use super::cache::{
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
-use crate::compiler::{compile_std_to_exec_with_options, CompilerOptions};
+use crate::compiler::{compile_std_to_exec_with_options_and_constraints, CompilerOptions};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
+use crate::shape_constraint::SlotScopedShapeConstraint;
 use crate::traced::{try_concrete_shape, TracedTensor};
 
 #[derive(Clone)]
@@ -392,6 +393,16 @@ impl GraphCompiler {
         binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
         default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
     ) -> Result<GraphProgram> {
+        let mut constraint_scopes = Vec::new();
+        let mut seen_constraint_scopes = std::collections::HashSet::new();
+        for output in outputs {
+            for scope in output.constraint_scopes.materialize() {
+                if seen_constraint_scopes.insert(Arc::as_ptr(&scope)) {
+                    constraint_scopes.push(scope);
+                }
+            }
+        }
+
         let mut roots = Vec::new();
         let mut output_keys = Vec::with_capacity(outputs.len());
         for output in outputs {
@@ -403,11 +414,62 @@ impl GraphCompiler {
         let graph = materialize_merge(&view, &output_keys);
         let mut compiled = compile(&graph);
         prune_compiled_extension_outputs(&mut compiled)?;
+        let slot_by_key: HashMap<_, _> = graph
+            .values
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| (value.key.clone(), slot))
+            .collect();
+        let mut scoped_constraints = Vec::new();
+        for scope in constraint_scopes {
+            for scoped in scope.constraints() {
+                let origin_slots: Vec<_> = scoped
+                    .origins
+                    .iter()
+                    .filter_map(|key| slot_by_key.get(key).copied())
+                    .collect();
+                if origin_slots.is_empty() {
+                    continue;
+                }
+                let origin_instruction = origin_slots.iter().find_map(|&slot| {
+                    graph
+                        .values
+                        .get(slot)
+                        .and_then(|value| value.producer.map(|p| p.0))
+                });
+                let mut local = scoped.local.clone();
+                if let Some(instruction_index) = origin_instruction {
+                    local.source = local.source.with_instruction(instruction_index);
+                }
+                let mut input_slots = Vec::with_capacity(scoped.inputs.len());
+                for (input_idx, key) in scoped.inputs.iter().enumerate() {
+                    let Some(slot) = slot_by_key.get(key).copied() else {
+                        return Err(Error::ShapeConstraintEvaluation {
+                            family: local.source.family_id,
+                            instruction_index: local.source.instruction_index,
+                            relation: local.relation,
+                            expression: format!("{:?}", local.lhs),
+                            cause: crate::ShapeConstraintEvalError::MissingInput {
+                                input_idx,
+                                input_count: scoped.inputs.len(),
+                            },
+                        });
+                    };
+                    input_slots.push(slot);
+                }
+                scoped_constraints.push(SlotScopedShapeConstraint {
+                    origin_slots,
+                    input_slots,
+                    local,
+                });
+            }
+        }
 
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
         let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
         let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
+        let mut analysis_input_shapes = Vec::with_capacity(graph.inputs.len());
+        for (input_index, key) in graph.inputs.iter().enumerate() {
             let ValueKey::Input(input_key) = key else {
                 return Err(Error::Internal(
                     "expected Input key in graph inputs".to_string(),
@@ -416,6 +478,7 @@ impl GraphCompiler {
             let descriptor = descriptor_for_input(input_key, binding_specs, default_inputs)?;
             input_dtypes.push(descriptor.dtype);
             input_shapes.push(DimExpr::from_concrete(&descriptor.shape));
+            analysis_input_shapes.push(DimExpr::input_shape(input_index, descriptor.shape.len()));
             descriptors.push(GraphProgramInput::new(
                 descriptor.key,
                 descriptor.dtype,
@@ -425,11 +488,13 @@ impl GraphCompiler {
             ));
         }
 
-        let exec = compile_std_to_exec_with_options(
+        let exec = compile_std_to_exec_with_options_and_constraints(
             &compiled,
             &input_dtypes,
             &input_shapes,
             self.compiler_options,
+            &scoped_constraints,
+            &analysis_input_shapes,
         )?;
         let exec = self.get_or_compile(exec);
         Ok(GraphProgram::new(exec, descriptors))
@@ -615,6 +680,9 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod constraint_scope_tests;
 
 #[cfg(test)]
 mod tests {

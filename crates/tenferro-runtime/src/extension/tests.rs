@@ -1,4 +1,5 @@
 use computegraph::types::OperationRole;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::DType;
 
@@ -149,6 +150,7 @@ fn apply_expanded_graph_builds_standard_op_without_extension() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].rank, 1);
     assert_eq!(outputs[0].dtype, DType::F64);
+    assert!(outputs[0].constraint_scopes.materialize().is_empty());
     assert!(outputs[0]
         .graph
         .operations()
@@ -171,4 +173,84 @@ fn apply_expanded_graph_rejects_output_metadata_count_mismatch() {
     assert!(message.contains("expanded graph"), "{message}");
     assert!(message.contains("returned 1 outputs"), "{message}");
     assert!(message.contains("0 output metadata entries"), "{message}");
+}
+
+#[derive(Clone, Debug)]
+struct CountedConstraintExtension {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ExtensionOp for CountedConstraintExtension {
+    fn family_id(&self) -> &'static str {
+        "test.counted-constraint"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| Arc::ptr_eq(&self.calls, &other.calls))
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        2
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        ctx.require_axes_equal((0, 0), (1, 0))?;
+        let meta = (ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec());
+        Ok(vec![meta.clone(), meta])
+    }
+}
+
+#[test]
+fn constraint_scope_analysis_invokes_extension_inference_once_and_attaches_one_scope() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let lhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3], vec![2.0_f64; 3]).unwrap();
+
+    let outputs = apply(
+        Arc::new(CountedConstraintExtension {
+            calls: Arc::clone(&calls),
+        }),
+        &[&lhs, &rhs],
+    )
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(outputs[0].constraint_scopes.materialize().len(), 1);
+    let constraints = outputs[0].constraint_scopes.as_slice()[0].constraints();
+    assert_eq!(constraints.len(), 1);
+    assert_eq!(
+        constraints[0].origins,
+        outputs
+            .iter()
+            .map(|output| output.graph.values()[output.val].key.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        constraints[0].inputs,
+        vec![
+            lhs.graph.values()[lhs.val].key.clone(),
+            rhs.graph.values()[rhs.val].key.clone(),
+        ]
+    );
 }

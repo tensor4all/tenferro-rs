@@ -70,6 +70,7 @@ fn tensor_from_parts_preserves_summary_fields() {
         tensor.graph.values()[tensor.val].key,
         ValueKey::Input(_)
     ));
+    assert!(tensor.constraint_scopes.materialize().is_empty());
 }
 
 #[test]

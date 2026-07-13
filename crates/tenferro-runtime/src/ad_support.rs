@@ -15,10 +15,13 @@ pub use crate::checkpoint::CheckpointNode;
 use crate::metadata::MetadataScopeChain;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
-    push_metadata_scope, register_scoped_graph_metadata, register_scoped_live_graph_metadata,
-    register_scoped_metadata_batch, register_scoped_value_metadata, registered_meta,
-    tensor_meta_from_tensor,
+    push_metadata_scope, register_scoped_graph_analysis, register_scoped_graph_metadata,
+    register_scoped_live_graph_metadata, register_scoped_metadata_batch,
+    register_scoped_value_metadata, registered_meta, tensor_meta_from_tensor,
+    RegisteredGraphAnalysis,
 };
+use crate::shape_constraint::ConstraintScopeChain;
+pub use crate::shape_constraint::ShapeConstraintScope;
 use crate::sym_dim::SymDim;
 use crate::traced::{next_input_key, next_traced_id, TracedTensor};
 use crate::{Error, Result};
@@ -67,6 +70,8 @@ pub fn tensor_from_parts(parts: TracedTensorParts) -> TracedTensor {
         extra_roots: parts.extra_roots,
         checkpoint_chain: parts.checkpoint_chain,
         metadata_scopes: MetadataScopeChain::from_materialized(parts.metadata_scopes),
+        // Task 8 will transfer scopes explicitly through `TracedTensorParts`.
+        constraint_scopes: ConstraintScopeChain::from_materialized(Vec::new()),
     }
 }
 
@@ -88,6 +93,24 @@ pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
 
 pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
     tensor.metadata_scopes.as_slice()
+}
+
+/// Borrow graph-owned shape-constraint scopes carried by a traced tensor.
+///
+/// This is the narrow preservation boundary used by `tenferro-ad`. Ordinary
+/// user code should declare constraints through `ExtensionShapeContext`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ad_support::constraint_scopes;
+/// use tenferro_runtime::{DType, TracedTensor};
+///
+/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+/// assert!(constraint_scopes(&input).is_empty());
+/// ```
+pub fn constraint_scopes(tensor: &TracedTensor) -> &[Arc<ShapeConstraintScope>] {
+    tensor.constraint_scopes.as_slice()
 }
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {

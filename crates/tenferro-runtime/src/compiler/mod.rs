@@ -5,7 +5,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
-use crate::shape_constraint::{discharge, LocalShapeConstraint};
+use crate::shape_constraint::{discharge, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::shape_infer::{
     infer_extension_output_meta, infer_extension_output_meta_with_constraints, infer_output_dtype,
     infer_output_extents, infer_output_shapes,
@@ -20,10 +20,10 @@ mod options;
 pub use options::{CompilerOptions, OptimizerConfig};
 
 struct PendingShapeConstraints {
-    tracked_output_slot: usize,
     origin_output_slots: Vec<usize>,
     family_id: &'static str,
     constraints: Vec<LocalShapeConstraint>,
+    prune_if_dead: bool,
 }
 
 pub fn compile_std_to_exec(
@@ -31,7 +31,14 @@ pub fn compile_std_to_exec(
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
 ) -> Result<ExecProgram> {
-    compile_std_to_exec_with_options(prog, input_dtypes, input_shapes, CompilerOptions::default())
+    compile_std_to_exec_with_options_and_constraints(
+        prog,
+        input_dtypes,
+        input_shapes,
+        CompilerOptions::default(),
+        &[],
+        input_shapes,
+    )
 }
 
 pub fn compile_std_to_exec_with_options(
@@ -39,6 +46,24 @@ pub fn compile_std_to_exec_with_options(
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
     options: CompilerOptions,
+) -> Result<ExecProgram> {
+    compile_std_to_exec_with_options_and_constraints(
+        prog,
+        input_dtypes,
+        input_shapes,
+        options,
+        &[],
+        input_shapes,
+    )
+}
+
+pub(crate) fn compile_std_to_exec_with_options_and_constraints(
+    prog: &CompiledProgram<StdTensorOp>,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+    options: CompilerOptions,
+    scoped_constraints: &[SlotScopedShapeConstraint],
+    analysis_input_shapes: &[Vec<DimExpr>],
 ) -> Result<ExecProgram> {
     validate_unique_output_producers(prog)?;
     if prog.input_slots.len() != input_dtypes.len() {
@@ -55,16 +80,25 @@ pub fn compile_std_to_exec_with_options(
             prog.input_slots.len()
         )));
     }
+    if prog.input_slots.len() != analysis_input_shapes.len() {
+        return Err(invalid_compiled_graph(format!(
+            "analysis input shape count {} must match input slot count {}",
+            analysis_input_shapes.len(),
+            prog.input_slots.len()
+        )));
+    }
 
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
     let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; prog.n_slots];
+    let mut analysis_slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
     let mut pending_constraints = Vec::new();
 
     for (index, &slot) in prog.input_slots.iter().enumerate() {
         slot_dtypes[slot] = Some(input_dtypes[index]);
         slot_shapes[slot] = Some(input_shapes[index].clone());
         slot_extents[slot] = Some(exact_extents_from_shape(&input_shapes[index]));
+        analysis_slot_shapes[slot] = Some(analysis_input_shapes[index].clone());
     }
 
     let instructions = prog
@@ -101,25 +135,55 @@ pub fn compile_std_to_exec_with_options(
                         .ok_or_else(|| missing_slot_meta("extents", slot))
                 })
                 .collect::<Result<_>>()?;
+            let analysis_input_shape_refs: Vec<&[DimExpr]> = instr
+                .inputs
+                .iter()
+                .map(|&slot| {
+                    analysis_slot_shapes
+                        .get(slot)
+                        .and_then(|shape| shape.as_deref())
+                        .ok_or_else(|| missing_slot_meta("analysis shape", slot))
+                })
+                .collect::<Result<_>>()?;
 
-            let (output_dtypes, output_shapes, output_extents) =
+            let (output_dtypes, output_shapes, output_extents, analysis_output_shapes) =
                 if let StdTensorOp::Extension(ext) = &instr.operation {
+                    let local_input_shapes: Vec<_> = analysis_input_shape_refs
+                        .iter()
+                        .enumerate()
+                        .map(|(input_idx, shape)| DimExpr::input_shape(input_idx, shape.len()))
+                        .collect();
+                    let local_input_shape_refs: Vec<_> =
+                        local_input_shapes.iter().map(Vec::as_slice).collect();
                     let inferred = infer_extension_output_meta_with_constraints(
                         ext.as_ref(),
                         &input_dtypes,
-                        &input_shapes_refs,
+                        &local_input_shape_refs,
                     )?;
-                    let metas = inferred.output_metas;
-                    if let Some(tracked_output_slot) = instr.outputs.first().copied() {
-                        if !inferred.constraints.is_empty() {
-                            pending_constraints.push(PendingShapeConstraints {
-                                tracked_output_slot,
-                                origin_output_slots: instr.outputs.clone(),
-                                family_id: ext.family_id(),
-                                constraints: inferred.constraints,
-                            });
-                        }
+                    let mut inferred_constraints = inferred.constraints;
+                    for local in &mut inferred_constraints {
+                        local.lhs = lower_scoped_dim_expr(
+                            &local.lhs,
+                            &instr.inputs,
+                            &analysis_slot_shapes,
+                            local,
+                        )?;
+                        local.rhs = lower_scoped_dim_expr(
+                            &local.rhs,
+                            &instr.inputs,
+                            &analysis_slot_shapes,
+                            local,
+                        )?;
                     }
+                    if !inferred_constraints.is_empty() {
+                        pending_constraints.push(PendingShapeConstraints {
+                            origin_output_slots: instr.outputs.clone(),
+                            family_id: ext.family_id(),
+                            constraints: inferred_constraints,
+                            prune_if_dead: false,
+                        });
+                    }
+                    let metas = inferred.output_metas;
                     if metas.len() != instr.outputs.len() {
                         return Err(invalid_compiled_graph(format!(
                             "extension family_id={:?} inferred {} output metas for {} output slots",
@@ -129,10 +193,13 @@ pub fn compile_std_to_exec_with_options(
                         )));
                     }
                     let dtypes: Vec<DType> = metas.iter().map(|(dtype, _)| *dtype).collect();
-                    let shapes: Vec<Vec<DimExpr>> =
+                    let local_shapes: Vec<Vec<DimExpr>> =
                         metas.into_iter().map(|(_dtype, shape)| shape).collect();
+                    let shapes = resolve_shapes(&local_shapes, &input_shapes_refs)?;
+                    let analysis_shapes =
+                        resolve_shapes(&local_shapes, &analysis_input_shape_refs)?;
                     let extents = exact_extents_from_shapes(&shapes);
-                    (dtypes, shapes, extents)
+                    (dtypes, shapes, extents, analysis_shapes)
                 } else {
                     let dtype = infer_output_dtype(&instr.operation, &input_dtypes)?;
                     let shapes = infer_output_shapes(&instr.operation, &input_shapes_refs)?;
@@ -155,7 +222,14 @@ pub fn compile_std_to_exec_with_options(
                     }
                     let resolved_extents =
                         resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs)?;
-                    (vec![dtype; instr.outputs.len()], shapes, resolved_extents)
+                    let analysis_shapes =
+                        infer_output_shapes(&instr.operation, &analysis_input_shape_refs)?;
+                    (
+                        vec![dtype; instr.outputs.len()],
+                        shapes,
+                        resolved_extents,
+                        analysis_shapes,
+                    )
                 };
 
             let instruction_dtype = output_dtypes
@@ -179,6 +253,9 @@ pub fn compile_std_to_exec_with_options(
                 slot_shapes[*slot] = Some(shape.clone());
                 slot_extents[*slot] = Some(extents.clone());
             }
+            for (&slot, shape) in instr.outputs.iter().zip(analysis_output_shapes.iter()) {
+                analysis_slot_shapes[slot] = Some(shape.clone());
+            }
 
             Ok(ExecInstruction {
                 op: ExecOp::from_std_tensor_op(&instr.operation),
@@ -191,6 +268,28 @@ pub fn compile_std_to_exec_with_options(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    for scoped in scoped_constraints {
+        let mut local = scoped.local.clone();
+        local.lhs = lower_scoped_dim_expr(
+            &local.lhs,
+            &scoped.input_slots,
+            &analysis_slot_shapes,
+            &local,
+        )?;
+        local.rhs = lower_scoped_dim_expr(
+            &local.rhs,
+            &scoped.input_slots,
+            &analysis_slot_shapes,
+            &local,
+        )?;
+        pending_constraints.push(PendingShapeConstraints {
+            origin_output_slots: scoped.origin_slots.clone(),
+            family_id: local.source.family_id,
+            constraints: vec![local],
+            prune_if_dead: true,
+        });
+    }
 
     let mut program = ExecProgram {
         instructions,
@@ -206,30 +305,26 @@ pub fn compile_std_to_exec_with_options(
     let producer_by_slot = producer_index_by_slot(&program)?;
     let mut constraints = Vec::new();
     for pending in pending_constraints {
-        let instruction_index = producer_by_slot
-            .get(pending.tracked_output_slot)
-            .copied()
-            .flatten()
-            .filter(|&instruction_index| {
-                program
-                    .instructions
-                    .get(instruction_index)
-                    .is_some_and(|instruction| {
-                        instruction.output_slots == pending.origin_output_slots
-                            && matches!(
-                                &instruction.op,
-                                ExecOp::Extension(extension)
-                                    if extension.family_id() == pending.family_id
-                            )
-                    })
+        let instruction_index = pending.origin_output_slots.iter().find_map(|&slot| {
+            let index = producer_by_slot.get(slot).copied().flatten()?;
+            program.instructions.get(index).and_then(|instruction| {
+                matches!(
+                    &instruction.op,
+                    ExecOp::Extension(extension) if extension.family_id() == pending.family_id
+                )
+                .then_some(index)
             })
-            .ok_or_else(|| {
-                invalid_compiled_graph(format!(
-                    "extension constraint origin for family {:?} with output slots {:?} \
-                     is absent from the final instruction stream",
-                    pending.family_id, pending.origin_output_slots
-                ))
-            })?;
+        });
+        let Some(instruction_index) = instruction_index else {
+            if pending.prune_if_dead {
+                continue;
+            }
+            return Err(invalid_compiled_graph(format!(
+                "extension constraint origin for family {:?} with output slots {:?} \
+                 is absent from the final instruction stream",
+                pending.family_id, pending.origin_output_slots
+            )));
+        };
         constraints.extend(pending.constraints.into_iter().map(|mut constraint| {
             constraint.source = constraint.source.with_instruction(instruction_index);
             constraint
@@ -237,6 +332,72 @@ pub fn compile_std_to_exec_with_options(
     }
     program.shape_guards = discharge(constraints)?;
     Ok(program)
+}
+
+fn lower_scoped_dim_expr(
+    expr: &DimExpr,
+    input_slots: &[usize],
+    slot_shapes: &[Option<Vec<DimExpr>>],
+    constraint: &LocalShapeConstraint,
+) -> Result<DimExpr> {
+    let evaluation_error = |cause| Error::ShapeConstraintEvaluation {
+        family: constraint.source.family_id,
+        instruction_index: constraint.source.instruction_index,
+        relation: constraint.relation,
+        expression: format!("{expr:?}"),
+        cause,
+    };
+    match expr {
+        DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
+        DimExpr::InputDim { input_idx, axis } => {
+            let slot = input_slots.get(*input_idx).copied().ok_or_else(|| {
+                evaluation_error(crate::ShapeConstraintEvalError::MissingInput {
+                    input_idx: *input_idx,
+                    input_count: input_slots.len(),
+                })
+            })?;
+            let shape = slot_shapes
+                .get(slot)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    evaluation_error(crate::ShapeConstraintEvalError::MissingInput {
+                        input_idx: *input_idx,
+                        input_count: input_slots.len(),
+                    })
+                })?;
+            shape.get(*axis).cloned().ok_or_else(|| {
+                evaluation_error(crate::ShapeConstraintEvalError::AxisOutOfBounds {
+                    input_idx: *input_idx,
+                    axis: *axis,
+                    rank: shape.len(),
+                })
+            })
+        }
+        DimExpr::Add(lhs, rhs) => Ok(DimExpr::add(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+        DimExpr::Sub(lhs, rhs) => Ok(DimExpr::sub(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+        DimExpr::Mul(lhs, rhs) => Ok(DimExpr::mul(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+        DimExpr::FloorDiv(lhs, rhs) => Ok(DimExpr::floor_div(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+        DimExpr::Min(lhs, rhs) => Ok(DimExpr::min(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+        DimExpr::Max(lhs, rhs) => Ok(DimExpr::max(
+            lower_scoped_dim_expr(lhs, input_slots, slot_shapes, constraint)?,
+            lower_scoped_dim_expr(rhs, input_slots, slot_shapes, constraint)?,
+        )),
+    }
 }
 
 fn invalid_compiled_graph(message: impl Into<String>) -> Error {
@@ -278,6 +439,21 @@ fn exact_extents_from_shapes(shapes: &[Vec<DimExpr>]) -> Vec<Vec<ShapeExtent<Dim
     shapes
         .iter()
         .map(|shape| exact_extents_from_shape(shape))
+        .collect()
+}
+
+fn resolve_shapes(
+    shapes: &[Vec<DimExpr>],
+    input_shapes: &[&[DimExpr]],
+) -> Result<Vec<Vec<DimExpr>>> {
+    shapes
+        .iter()
+        .map(|shape| {
+            shape
+                .iter()
+                .map(|dim| resolve_dim_expr(dim, input_shapes))
+                .collect()
+        })
         .collect()
 }
 

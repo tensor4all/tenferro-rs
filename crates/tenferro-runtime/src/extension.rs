@@ -20,14 +20,16 @@ use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
-use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, Result};
-use crate::metadata::{register_scoped_graph_metadata, MetadataScopeChain};
+use crate::metadata::{
+    register_scoped_graph_analysis, registered_meta, MetadataScopeChain, RegisteredGraphAnalysis,
+};
+use crate::shape_constraint::ConstraintScopeChain;
 use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
 
 pub use crate::compiler::CompilerOptions;
@@ -143,25 +145,6 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
     // None) use per-axis TensorAxis symbolic dims keyed by the input
     // TracedTensor's id so downstream composition still resolves
     // correctly via tenferro-internal-ops's SymDim API.
-    let input_dtypes: Vec<_> = inputs.iter().map(|t| t.dtype).collect();
-    let input_shape_storage: Vec<Vec<SymDim>> = inputs
-        .iter()
-        .map(|t| {
-            if let Some(hint) = t.shape_hint.clone() {
-                hint
-            } else {
-                (0..t.rank)
-                    .map(|axis| SymDim::tensor_axis(t.id, axis))
-                    .collect()
-            }
-        })
-        .collect();
-    let input_shape_refs: Vec<&[SymDim]> = input_shape_storage.iter().map(Vec::as_slice).collect();
-
-    let output_metas =
-        invoke_extension_shape_inference(op.as_ref(), &input_dtypes, &input_shape_refs)?
-            .output_metas;
-
     // Build the graph that carries the Extension op.
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     for input in inputs {
@@ -175,7 +158,22 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
     let outputs = builder.add_operation(carrier, op_inputs, OperationRole::Primary);
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
-    traced_outputs_from_graph(inputs, graph, &outputs, output_metas)
+    let analysis = register_scoped_graph_analysis(graph.as_ref(), std::iter::empty())?;
+    let output_metas = outputs
+        .iter()
+        .map(|&output| {
+            let meta = registered_meta(&graph.values()[output].key)?;
+            let shape = meta.bound_shape().ok_or_else(|| Error::InvalidGraphBuild {
+                op: "extension::apply",
+                message: format!(
+                    "extension family {:?} produced unknown output shape metadata",
+                    op.family_id()
+                ),
+            })?;
+            Ok((meta.dtype, shape))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    traced_outputs_from_analysis(inputs, graph, &outputs, output_metas, analysis)
 }
 
 /// Apply an extension-provided lowering as ordinary traced graph operations.
@@ -209,19 +207,19 @@ pub fn apply_expanded_graph(
     }
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
-    traced_outputs_from_graph(inputs, graph, &outputs, output_metas)
+    let analysis = register_scoped_graph_analysis(graph.as_ref(), std::iter::empty())?;
+    traced_outputs_from_analysis(inputs, graph, &outputs, output_metas, analysis)
 }
 
-fn traced_outputs_from_graph(
+fn traced_outputs_from_analysis(
     inputs: &[&TracedTensor],
     graph: Arc<computegraph::graph::Graph<StdTensorOp>>,
     outputs: &[usize],
     output_metas: Vec<(tenferro_tensor::DType, Vec<SymDim>)>,
+    analysis: RegisteredGraphAnalysis,
 ) -> Result<Vec<TracedTensor>> {
-    let metadata_scope = Arc::new(register_scoped_graph_metadata(
-        graph.as_ref(),
-        std::iter::empty(),
-    )?);
+    let metadata_scope = Arc::new(analysis.metadata);
+    let constraint_scope = Arc::new(analysis.constraints);
 
     let merged_map = merge_traced_inputs_map(inputs.iter().copied());
     let mut extra_roots = Vec::new();
@@ -230,6 +228,14 @@ fn traced_outputs_from_graph(
         Arc::clone(&metadata_scope),
         inputs.iter().map(|input| &input.metadata_scopes),
     );
+    let constraint_scopes = if constraint_scope.is_empty() {
+        ConstraintScopeChain::merge(inputs.iter().map(|input| &input.constraint_scopes))
+    } else {
+        ConstraintScopeChain::with_scope(
+            constraint_scope,
+            inputs.iter().map(|input| &input.constraint_scopes),
+        )
+    };
     for input in inputs {
         extra_roots.extend(input.extra_roots.iter().cloned());
         checkpoint_chain =
@@ -257,6 +263,7 @@ fn traced_outputs_from_graph(
                 extra_roots: extra_roots.clone(),
                 checkpoint_chain: checkpoint_chain.clone(),
                 metadata_scopes: metadata_scopes.clone(),
+                constraint_scopes: constraint_scopes.clone(),
             }
         })
         .collect())
