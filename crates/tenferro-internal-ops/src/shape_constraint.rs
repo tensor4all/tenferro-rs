@@ -21,24 +21,7 @@ pub enum ShapeRelation {
 ///
 /// The constraint stores expressions as provided. It does not attempt to
 /// normalize or solve them.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_ops::{ExtensionShapeContext, ShapeRelation, SymDim};
-/// use tenferro_tensor::DType;
-///
-/// let shape = [SymDim::from(3usize)];
-/// let shapes: [&[SymDim]; 1] = [&shape];
-/// let mut ctx = ExtensionShapeContext::new_for_inference(
-///     "example.identity.v1",
-///     &[DType::F64],
-///     &shapes,
-/// );
-/// ctx.require_equal(SymDim::from(3usize), SymDim::from(3usize))?;
-/// assert_eq!(ctx.constraints()[0].relation(), ShapeRelation::Equal);
-/// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
-/// ```
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtensionShapeConstraint {
     relation: ShapeRelation,
@@ -56,58 +39,19 @@ impl ExtensionShapeConstraint {
     }
 
     /// Return the relation imposed by this constraint.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, ShapeRelation, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// ctx.require_equal(SymDim::from(2usize), SymDim::from(2usize))?;
-    /// assert_eq!(ctx.constraints()[0].relation(), ShapeRelation::Equal);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
-    /// ```
+    #[doc(hidden)]
     pub fn relation(&self) -> ShapeRelation {
         self.relation
     }
 
     /// Return the left-hand symbolic expression.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// ctx.require_equal(SymDim::from(2usize), SymDim::from(4usize))?;
-    /// assert_eq!(ctx.constraints()[0].lhs(), &SymDim::from(2usize));
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
-    /// ```
+    #[doc(hidden)]
     pub fn lhs(&self) -> &SymDim {
         &self.lhs
     }
 
     /// Return the right-hand symbolic expression.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// ctx.require_equal(SymDim::from(2usize), SymDim::from(4usize))?;
-    /// assert_eq!(ctx.constraints()[0].rhs(), &SymDim::from(4usize));
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
-    /// ```
+    #[doc(hidden)]
     pub fn rhs(&self) -> &SymDim {
         &self.rhs
     }
@@ -173,6 +117,24 @@ pub enum ExtensionShapeError {
     },
 }
 
+impl From<ExtensionShapeError> for tenferro_tensor::Error {
+    fn from(error: ExtensionShapeError) -> Self {
+        // `tenferro_tensor::Error` has no source-carrying extension-config
+        // variant. Keep the context's native error typed, and cross the
+        // ExtensionOp callback boundary through its structured InvalidConfig
+        // carrier while retaining every field in the diagnostic.
+        let op = match &error {
+            ExtensionShapeError::InputOutOfBounds { family_id, .. }
+            | ExtensionShapeError::AxisOutOfBounds { family_id, .. }
+            | ExtensionShapeError::RankMismatch { family_id, .. } => *family_id,
+        };
+        Self::InvalidConfig {
+            op,
+            message: error.to_string(),
+        }
+    }
+}
+
 /// Input metadata and equality requirements for one extension inference call.
 ///
 /// The context records requirements declaratively. It does not prove, reject,
@@ -181,20 +143,14 @@ pub enum ExtensionShapeError {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_ops::{ExtensionShapeContext, SymDim};
-/// use tenferro_tensor::DType;
+/// use tenferro_ops::ExtensionShapeContext;
 ///
-/// let lhs = [SymDim::from(4usize)];
-/// let rhs = [SymDim::from(2usize)];
-/// let shapes: [&[SymDim]; 2] = [&lhs, &rhs];
-/// let mut ctx = ExtensionShapeContext::new_for_inference(
-///     "example.double.v1",
-///     &[DType::F64, DType::F64],
-///     &shapes,
-/// );
-/// ctx.require_equal(ctx.input_axis(0, 0)?, 2 * ctx.input_axis(1, 0)?)?;
-/// assert_eq!(ctx.constraints().len(), 1);
-/// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+/// fn infer(ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+///     let lhs = ctx.input_axis(0, 0)?;
+///     let rhs = ctx.input_axis(1, 0)?;
+///     ctx.require_equal(lhs, 2 * rhs)?;
+///     Ok(())
+/// }
 /// ```
 #[derive(Debug)]
 pub struct ExtensionShapeContext<'a> {
@@ -206,19 +162,6 @@ pub struct ExtensionShapeContext<'a> {
 
 impl<'a> ExtensionShapeContext<'a> {
     /// Construct a context for the internal extension inference driver.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// assert_eq!(ctx.input_dtype(0)?, DType::F64);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
-    /// ```
     #[doc(hidden)]
     pub fn new_for_inference(
         family_id: &'static str,
@@ -238,14 +181,12 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
+    /// use tenferro_ops::ExtensionShapeContext;
     /// use tenferro_tensor::DType;
     ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F32], &shapes);
-    /// assert_eq!(ctx.input_dtype(0)?, DType::F32);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &ExtensionShapeContext<'_>) -> tenferro_tensor::Result<DType> {
+    ///     Ok(ctx.input_dtype(0)?)
+    /// }
     /// ```
     pub fn input_dtype(&self, input: usize) -> Result<DType, ExtensionShapeError> {
         self.input_dtypes
@@ -263,14 +204,12 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
+    /// use tenferro_ops::ExtensionShapeContext;
     ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// assert_eq!(ctx.input_shape(0)?, shape.as_slice());
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+    ///     let _shape = ctx.input_shape(0)?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn input_shape(&self, input: usize) -> Result<&[SymDim], ExtensionShapeError> {
         self.input_shapes
@@ -288,14 +227,12 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
+    /// use tenferro_ops::ExtensionShapeContext;
+    /// use tenferro_ops::SymDim;
     ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// assert_eq!(ctx.input_axis(0, 0)?, SymDim::from(2usize));
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &ExtensionShapeContext<'_>) -> tenferro_tensor::Result<SymDim> {
+    ///     Ok(ctx.input_axis(0, 0)?)
+    /// }
     /// ```
     pub fn input_axis(&self, input: usize, axis: usize) -> Result<SymDim, ExtensionShapeError> {
         let shape = self.input_shape(input)?;
@@ -317,20 +254,14 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
+    /// use tenferro_ops::ExtensionShapeContext;
     ///
-    /// let lhs = [SymDim::from(4usize)];
-    /// let rhs = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 2] = [&lhs, &rhs];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference(
-    ///     "example.v1",
-    ///     &[DType::F64, DType::F64],
-    ///     &shapes,
-    /// );
-    /// ctx.require_equal(ctx.input_axis(0, 0)?, 2 * ctx.input_axis(1, 0)?)?;
-    /// assert_eq!(ctx.constraints().len(), 1);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+    ///     let lhs = ctx.input_axis(0, 0)?;
+    ///     let rhs = ctx.input_axis(1, 0)?;
+    ///     ctx.require_equal(lhs, 2 * rhs)?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn require_equal(&mut self, lhs: SymDim, rhs: SymDim) -> Result<(), ExtensionShapeError> {
         self.constraints
@@ -343,20 +274,12 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
+    /// use tenferro_ops::ExtensionShapeContext;
     ///
-    /// let lhs = [SymDim::from(2usize)];
-    /// let rhs = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 2] = [&lhs, &rhs];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference(
-    ///     "example.v1",
-    ///     &[DType::F64, DType::F64],
-    ///     &shapes,
-    /// );
-    /// ctx.require_axes_equal((0, 0), (1, 0))?;
-    /// assert_eq!(ctx.constraints().len(), 1);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+    ///     ctx.require_axes_equal((0, 0), (1, 0))?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn require_axes_equal(
         &mut self,
@@ -375,20 +298,12 @@ impl<'a> ExtensionShapeContext<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
+    /// use tenferro_ops::ExtensionShapeContext;
     ///
-    /// let lhs = [SymDim::from(2usize), SymDim::from(3usize)];
-    /// let rhs = [SymDim::from(2usize), SymDim::from(3usize)];
-    /// let shapes: [&[SymDim]; 2] = [&lhs, &rhs];
-    /// let mut ctx = ExtensionShapeContext::new_for_inference(
-    ///     "example.v1",
-    ///     &[DType::F64, DType::F64],
-    ///     &shapes,
-    /// );
-    /// ctx.require_same_shape(0, 1)?;
-    /// assert_eq!(ctx.constraints().len(), 2);
-    /// # Ok::<(), tenferro_ops::ExtensionShapeError>(())
+    /// fn infer(ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+    ///     ctx.require_same_shape(0, 1)?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn require_same_shape(
         &mut self,
@@ -418,36 +333,12 @@ impl<'a> ExtensionShapeContext<'a> {
     }
 
     /// Borrow the constraints collected by this inference call.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// assert!(ctx.constraints().is_empty());
-    /// ```
     #[doc(hidden)]
     pub fn constraints(&self) -> &[ExtensionShapeConstraint] {
         &self.constraints
     }
 
     /// Consume the context and return its collected constraints.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let shape = [SymDim::from(2usize)];
-    /// let shapes: [&[SymDim]; 1] = [&shape];
-    /// let ctx = ExtensionShapeContext::new_for_inference("example.v1", &[DType::F64], &shapes);
-    /// assert!(ctx.into_constraints().is_empty());
-    /// ```
     #[doc(hidden)]
     pub fn into_constraints(self) -> Vec<ExtensionShapeConstraint> {
         self.constraints

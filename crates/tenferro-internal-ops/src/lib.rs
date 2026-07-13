@@ -17,6 +17,13 @@
 //! assert!(extent.is_exact());
 //! ```
 //!
+//! Collected shape constraints are inference-driver internals rather than a
+//! crate-root extension-author API:
+//!
+//! ```compile_fail
+//! use tenferro_ops::ExtensionShapeConstraint;
+//! ```
+//!
 pub mod ad;
 pub mod axis;
 pub mod broadcast;
@@ -24,6 +31,7 @@ pub mod dim_expr;
 pub mod ext_op;
 pub mod input_key;
 pub mod reduction;
+#[doc(hidden)]
 pub mod shape_constraint;
 pub mod shape_extent;
 pub mod std_tensor_op;
@@ -38,9 +46,7 @@ pub use ext_op::{
 };
 #[cfg(not(feature = "autodiff"))]
 pub use ext_op::{ExtensionOp, HostReference};
-pub use shape_constraint::{
-    ExtensionShapeConstraint, ExtensionShapeContext, ExtensionShapeError, ShapeRelation,
-};
+pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;
 pub use tenferro_extension_macros::ExtensionFamilyId;

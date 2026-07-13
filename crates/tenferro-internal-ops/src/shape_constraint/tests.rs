@@ -10,6 +10,62 @@ fn inference_context<'a>(
     ExtensionShapeContext::new_for_inference("test.shape.v1", input_dtypes, input_shapes)
 }
 
+fn callback_with_tensor_result(ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<()> {
+    let lhs = ctx.input_axis(0, 0)?;
+    let rhs = ctx.input_axis(1, 0)?;
+    ctx.require_equal(lhs, rhs)?;
+    ctx.require_axes_equal((0, 0), (1, 0))?;
+    ctx.require_same_shape(0, 1)?;
+    Ok(())
+}
+
+#[test]
+fn context_errors_compose_with_tensor_result_and_preserve_diagnostic() {
+    let lhs_shape = [SymDim::from(2)];
+    let rhs_shape: [SymDim; 0] = [];
+    let input_dtypes = [DType::F64, DType::F64];
+    let input_shapes: [&[SymDim]; 2] = [&lhs_shape, &rhs_shape];
+    let mut ctx = inference_context(&input_dtypes, &input_shapes);
+
+    assert_eq!(
+        callback_with_tensor_result(&mut ctx),
+        Err(tenferro_tensor::Error::InvalidConfig {
+            op: "test.shape.v1",
+            message: "extension family \"test.shape.v1\" axis 0 out of bounds for input 1 rank 0"
+                .into(),
+        })
+    );
+}
+
+#[test]
+fn tensor_error_conversion_preserves_input_and_rank_diagnostics() {
+    assert_eq!(
+        tenferro_tensor::Error::from(ExtensionShapeError::InputOutOfBounds {
+            family_id: "test.shape.v1",
+            input: 3,
+            input_count: 2,
+        }),
+        tenferro_tensor::Error::InvalidConfig {
+            op: "test.shape.v1",
+            message: "extension family \"test.shape.v1\" input index 3 out of bounds for 2 inputs"
+                .into(),
+        }
+    );
+    assert_eq!(
+        tenferro_tensor::Error::from(ExtensionShapeError::RankMismatch {
+            family_id: "test.shape.v1",
+            lhs_input: 0,
+            lhs_rank: 1,
+            rhs_input: 1,
+            rhs_rank: 2,
+        }),
+        tenferro_tensor::Error::InvalidConfig {
+            op: "test.shape.v1",
+            message: "extension family \"test.shape.v1\" requires inputs 0 and 1 to have the same shape, but their ranks are 1 and 2".into(),
+        }
+    );
+}
+
 #[test]
 fn expression_equality_is_recorded_without_solving() {
     let lhs_shape = [SymDim::tensor_axis(10, 0)];
