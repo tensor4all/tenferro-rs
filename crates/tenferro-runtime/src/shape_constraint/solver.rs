@@ -2,7 +2,10 @@
 // executor tasks connect its crate-private entry points to production flow.
 #![allow(dead_code)]
 
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
+};
 
 use tenferro_ops::{dim_expr::DimExpr, dim_expr::DimExprEvalError, ShapeRelation};
 
@@ -86,26 +89,55 @@ impl SymbolSets {
         };
         self.parents.insert(other, representative);
     }
+
+    fn flatten(&mut self) {
+        let symbols: Vec<_> = self.parents.keys().copied().collect();
+        for symbol in symbols {
+            let representative = self.representative(symbol);
+            self.parents.insert(symbol, representative);
+        }
+    }
+}
+
+/// One original bare-symbol declaration eligible for the enforcement basis.
+#[derive(Clone)]
+struct SymbolEdge {
+    lhs: Symbol,
+    rhs: Symbol,
+    source: ConstraintSource,
+}
+
+/// A discharge failure plus its deterministic semantic-selection key.
+struct ErrorCandidate {
+    primary_expression: String,
+    secondary_expression: String,
+    source: ConstraintSource,
+    kind: u8,
+    error: Error,
 }
 
 pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<ShapeGuard>> {
     let mut sets = SymbolSets::default();
+    let mut edges = Vec::new();
     for constraint in &constraints {
         if let (Some(lhs), Some(rhs)) = (as_symbol(&constraint.lhs), as_symbol(&constraint.rhs)) {
             sets.union(lhs, rhs);
+            if lhs != rhs {
+                let (lhs, rhs) = canonical_symbol_pair(lhs, rhs);
+                edges.push(SymbolEdge {
+                    lhs,
+                    rhs,
+                    source: constraint.source.clone(),
+                });
+            }
         }
     }
+    sets.flatten();
 
+    let mut basis_guards = spanning_tree_guards(edges);
     let mut pending_bindings = Vec::new();
     for constraint in &constraints {
-        let binding = match (as_symbol(&constraint.lhs), as_const(&constraint.rhs)) {
-            (Some(symbol), Some(value)) => Some((symbol, value)),
-            _ => match (as_symbol(&constraint.rhs), as_const(&constraint.lhs)) {
-                (Some(symbol), Some(value)) => Some((symbol, value)),
-                _ => None,
-            },
-        };
-        if let Some((symbol, value)) = binding {
+        if let Some((symbol, value)) = symbol_binding(constraint) {
             sets.ensure(symbol);
             pending_bindings.push((
                 sets.representative(symbol),
@@ -121,49 +153,107 @@ pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<Sh
             .then_with(|| compare_source(&lhs.2, &rhs.2))
     });
 
-    let mut bindings: BTreeMap<Symbol, usize> = BTreeMap::new();
-    for (symbol, value, source) in pending_bindings {
-        if let Some(bound) = bindings.get(&symbol).copied() {
-            if bound != value {
-                return Err(violation(
-                    &source,
-                    ShapeRelation::Equal,
-                    &symbol_expr(symbol),
-                    &DimExpr::Const(value),
-                    bound,
-                    value,
-                ));
-            }
+    let mut errors = Vec::new();
+    let mut bindings = BTreeMap::new();
+    let mut binding_index = 0;
+    while binding_index < pending_bindings.len() {
+        let symbol = pending_bindings[binding_index].0;
+        let mut values: BTreeMap<usize, ConstraintSource> = BTreeMap::new();
+        while binding_index < pending_bindings.len() && pending_bindings[binding_index].0 == symbol
+        {
+            let (_, value, source) = &pending_bindings[binding_index];
+            values
+                .entry(*value)
+                .and_modify(|selected| {
+                    if compare_source(source, selected).is_lt() {
+                        *selected = source.clone();
+                    }
+                })
+                .or_insert_with(|| source.clone());
+            binding_index += 1;
+        }
+
+        let mut distinct_values = values.into_iter();
+        let Some((first_value, first_source)) = distinct_values.next() else {
+            continue;
+        };
+        bindings.insert(symbol, first_value);
+        if let Some((second_value, second_source)) = distinct_values.next() {
+            let source = if compare_source(&first_source, &second_source).is_le() {
+                first_source
+            } else {
+                second_source
+            };
+            errors.push(violation_candidate(
+                &source,
+                ShapeRelation::Equal,
+                &symbol_expr(symbol),
+                &DimExpr::Const(second_value),
+                first_value,
+                second_value,
+            ));
         } else {
-            bindings.insert(symbol, value);
+            basis_guards.push(canonical_guard(
+                first_source,
+                ShapeRelation::Equal,
+                symbol_expr(symbol),
+                DimExpr::Const(first_value),
+            ));
         }
     }
 
     let mut guards = Vec::new();
     for constraint in constraints {
-        let mut lhs = normalize_for_constraint(
-            &constraint.lhs,
-            &sets,
-            &bindings,
-            &constraint.source,
-            constraint.relation,
-        )?;
-        let mut rhs = normalize_for_constraint(
-            &constraint.rhs,
-            &sets,
-            &bindings,
-            &constraint.source,
-            constraint.relation,
-        )?;
+        if is_basis_declaration(&constraint) {
+            continue;
+        }
+        let lhs = normalize(&constraint.lhs, &sets, &bindings);
+        let rhs = normalize(&constraint.rhs, &sets, &bindings);
+        let lhs = match lhs {
+            Ok(lhs) => Some(lhs),
+            Err(cause) => {
+                errors.push(evaluation_candidate(
+                    &constraint.source,
+                    constraint.relation,
+                    &constraint.lhs,
+                    cause,
+                ));
+                None
+            }
+        };
+        let rhs = match rhs {
+            Ok(rhs) => Some(rhs),
+            Err(cause) => {
+                errors.push(evaluation_candidate(
+                    &constraint.source,
+                    constraint.relation,
+                    &constraint.rhs,
+                    cause,
+                ));
+                None
+            }
+        };
+        let (Some(mut lhs), Some(mut rhs)) = (lhs, rhs) else {
+            continue;
+        };
         if compare_expression(&lhs, &rhs).is_gt() {
             std::mem::swap(&mut lhs, &mut rhs);
         }
 
         if lhs == rhs {
+            if is_statically_total(&lhs) {
+                continue;
+            }
+            guards.push(ShapeGuard {
+                source: constraint.source,
+                relation: constraint.relation,
+                lhs,
+                rhs,
+            });
             continue;
         }
         if let (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) = (&lhs, &rhs) {
-            return Err(violation(
+            errors.push(violation_candidate(
                 &constraint.source,
                 constraint.relation,
                 &lhs,
@@ -171,6 +261,7 @@ pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<Sh
                 *lhs_value,
                 *rhs_value,
             ));
+            continue;
         }
         guards.push(ShapeGuard {
             source: constraint.source,
@@ -180,27 +271,180 @@ pub(crate) fn discharge(constraints: Vec<LocalShapeConstraint>) -> Result<Vec<Sh
         });
     }
 
+    if !errors.is_empty() {
+        errors.sort_by(compare_error_candidate);
+        return Err(errors.remove(0).error);
+    }
+
+    sort_and_dedup_guards(&mut basis_guards);
+    sort_and_dedup_guards(&mut guards);
+    let basis_keys: HashSet<_> = basis_guards
+        .iter()
+        .map(|guard| (guard.relation, guard.lhs.clone(), guard.rhs.clone()))
+        .collect();
+    guards.retain(|guard| {
+        !basis_keys.contains(&(guard.relation, guard.lhs.clone(), guard.rhs.clone()))
+    });
+    basis_guards.extend(guards);
+    basis_guards.sort_by(compare_guard);
+    Ok(basis_guards)
+}
+
+fn spanning_tree_guards(mut edges: Vec<SymbolEdge>) -> Vec<ShapeGuard> {
+    // Kruskal over structurally ordered declarations retains exactly one
+    // original-source edge per component merge, independent of caller order.
+    edges.sort_by(|lhs, rhs| {
+        lhs.lhs
+            .cmp(&rhs.lhs)
+            .then_with(|| lhs.rhs.cmp(&rhs.rhs))
+            .then_with(|| compare_source(&lhs.source, &rhs.source))
+    });
+    let mut basis_sets = SymbolSets::default();
+    let mut guards = Vec::new();
+    for edge in edges {
+        if basis_sets.representative(edge.lhs) == basis_sets.representative(edge.rhs) {
+            continue;
+        }
+        basis_sets.union(edge.lhs, edge.rhs);
+        guards.push(canonical_guard(
+            edge.source,
+            ShapeRelation::Equal,
+            symbol_expr(edge.lhs),
+            symbol_expr(edge.rhs),
+        ));
+    }
+    guards
+}
+
+fn canonical_guard(
+    source: ConstraintSource,
+    relation: ShapeRelation,
+    mut lhs: DimExpr,
+    mut rhs: DimExpr,
+) -> ShapeGuard {
+    if compare_expression(&lhs, &rhs).is_gt() {
+        std::mem::swap(&mut lhs, &mut rhs);
+    }
+    ShapeGuard {
+        source,
+        relation,
+        lhs,
+        rhs,
+    }
+}
+
+fn symbol_binding(constraint: &LocalShapeConstraint) -> Option<(Symbol, usize)> {
+    match (as_symbol(&constraint.lhs), as_const(&constraint.rhs)) {
+        (Some(symbol), Some(value)) => Some((symbol, value)),
+        _ => match (as_symbol(&constraint.rhs), as_const(&constraint.lhs)) {
+            (Some(symbol), Some(value)) => Some((symbol, value)),
+            _ => None,
+        },
+    }
+}
+
+fn is_basis_declaration(constraint: &LocalShapeConstraint) -> bool {
+    match (as_symbol(&constraint.lhs), as_symbol(&constraint.rhs)) {
+        (Some(lhs), Some(rhs)) if lhs != rhs => true,
+        _ => symbol_binding(constraint).is_some(),
+    }
+}
+
+fn canonical_symbol_pair(lhs: Symbol, rhs: Symbol) -> (Symbol, Symbol) {
+    if lhs <= rhs {
+        (lhs, rhs)
+    } else {
+        (rhs, lhs)
+    }
+}
+
+fn is_statically_total(expression: &DimExpr) -> bool {
+    // InputDim can fail bounds validation, and every compound expression can
+    // contain one. Normalization folds fully constant trees to Const first.
+    matches!(expression, DimExpr::Const(_))
+}
+
+fn sort_and_dedup_guards(guards: &mut Vec<ShapeGuard>) {
     guards.sort_by(compare_guard);
     guards.dedup_by(|lhs, rhs| {
         lhs.relation == rhs.relation && lhs.lhs == rhs.lhs && lhs.rhs == rhs.rhs
     });
-    Ok(guards)
 }
 
-fn normalize_for_constraint(
-    expression: &DimExpr,
-    sets: &SymbolSets,
-    bindings: &BTreeMap<Symbol, usize>,
+fn evaluation_candidate(
     source: &ConstraintSource,
     relation: ShapeRelation,
-) -> Result<DimExpr> {
-    normalize(expression, sets, bindings).map_err(|cause| Error::ShapeConstraintEvaluation {
-        family: source.family_id,
-        instruction_index: source.instruction_index,
-        relation,
-        expression: format_expression(expression),
-        cause,
-    })
+    expression: &DimExpr,
+    cause: ShapeConstraintEvalError,
+) -> ErrorCandidate {
+    let formatted = format_expression(expression);
+    ErrorCandidate {
+        primary_expression: formatted.clone(),
+        secondary_expression: String::new(),
+        source: source.clone(),
+        kind: 0,
+        error: Error::ShapeConstraintEvaluation {
+            family: source.family_id,
+            instruction_index: source.instruction_index,
+            relation,
+            expression: formatted,
+            cause,
+        },
+    }
+}
+
+fn violation_candidate(
+    source: &ConstraintSource,
+    relation: ShapeRelation,
+    lhs: &DimExpr,
+    rhs: &DimExpr,
+    lhs_value: usize,
+    rhs_value: usize,
+) -> ErrorCandidate {
+    let lhs_expression = format_expression(lhs);
+    let rhs_expression = format_expression(rhs);
+    let (primary_expression, secondary_expression) = if lhs_expression <= rhs_expression {
+        (lhs_expression.clone(), rhs_expression.clone())
+    } else {
+        (rhs_expression.clone(), lhs_expression.clone())
+    };
+    ErrorCandidate {
+        primary_expression,
+        secondary_expression,
+        source: source.clone(),
+        kind: 1,
+        error: Error::ShapeConstraintViolation {
+            family: source.family_id,
+            instruction_index: source.instruction_index,
+            relation,
+            lhs_expr: lhs_expression,
+            rhs_expr: rhs_expression,
+            lhs_value,
+            rhs_value,
+        },
+    }
+}
+
+fn compare_error_candidate(lhs: &ErrorCandidate, rhs: &ErrorCandidate) -> Ordering {
+    lhs.primary_expression
+        .cmp(&rhs.primary_expression)
+        .then_with(|| lhs.secondary_expression.cmp(&rhs.secondary_expression))
+        .then_with(|| compare_source(&lhs.source, &rhs.source))
+        .then_with(|| lhs.kind.cmp(&rhs.kind))
+}
+
+#[cfg(test)]
+pub(super) fn union_representatives_are_flat(constraints: &[LocalShapeConstraint]) -> bool {
+    let mut sets = SymbolSets::default();
+    for constraint in constraints {
+        if let (Some(lhs), Some(rhs)) = (as_symbol(&constraint.lhs), as_symbol(&constraint.rhs)) {
+            sets.union(lhs, rhs);
+        }
+    }
+    sets.flatten();
+    sets.parents
+        .iter()
+        .all(|(symbol, parent)| *parent == sets.representative(*symbol))
 }
 
 fn normalize(

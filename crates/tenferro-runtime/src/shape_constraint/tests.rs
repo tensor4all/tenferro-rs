@@ -5,6 +5,7 @@ use std::{
 
 use tenferro_ops::{dim_expr::DimExpr, ShapeRelation};
 
+use super::solver::union_representatives_are_flat;
 use super::{discharge, ConstraintSource, LocalShapeConstraint, ShapeGuard};
 use crate::error::{ContextId, Error, ShapeConstraintEvalError};
 
@@ -71,8 +72,16 @@ fn transitive_symbols_and_constant_binding_are_order_independent() {
     let mut reversed = constraints.clone();
     reversed.reverse();
 
-    assert!(discharge(constraints).unwrap().is_empty());
-    assert!(discharge(reversed).unwrap().is_empty());
+    let guards = discharge(constraints).unwrap();
+    let reversed_guards = discharge(reversed).unwrap();
+    assert_eq!(guards, reversed_guards);
+    assert_eq!(guards.len(), 3);
+    for guard in &guards {
+        guard.evaluate(&[&[7, 7, 7, 7], &[7], &[1, 7]]).unwrap();
+    }
+    assert!(guards
+        .iter()
+        .any(|guard| guard.evaluate(&[&[7, 7, 7, 8], &[7], &[1, 7]]).is_err()));
 }
 
 #[test]
@@ -104,13 +113,18 @@ fn representative_guard_order_and_source_choice_are_deterministic() {
 
     let guards = discharge(constraints).unwrap();
     assert_eq!(guards, discharge(reversed).unwrap());
-    assert_eq!(guards.len(), 2);
-    assert_eq!(guards[0].source, source("a-family", Some(8)));
-    assert_eq!(
-        guards[0].rhs,
-        DimExpr::add(DimExpr::Const(1), smaller.clone())
-    );
-    assert_eq!(guards[1].rhs, DimExpr::mul(DimExpr::Const(2), smaller));
+    assert_eq!(guards.len(), 3);
+    assert!(guards.iter().any(|guard| {
+        guard.source == source("a-family", Some(8))
+            && guard.rhs == DimExpr::add(DimExpr::Const(1), smaller.clone())
+    }));
+    assert!(guards.iter().any(|guard| {
+        guard.source == source("a-family", Some(3))
+            && guard.rhs == DimExpr::mul(DimExpr::Const(2), smaller.clone())
+    }));
+    assert!(guards
+        .iter()
+        .any(|guard| guard.source == source("test.union", Some(4))));
 }
 
 #[test]
@@ -365,14 +379,23 @@ fn checked_constant_folding_handles_every_expression_kind() {
 fn duplicate_union_and_reversed_duplicate_binding_are_stable() {
     let a = symbol(0, 0);
     let b = symbol(1, 0);
-    assert!(discharge(vec![
+    let guards = discharge(vec![
         equal(source("test.duplicate", Some(0)), a.clone(), b.clone()),
         equal(source("test.duplicate", Some(1)), b, a.clone()),
         equal(source("test.duplicate", Some(2)), 3, a.clone()),
         equal(source("test.duplicate", Some(3)), a, 3),
     ])
-    .unwrap()
-    .is_empty());
+    .unwrap();
+    assert_eq!(guards.len(), 2);
+    for guard in &guards {
+        guard.evaluate(&[&[3], &[3]]).unwrap();
+    }
+    assert!(guards
+        .iter()
+        .any(|guard| guard.evaluate(&[&[4], &[4]]).is_err()));
+    assert!(guards
+        .iter()
+        .any(|guard| guard.evaluate(&[&[3], &[4]]).is_err()));
 }
 
 #[test]
@@ -390,10 +413,10 @@ fn guard_hash(guards: &[ShapeGuard]) -> u64 {
 }
 
 #[test]
-fn min_and_max_are_structurally_commutative() {
+fn min_and_max_are_canonical_but_retain_validation_guards() {
     let a = symbol(0, 0);
     let b = symbol(1, 0);
-    assert!(discharge(vec![
+    let guards = discharge(vec![
         equal(
             source("test.commutative", Some(0)),
             DimExpr::min(a.clone(), b.clone()),
@@ -405,8 +428,11 @@ fn min_and_max_are_structurally_commutative() {
             DimExpr::max(b, a),
         ),
     ])
-    .unwrap()
-    .is_empty());
+    .unwrap();
+    assert_eq!(guards.len(), 2);
+    for guard in guards {
+        guard.evaluate(&[&[3], &[5]]).unwrap();
+    }
 }
 
 #[test]
@@ -472,4 +498,214 @@ fn min_max_canonicalization_does_not_hide_operand_evaluation_errors() {
             })
         ));
     }
+}
+
+#[test]
+fn bare_axis_equality_is_enforced_at_runtime() {
+    let guard = only_guard(vec![equal(
+        source("test.bare", Some(4)),
+        symbol(0, 0),
+        symbol(1, 0),
+    )]);
+
+    guard.evaluate(&[&[6], &[6]]).unwrap();
+    assert!(matches!(
+        guard.evaluate(&[&[6], &[7]]),
+        Err(Error::ShapeConstraintViolation {
+            family: "test.bare",
+            instruction_index: Some(4),
+            lhs_value: 6,
+            rhs_value: 7,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn binding_closure_does_not_drop_establishing_runtime_obligation() {
+    let a = symbol(0, 0);
+    let b = symbol(1, 0);
+    let guards = discharge(vec![
+        equal(source("test.binding-basis", Some(0)), a.clone(), 3),
+        equal(
+            source("test.binding-basis", Some(1)),
+            DimExpr::add(a, DimExpr::Const(1)),
+            b,
+        ),
+    ])
+    .unwrap();
+
+    assert_eq!(guards.len(), 2);
+    for guard in &guards {
+        guard.evaluate(&[&[3], &[4]]).unwrap();
+    }
+    assert!(guards
+        .iter()
+        .any(|guard| guard.evaluate(&[&[999], &[4]]).is_err()));
+}
+
+#[test]
+fn unsafe_structural_identity_remains_a_validation_guard() {
+    let cases = [
+        (
+            DimExpr::floor_div(symbol(0, 0), symbol(1, 0)),
+            vec![vec![8], vec![0]],
+            ShapeConstraintEvalError::DivisionByZero,
+        ),
+        (
+            DimExpr::add(symbol(0, 0), DimExpr::Const(usize::MAX)),
+            vec![vec![1]],
+            ShapeConstraintEvalError::Overflow,
+        ),
+        (
+            DimExpr::min(symbol(2, 0), DimExpr::Const(9)),
+            Vec::<Vec<usize>>::new(),
+            ShapeConstraintEvalError::MissingInput {
+                input_idx: 2,
+                input_count: 0,
+            },
+        ),
+        (
+            DimExpr::max(symbol(0, 2), DimExpr::Const(9)),
+            vec![vec![1]],
+            ShapeConstraintEvalError::AxisOutOfBounds {
+                input_idx: 0,
+                axis: 2,
+                rank: 1,
+            },
+        ),
+    ];
+
+    for (expression, owned_inputs, expected) in cases {
+        let guard = only_guard(vec![equal(
+            source("test.structural-validation", Some(5)),
+            expression.clone(),
+            expression,
+        )]);
+        let inputs: Vec<&[usize]> = owned_inputs.iter().map(Vec::as_slice).collect();
+        assert!(matches!(
+            guard.evaluate(&inputs),
+            Err(Error::ShapeConstraintEvaluation { cause, .. }) if cause == expected
+        ));
+    }
+}
+
+#[test]
+fn independent_constant_violations_choose_same_error_for_every_order() {
+    let first = equal(source("z-family", Some(9)), 3, 4);
+    let second = equal(source("a-family", Some(1)), 1, 2);
+    let forward = discharge(vec![first.clone(), second.clone()]).unwrap_err();
+    let reversed = discharge(vec![second, first]).unwrap_err();
+
+    assert_eq!(format!("{forward:?}"), format!("{reversed:?}"));
+    assert!(matches!(
+        forward,
+        Error::ShapeConstraintViolation {
+            family: "a-family",
+            instruction_index: Some(1),
+            lhs_value: 1,
+            rhs_value: 2,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn independent_constant_fold_failures_choose_same_error_for_every_order() {
+    let overflow = equal(
+        source("z-family", Some(9)),
+        DimExpr::add(usize::MAX.into(), 1.into()),
+        0,
+    );
+    let division = equal(
+        source("a-family", Some(1)),
+        DimExpr::floor_div(1.into(), 0.into()),
+        0,
+    );
+    let forward = discharge(vec![overflow.clone(), division.clone()]).unwrap_err();
+    let reversed = discharge(vec![division, overflow]).unwrap_err();
+
+    assert_eq!(format!("{forward:?}"), format!("{reversed:?}"));
+    assert!(matches!(
+        forward,
+        Error::ShapeConstraintEvaluation {
+            family: "a-family",
+            instruction_index: Some(1),
+            cause: ShapeConstraintEvalError::DivisionByZero,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn shape_evaluation_error_exposes_standard_source_chain() {
+    let expression = DimExpr::floor_div(symbol(0, 0), DimExpr::Const(0));
+    let guard = only_guard(vec![equal(source("test.source", Some(2)), expression, 1)]);
+    let error = guard.evaluate(&[&[4]]).unwrap_err();
+    let cause = std::error::Error::source(&error).expect("typed evaluation cause");
+    assert_eq!(cause.to_string(), "shape expression divided by zero");
+}
+
+#[test]
+fn swapped_mul_dedups_but_sub_and_floor_div_remain_ordered() {
+    let a = symbol(0, 0);
+    let b = symbol(1, 0);
+    let c = symbol(2, 0);
+    let mul_guards = discharge(vec![
+        equal(
+            source("z-family", Some(3)),
+            DimExpr::mul(a.clone(), b.clone()),
+            c.clone(),
+        ),
+        equal(
+            source("a-family", Some(2)),
+            DimExpr::mul(b.clone(), a.clone()),
+            c,
+        ),
+    ])
+    .unwrap();
+    assert_eq!(mul_guards.len(), 1);
+    assert_eq!(mul_guards[0].source, source("a-family", Some(2)));
+
+    let sub_guard = only_guard(vec![equal(
+        source("test.ordered", Some(0)),
+        DimExpr::sub(a.clone(), b.clone()),
+        DimExpr::sub(b.clone(), a.clone()),
+    )]);
+    assert_ne!(sub_guard.lhs, sub_guard.rhs);
+
+    let div_guard = only_guard(vec![equal(
+        source("test.ordered", Some(1)),
+        DimExpr::floor_div(a, b.clone()),
+        DimExpr::floor_div(b, symbol(0, 0)),
+    )]);
+    assert_ne!(div_guard.lhs, div_guard.rhs);
+    assert!(matches!(
+        div_guard.evaluate(&[&[8], &[2]]),
+        Err(Error::ShapeConstraintViolation {
+            lhs_value: 4,
+            rhs_value: 0,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn long_union_chains_flatten_to_the_minimum_representative() {
+    let count = 4096;
+    let descending: Vec<_> = (1..count)
+        .rev()
+        .map(|index| {
+            equal(
+                source("test.flatten", Some(index)),
+                symbol(index, 0),
+                symbol(index - 1, 0),
+            )
+        })
+        .collect();
+    let mut reversed = descending.clone();
+    reversed.reverse();
+
+    assert!(union_representatives_are_flat(&descending));
+    assert!(union_representatives_are_flat(&reversed));
 }

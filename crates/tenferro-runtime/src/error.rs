@@ -204,6 +204,7 @@ pub enum Error {
         /// Normalized expression that failed.
         expression: String,
         /// Typed evaluation failure.
+        #[source]
         cause: ShapeConstraintEvalError,
     },
 
