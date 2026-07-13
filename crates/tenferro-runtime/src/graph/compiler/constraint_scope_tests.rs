@@ -256,3 +256,79 @@ fn constraint_scope_live_missing_axis_returns_typed_evaluation_error() {
         }
     ));
 }
+
+fn attach_violated_scope_to_layout_output(
+    mut output: TracedTensor,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+) -> TracedTensor {
+    let origin = output.graph.values()[output.val].key.clone();
+    let lhs_input = lhs.graph.values()[lhs.val].key.clone();
+    let rhs_input = rhs.graph.values()[rhs.val].key.clone();
+    let scope = Arc::new(ShapeConstraintScope::new(vec![ScopedShapeConstraint {
+        origins: vec![origin],
+        inputs: vec![lhs_input, rhs_input],
+        local: LocalShapeConstraint {
+            source: ConstraintSource {
+                family_id: "test.eliminated-layout-scope",
+                instruction_index: None,
+            },
+            relation: ShapeRelation::Equal,
+            lhs: DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            rhs: DimExpr::Mul(
+                Box::new(DimExpr::Const(2)),
+                Box::new(DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                }),
+            ),
+        },
+    }]));
+    output.constraint_scopes = ConstraintScopeChain::with_scope(scope, []);
+    output
+}
+
+fn assert_eliminated_layout_keeps_live_constraint(output: TracedTensor) {
+    let error = GraphCompiler::new()
+        .compile(&output)
+        .expect_err("optimizer elimination must not discard a live graph-scoped constraint");
+    assert!(
+        matches!(
+            error,
+            Error::ShapeConstraintViolation {
+                family: "test.eliminated-layout-scope",
+                lhs_value: 7,
+                rhs_value: 6,
+                ..
+            }
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn graph_scoped_constraint_survives_identity_reshape_elimination() {
+    let lhs = TracedTensor::from_vec_col_major(vec![7], vec![1.0_f64; 7]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    let base = lhs.add(&rhs.reduce_sum(&[0]).unwrap()).unwrap();
+    let output = base.reshape(&[7]).unwrap();
+
+    assert_eliminated_layout_keeps_live_constraint(attach_violated_scope_to_layout_output(
+        output, &lhs, &rhs,
+    ));
+}
+
+#[test]
+fn graph_scoped_constraint_survives_identity_transpose_elimination() {
+    let lhs = TracedTensor::from_vec_col_major(vec![7], vec![1.0_f64; 7]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    let base = lhs.add(&rhs.reduce_sum(&[0]).unwrap()).unwrap();
+    let output = base.transpose(&[0]).unwrap();
+
+    assert_eliminated_layout_keeps_live_constraint(attach_violated_scope_to_layout_output(
+        output, &lhs, &rhs,
+    ));
+}

@@ -31,8 +31,10 @@ use crate::metadata::{
     register_scoped_graph_analysis, registered_meta, MetadataScopeChain, RegisteredGraphAnalysis,
 };
 use crate::shape_constraint::{ConstraintScopeChain, ScopedShapeConstraint, ShapeConstraintScope};
-use crate::shape_infer::infer_extension_output_meta_with_constraints;
+use crate::shape_infer::{infer_extension_output_meta_with_constraints, InferredExtensionMeta};
 use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
+
+type ExpandedOutputMetas = Vec<(tenferro_tensor::DType, Vec<SymDim>)>;
 
 pub use crate::compiler::CompilerOptions;
 #[doc(hidden)]
@@ -220,16 +222,36 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
 pub fn attach_expanded_shape_contract(
     op: &dyn ExtensionOp,
     inputs: &[&TracedTensor],
-    mut output: TracedTensor,
+    output: TracedTensor,
 ) -> Result<TracedTensor> {
-    if inputs.len() != op.input_count() || op.output_count() != 1 {
+    if op.output_count() != 1 {
         return Err(Error::InvalidGraphBuild {
             op: "extension::attach_expanded_shape_contract",
             message: format!(
-                "extension family {:?} contract expects {} inputs and {} outputs, got {} inputs and one output",
+                "extension family {:?} contract expects {} outputs, got one expanded output",
+                op.family_id(),
+                op.output_count(),
+            ),
+        });
+    }
+    let (_, inferred) = infer_expanded_shape_contract(op, inputs)?;
+    attach_inferred_expanded_shape_contract(inputs, vec![output], inferred)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Internal("expanded shape contract returned no output".into()))
+}
+
+fn infer_expanded_shape_contract(
+    op: &dyn ExtensionOp,
+    inputs: &[&TracedTensor],
+) -> Result<(ExpandedOutputMetas, InferredExtensionMeta)> {
+    if inputs.len() != op.input_count() {
+        return Err(Error::InvalidGraphBuild {
+            op: "extension::infer_expanded_shape_contract",
+            message: format!(
+                "extension family {:?} contract expects {} inputs, got {}",
                 op.family_id(),
                 op.input_count(),
-                op.output_count(),
                 inputs.len()
             ),
         });
@@ -243,33 +265,71 @@ pub fn attach_expanded_shape_contract(
     let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
     let inferred =
         infer_extension_output_meta_with_constraints(op, &input_dtypes, &input_shape_refs)?;
-    let Some((inferred_dtype, inferred_shape)) = inferred.output_metas.first() else {
+    let input_sym_shapes = inputs
+        .iter()
+        .map(|input| {
+            (0..input.rank)
+                .map(|axis| input.axis_sym_dim(axis))
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let input_sym_shape_refs = input_sym_shapes
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let output_metas = inferred
+        .output_metas
+        .iter()
+        .map(|(dtype, shape)| {
+            (
+                *dtype,
+                shape
+                    .iter()
+                    .map(|dim| SymDim::from_dim_expr(dim, &input_sym_shape_refs))
+                    .collect(),
+            )
+        })
+        .collect();
+    Ok((output_metas, inferred))
+}
+
+fn attach_inferred_expanded_shape_contract(
+    inputs: &[&TracedTensor],
+    mut outputs: Vec<TracedTensor>,
+    inferred: InferredExtensionMeta,
+) -> Result<Vec<TracedTensor>> {
+    if inferred.output_metas.len() != outputs.len() {
         return Err(Error::InvalidGraphBuild {
             op: "extension::attach_expanded_shape_contract",
             message: format!(
-                "extension family {:?} returned no output metadata",
-                op.family_id()
+                "extension contract inferred {} outputs, but expanded graph produced {}",
+                inferred.output_metas.len(),
+                outputs.len()
             ),
         });
-    };
-    if *inferred_dtype != output.dtype || inferred_shape.len() != output.rank {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::attach_expanded_shape_contract",
-            message: format!(
-                "extension family {:?} inferred output {:?} rank {}, but expanded output is {:?} rank {}",
-                op.family_id(),
-                inferred_dtype,
-                inferred_shape.len(),
-                output.dtype,
-                output.rank
-            ),
-        });
+    }
+    for (output, (dtype, local_shape)) in outputs.iter().zip(inferred.output_metas.iter()) {
+        if output.dtype != *dtype || output.rank != local_shape.len() {
+            return Err(Error::InvalidGraphBuild {
+                op: "extension::attach_expanded_shape_contract",
+                message: format!(
+                    "extension contract inferred output {:?} rank {}, but expanded output is {:?} rank {}",
+                    dtype,
+                    local_shape.len(),
+                    output.dtype,
+                    output.rank
+                ),
+            });
+        }
     }
     if inferred.constraints.is_empty() {
-        return Ok(output);
+        return Ok(outputs);
     }
 
-    let origins = vec![output.graph.values()[output.val].key.clone()];
+    let origins = outputs
+        .iter()
+        .map(|output| output.graph.values()[output.val].key.clone())
+        .collect::<Vec<_>>();
     let input_keys = inputs
         .iter()
         .map(|input| input.graph.values()[input.val].key.clone())
@@ -284,8 +344,68 @@ pub fn attach_expanded_shape_contract(
         })
         .collect();
     let scope = Arc::new(ShapeConstraintScope::new(constraints));
-    output.constraint_scopes = ConstraintScopeChain::with_scope(scope, [&output.constraint_scopes]);
-    Ok(output)
+    for output in &mut outputs {
+        output.constraint_scopes =
+            ConstraintScopeChain::with_scope(Arc::clone(&scope), [&output.constraint_scopes]);
+    }
+    Ok(outputs)
+}
+
+/// Apply an expanded core graph while retaining one extension metadata contract.
+///
+/// Metadata inference runs exactly once. Its output metadata builds the traced
+/// outputs and its equality constraints are attached to those same outputs.
+///
+/// # Examples
+///
+/// ```rust
+/// # use std::{any::Any, sync::Arc};
+/// use computegraph::types::OperationRole;
+/// use tenferro_ops::{std_tensor_op::StdTensorOp, ExtensionShapeContext};
+/// use tenferro_runtime::extension::{apply_expanded_graph_with_shape_contract, ExtensionOp};
+/// use tenferro_runtime::{DType, SymDim, TracedTensor};
+///
+/// # #[derive(Clone, Debug)]
+/// # struct SameShapeAdd;
+/// # impl ExtensionOp for SameShapeAdd {
+/// #     fn family_id(&self) -> &'static str { "example.expanded-add.v1" }
+/// #     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+/// #     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+/// #         other.as_any().downcast_ref::<Self>().is_some()
+/// #     }
+/// #     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
+/// #     fn as_any(&self) -> &dyn Any { self }
+/// #     fn input_count(&self) -> usize { 2 }
+/// #     fn output_count(&self) -> usize { 1 }
+/// #     fn infer_output_meta(
+/// #         &self,
+/// #         ctx: &mut ExtensionShapeContext<'_>,
+/// #     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+/// #         ctx.require_same_shape(0, 1)?;
+/// #         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+/// #     }
+/// # }
+/// let lhs = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+/// let rhs = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+/// let outputs = apply_expanded_graph_with_shape_contract(
+///     &SameShapeAdd,
+///     &[&lhs, &rhs],
+///     |builder, inputs| {
+///         Ok(builder.add_operation(StdTensorOp::Add, inputs.to_vec(), OperationRole::Primary))
+///     },
+/// )?;
+/// assert_eq!(outputs[0].rank, 1);
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+#[doc(hidden)]
+pub fn apply_expanded_graph_with_shape_contract(
+    op: &dyn ExtensionOp,
+    inputs: &[&TracedTensor],
+    build: impl FnOnce(&mut GraphBuilder<StdTensorOp>, &[ValueRef<StdTensorOp>]) -> Result<Vec<usize>>,
+) -> Result<Vec<TracedTensor>> {
+    let (output_metas, inferred) = infer_expanded_shape_contract(op, inputs)?;
+    let outputs = apply_expanded_graph(inputs, output_metas, build)?;
+    attach_inferred_expanded_shape_contract(inputs, outputs, inferred)
 }
 
 /// Apply an extension-provided lowering as ordinary traced graph operations.

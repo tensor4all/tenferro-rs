@@ -386,7 +386,7 @@ fn compiler_rejects_out_of_range_output_slot_before_optimization() {
 }
 
 #[test]
-fn compiler_rejects_constraint_origin_eliminated_from_final_stream() {
+fn compiler_prunes_inferred_constraint_when_extension_output_is_dead() {
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
             StdTensorOp::Extension(Arc::new(ConstraintFixture::ScaledAxisEquality)),
@@ -398,25 +398,26 @@ fn compiler_rejects_constraint_origin_eliminated_from_final_stream() {
         n_slots: 3,
     };
 
-    assert!(matches!(
-        compile_std_to_exec(
-            &program,
-            &[DType::F64, DType::F64],
-            &[
-                vec![DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                }],
-                vec![DimExpr::InputDim {
-                    input_idx: 1,
-                    axis: 0,
-                }],
-            ],
-        ),
-        Err(Error::InvalidCompiledGraph { ref message })
-            if message.contains("absent from the final instruction stream")
-                && message.contains("output slots [2]")
-    ));
+    // This constraint is inferred from the dead extension instruction itself,
+    // unlike a graph-scoped contract whose origin was already proven live before
+    // optimization. Only the former is safe to prune with its dead producer.
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    )
+    .expect("dead compiler-inferred constraint should be pruned");
+    assert!(exec.instructions.is_empty());
+    assert!(exec.shape_guards.is_empty());
 }
 
 #[test]

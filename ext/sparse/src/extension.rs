@@ -356,7 +356,7 @@ impl ExtensionOp for SparseMatmulJvpOp {
 #[cfg(feature = "autodiff")]
 impl HostReference for SparseMatmulJvpOp {
     fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        validate_primal_inputs(&self.plan, &inputs[..2])?;
+        validate_jvp_inputs(&self.plan, inputs, &self.active_inputs)?;
         execute_jvp(&self.plan, inputs, &self.active_inputs).map(|tensor| vec![tensor])
     }
 }
@@ -444,8 +444,7 @@ impl ExtensionOp for SparseMatmulVjpOp {
 #[cfg(feature = "autodiff")]
 impl HostReference for SparseMatmulVjpOp {
     fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        validate_primal_inputs(&self.plan, &inputs[..2])?;
-        validate_value_tensor(inputs[2], self.plan.output_nnz())?;
+        validate_vjp_inputs(&self.plan, inputs, self.active_input)?;
         execute_vjp(&self.plan, inputs, self.active_input).map(|tensor| vec![tensor])
     }
 }
@@ -679,6 +678,52 @@ fn validate_primal_inputs(plan: &SparseMatmulPlan, inputs: &[&Tensor]) -> Result
 }
 
 #[cfg(feature = "autodiff")]
+fn validate_jvp_inputs(
+    plan: &SparseMatmulPlan,
+    inputs: &[&Tensor],
+    active_inputs: &[usize],
+) -> Result<()> {
+    let expected = 2 + active_inputs.len();
+    if inputs.len() != expected {
+        return Err(invalid(format!(
+            "sparse JVP expected {expected} inputs, got {}",
+            inputs.len()
+        )));
+    }
+    validate_primal_inputs(plan, &inputs[..2])?;
+    for (active_pos, &active) in active_inputs.iter().enumerate() {
+        let expected_nnz = match active {
+            0 => plan.left_nnz(),
+            1 => plan.right_nnz(),
+            _ => return Err(invalid(format!("invalid active sparse input {active}"))),
+        };
+        validate_value_tensor(inputs[2 + active_pos], expected_nnz)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_vjp_inputs(
+    plan: &SparseMatmulPlan,
+    inputs: &[&Tensor],
+    active_input: usize,
+) -> Result<()> {
+    if inputs.len() != 3 {
+        return Err(invalid(format!(
+            "sparse VJP expected 3 inputs, got {}",
+            inputs.len()
+        )));
+    }
+    if active_input >= 2 {
+        return Err(invalid(format!(
+            "invalid active sparse input {active_input}"
+        )));
+    }
+    validate_primal_inputs(plan, &inputs[..2])?;
+    validate_value_tensor(inputs[2], plan.output_nnz())
+}
+
+#[cfg(feature = "autodiff")]
 fn downcast_matmul_op(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&SparseMatmulOp> {
     op.as_any()
         .downcast_ref::<SparseMatmulOp>()
@@ -719,3 +764,6 @@ fn invalid(message: impl Into<String>) -> Error {
         message: message.into(),
     }
 }
+
+#[cfg(all(test, feature = "autodiff"))]
+mod tests;

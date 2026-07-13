@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use computegraph::types::ValueRef;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
@@ -258,31 +257,19 @@ fn expand_traced_einsum_graph(
         output_shape_hint,
         EinsumPlanSpec::LeftToRight,
     );
-    let input_dtypes: Vec<_> = inputs.iter().map(|tensor| tensor.dtype).collect();
-    let input_sym_shapes: Vec<Vec<SymDim>> = inputs
-        .iter()
-        .map(|tensor| match tensor.sym_shape() {
-            Some(shape) => Ok(shape.to_vec()),
-            None => (0..tensor.rank)
-                .map(|axis| tensor.axis_sym_dim(axis))
-                .collect(),
-        })
-        .collect::<Result<_>>()?;
-    let input_sym_shape_refs: Vec<_> = input_sym_shapes.iter().map(Vec::as_slice).collect();
-    let output_metas =
-        invoke_extension_shape_inference(&op, &input_dtypes, &input_sym_shape_refs)?.output_metas;
     let input_dim_shapes = traced_dim_expr_shapes(inputs);
 
-    let outputs = extension::apply_expanded_graph(inputs, output_metas, |builder, input_refs| {
-        let result = build_einsum_graph_dim_expr(builder, tree, input_refs, &input_dim_shapes)
-            .map_err(|err| Error::ContractionError(err.to_string()))?;
-        let ValueRef::Local(local) = result else {
-            return Err(Error::Internal(
-                "expanded einsum returned an external value".into(),
-            ));
-        };
-        Ok(vec![local])
-    })?;
+    let outputs =
+        extension::apply_expanded_graph_with_shape_contract(&op, inputs, |builder, input_refs| {
+            let result = build_einsum_graph_dim_expr(builder, tree, input_refs, &input_dim_shapes)
+                .map_err(|err| Error::ContractionError(err.to_string()))?;
+            let ValueRef::Local(local) = result else {
+                return Err(Error::Internal(
+                    "expanded einsum returned an external value".into(),
+                ));
+            };
+            Ok(vec![local])
+        })?;
 
     outputs
         .into_iter()

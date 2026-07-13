@@ -21,10 +21,17 @@ pub use options::{CompilerOptions, OptimizerConfig};
 
 struct PendingShapeConstraints {
     origin_output_slots: Vec<usize>,
+    fallback_provenance_slots: Vec<usize>,
     family_id: &'static str,
     constraints: Vec<LocalShapeConstraint>,
-    prune_if_dead: bool,
+    missing_origin: MissingConstraintOrigin,
     require_extension_family: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MissingConstraintOrigin {
+    Prune,
+    Preserve,
 }
 
 pub fn compile_std_to_exec(
@@ -179,9 +186,10 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                     if !inferred_constraints.is_empty() {
                         pending_constraints.push(PendingShapeConstraints {
                             origin_output_slots: instr.outputs.clone(),
+                            fallback_provenance_slots: Vec::new(),
                             family_id: ext.family_id(),
                             constraints: inferred_constraints,
-                            prune_if_dead: false,
+                            missing_origin: MissingConstraintOrigin::Prune,
                             require_extension_family: true,
                         });
                     }
@@ -286,6 +294,12 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let mut pre_optimizer_producer_by_slot = vec![None; prog.n_slots];
+    for (instruction_index, instruction) in instructions.iter().enumerate() {
+        for &slot in &instruction.output_slots {
+            pre_optimizer_producer_by_slot[slot] = Some(instruction_index);
+        }
+    }
     for scoped in scoped_constraints {
         let mut local = scoped.local.clone();
         local.lhs = lower_scoped_dim_expr(
@@ -300,11 +314,26 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
             &analysis_slot_shapes,
             &local,
         )?;
+        let fallback_provenance_slots = scoped
+            .origin_slots
+            .iter()
+            .filter_map(|&slot| {
+                pre_optimizer_producer_by_slot
+                    .get(slot)
+                    .copied()
+                    .flatten()
+                    .and_then(|index| instructions.get(index))
+                    .map(|instruction| instruction.input_slots.as_slice())
+            })
+            .flatten()
+            .copied()
+            .collect();
         pending_constraints.push(PendingShapeConstraints {
             origin_output_slots: scoped.origin_slots.clone(),
+            fallback_provenance_slots,
             family_id: local.source.family_id,
             constraints: vec![local],
-            prune_if_dead: true,
+            missing_origin: MissingConstraintOrigin::Preserve,
             require_extension_family: false,
         });
     }
@@ -335,18 +364,19 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                 .then_some(index)
             })
         });
-        let Some(instruction_index) = instruction_index else {
-            if pending.prune_if_dead {
-                continue;
-            }
-            return Err(invalid_compiled_graph(format!(
-                "extension constraint origin for family {:?} with output slots {:?} \
-                 is absent from the final instruction stream",
-                pending.family_id, pending.origin_output_slots
-            )));
-        };
+        let instruction_index = instruction_index.or_else(|| {
+            pending
+                .fallback_provenance_slots
+                .iter()
+                .find_map(|&slot| producer_by_slot.get(slot).copied().flatten())
+        });
+        if instruction_index.is_none()
+            && matches!(pending.missing_origin, MissingConstraintOrigin::Prune)
+        {
+            continue;
+        }
         constraints.extend(pending.constraints.into_iter().map(|mut constraint| {
-            constraint.source = constraint.source.with_instruction(instruction_index);
+            constraint.source.instruction_index = instruction_index;
             constraint
         }));
     }

@@ -256,16 +256,7 @@ impl ExtensionOp for TropicalEinsumJvpOp {
 #[cfg(feature = "autodiff")]
 impl HostReference for TropicalEinsumJvpOp {
     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        if inputs.len() != self.input_count() {
-            return Err(invalid_config(
-                "tropical_einsum_jvp",
-                format!(
-                    "expected {} inputs, got {}",
-                    self.input_count(),
-                    inputs.len()
-                ),
-            ));
-        }
+        validate_tropical_jvp_inputs(inputs, &self.subscripts, &self.active_inputs)?;
         let primal = tropical_einsum_subscripts_with_argmax(
             self.kind,
             &[inputs[0], inputs[1]],
@@ -404,12 +395,7 @@ impl ExtensionOp for TropicalEinsumVjpOp {
 #[cfg(feature = "autodiff")]
 impl HostReference for TropicalEinsumVjpOp {
     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        if inputs.len() != 3 {
-            return Err(invalid_config(
-                "tropical_einsum_vjp",
-                format!("expected 3 inputs, got {}", inputs.len()),
-            ));
-        }
+        validate_tropical_vjp_inputs(inputs, &self.subscripts, self.active_input)?;
         let primal = tropical_einsum_subscripts_with_argmax(
             self.kind,
             &[inputs[0], inputs[1]],
@@ -621,6 +607,143 @@ fn infer_tropical_output_meta(
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| invalid_config(op, "output labels must be present in input metadata"))?;
     Ok((input_dtypes[0], output_shape))
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_tropical_primal_host_meta(
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+    op: &'static str,
+) -> tenferro_tensor::Result<Vec<usize>> {
+    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
+        return Err(invalid_config(
+            op,
+            format!(
+                "expected two primal inputs, got tensors={} subscripts={}",
+                inputs.len(),
+                subscripts.inputs.len()
+            ),
+        ));
+    }
+    let dtype = inputs[0].dtype();
+    if inputs[1].dtype() != dtype || !matches!(dtype, DType::F32 | DType::F64) {
+        return Err(invalid_config(
+            op,
+            format!(
+                "primal inputs must have matching F32 or F64 dtype, got {:?} and {:?}",
+                inputs[0].dtype(),
+                inputs[1].dtype()
+            ),
+        ));
+    }
+
+    let mut label_dims = HashMap::new();
+    for (input_idx, (labels, input)) in subscripts.inputs.iter().zip(inputs).enumerate() {
+        if labels.len() != input.shape().len() {
+            return Err(invalid_config(
+                op,
+                format!(
+                    "input {input_idx} subscript rank {} does not match tensor rank {}",
+                    labels.len(),
+                    input.shape().len()
+                ),
+            ));
+        }
+        for (&label, &dim) in labels.iter().zip(input.shape()) {
+            if let Some(existing) = label_dims.insert(label, dim) {
+                if existing != dim {
+                    return Err(invalid_config(
+                        op,
+                        format!("label {label} has conflicting extents {existing} and {dim}"),
+                    ));
+                }
+            }
+        }
+    }
+    subscripts
+        .output
+        .iter()
+        .map(|label| {
+            label_dims
+                .get(label)
+                .copied()
+                .ok_or_else(|| invalid_config(op, format!("output label {label} is absent")))
+        })
+        .collect()
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_tropical_jvp_inputs(
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+    active_inputs: &[usize],
+) -> tenferro_tensor::Result<()> {
+    let expected = 2 + active_inputs.len();
+    if inputs.len() != expected {
+        return Err(invalid_config(
+            "tropical_einsum_jvp",
+            format!("expected {expected} inputs, got {}", inputs.len()),
+        ));
+    }
+    validate_tropical_primal_host_meta(&inputs[..2], subscripts, "tropical_einsum_jvp")?;
+    for (active_pos, &active) in active_inputs.iter().enumerate() {
+        if active >= 2 {
+            return Err(invalid_config(
+                "tropical_einsum_jvp",
+                format!("invalid active input {active}"),
+            ));
+        }
+        let tangent = inputs[2 + active_pos];
+        if tangent.dtype() != inputs[active].dtype() || tangent.shape() != inputs[active].shape() {
+            return Err(invalid_config(
+                "tropical_einsum_jvp",
+                format!(
+                    "tangent {active_pos} metadata {:?} {:?} does not match active input {active} {:?} {:?}",
+                    tangent.dtype(),
+                    tangent.shape(),
+                    inputs[active].dtype(),
+                    inputs[active].shape()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_tropical_vjp_inputs(
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+    active_input: usize,
+) -> tenferro_tensor::Result<()> {
+    if inputs.len() != 3 {
+        return Err(invalid_config(
+            "tropical_einsum_vjp",
+            format!("expected 3 inputs, got {}", inputs.len()),
+        ));
+    }
+    if active_input >= 2 {
+        return Err(invalid_config(
+            "tropical_einsum_vjp",
+            format!("invalid active input {active_input}"),
+        ));
+    }
+    let output_shape =
+        validate_tropical_primal_host_meta(&inputs[..2], subscripts, "tropical_einsum_vjp")?;
+    let cotangent = inputs[2];
+    if cotangent.dtype() != inputs[active_input].dtype() || cotangent.shape() != output_shape {
+        return Err(invalid_config(
+            "tropical_einsum_vjp",
+            format!(
+                "cotangent metadata {:?} {:?} does not match output {:?} {:?}",
+                cotangent.dtype(),
+                cotangent.shape(),
+                inputs[active_input].dtype(),
+                output_shape
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "autodiff")]
@@ -885,3 +1008,6 @@ fn decode_col_major_index(mut flat: usize, shape: &[usize]) -> Option<Vec<usize>
     }
     Some(coordinates)
 }
+
+#[cfg(all(test, feature = "autodiff"))]
+mod tests;
