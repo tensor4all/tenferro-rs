@@ -962,7 +962,7 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
 }
 
 #[test]
-fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
+fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
     let mod_source = cubecl_source("mod.rs");
     let helper = source_section(
         &mod_source,
@@ -1024,14 +1024,16 @@ fn cubecl_scalar_div_rem_is_narrow_and_pow_remains_equal_shape() {
         );
     }
     let pow = source_section(&mod_source, "fn pow(", "fn transpose(");
-    assert!(!pow.contains("launch_scalar_binary"));
+    assert!(pow.contains("launch_scalar_binary"));
+    assert!(pow.contains("launch_checked_integer_scalar_binary"));
+    assert!(!pow.contains("broadcast_typed"));
     assert_ordered_needles(
-        "pow dtype and shape validation",
+        "pow dtype validation before scalar shape dispatch",
         pow,
         &[
             "if lhs.dtype() != rhs.dtype()",
             "return Err(dtype_mismatch(op, lhs, rhs))",
-            "ensure_same_shape(op, lhs.shape(), rhs.shape())?",
+            "match (lhs, rhs)",
         ],
     );
     assert!(pow.contains("launch_binary("));

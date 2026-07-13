@@ -342,7 +342,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {
+fn test_scalar_div_rem_pow_match_cpu() {
     if !gpu_available() {
         eprintln!("skipping scalar div/rem/pow parity test - no CUDA device found");
         return;
@@ -522,30 +522,19 @@ fn test_scalar_div_rem_match_cpu_and_pow_rejects_shape_mismatch() {
     ] {
         let gpu_tensor = upload(&gpu, &tensor);
         let gpu_scalar = upload(&gpu, &scalar);
-        for (cpu_result, gpu_result, lhs_shape, rhs_shape) in [
+        for (expected, actual) in [
             (
-                cpu.pow(&scalar, &tensor),
-                gpu.pow(&gpu_scalar, &gpu_tensor),
-                vec![],
-                vec![2],
+                cpu.pow(&scalar, &tensor).unwrap(),
+                gpu.pow(&gpu_scalar, &gpu_tensor)
+                    .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.pow(&tensor, &scalar),
-                gpu.pow(&gpu_tensor, &gpu_scalar),
-                vec![2],
-                vec![],
+                cpu.pow(&tensor, &scalar).unwrap(),
+                gpu.pow(&gpu_tensor, &gpu_scalar)
+                    .map(|value| download(&gpu, &value)),
             ),
         ] {
-            for result in [cpu_result, gpu_result] {
-                match result {
-                    Err(crate::Error::ShapeMismatch { op, lhs, rhs }) => {
-                        assert_eq!(op, "pow");
-                        assert_eq!(lhs, lhs_shape);
-                        assert_eq!(rhs, rhs_shape);
-                    }
-                    other => panic!("unexpected scalar pow result: {other:?}"),
-                }
-            }
+            assert_tensor_close(&actual.unwrap(), &expected, 0.0);
         }
     }
 }
