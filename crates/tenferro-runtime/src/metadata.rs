@@ -3,6 +3,9 @@ use computegraph::types::{LocalValueId, ValueKey, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
@@ -321,20 +324,12 @@ fn append_graph_metadata_registrations(
     if !visited.insert(graph_ptr) {
         return Ok(());
     }
-
-    for parent in graph.parents() {
-        append_graph_metadata_registrations(
-            parent,
-            None,
-            false,
-            known,
-            registrations,
-            constraints,
-            visited,
-        )?;
-    }
+    #[cfg(test)]
+    test_support::record_graph_visit();
 
     for op_node in graph.operations() {
+        #[cfg(test)]
+        test_support::record_operation_visit();
         if let Some(live_values) = live_values {
             if !op_node
                 .outputs
@@ -371,17 +366,48 @@ fn append_graph_metadata_registrations(
             })
             .cloned()
             .collect();
-        let input_metas: Vec<_> = input_keys
-            .iter()
-            .map(|key| {
-                if let Some(meta) = known.get(key).cloned() {
-                    return Ok(meta);
-                }
-                lookup_global_metadata(key)
-                    .map_err(|err| metadata_error(err.to_string()))?
-                    .ok_or_else(|| metadata_error(format!("missing input metadata for {:?}", key)))
-            })
-            .collect::<Result<_>>()?;
+        let mut input_metas = Vec::with_capacity(input_keys.len());
+        for key in &input_keys {
+            if let Some(meta) = known.get(key).cloned() {
+                input_metas.push(meta);
+                continue;
+            }
+            if let Some(meta) =
+                lookup_global_metadata(key).map_err(|err| metadata_error(err.to_string()))?
+            {
+                known.insert(key.clone(), meta.clone());
+                input_metas.push(meta);
+                continue;
+            }
+
+            // Traced construction normally keeps parent metadata scopes alive,
+            // so this is only the compatibility path for manually assembled or
+            // otherwise unregistered parent graphs.
+            let Some(parent) = graph
+                .parents()
+                .iter()
+                .find(|parent| parent.values().iter().any(|value| value.key == *key))
+            else {
+                return Err(metadata_error(format!(
+                    "missing input metadata for {:?}",
+                    key
+                )));
+            };
+            append_graph_metadata_registrations(
+                parent,
+                None,
+                false,
+                known,
+                registrations,
+                constraints,
+                visited,
+            )?;
+            input_metas.push(
+                known.get(key).cloned().ok_or_else(|| {
+                    metadata_error(format!("missing input metadata for {:?}", key))
+                })?,
+            );
+        }
 
         let inferred = infer_output_metas(&op_node.operation, &input_metas)?;
         let origin_keys: Vec<_> = op_node

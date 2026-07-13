@@ -20,10 +20,13 @@ constraints to real extension families or transfer scopes through
 
 - One graph analysis walk registers metadata and records extension-local
   constraints with every output origin and the ordered graph input keys.
-  Parent graphs are traversed only for metadata dependencies: their registered
-  output metadata is reused, and only operations owned by the analyzed root
-  contribute to its local constraint scope. Parent constraint scopes arrive
-  exclusively through the traced input chain.
+  Analysis is root-local: registered external metadata is resolved directly
+  from the global registry without traversing parent graphs. A parent is
+  analyzed only as an on-demand fallback when an external key is unregistered;
+  multi-output inference registers every sibling output in that walk. Only
+  operations owned by the analyzed root contribute to its local constraint
+  scope. Parent constraint scopes arrive exclusively through the traced input
+  chain.
 - Traced tensors carry an immutable `Arc`-backed constraint-scope chain.
   Materialization uses pointer-identity deduplication; semantic deduplication
   remains in the normalized equality solver after lowering.
@@ -69,6 +72,13 @@ compilation accepted `7 == 2 * 3` with a guard and retained a guard for
 `6 == 2 * 3` until it used concrete descriptor shapes. A depth-12 shared
 constraint-chain diamond visited 8,191 nodes instead of the 13 unique nodes
 until chain-node identity was tracked.
+
+A second review follow-up added test-only graph/operation visit counters. Both
+a depth-16 extension chain and a depth-16 expanded-graph chain visited 152
+graphs before the fix, despite each construction owning one operation. Removing
+the unconditional parent recursion made both totals exactly 16 graphs and 16
+operations. A raw unregistered multi-output parent test covers the on-demand
+fallback and verifies both sibling outputs remain available to the child.
 
 ## Residual risk
 

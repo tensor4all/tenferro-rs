@@ -319,3 +319,108 @@ fn graph_local_constraint_scope_expanded_child_does_not_reinfer_or_duplicate_anc
     assert_eq!(child.constraint_scopes.materialize().len(), 1);
     assert_eq!(reachable_constraint_count(&child), 1);
 }
+
+#[test]
+fn extension_chain_graph_analysis_visit_count_is_root_local() {
+    const DEPTH: usize = 16;
+    let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let (result, graph_visits, operation_visits) =
+        crate::metadata::test_support::with_visit_count(|| {
+            let mut value = input;
+            for _ in 0..DEPTH {
+                value = apply(
+                    Arc::new(TestExtension {
+                        input_count: 1,
+                        output_count: 1,
+                        inferred_outputs: 1,
+                    }),
+                    &[&value],
+                )?
+                .remove(0);
+            }
+            Ok::<_, Error>(value)
+        });
+
+    result.unwrap();
+    assert_eq!(graph_visits, DEPTH);
+    assert_eq!(operation_visits, DEPTH);
+}
+
+#[test]
+fn expanded_chain_graph_analysis_visit_count_is_root_local() {
+    const DEPTH: usize = 16;
+    let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let (result, graph_visits, operation_visits) =
+        crate::metadata::test_support::with_visit_count(|| {
+            let mut value = input;
+            for _ in 0..DEPTH {
+                value = apply_expanded_graph(
+                    &[&value],
+                    vec![(DType::F64, vec![SymDim::from(3)])],
+                    |builder, inputs| {
+                        Ok(builder.add_operation(
+                            StdTensorOp::Neg,
+                            inputs.to_vec(),
+                            OperationRole::Primary,
+                        ))
+                    },
+                )?
+                .remove(0);
+            }
+            Ok::<_, Error>(value)
+        });
+
+    result.unwrap();
+    assert_eq!(graph_visits, DEPTH);
+    assert_eq!(operation_visits, DEPTH);
+}
+
+#[test]
+fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
+    let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let mut parent_builder = GraphBuilder::new();
+    parent_builder.add_parent(input.graph.clone());
+    let parent_outputs = parent_builder.add_operation(
+        StdTensorOp::Extension(Arc::new(TestExtension {
+            input_count: 1,
+            output_count: 2,
+            inferred_outputs: 2,
+        })),
+        vec![ValueRef::External(
+            input.graph.values()[input.val].key.clone(),
+        )],
+        OperationRole::Primary,
+    );
+    parent_builder.set_outputs(parent_outputs.clone());
+    let parent = Arc::new(parent_builder.build());
+
+    let mut child_builder = GraphBuilder::new();
+    child_builder.add_parent(Arc::clone(&parent));
+    let child_output = child_builder.add_operation(
+        StdTensorOp::Add,
+        parent_outputs
+            .iter()
+            .map(|&output| ValueRef::External(parent.values()[output].key.clone()))
+            .collect(),
+        OperationRole::Primary,
+    )[0];
+    child_builder.set_outputs(vec![child_output]);
+    let child = child_builder.build();
+
+    let analysis = crate::metadata::register_scoped_graph_analysis(&child, []).unwrap();
+    assert!(analysis.constraints.is_empty());
+    let child_meta = crate::metadata::registered_meta(&child.values()[child_output].key).unwrap();
+    assert_eq!(child_meta.dtype, DType::F64);
+    assert_eq!(child_meta.rank(), 1);
+    for &output in &parent_outputs {
+        assert_eq!(
+            crate::metadata::registered_meta(&parent.values()[output].key)
+                .unwrap()
+                .bound_shape(),
+            Some(vec![SymDim::from(3)])
+        );
+    }
+}
