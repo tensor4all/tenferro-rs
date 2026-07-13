@@ -201,6 +201,21 @@ fn producer_index_by_slot_rejects_out_of_range_output_slot() {
 }
 
 #[test]
+fn producer_index_by_slot_rejects_duplicate_output_slot() {
+    let first = make_exec_instr(ExecOp::Negate, vec![0], vec![1]);
+    let second = make_exec_instr(ExecOp::Negate, vec![0], vec![1]);
+    let program = make_exec_program(vec![first, second], vec![0], vec![1], 2);
+
+    let err = producer_index_by_slot(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message == "producer output slot 1 has duplicate producers at instructions 0 and 1"
+    ));
+}
+
+#[test]
 fn slot_use_counts_rejects_out_of_range_slots() {
     let instr = make_exec_instr(ExecOp::Negate, vec![2], vec![0]);
     let program = make_exec_program(vec![instr], vec![0], vec![], 1);

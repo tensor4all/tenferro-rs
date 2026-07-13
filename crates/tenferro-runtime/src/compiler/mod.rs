@@ -19,6 +19,13 @@ mod options;
 
 pub use options::{CompilerOptions, OptimizerConfig};
 
+struct PendingShapeConstraints {
+    tracked_output_slot: usize,
+    origin_output_slots: Vec<usize>,
+    family_id: &'static str,
+    constraints: Vec<LocalShapeConstraint>,
+}
+
 pub fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
@@ -52,8 +59,7 @@ pub fn compile_std_to_exec_with_options(
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
     let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; prog.n_slots];
-    let mut pending_constraints: Vec<(Vec<usize>, &'static str, Vec<LocalShapeConstraint>)> =
-        Vec::new();
+    let mut pending_constraints = Vec::new();
 
     for (index, &slot) in prog.input_slots.iter().enumerate() {
         slot_dtypes[slot] = Some(input_dtypes[index]);
@@ -104,12 +110,15 @@ pub fn compile_std_to_exec_with_options(
                         &input_shapes_refs,
                     )?;
                     let metas = inferred.output_metas;
-                    if !inferred.constraints.is_empty() {
-                        pending_constraints.push((
-                            instr.outputs.clone(),
-                            ext.family_id(),
-                            inferred.constraints,
-                        ));
+                    if let Some(tracked_output_slot) = instr.outputs.first().copied() {
+                        if !inferred.constraints.is_empty() {
+                            pending_constraints.push(PendingShapeConstraints {
+                                tracked_output_slot,
+                                origin_output_slots: instr.outputs.clone(),
+                                family_id: ext.family_id(),
+                                constraints: inferred.constraints,
+                            });
+                        }
                     }
                     if metas.len() != instr.outputs.len() {
                         return Err(invalid_compiled_graph(format!(
@@ -191,26 +200,37 @@ pub fn compile_std_to_exec_with_options(
         shape_guards: Vec::new(),
     };
     optimizer::optimize_exec_program(&mut program, input_dtypes, input_shapes, options.optimizer)?;
+    // Build the final SSA index once. Provenance resolution below is then
+    // O(total constraint-origin outputs), rather than rescanning all final
+    // instructions for every constraint-bearing extension.
+    let producer_by_slot = producer_index_by_slot(&program)?;
     let mut constraints = Vec::new();
-    for (origin_output_slots, family_id, local_constraints) in pending_constraints {
-        let instruction_index = program
-            .instructions
-            .iter()
-            .position(|instruction| {
-                instruction.output_slots == origin_output_slots
-                    && matches!(
-                        &instruction.op,
-                        ExecOp::Extension(extension) if extension.family_id() == family_id
-                    )
+    for pending in pending_constraints {
+        let instruction_index = producer_by_slot
+            .get(pending.tracked_output_slot)
+            .copied()
+            .flatten()
+            .filter(|&instruction_index| {
+                program
+                    .instructions
+                    .get(instruction_index)
+                    .is_some_and(|instruction| {
+                        instruction.output_slots == pending.origin_output_slots
+                            && matches!(
+                                &instruction.op,
+                                ExecOp::Extension(extension)
+                                    if extension.family_id() == pending.family_id
+                            )
+                    })
             })
             .ok_or_else(|| {
                 invalid_compiled_graph(format!(
-                    "extension constraint origin for family {family_id:?} with output slots \
-                     {origin_output_slots:?} \
-                     is absent from the final instruction stream"
+                    "extension constraint origin for family {:?} with output slots {:?} \
+                     is absent from the final instruction stream",
+                    pending.family_id, pending.origin_output_slots
                 ))
             })?;
-        constraints.extend(local_constraints.into_iter().map(|mut constraint| {
+        constraints.extend(pending.constraints.into_iter().map(|mut constraint| {
             constraint.source = constraint.source.with_instruction(instruction_index);
             constraint
         }));
@@ -1338,13 +1358,19 @@ fn producer_index_by_slot(program: &ExecProgram) -> Result<Vec<Option<usize>>> {
     let mut producer_by_slot = vec![None; program.n_slots];
     for (idx, instr) in program.instructions.iter().enumerate() {
         for &slot in &instr.output_slots {
-            if slot >= producer_by_slot.len() {
+            let Some(producer) = producer_by_slot.get_mut(slot) else {
                 return Err(invalid_compiled_graph(format!(
                     "producer output slot {slot} is outside slot table of length {}",
                     program.n_slots
                 )));
+            };
+            if let Some(previous_idx) = *producer {
+                return Err(invalid_compiled_graph(format!(
+                    "producer output slot {slot} has duplicate producers at instructions \
+                     {previous_idx} and {idx}"
+                )));
             }
-            producer_by_slot[slot] = Some(idx);
+            *producer = Some(idx);
         }
     }
     Ok(producer_by_slot)

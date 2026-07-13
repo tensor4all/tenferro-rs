@@ -13,6 +13,7 @@ use crate::{Error, ShapeGuard};
 enum ConstraintFixture {
     ScaledAxisEquality,
     ScaledAxisEqualityMultiOutput,
+    AxisEquality { axis: usize },
     WithoutOutput,
     InvalidAxis,
 }
@@ -24,18 +25,23 @@ impl ExtensionOp for ConstraintFixture {
             Self::ScaledAxisEqualityMultiOutput => {
                 "test.compiler-scaled-axis-equality-multi-output.v1"
             }
+            Self::AxisEquality { .. } => "test.compiler-many-axis-equalities.v1",
             Self::WithoutOutput => "test.compiler-constraint-without-output.v1",
             Self::InvalidAxis => "test.compiler-invalid-constraint-axis.v1",
         }
     }
 
     fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
-        hasher.write_u8(match self {
-            Self::ScaledAxisEquality => 0,
-            Self::ScaledAxisEqualityMultiOutput => 1,
-            Self::WithoutOutput => 2,
-            Self::InvalidAxis => 3,
-        });
+        match self {
+            Self::ScaledAxisEquality => hasher.write_u8(0),
+            Self::ScaledAxisEqualityMultiOutput => hasher.write_u8(1),
+            Self::AxisEquality { axis } => {
+                hasher.write_u8(2);
+                hasher.write_usize(*axis);
+            }
+            Self::WithoutOutput => hasher.write_u8(3),
+            Self::InvalidAxis => hasher.write_u8(4),
+        }
     }
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
@@ -54,6 +60,7 @@ impl ExtensionOp for ConstraintFixture {
         match self {
             Self::ScaledAxisEquality
             | Self::ScaledAxisEqualityMultiOutput
+            | Self::AxisEquality { .. }
             | Self::WithoutOutput => 2,
             Self::InvalidAxis => 1,
         }
@@ -63,7 +70,7 @@ impl ExtensionOp for ConstraintFixture {
         match self {
             Self::ScaledAxisEqualityMultiOutput => 2,
             Self::WithoutOutput => 0,
-            Self::ScaledAxisEquality | Self::InvalidAxis => 1,
+            Self::ScaledAxisEquality | Self::AxisEquality { .. } | Self::InvalidAxis => 1,
         }
     }
 
@@ -85,6 +92,10 @@ impl ExtensionOp for ConstraintFixture {
             Self::WithoutOutput => {
                 ctx.require_axes_equal((0, 0), (1, 0))?;
                 Ok(Vec::new())
+            }
+            Self::AxisEquality { axis } => {
+                ctx.require_axes_equal((0, *axis), (1, *axis))?;
+                Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
             }
             Self::InvalidAxis => {
                 ctx.require_axes_equal((0, 1), (0, 0))?;
@@ -256,6 +267,51 @@ fn compiler_shape_guard_provenance_uses_final_instruction_indices() {
         .find(|guard| guard.source.instruction_index == Some(1))
         .unwrap();
     assert_guard_equation(second_guard, first, DimExpr::mul(DimExpr::Const(2), second));
+}
+
+#[test]
+fn compiler_indexes_many_constraint_origins_with_stable_final_indices() {
+    const CONSTRAINT_COUNT: usize = 24;
+    let instructions = (0..CONSTRAINT_COUNT)
+        .map(|axis| {
+            make_std_instr(
+                StdTensorOp::Extension(Arc::new(ConstraintFixture::AxisEquality { axis })),
+                vec![0, 1],
+                vec![axis + 2],
+            )
+        })
+        .collect();
+    let program = CompiledProgram {
+        instructions,
+        input_slots: vec![0, 1],
+        output_slots: (2..CONSTRAINT_COUNT + 2).collect(),
+        n_slots: CONSTRAINT_COUNT + 2,
+    };
+    let symbolic_shape = |input_idx| {
+        (0..CONSTRAINT_COUNT)
+            .map(|axis| DimExpr::InputDim { input_idx, axis })
+            .collect::<Vec<_>>()
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[symbolic_shape(0), symbolic_shape(1)],
+    )
+    .unwrap();
+
+    assert_eq!(exec.instructions.len(), CONSTRAINT_COUNT);
+    assert_eq!(exec.shape_guards.len(), CONSTRAINT_COUNT);
+    let mut instruction_indices = exec
+        .shape_guards
+        .iter()
+        .map(|guard| guard.source.instruction_index.unwrap())
+        .collect::<Vec<_>>();
+    instruction_indices.sort_unstable();
+    assert_eq!(
+        instruction_indices,
+        (0..CONSTRAINT_COUNT).collect::<Vec<_>>()
+    );
 }
 
 #[test]
