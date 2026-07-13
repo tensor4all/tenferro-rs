@@ -314,6 +314,22 @@ fn compiler_rejects_duplicate_output_slot_producers_before_optimization() {
 }
 
 #[test]
+fn compiler_rejects_out_of_range_output_slot_before_optimization() {
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(StdTensorOp::Neg, vec![0], vec![2])],
+        input_slots: vec![0],
+        output_slots: vec![1],
+        n_slots: 2,
+    };
+
+    assert!(matches!(
+        compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]),
+        Err(Error::InvalidCompiledGraph { message })
+            if message == "output slot 2 is outside slot table of length 2"
+    ));
+}
+
+#[test]
 fn compiler_rejects_constraint_origin_eliminated_from_final_stream() {
     let program = CompiledProgram {
         instructions: vec![make_std_instr(

@@ -109,10 +109,23 @@ fn compile_cache_stats_include_recursive_guard_expression_storage() {
         .capacity()
         .saturating_mul(std::mem::size_of::<ShapeGuard>())
         .saturating_add(6 * std::mem::size_of::<DimExpr>());
+    let base_key = compute_cache_key(&base);
+    let guarded_key = compute_cache_key(&guarded);
+    let expected_guard_key_bytes = guarded_key
+        .fingerprint
+        .shape_guards
+        .capacity()
+        .saturating_mul(std::mem::size_of::<ShapeGuardKey>())
+        .saturating_add(6 * std::mem::size_of::<DimExpr>());
 
     assert_eq!(
         exec_program_retained_bytes(&guarded) - exec_program_retained_bytes(&base),
         expected_guard_bytes
+    );
+    assert_eq!(
+        exec_program_key_retained_bytes(&guarded_key.fingerprint)
+            - exec_program_key_retained_bytes(&base_key.fingerprint),
+        expected_guard_key_bytes
     );
 }
 
