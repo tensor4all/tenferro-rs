@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use computegraph::types::ValueRef;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
@@ -264,7 +264,8 @@ fn expand_traced_einsum_graph(
         })
         .collect::<Result<_>>()?;
     let input_sym_shape_refs: Vec<_> = input_sym_shapes.iter().map(Vec::as_slice).collect();
-    let output_metas = op.infer_output_meta(&input_dtypes, &input_sym_shape_refs)?;
+    let output_metas =
+        invoke_extension_shape_inference(&op, &input_dtypes, &input_sym_shape_refs)?.output_metas;
     let input_dim_shapes = traced_dim_expr_shapes(inputs);
 
     let outputs = extension::apply_expanded_graph(inputs, output_metas, |builder, input_refs| {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{
     Buffer, BufferHandle, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind,
@@ -9,7 +10,7 @@ use tenferro_tensor::{
 
 use super::{
     apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, promote_dtypes, EighGauge,
-    LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge,
+    LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge, LINALG_EXTENSION_FAMILY_ID,
 };
 
 #[test]
@@ -50,12 +51,12 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
 fn infer_output_meta_returns_error_on_input_count_mismatch() {
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
-    let err = op.infer_output_meta(&[], &[]).unwrap_err();
+    let err = invoke_extension_shape_inference(&op, &[], &[]).unwrap_err();
 
     assert!(matches!(
         err,
         Error::InvalidConfig {
-            op: "tenferro-linalg",
+            op: LINALG_EXTENSION_FAMILY_ID,
             ..
         }
     ));

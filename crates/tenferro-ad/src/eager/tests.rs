@@ -255,10 +255,9 @@ impl ExtensionOp for ReadPathFallbackProbe {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {

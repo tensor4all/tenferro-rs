@@ -11,7 +11,7 @@ use crate::SymDim;
 ///
 /// assert_eq!(ShapeRelation::Equal, ShapeRelation::Equal);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShapeRelation {
     /// The two symbolic expressions must evaluate to the same dimension.
     Equal,

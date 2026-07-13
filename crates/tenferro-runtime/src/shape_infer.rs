@@ -4,13 +4,20 @@
 //! `ExecInstruction::output_shapes` and `ExecInstruction::dtype`.
 
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{invoke_extension_shape_inference, ExtensionOp};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
 
+use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint};
 use crate::{Error, Result};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InferredExtensionMeta {
+    pub(crate) output_metas: Vec<(DType, Vec<DimExpr>)>,
+    pub(crate) constraints: Vec<LocalShapeConstraint>,
+}
 
 /// Promote two dtypes to the narrowest common dtype that avoids silent
 /// precision loss, following the policy defined in [#811].
@@ -380,6 +387,14 @@ pub fn infer_extension_output_meta(
     input_dtypes: &[DType],
     input_shapes: &[&[DimExpr]],
 ) -> Result<Vec<(DType, Vec<DimExpr>)>> {
+    Ok(infer_extension_output_meta_with_constraints(op, input_dtypes, input_shapes)?.output_metas)
+}
+
+pub(crate) fn infer_extension_output_meta_with_constraints(
+    op: &dyn ExtensionOp,
+    input_dtypes: &[DType],
+    input_shapes: &[&[DimExpr]],
+) -> Result<InferredExtensionMeta> {
     // Build per-input SymDim representations using the input index as the
     // synthetic tensor id. This preserves DimExpr::InputDim ↔ SymDim::TensorAxis
     // round-trips; the tensor_id namespace is local to this call.
@@ -396,30 +411,51 @@ pub fn infer_extension_output_meta(
         .collect();
     let symdim_refs: Vec<&[SymDim]> = symdim_storage.iter().map(Vec::as_slice).collect();
 
-    let metas = op.infer_output_meta(input_dtypes, &symdim_refs)?;
+    let inferred = invoke_extension_shape_inference(op, input_dtypes, &symdim_refs)?;
 
     let tensor_map: Vec<(u64, usize)> = (0..input_shapes.len())
         .map(|input_idx| (input_idx as u64, input_idx))
         .collect();
 
-    metas
+    let convert = |dim: &SymDim| {
+        dim.to_dim_expr(&tensor_map).map_err(|err| {
+            shape_infer_error(format!(
+                "ExtensionOp::infer_output_meta for family {:?} returned a SymDim \
+                 that cannot be converted to DimExpr: {err}",
+                op.family_id()
+            ))
+        })
+    };
+
+    let output_metas = inferred
+        .output_metas
         .into_iter()
         .map(|(dtype, shape)| {
-            let dim_exprs: Vec<DimExpr> = shape
-                .iter()
-                .map(|dim| {
-                    dim.to_dim_expr(&tensor_map).map_err(|err| {
-                        shape_infer_error(format!(
-                            "ExtensionOp::infer_output_meta for family {:?} returned a SymDim \
-                             that cannot be converted to DimExpr: {err}",
-                            op.family_id()
-                        ))
-                    })
-                })
-                .collect::<Result<_>>()?;
+            let dim_exprs = shape.iter().map(&convert).collect::<Result<_>>()?;
             Ok((dtype, dim_exprs))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    let source = ConstraintSource {
+        family_id: op.family_id(),
+        instruction_index: None,
+    };
+    let constraints = inferred
+        .constraints
+        .into_iter()
+        .map(|constraint| {
+            Ok(LocalShapeConstraint {
+                source: source.clone(),
+                relation: constraint.relation(),
+                lhs: convert(constraint.lhs())?,
+                rhs: convert(constraint.rhs())?,
+            })
+        })
+        .collect::<Result<_>>()?;
+
+    Ok(InferredExtensionMeta {
+        output_metas,
+        constraints,
+    })
 }
 
 fn dim_expr_to_sym_dim(expr: &DimExpr, input_idx: usize, axis: usize) -> SymDim {
@@ -444,15 +480,17 @@ fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) ->
     // be handled through [`infer_extension_output_meta`], which
     // `compile_std_to_exec` prefers for the `Extension` arm.
     let empty_rows: Vec<&[SymDim]> = (0..op.input_count()).map(|_| [].as_slice()).collect();
-    let metas = op.infer_output_meta(input_dtypes, &empty_rows)?;
-    if metas.is_empty() {
-        return Err(shape_infer_error(format!(
-            "ExtensionOp::infer_output_meta for family {:?} returned an \
-             empty meta list; expected at least one output",
-            op.family_id()
-        )));
-    }
-    Ok(metas[0].0)
+    let inferred = invoke_extension_shape_inference(op, input_dtypes, &empty_rows)?;
+    inferred
+        .output_metas
+        .first()
+        .map(|meta| meta.0)
+        .ok_or_else(|| {
+            shape_infer_error(format!(
+                "ExtensionOp::infer_output_meta for family {:?} returned an empty meta list",
+                op.family_id()
+            ))
+        })
 }
 
 fn require_input<'a>(

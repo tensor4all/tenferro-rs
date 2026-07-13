@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
+use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 use tenferro_tensor::{Tensor, TensorBackend};
@@ -89,6 +90,7 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// use std::sync::Arc;
 /// use tenferro_runtime::extension::{apply, ExtensionOp};
 /// use tenferro_runtime::{DType, SymDim, TracedTensor};
+/// use tenferro_ops::ExtensionShapeContext;
 ///
 /// # #[derive(Clone, Debug)]
 /// # struct IdentityExt;
@@ -104,10 +106,9 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// #     fn output_count(&self) -> usize { 1 }
 /// #     fn infer_output_meta(
 /// #         &self,
-/// #         dtypes: &[DType],
-/// #         shapes: &[&[SymDim]],
+/// #         ctx: &mut ExtensionShapeContext<'_>,
 /// #     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-/// #         Ok(vec![(dtypes[0], shapes[0].to_vec())])
+/// #         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
 /// #     }
 /// # }
 /// let op: Arc<dyn ExtensionOp> = Arc::new(IdentityExt);
@@ -155,18 +156,9 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
         .collect();
     let input_shape_refs: Vec<&[SymDim]> = input_shape_storage.iter().map(Vec::as_slice).collect();
 
-    let output_metas = op.infer_output_meta(&input_dtypes, &input_shape_refs)?;
-    if output_metas.len() != op.output_count() {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::apply",
-            message: format!(
-                "op family {:?}: infer_output_meta produced {} output metadata entries; op declared {} outputs",
-                op.family_id(),
-                output_metas.len(),
-                op.output_count()
-            ),
-        });
-    }
+    let output_metas =
+        invoke_extension_shape_inference(op.as_ref(), &input_dtypes, &input_shape_refs)?
+            .output_metas;
 
     // Build the graph that carries the Extension op.
     let mut builder = GraphBuilder::<StdTensorOp>::new();

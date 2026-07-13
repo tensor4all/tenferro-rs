@@ -216,22 +216,14 @@ impl ExtensionOp for EinsumExtensionOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_shapes.len() != self.subscripts.inputs.len()
-            || input_dtypes.len() != input_shapes.len()
-        {
-            return Err(TensorError::InvalidConfig {
-                op: "einsum",
-                message: format!(
-                    "expected {} input metadata entries, got dtypes={} shapes={}",
-                    self.subscripts.inputs.len(),
-                    input_dtypes.len(),
-                    input_shapes.len()
-                ),
-            });
-        }
+        let input_dtypes = (0..self.input_count())
+            .map(|input| ctx.input_dtype(input))
+            .collect::<Result<Vec<_>, _>>()?;
+        let input_shapes = (0..self.input_count())
+            .map(|input| ctx.input_shape(input))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
         for (labels, shape) in self.subscripts.inputs.iter().zip(input_shapes.iter()) {

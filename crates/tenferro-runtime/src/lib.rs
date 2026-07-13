@@ -46,6 +46,7 @@ mod metadata;
 #[doc(hidden)]
 pub mod scalar_semantics;
 mod segment;
+mod shape_constraint;
 mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;

@@ -249,10 +249,11 @@ impl ExtensionOp for SparseMatmulOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> Result<Vec<(DType, Vec<SymDim>)>> {
-        validate_primal_meta(&self.plan, input_dtypes, input_shapes)?;
+        let input_dtypes = [ctx.input_dtype(0)?, ctx.input_dtype(1)?];
+        let input_shapes = [ctx.input_shape(0)?, ctx.input_shape(1)?];
+        validate_primal_meta(&self.plan, &input_dtypes, &input_shapes)?;
         Ok(vec![(
             input_dtypes[0],
             vec![SymDim::from(self.plan.output_nnz())],
@@ -313,17 +314,14 @@ impl ExtensionOp for SparseMatmulJvpOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
-            return Err(invalid(format!(
-                "expected {} JVP metadata entries, got dtypes={} shapes={}",
-                self.input_count(),
-                input_dtypes.len(),
-                input_shapes.len()
-            )));
-        }
+        let input_dtypes = (0..self.input_count())
+            .map(|input| ctx.input_dtype(input))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let input_shapes = (0..self.input_count())
+            .map(|input| ctx.input_shape(input))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
         for (active_pos, &active) in self.active_inputs.iter().enumerate() {
             if active >= 2 {
@@ -398,12 +396,21 @@ impl ExtensionOp for SparseMatmulVjpOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_dtypes.len() != 3 || input_shapes.len() != 3 || self.active_input >= 2 {
+        if self.active_input >= 2 {
             return Err(invalid("invalid sparse VJP metadata"));
         }
+        let input_dtypes = [
+            ctx.input_dtype(0)?,
+            ctx.input_dtype(1)?,
+            ctx.input_dtype(2)?,
+        ];
+        let input_shapes = [
+            ctx.input_shape(0)?,
+            ctx.input_shape(1)?,
+            ctx.input_shape(2)?,
+        ];
         validate_primal_meta(&self.plan, &input_dtypes[..2], &input_shapes[..2])?;
         if input_dtypes[2] != input_dtypes[self.active_input]
             || !is_rank1_shape(input_shapes[2])

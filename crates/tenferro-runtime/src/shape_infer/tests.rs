@@ -1,5 +1,94 @@
 use super::*;
 
+#[derive(Clone, Debug)]
+struct AxisEqualityExtension;
+
+impl ExtensionOp for AxisEqualityExtension {
+    fn family_id(&self) -> &'static str {
+        "test.axis-equality.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> std::sync::Arc<dyn ExtensionOp> {
+        std::sync::Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        2
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        ctx.require_axes_equal((0, 0), (1, 0))?;
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+}
+
+#[test]
+fn extension_shape_context_converts_axis_equality_to_runtime_constraint() {
+    let first_shape = [DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    }];
+    let second_shape = [DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    }];
+
+    let inferred = infer_extension_output_meta_with_constraints(
+        &AxisEqualityExtension,
+        &[DType::F64, DType::F64],
+        &[&first_shape, &second_shape],
+    )
+    .unwrap();
+
+    assert_eq!(inferred.output_metas.len(), 1);
+    assert_eq!(inferred.constraints.len(), 1);
+    assert_eq!(
+        inferred.constraints[0].relation,
+        tenferro_ops::ShapeRelation::Equal
+    );
+    assert_eq!(
+        inferred.constraints[0].source,
+        crate::shape_constraint::ConstraintSource {
+            family_id: "test.axis-equality.v1",
+            instruction_index: None,
+        }
+    );
+    assert_eq!(
+        inferred.constraints[0].lhs,
+        DimExpr::InputDim {
+            input_idx: 0,
+            axis: 0,
+        }
+    );
+    assert_eq!(
+        inferred.constraints[0].rhs,
+        DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0,
+        }
+    );
+
+    let source = inferred.constraints[0].source.clone().with_instruction(7);
+    assert_eq!(source.instruction_index, Some(7));
+}
+
 #[test]
 fn promote_same_returns_same() {
     assert_eq!(promote_dtype(DType::F64, DType::F64), DType::F64);

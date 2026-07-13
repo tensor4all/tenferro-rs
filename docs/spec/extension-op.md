@@ -176,17 +176,14 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
 
     /// Infer output dtype and shape for each output slot.
     ///
-    /// Implementations MUST validate arity, rank, dtype, axis, and other
-    /// input-derived metadata before indexing shape arrays. Invalid public
-    /// input must return a typed error rather than an empty sentinel or panic.
+    /// Implementations inspect input metadata through the context accessors
+    /// and record symbolic shape requirements through its builder methods.
+    /// Invalid public input must return a typed error rather than panic.
     /// Returned vector length MUST equal `self.output_count()` on success.
-    /// Shapes use graph-global `SymDim` (symbolic dimensions). Input metadata
-    /// is given as explicit `SymDim` / `DType` slices; callers that start from
-    /// `TensorMeta` must choose `exact_shape` or `bound_shape` deliberately.
+    /// Shapes use graph-global `SymDim` (symbolic dimensions).
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
     /// Optional host/reference execution capability.
@@ -553,8 +550,7 @@ store the arity in their payload and are handled by the core enum directly.
 ```rust
 fn infer_output_meta(
     &self,
-    input_dtypes: &[DType],
-    input_shapes: &[&[SymDim]],
+    ctx: &mut ExtensionShapeContext<'_>,
 ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 ```
 
@@ -565,10 +561,13 @@ extension.
 
 ### Contract
 
-- `input_dtypes.len()` and `input_shapes.len()` MUST both equal
-  `self.input_count()`. Implementations MUST validate this before indexing,
-  even when current callers are expected to pass checked metadata.
+- The canonical inference driver validates dtype and shape metadata counts
+  against `self.input_count()` before constructing the context.
 - The returned vector MUST have length `self.output_count()` on success.
+- Implementations MUST use `ctx.input_dtype`, `ctx.input_shape`, and
+  `ctx.input_axis` rather than indexing raw metadata slices.
+- Implementations MAY record equality requirements with `ctx.require_equal`,
+  `ctx.require_axes_equal`, and `ctx.require_same_shape`.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>`. `TensorMeta` does not expose a
@@ -649,8 +648,8 @@ The compiled path runs through
 1. An `ExecOp::Extension(Arc<dyn ExtensionOp>)` variant (or an
    equivalent carrier) in the execution IR, mirroring the `StdTensorOp`
    variant.
-2. Shape / dtype lowering in `compile_std_to_exec` that calls
-   `op.infer_output_meta(...)` to populate
+2. Shape / dtype lowering in `compile_std_to_exec` that calls the canonical
+   extension inference driver to populate
    `ExecInstruction::dtype` and `ExecInstruction::output_shapes`.
 3. An `execute_extension_op` dispatcher in `crates/tenferro-runtime/src/exec.rs` that,
    at runtime, calls the registered `ExtensionExecutor<B>`.
@@ -679,8 +678,8 @@ metadata detected while constructing the standard graph.
 ### Responsibility split (normative)
 
 - **`compile_std_to_exec`** is responsible for: lowering the
-  `StdTensorOp::Extension` variant to `ExecOp::Extension`, calling
-  `infer_output_meta` for metadata population, and assigning
+  `StdTensorOp::Extension` variant to `ExecOp::Extension`, invoking canonical
+  extension metadata inference, and assigning
   `last_use` markers. It does not invoke backend kernels.
 - **Peer lowerers** are responsible for: calling
   `ExtensionOp::lower_to_standard_ops` only when they require a standard-op

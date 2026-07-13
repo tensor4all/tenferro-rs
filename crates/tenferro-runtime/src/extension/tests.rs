@@ -40,11 +40,12 @@ impl ExtensionOp for TestExtension {
 
     fn infer_output_meta(
         &self,
-        dtypes: &[DType],
-        shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        let dtype = ctx.input_dtype(0)?;
+        let shape = ctx.input_shape(0)?.to_vec();
         Ok((0..self.inferred_outputs)
-            .map(|_| (dtypes[0], shapes[0].to_vec()))
+            .map(|_| (dtype, shape.clone()))
             .collect())
     }
 }

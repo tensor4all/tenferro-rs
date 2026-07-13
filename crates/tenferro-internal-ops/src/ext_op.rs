@@ -38,8 +38,113 @@ use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
+use crate::ExtensionShapeContext;
 #[cfg(feature = "autodiff")]
 use std::collections::HashMap;
+
+#[doc(hidden)]
+pub use crate::shape_constraint::ExtensionShapeConstraint;
+
+/// Canonical result of one extension metadata inference callback.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ops::ext_op::ExtensionShapeInference;
+///
+/// let inferred = ExtensionShapeInference {
+///     output_metas: Vec::new(),
+///     constraints: Vec::new(),
+/// };
+/// assert!(inferred.output_metas.is_empty());
+/// assert!(inferred.constraints.is_empty());
+/// ```
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtensionShapeInference {
+    /// Output dtype and symbolic-shape metadata in output-slot order.
+    pub output_metas: Vec<(DType, Vec<SymDim>)>,
+    /// Shape requirements recorded by the callback.
+    pub constraints: Vec<ExtensionShapeConstraint>,
+}
+
+/// Invoke an extension metadata callback after validating its declared arity.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::any::Any;
+/// use std::sync::Arc;
+/// use tenferro_ops::ext_op::{invoke_extension_shape_inference, ExtensionOp};
+/// use tenferro_ops::{ExtensionShapeContext, SymDim};
+/// use tenferro_tensor::DType;
+///
+/// #[derive(Clone, Debug)]
+/// struct Identity;
+///
+/// impl ExtensionOp for Identity {
+///     fn family_id(&self) -> &'static str { "example.identity.v1" }
+///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+///         other.as_any().downcast_ref::<Self>().is_some()
+///     }
+///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
+///     fn as_any(&self) -> &dyn Any { self }
+///     fn input_count(&self) -> usize { 1 }
+///     fn output_count(&self) -> usize { 1 }
+///     fn infer_output_meta(
+///         &self,
+///         ctx: &mut ExtensionShapeContext<'_>,
+///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+///     }
+/// }
+///
+/// let shape = [SymDim::from(3usize)];
+/// let inferred = invoke_extension_shape_inference(
+///     &Identity,
+///     &[DType::F64],
+///     &[&shape],
+/// ).unwrap();
+/// assert_eq!(inferred.output_metas, vec![(DType::F64, shape.to_vec())]);
+/// ```
+#[doc(hidden)]
+pub fn invoke_extension_shape_inference(
+    op: &dyn ExtensionOp,
+    input_dtypes: &[DType],
+    input_shapes: &[&[SymDim]],
+) -> tenferro_tensor::Result<ExtensionShapeInference> {
+    let expected_inputs = op.input_count();
+    if input_dtypes.len() != expected_inputs || input_shapes.len() != expected_inputs {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: op.family_id(),
+            message: format!(
+                "infer_output_meta expects {expected_inputs} input metadata entries, got {} dtypes and {} shapes",
+                input_dtypes.len(),
+                input_shapes.len()
+            ),
+        });
+    }
+
+    let mut ctx =
+        ExtensionShapeContext::new_for_inference(op.family_id(), input_dtypes, input_shapes);
+    let output_metas = op.infer_output_meta(&mut ctx)?;
+    if output_metas.len() != op.output_count() {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: op.family_id(),
+            message: format!(
+                "infer_output_meta produced {} output metadata entries; op declared {} outputs",
+                output_metas.len(),
+                op.output_count()
+            ),
+        });
+    }
+
+    Ok(ExtensionShapeInference {
+        output_metas,
+        constraints: ctx.into_constraints(),
+    })
+}
 
 /// Error returned when an extension cannot expand itself into standard ops.
 ///
@@ -141,7 +246,7 @@ pub trait HostReference: Debug + Send + Sync + 'static {
 /// # use std::any::Any;
 /// use std::sync::Arc;
 /// use tenferro_ops::ext_op::{ExtensionOp, HostReference};
-/// use tenferro_ops::SymDim;
+/// use tenferro_ops::{ExtensionShapeContext, SymDim};
 /// use tenferro_tensor::{DType, Tensor};
 ///
 /// #[derive(Clone, Debug)]
@@ -159,10 +264,9 @@ pub trait HostReference: Debug + Send + Sync + 'static {
 ///     fn output_count(&self) -> usize { 1 }
 ///     fn infer_output_meta(
 ///         &self,
-///         dtypes: &[DType],
-///         shapes: &[&[SymDim]],
+///         ctx: &mut ExtensionShapeContext<'_>,
 ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-///         Ok(vec![(dtypes[0], shapes[0].to_vec())])
+///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
 ///     }
 ///     fn host_reference(&self) -> Option<&dyn HostReference> {
 ///         Some(self)
@@ -241,8 +345,7 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// extension ops compose with graph-global symbolic metadata.
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
     // ----- Optional host/reference execution (spec Section 8) -----

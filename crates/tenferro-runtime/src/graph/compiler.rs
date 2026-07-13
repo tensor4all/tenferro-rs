@@ -721,11 +721,12 @@ mod tests {
 
         fn infer_output_meta(
             &self,
-            input_dtypes: &[DType],
-            input_shapes: &[&[SymDim]],
+            ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
         ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+            let dtype = ctx.input_dtype(0)?;
+            let shape = ctx.input_shape(0)?.to_vec();
             Ok((0..self.output_count())
-                .map(|_| (input_dtypes[0], input_shapes[0].to_vec()))
+                .map(|_| (dtype, shape.clone()))
                 .collect())
         }
 

@@ -138,10 +138,11 @@ impl ExtensionOp for TropicalEinsumOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        let meta = infer_tropical_output_meta(&self.subscripts, input_dtypes, input_shapes)
+        let input_dtypes = [ctx.input_dtype(0)?, ctx.input_dtype(1)?];
+        let input_shapes = [ctx.input_shape(0)?, ctx.input_shape(1)?];
+        let meta = infer_tropical_output_meta(&self.subscripts, &input_dtypes, &input_shapes)
             .ok_or_else(|| invalid_config("tropical_einsum", "invalid tropical einsum metadata"))?;
         Ok(vec![meta])
     }
@@ -214,20 +215,14 @@ impl ExtensionOp for TropicalEinsumJvpOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_dtypes.len() != self.input_count() || input_shapes.len() != self.input_count() {
-            return Err(invalid_config(
-                "tropical_einsum_jvp",
-                format!(
-                    "expected {} input metadata entries, got dtypes={} shapes={}",
-                    self.input_count(),
-                    input_dtypes.len(),
-                    input_shapes.len()
-                ),
-            ));
-        }
+        let input_dtypes = (0..self.input_count())
+            .map(|input| ctx.input_dtype(input))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let input_shapes = (0..self.input_count())
+            .map(|input| ctx.input_shape(input))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let Some(primal) =
             infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
         else {
@@ -352,20 +347,26 @@ impl ExtensionOp for TropicalEinsumVjpOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        if input_dtypes.len() != 3 || input_shapes.len() != 3 || self.active_input >= 2 {
+        if self.active_input >= 2 {
             return Err(invalid_config(
                 "tropical_einsum_vjp",
                 format!(
-                    "expected 3 input metadata entries and active input < 2, got dtypes={} shapes={} active_input={}",
-                    input_dtypes.len(),
-                    input_shapes.len(),
-                    self.active_input
+                    "expected active input < 2, got active_input={}", self.active_input
                 ),
             ));
         }
+        let input_dtypes = [
+            ctx.input_dtype(0)?,
+            ctx.input_dtype(1)?,
+            ctx.input_dtype(2)?,
+        ];
+        let input_shapes = [
+            ctx.input_shape(0)?,
+            ctx.input_shape(1)?,
+            ctx.input_shape(2)?,
+        ];
         if infer_tropical_output_meta(&self.subscripts, &input_dtypes[..2], &input_shapes[..2])
             .is_none()
         {

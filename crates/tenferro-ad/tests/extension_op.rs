@@ -80,10 +80,9 @@ impl ExtensionOp for TestScaleBy2 {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -228,18 +227,21 @@ impl ExtensionOp for TestSwap {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         // (a, b) -> (b, a). We report the swapped meta so downstream
         // consumers see the correct shape for each output slot.
-        assert_eq!(
-            input_dtypes[0], input_dtypes[1],
-            "TestSwap expects matching dtypes"
-        );
+        let lhs_dtype = ctx.input_dtype(0)?;
+        let rhs_dtype = ctx.input_dtype(1)?;
+        if lhs_dtype != rhs_dtype {
+            return Err(tenferro_tensor::Error::InvalidConfig {
+                op: self.family_id(),
+                message: "TestSwap expects matching dtypes".into(),
+            });
+        }
         Ok(vec![
-            (input_dtypes[1], input_shapes[1].to_vec()),
-            (input_dtypes[0], input_shapes[0].to_vec()),
+            (rhs_dtype, ctx.input_shape(1)?.to_vec()),
+            (lhs_dtype, ctx.input_shape(0)?.to_vec()),
         ])
     }
 
@@ -349,10 +351,9 @@ impl ExtensionOp for TestPreferLinearize {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -473,10 +474,9 @@ impl ExtensionOp for TestCustomVjpInvalid {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -585,10 +585,9 @@ impl ExtensionOp for TestPrimaryTransposeOnly {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -696,10 +695,9 @@ impl ExtensionOp for TestNoAd {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -754,10 +752,9 @@ impl ExtensionOp for TestProbeIdentity {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -807,10 +804,9 @@ impl ExtensionOp for TestProbeLinear {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
@@ -958,10 +954,9 @@ impl ExtensionOp for TestBadOutputCount {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 
     fn host_reference(&self) -> Option<&dyn HostReference> {
