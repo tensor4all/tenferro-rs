@@ -121,8 +121,10 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// # Errors
 ///
 /// Returns [`Error::InvalidGraphBuild`] when the extension receives the wrong
-/// number of inputs or when [`ExtensionOp::infer_output_meta`] returns metadata
-/// whose count does not match [`ExtensionOp::output_count`].
+/// number of traced inputs. Canonical metadata inference failures, including a
+/// returned metadata count that differs from [`ExtensionOp::output_count`],
+/// are returned as [`Error::TensorRuntime`] containing
+/// [`tenferro_tensor::Error::InvalidConfig`].
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
     if inputs.len() != op.input_count() {
         return Err(Error::InvalidGraphBuild {

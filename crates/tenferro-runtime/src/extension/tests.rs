@@ -81,13 +81,16 @@ fn apply_returns_error_for_output_metadata_count_mismatch() {
         panic!("output metadata mismatch should be an error");
     };
 
-    let message = err.to_string();
-    assert!(message.contains("test.extension"), "{message}");
-    assert!(message.contains("declared 2 outputs"), "{message}");
-    assert!(
-        message.contains("produced 1 output metadata entries"),
-        "{message}"
-    );
+    match err {
+        Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig { op, message }) => {
+            assert_eq!(op, "extension");
+            assert_eq!(
+                message,
+                "family_id=\"test.extension\": infer_output_meta produced 1 output metadata entries; op declared 2 outputs"
+            );
+        }
+        other => panic!("expected structured extension InvalidConfig, got {other:?}"),
+    }
 }
 
 #[test]

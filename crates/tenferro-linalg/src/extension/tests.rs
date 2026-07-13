@@ -56,9 +56,9 @@ fn infer_output_meta_returns_error_on_input_count_mismatch() {
     assert!(matches!(
         err,
         Error::InvalidConfig {
-            op: LINALG_EXTENSION_FAMILY_ID,
-            ..
-        }
+            op: "extension",
+            ref message,
+        } if message.contains(LINALG_EXTENSION_FAMILY_ID)
     ));
 }
 

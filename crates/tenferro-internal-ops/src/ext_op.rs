@@ -117,9 +117,10 @@ pub fn invoke_extension_shape_inference(
     let expected_inputs = op.input_count();
     if input_dtypes.len() != expected_inputs || input_shapes.len() != expected_inputs {
         return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op.family_id(),
+            op: "extension",
             message: format!(
-                "infer_output_meta expects {expected_inputs} input metadata entries, got {} dtypes and {} shapes",
+                "family_id={:?}: infer_output_meta expects {expected_inputs} input metadata entries, got {} dtypes and {} shapes",
+                op.family_id(),
                 input_dtypes.len(),
                 input_shapes.len()
             ),
@@ -131,9 +132,10 @@ pub fn invoke_extension_shape_inference(
     let output_metas = op.infer_output_meta(&mut ctx)?;
     if output_metas.len() != op.output_count() {
         return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op.family_id(),
+            op: "extension",
             message: format!(
-                "infer_output_meta produced {} output metadata entries; op declared {} outputs",
+                "family_id={:?}: infer_output_meta produced {} output metadata entries; op declared {} outputs",
+                op.family_id(),
                 output_metas.len(),
                 op.output_count()
             ),
@@ -336,8 +338,9 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 
     /// Infer output dtypes and shapes for each output slot.
     ///
-    /// Implementations MUST validate arity, rank, dtype, axis, and other
-    /// input-derived metadata before indexing shape arrays. Invalid public
+    /// The canonical inference driver validates arity before invoking this
+    /// callback. Implementations MUST validate rank, dtype, axis, and other
+    /// input-derived metadata through `ctx` before using it. Invalid public
     /// input must return a typed error rather than an empty sentinel or panic.
     ///
     /// On success, the returned vector MUST have length `self.output_count()`,

@@ -395,36 +395,41 @@ pub(crate) fn infer_extension_output_meta_with_constraints(
     input_dtypes: &[DType],
     input_shapes: &[&[DimExpr]],
 ) -> Result<InferredExtensionMeta> {
-    // Build per-input SymDim representations using the input index as the
-    // synthetic tensor id. This preserves DimExpr::InputDim ↔ SymDim::TensorAxis
-    // round-trips; the tensor_id namespace is local to this call.
+    // Give each extension input a call-local tensor id. These ids deliberately
+    // do not reuse DimExpr program input indices: extension input order and
+    // program input order are different namespaces.
     let symdim_storage: Vec<Vec<SymDim>> = input_shapes
         .iter()
         .enumerate()
-        .map(|(input_idx, shape)| {
-            shape
+        .map(|(input_idx, shape)| -> Result<Vec<SymDim>> {
+            let tensor_id = extension_local_tensor_id(input_idx)?;
+            Ok(shape
                 .iter()
                 .enumerate()
-                .map(|(axis, dim)| dim_expr_to_sym_dim(dim, input_idx, axis))
-                .collect()
+                .map(|(axis, dim)| match dim {
+                    DimExpr::Const(value) => SymDim::from(*value),
+                    _ => SymDim::tensor_axis(tensor_id, axis),
+                })
+                .collect())
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let symdim_refs: Vec<&[SymDim]> = symdim_storage.iter().map(Vec::as_slice).collect();
 
     let inferred = invoke_extension_shape_inference(op, input_dtypes, &symdim_refs)?;
 
     let tensor_map: Vec<(u64, usize)> = (0..input_shapes.len())
-        .map(|input_idx| (input_idx as u64, input_idx))
-        .collect();
+        .map(|input_idx| Ok((extension_local_tensor_id(input_idx)?, input_idx)))
+        .collect::<Result<_>>()?;
 
     let convert = |dim: &SymDim| {
-        dim.to_dim_expr(&tensor_map).map_err(|err| {
+        let local_expr = dim.to_dim_expr(&tensor_map).map_err(|err| {
             shape_infer_error(format!(
                 "ExtensionOp::infer_output_meta for family {:?} returned a SymDim \
-                 that cannot be converted to DimExpr: {err}",
+                 that cannot be converted to a local DimExpr: {err}",
                 op.family_id()
             ))
-        })
+        })?;
+        resolve_dim_expr_from_shapes(&local_expr, input_shapes)
     };
 
     let output_metas = inferred
@@ -458,19 +463,17 @@ pub(crate) fn infer_extension_output_meta_with_constraints(
     })
 }
 
-fn dim_expr_to_sym_dim(expr: &DimExpr, input_idx: usize, axis: usize) -> SymDim {
-    // Prefer explicit const for concrete extents; otherwise expose as an
-    // opaque TensorAxis handle. Inner expressions (Add/Mul/…) are not
-    // expected in per-input shape vectors — callers pass them as raw
-    // `InputDim` references — so a direct mapping is sufficient.
-    match expr {
-        DimExpr::Const(value) => SymDim::from(*value),
-        DimExpr::InputDim {
-            input_idx: idx,
-            axis: ax,
-        } => SymDim::tensor_axis(*idx as u64, *ax),
-        _ => SymDim::tensor_axis(input_idx as u64, axis),
-    }
+fn extension_local_tensor_id(input_idx: usize) -> Result<u64> {
+    let offset = u64::try_from(input_idx).map_err(|_| {
+        shape_infer_error(format!(
+            "extension input index {input_idx} does not fit the local symbolic namespace"
+        ))
+    })?;
+    u64::MAX.checked_sub(offset).ok_or_else(|| {
+        shape_infer_error(format!(
+            "extension input index {input_idx} exhausts the local symbolic namespace"
+        ))
+    })
 }
 
 fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) -> Result<DType> {
