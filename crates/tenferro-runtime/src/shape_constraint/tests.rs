@@ -1,3 +1,8 @@
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
+
 use tenferro_ops::{dim_expr::DimExpr, ShapeRelation};
 
 use super::{discharge, ConstraintSource, LocalShapeConstraint, ShapeGuard};
@@ -227,7 +232,7 @@ fn guard_evaluation_preserves_all_typed_causes_and_provenance() {
                 input_idx: 2,
                 input_count: 0,
             },
-            format!("min(input[2].shape[0], {})", usize::MAX),
+            format!("min({}, input[2].shape[0])", usize::MAX),
         ),
         (
             DimExpr::min(symbol(0, 2), DimExpr::Const(usize::MAX)),
@@ -237,7 +242,7 @@ fn guard_evaluation_preserves_all_typed_causes_and_provenance() {
                 axis: 2,
                 rank: 1,
             },
-            format!("min(input[0].shape[2], {})", usize::MAX),
+            format!("min({}, input[0].shape[2])", usize::MAX),
         ),
         (
             DimExpr::add(symbol(0, 0), DimExpr::Const(usize::MAX)),
@@ -376,4 +381,95 @@ fn context_id_diagnostic_is_nonempty_and_unique() {
     let second = ContextId::fresh();
     assert_ne!(first, second);
     assert!(first.to_string().starts_with("ctx@"));
+}
+
+fn guard_hash(guards: &[ShapeGuard]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    guards.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[test]
+fn min_and_max_are_structurally_commutative() {
+    let a = symbol(0, 0);
+    let b = symbol(1, 0);
+    assert!(discharge(vec![
+        equal(
+            source("test.commutative", Some(0)),
+            DimExpr::min(a.clone(), b.clone()),
+            DimExpr::min(b.clone(), a.clone()),
+        ),
+        equal(
+            source("test.commutative", Some(1)),
+            DimExpr::max(a.clone(), b.clone()),
+            DimExpr::max(b, a),
+        ),
+    ])
+    .unwrap()
+    .is_empty());
+}
+
+#[test]
+fn swapped_min_max_guards_dedup_with_deterministic_source_and_hash() {
+    let a = symbol(0, 0);
+    let b = symbol(1, 0);
+    let c = symbol(2, 0);
+    let constraints = vec![
+        equal(
+            source("z-family", Some(9)),
+            DimExpr::min(a.clone(), b.clone()),
+            c.clone(),
+        ),
+        equal(
+            source("a-family", Some(7)),
+            DimExpr::min(b.clone(), a.clone()),
+            c.clone(),
+        ),
+        equal(
+            source("z-family", Some(8)),
+            DimExpr::max(a.clone(), b.clone()),
+            c.clone(),
+        ),
+        equal(source("a-family", Some(6)), DimExpr::max(b, a), c),
+    ];
+    let mut reversed = constraints.clone();
+    reversed.reverse();
+
+    let guards = discharge(constraints).unwrap();
+    let reversed_guards = discharge(reversed).unwrap();
+    assert_eq!(guards, reversed_guards);
+    assert_eq!(guard_hash(&guards), guard_hash(&reversed_guards));
+    assert_eq!(guards.len(), 2);
+    assert_eq!(guards[0].source, source("a-family", Some(7)));
+    assert_eq!(guards[1].source, source("a-family", Some(6)));
+}
+
+#[test]
+fn min_max_canonicalization_does_not_hide_operand_evaluation_errors() {
+    let right_fails = only_guard(vec![equal(
+        source("test.commutative-errors", Some(0)),
+        DimExpr::min(
+            symbol(0, 0),
+            DimExpr::floor_div(symbol(1, 0), DimExpr::Const(0)),
+        ),
+        99,
+    )]);
+    let left_fails = only_guard(vec![equal(
+        source("test.commutative-errors", Some(1)),
+        DimExpr::max(
+            DimExpr::floor_div(symbol(0, 0), DimExpr::Const(0)),
+            symbol(1, 0),
+        ),
+        99,
+    )]);
+
+    for guard in [right_fails, left_fails] {
+        assert!(matches!(
+            guard.evaluate(&[&[4], &[7]]),
+            Err(Error::ShapeConstraintEvaluation {
+                cause: ShapeConstraintEvalError::DivisionByZero,
+                ..
+            })
+        ));
+    }
 }

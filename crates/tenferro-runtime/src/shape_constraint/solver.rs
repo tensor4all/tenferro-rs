@@ -265,7 +265,7 @@ fn normalize(
                 _ => Ok(DimExpr::floor_div(lhs, rhs)),
             }
         }
-        DimExpr::Min(lhs, rhs) => normalize_noncommutative(
+        DimExpr::Min(lhs, rhs) => normalize_commutative_expression(
             lhs,
             rhs,
             sets,
@@ -273,7 +273,7 @@ fn normalize(
             |a, b| DimExpr::Const(a.min(b)),
             DimExpr::min,
         ),
-        DimExpr::Max(lhs, rhs) => normalize_noncommutative(
+        DimExpr::Max(lhs, rhs) => normalize_commutative_expression(
             lhs,
             rhs,
             sets,
@@ -298,7 +298,7 @@ fn normalize_commutative(
     Ok((lhs, rhs))
 }
 
-fn normalize_noncommutative(
+fn normalize_commutative_expression(
     lhs: &DimExpr,
     rhs: &DimExpr,
     sets: &SymbolSets,
@@ -306,8 +306,7 @@ fn normalize_noncommutative(
     fold: impl FnOnce(usize, usize) -> DimExpr,
     construct: impl FnOnce(DimExpr, DimExpr) -> DimExpr,
 ) -> std::result::Result<DimExpr, ShapeConstraintEvalError> {
-    let lhs = normalize(lhs, sets, bindings)?;
-    let rhs = normalize(rhs, sets, bindings)?;
+    let (lhs, rhs) = normalize_commutative(lhs, rhs, sets, bindings)?;
     match (&lhs, &rhs) {
         (DimExpr::Const(lhs), DimExpr::Const(rhs)) => Ok(fold(*lhs, *rhs)),
         _ => Ok(construct(lhs, rhs)),
