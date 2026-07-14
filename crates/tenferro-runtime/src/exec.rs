@@ -744,10 +744,10 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
 }
 
 pub(crate) fn can_run_in_single_exec_session(program: &ExecProgram) -> bool {
-    program.instructions.iter().all(|inst| {
-        !is_host_instruction(inst)
-            && (!is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
-    })
+    program
+        .instructions
+        .iter()
+        .all(|inst| !is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
 }
 
 pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: TensorBackend>(
@@ -764,9 +764,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
         backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
                 if is_host_instruction(inst) {
-                    return Err(Error::Internal(
-                        "host instruction reached single-session executor".into(),
-                    ));
+                    execute_host_instruction_exec(exec, slots, inst)?;
                 } else if is_ffi_instruction(inst) {
                     execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
                 } else {
@@ -798,6 +796,14 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
     inst: &ExecInstruction,
 ) -> Result<()> {
     dispatch::execute_host_dispatch(backend, slots, inst)
+}
+
+pub(crate) fn execute_host_instruction_exec(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    inst: &ExecInstruction,
+) -> Result<()> {
+    dispatch::execute_host_dispatch(exec, slots, inst)
 }
 
 pub(crate) fn execute_ffi_instruction<B: TensorBackend + 'static>(

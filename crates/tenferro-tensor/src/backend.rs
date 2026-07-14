@@ -2613,9 +2613,12 @@ impl<T> TensorBackendOps for T where
 ///     backend.with_backend_session(|exec| exec.add(a, b))
 /// }
 /// ```
-pub trait BackendSession: TensorBackendOps + SessionCachedDot {}
+pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {}
 
-impl<T> BackendSession for T where T: TensorBackendOps + SessionCachedDot + ?Sized {}
+impl<T> BackendSession for T where
+    T: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer + ?Sized
+{
+}
 
 /// Standard runtime backend over dynamic [`Tensor`] values.
 ///

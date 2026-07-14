@@ -335,10 +335,10 @@ fn cpu_backend_with_threads_rejects_zero_without_panicking() {
 
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        tenferro_cpu::CpuBackendError::Tensor(Error::InvalidConfig {
             op: "CpuBackend::with_threads",
             ..
-        }
+        })
     ));
 }
 

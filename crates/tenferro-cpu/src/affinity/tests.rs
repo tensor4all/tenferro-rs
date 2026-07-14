@@ -15,6 +15,19 @@ fn count_affinity_mask_bits_sums_all_set_bits() {
     );
 }
 
+#[test]
+fn affinity_mask_preserves_sparse_logical_cpu_ids() {
+    let cpus = cpu_set_from_affinity_mask(&[0b1000_0010, 0b0000_0101]).unwrap();
+    assert_eq!(cpus.as_usize_vec(), vec![1, 7, 8, 10]);
+}
+
+#[test]
+fn affinity_mask_rejects_extreme_cpu_ids_before_allocation() {
+    let cpus = CpuSet::new([CpuId::new(usize::MAX)]).unwrap();
+    let error = build_affinity_mask(&cpus).unwrap_err();
+    assert!(error.contains("exceeds supported affinity mask"));
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn linux_next_affinity_mask_bytes_retries_only_on_einval() {
@@ -38,6 +51,10 @@ fn available_parallelism_helpers_report_positive_counts() {
     }
     if let Some(count) = process_cpu_affinity_count() {
         assert!(count >= 1);
+    }
+    if let Some(cpus) = process_cpu_affinity() {
+        assert!(!cpus.is_empty());
+        assert_eq!(process_cpu_affinity_count(), Some(cpus.len()));
     }
 }
 

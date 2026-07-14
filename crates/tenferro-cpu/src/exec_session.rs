@@ -8,8 +8,8 @@ use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::{
-    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
 use super::backend::reclaim_typed;
@@ -27,10 +27,44 @@ pub(crate) struct CpuExecSession<'a> {
     pub(crate) kind: CpuBackendKind,
 }
 
+impl CpuExecSession<'_> {
+    fn run_native<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
+        let buffers = &mut *self.buffers;
+        match self.kind {
+            CpuBackendKind::Faer => op(buffers),
+            CpuBackendKind::Blas => self.ctx.install(|| op(buffers)),
+        }
+    }
+}
+
+impl TensorDeviceTransfer for CpuExecSession<'_> {
+    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        if tensor.is_backend_buffer() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::download_to_host",
+                "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
+            ));
+        }
+        Ok(tensor.clone())
+    }
+
+    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        if tensor.is_backend_buffer() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::upload_host_tensor",
+                "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
+            ));
+        }
+        Ok(tensor.clone())
+    }
+}
+
 /// Simple delegation: no dtype dispatch, no install.
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
-        fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> { $body }
+        fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
+            self.run_native(|_| $body)
+        }
     };
 }
 
@@ -38,7 +72,7 @@ macro_rules! delegate {
 macro_rules! delegate_with_pool {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            $callee(self.buffers, $($arg),*)
+            self.run_native(|buffers| $callee(buffers, $($arg),*))
         }
     };
 }
@@ -48,7 +82,7 @@ impl TensorElementwise for CpuExecSession<'_> {
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        elementwise::add_read_with_pool(self.buffers, lhs, rhs)
+        self.run_native(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
     }
 
     delegate_with_pool!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
@@ -107,22 +141,24 @@ impl TensorStructural for CpuExecSession<'_> {
     // Structural
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return structural::transpose_with_pool(self.buffers, input, perm);
-        }
-
-        let input = materialize_tensor_read("transpose", input)?;
-        structural::transpose_with_pool(self.buffers, &input, perm)
+        self.run_native(|buffers| {
+            if let Some(input) = input.as_tensor() {
+                return structural::transpose_with_pool(buffers, input, perm);
+            }
+            let input = materialize_tensor_read("transpose", input)?;
+            structural::transpose_with_pool(buffers, &input, perm)
+        })
     }
 
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return structural::reshape(input, shape);
-        }
-
-        let input = materialize_tensor_read("reshape", input)?;
-        structural::reshape(&input, shape)
+        self.run_native(|_| {
+            if let Some(input) = input.as_tensor() {
+                return structural::reshape(input, shape);
+            }
+            let input = materialize_tensor_read("reshape", input)?;
+            structural::reshape(&input, shape)
+        })
     }
 
     delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
@@ -132,12 +168,13 @@ impl TensorStructural for CpuExecSession<'_> {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return structural::broadcast_in_dim_with_pool(self.buffers, input, shape, dims);
-        }
-
-        let input = materialize_tensor_read("broadcast_in_dim", input)?;
-        structural::broadcast_in_dim_with_pool(self.buffers, &input, shape, dims)
+        self.run_native(|buffers| {
+            if let Some(input) = input.as_tensor() {
+                return structural::broadcast_in_dim_with_pool(buffers, input, shape, dims);
+            }
+            let input = materialize_tensor_read("broadcast_in_dim", input)?;
+            structural::broadcast_in_dim_with_pool(buffers, &input, shape, dims)
+        })
     }
 
     delegate_with_pool!(cast(input: &Tensor, to: crate::DType) => structural::cast_with_pool);
@@ -152,25 +189,25 @@ impl TensorReduction for CpuExecSession<'_> {
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        reduction::reduce_sum_read(input, axes)
+        self.run_native(|_| reduction::reduce_sum_read(input, axes))
     }
 
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        reduction::reduce_prod_read(input, axes)
+        self.run_native(|_| reduction::reduce_prod_read(input, axes))
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        reduction::reduce_max_read(input, axes)
+        self.run_native(|_| reduction::reduce_max_read(input, axes))
     }
 
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        reduction::reduce_min_read(input, axes)
+        self.run_native(|_| reduction::reduce_min_read(input, axes))
     }
 }
 
@@ -692,7 +729,9 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        indexing::gather_with_pool(self.buffers, operand, start_indices, config)
+        self.run_native(|buffers| {
+            indexing::gather_with_pool(buffers, operand, start_indices, config)
+        })
     }
     delegate_with_pool!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter_with_pool);
     delegate_with_pool!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice_with_pool);
@@ -700,10 +739,10 @@ impl TensorIndexing for CpuExecSession<'_> {
     delegate_with_pool!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice_with_pool);
     delegate_with_pool!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad_with_pool);
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        indexing::try_concatenate_with_pool(self.buffers, inputs, axis)
+        self.run_native(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        indexing::reverse_with_pool(self.buffers, input, axes)
+        self.run_native(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
 }
 
@@ -727,7 +766,7 @@ impl TensorFusion for CpuExecSession<'_> {
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        elementwise::elementwise_fusion_with_pool(self.buffers, inputs, plan)
+        self.run_native(|buffers| elementwise::elementwise_fusion_with_pool(buffers, inputs, plan))
     }
 
     fn execute_broadcast_multiply(
@@ -739,15 +778,11 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        elementwise::broadcast_multiply_read_with_pool(
-            self.buffers,
-            lhs,
-            lhs_shape,
-            lhs_dims,
-            rhs,
-            rhs_shape,
-            rhs_dims,
-        )
+        self.run_native(|buffers| {
+            elementwise::broadcast_multiply_read_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
     }
 
     fn execute_broadcast_multiply_value(
@@ -759,14 +794,38 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
-        elementwise::broadcast_multiply_value_with_pool(
-            self.buffers,
-            lhs,
-            lhs_shape,
-            lhs_dims,
-            rhs,
-            rhs_shape,
-            rhs_dims,
-        )
+        self.run_native(|buffers| {
+            elementwise::broadcast_multiply_value_with_pool(
+                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            )
+        })
+    }
+}
+
+#[cfg(all(test, feature = "cpu-blas"))]
+mod tests {
+    use super::*;
+    use crate::{process_cpu_affinity, CpuSet};
+
+    #[test]
+    fn blas_session_native_scope_enters_the_pinned_rayon_engine() {
+        let allowed = process_cpu_affinity().expect("Linux test requires process affinity");
+        let cpus = CpuSet::new([allowed.as_slice()[0]]).unwrap();
+        let context = CpuContext::with_pinned_cpus(cpus, 1).unwrap();
+        let mut buffers = BufferPool::new();
+        let mut gemm_analysis_cache = gemm::GemmAnalysisCache::default();
+        let mut session = CpuExecSession {
+            ctx: &context,
+            buffers: &mut buffers,
+            gemm_analysis_cache: &mut gemm_analysis_cache,
+            kind: CpuBackendKind::Blas,
+        };
+
+        assert!(rayon::current_thread_index().is_none());
+        assert_eq!(
+            session.run_native(|_| rayon::current_thread_index()),
+            Some(0)
+        );
+        assert!(rayon::current_thread_index().is_none());
     }
 }

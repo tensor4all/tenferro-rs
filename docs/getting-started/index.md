@@ -1,5 +1,9 @@
 # Getting Started
 
+For multi-socket hosts, containers, or schedulers with restricted cpusets, read
+[CPU Execution and NUMA Placement](../guides/cpu-execution.md) before choosing
+between managed faer placement and an external BLAS provider.
+
 tenferro supports tensor computation without autodiff, immediate execution with
 optional `backward()` on scalar losses, functional eager `grad`, `vjp`, and
 `jvp`, traced graph execution, einsum, linear algebra, and CUDA execution

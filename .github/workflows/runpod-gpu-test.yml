@@ -726,7 +726,6 @@ jobs:
 
               gpuTypeIds: [
                 "NVIDIA RTX A2000",
-                "Tesla T4",
                 "NVIDIA GeForce RTX 3070",
                 "NVIDIA GeForce RTX 3080",
                 "NVIDIA GeForce RTX 3080 Ti",

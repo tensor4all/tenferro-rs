@@ -86,3 +86,8 @@ required-features = ["cpu-blas"]
 [[bench]]
 name = "grouped_gemm"
 harness = false
+
+[[bench]]
+name = "numa_execution"
+harness = false
+required-features = ["cpu-faer"]

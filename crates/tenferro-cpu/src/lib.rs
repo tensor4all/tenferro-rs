@@ -43,19 +43,23 @@ compile_error!("provider-inject cannot be combined with explicit BLAS provider f
 
 pub mod affinity;
 mod analytic;
+mod arbiter;
 pub mod backend;
 mod buffer_pool;
 mod capability;
 pub mod context;
 mod elementwise;
+mod engine;
 mod exec_session;
 mod gemm;
 mod indexing;
 mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
+mod placement;
 mod reduction;
 mod structural;
+mod topology;
 
 use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedArray, StridedView};
 
@@ -73,19 +77,26 @@ extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 
-pub use affinity::{available_parallelism, process_cpu_affinity_count};
+pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
 pub use analytic::pow;
-pub use backend::{CpuBackend, CpuBackendKind};
+pub use backend::{
+    CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
+};
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
-pub use context::CpuContext;
+pub use context::{CpuContext, CpuContextError};
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
 };
 pub use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
+pub use placement::{CpuPlacement, CpuPlacementError, ResolvedCpuPlacement};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
 pub use structural::{
     broadcast_in_dim, convert, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
+};
+pub use topology::{
+    discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
+    NumaNodeId,
 };
 
 /// Owner-scoped CPU scratch-pool API for operation-family crates.

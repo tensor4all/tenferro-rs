@@ -123,10 +123,15 @@ fn cpu_install_accepts_send_state() {
 }
 
 #[test]
-fn cpu_backend_exec_session_enters_owned_pool() {
+fn cpu_backend_exec_session_uses_default_provider_scope() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
-    let seen_threads = backend.with_backend_session(|_| rayon::current_num_threads());
-    assert_eq!(seen_threads, 2);
+    backend.with_backend_session(|_| {
+        #[cfg(feature = "cpu-blas")]
+        assert!(rayon::current_thread_index().is_none());
+
+        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
+        assert_eq!(rayon::current_num_threads(), 2);
+    });
 }
 
 #[test]
@@ -134,7 +139,7 @@ fn cpu_backend_shared_context() {
     let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
     let b1 = CpuBackend::from_context(ctx.clone());
     let b2 = CpuBackend::from_context(ctx);
-    assert!(Arc::ptr_eq(&b1.ctx, &b2.ctx));
+    assert_eq!(b1.context_id_for_test(), b2.context_id_for_test());
 }
 
 #[test]

@@ -4,6 +4,10 @@ tenferro keeps CPU parallelism and execution caches explicit. Use this page to
 control CPU thread counts, avoid provider oversubscription, and release cached
 memory in long-running processes.
 
+Thread count is not CPU affinity. For NUMA-node definitions, pinned engines,
+external BLAS safety, and the location of elementwise Rayon work, see
+[CPU Execution and NUMA Placement](cpu-execution.md).
+
 For tensor memory layout and column-major buffers, see
 [Memory Order](memory-order.md). That is part of the tensor data model, not the
 parallelism contract.
@@ -80,9 +84,9 @@ pool before dispatching tensor-sized kernels.
 
 ## BLAS And LAPACK Threads
 
-For `cpu-blas`, `CpuBackend::with_threads(n)` controls tenferro's CPU context,
-but the linked BLAS/LAPACK provider has its own thread controls. Set provider
-thread variables before process start:
+For `cpu-blas`, `CpuBackend::with_threads(n)` controls tenferro-native work, but
+the linked BLAS/LAPACK provider has its own thread controls. Set provider thread
+variables before process start when appropriate:
 
 ```bash
 RAYON_NUM_THREADS=4 \
@@ -99,6 +103,11 @@ uses `OPENBLAS_NUM_THREADS`; Intel MKL uses `MKL_NUM_THREADS`; Accelerate uses
 `OMP_NUM_THREADS`. For provider discovery at build time, non-standard OpenBLAS
 installs commonly need `OPENBLAS_LIB_DIR`; non-standard MKL installs commonly
 need `MKLROOT` or `MKL_LIB_DIR`.
+
+These variables limit thread counts; they do not let tenferro verify or enforce
+provider worker affinity. External BLAS therefore supports only
+`CpuPlacement::Auto` and executes under an exclusive coordinator permit. Use
+the faer backend when tenferro-managed NUMA placement is required.
 
 ## Avoid Oversubscription
 
