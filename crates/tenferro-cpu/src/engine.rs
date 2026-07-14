@@ -7,8 +7,6 @@ use crate::{CpuContext, CpuContextError, ResolvedCpuPlacement};
 #[derive(Debug)]
 pub(crate) struct EngineResources {
     pub(crate) buffers: BufferPool,
-    // Session-cache ownership migrates here in the graph-session stage.
-    #[allow(dead_code)]
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
 }
 

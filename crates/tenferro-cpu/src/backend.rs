@@ -1958,7 +1958,7 @@ impl TensorIndexing for CpuBackend {
 impl CpuBackend {
     fn run_backend_session_cached<R: Send>(
         &mut self,
-        cache: &mut gemm::GemmAnalysisCache,
+        cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         let _permit = self.acquire_execution_permit();
@@ -1969,7 +1969,9 @@ impl CpuBackend {
             .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let resources = &mut *resources;
         let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+        let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
         let run = || {
             let session_started = Instant::now();
             let mut session = CpuExecSession {
@@ -2002,10 +2004,7 @@ impl BackendSessionHost for CpuBackend {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        let mut cache = profile_cpu_session_section("with_backend_session.cache_default", || {
-            gemm::GemmAnalysisCache::default()
-        });
-        self.with_backend_session_cached(&mut cache, f)
+        self.run_backend_session_cached(None, f)
     }
 
     fn with_backend_session_cached<R: Send>(
@@ -2014,12 +2013,12 @@ impl BackendSessionHost for CpuBackend {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         if !cpu_session_profile_enabled() {
-            return self.run_backend_session_cached(cache, f);
+            return self.run_backend_session_cached(Some(cache), f);
         }
         let total_started = Instant::now();
         let result =
             profile_cpu_session_section("with_backend_session_cached.exec_session", || {
-                self.run_backend_session_cached(cache, f)
+                self.run_backend_session_cached(Some(cache), f)
             });
         record_cpu_session_profile("with_backend_session_cached.total", total_started.elapsed());
         maybe_print_cpu_session_profile();

@@ -80,6 +80,17 @@ fn placement_capabilities_follow_public_backend_kind() {
 
 #[test]
 #[cfg(feature = "cpu-blas")]
+fn blas_provider_session_body_stays_outside_the_rayon_engine() {
+    use tenferro_tensor::BackendSessionHost;
+
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    backend.with_backend_session(|_| {
+        assert!(rayon::current_thread_index().is_none());
+    });
+}
+
+#[test]
+#[cfg(feature = "cpu-blas")]
 fn blas_auto_is_provider_exclusive_and_explicit_placement_is_rejected() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
 

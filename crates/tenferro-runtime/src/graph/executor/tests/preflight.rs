@@ -22,8 +22,10 @@ use crate::{Error, GraphCompiler, TracedTensor};
 #[derive(Debug)]
 struct CountingBackend {
     uploads: Arc<AtomicUsize>,
+    uploads_in_session: Arc<AtomicUsize>,
     dispatches: Arc<AtomicUsize>,
     session_entries: Arc<AtomicUsize>,
+    session_depth: Arc<AtomicUsize>,
 }
 
 macro_rules! unreachable_backend_methods {
@@ -40,6 +42,9 @@ macro_rules! unreachable_backend_methods {
 impl TensorDeviceTransfer for CountingBackend {
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.uploads.fetch_add(1, Ordering::Relaxed);
+        if self.session_depth.load(Ordering::Relaxed) != 0 {
+            self.uploads_in_session.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(tensor.clone())
     }
 }
@@ -121,8 +126,14 @@ impl TensorIndexing for CountingBackend {
 }
 
 impl TensorDot for CountingBackend {
-    unreachable_backend_methods! {
-        dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> tenferro_tensor::Result<Tensor>;
+    fn dot_general(
+        &mut self,
+        lhs: &Tensor,
+        _rhs: &Tensor,
+        _config: &DotGeneralConfig,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.dispatches.fetch_add(1, Ordering::Relaxed);
+        Ok(lhs.clone())
     }
 }
 
@@ -135,7 +146,10 @@ impl BackendSessionHost for CountingBackend {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         self.session_entries.fetch_add(1, Ordering::Relaxed);
-        f(self)
+        self.session_depth.fetch_add(1, Ordering::Relaxed);
+        let result = f(self);
+        self.session_depth.fetch_sub(1, Ordering::Relaxed);
+        result
     }
 }
 impl TensorBackend for CountingBackend {}
@@ -147,18 +161,97 @@ fn counting_backend() -> (
     Arc<AtomicUsize>,
 ) {
     let uploads = Arc::new(AtomicUsize::new(0));
+    let uploads_in_session = Arc::new(AtomicUsize::new(0));
     let dispatches = Arc::new(AtomicUsize::new(0));
     let session_entries = Arc::new(AtomicUsize::new(0));
+    let session_depth = Arc::new(AtomicUsize::new(0));
     (
         CountingBackend {
             uploads: uploads.clone(),
+            uploads_in_session,
             dispatches: dispatches.clone(),
             session_entries: session_entries.clone(),
+            session_depth,
         },
         uploads,
         dispatches,
         session_entries,
     )
+}
+
+#[test]
+fn host_native_and_session_ffi_share_one_backend_session() {
+    let uploads = Arc::new(AtomicUsize::new(0));
+    let uploads_in_session = Arc::new(AtomicUsize::new(0));
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let session_entries = Arc::new(AtomicUsize::new(0));
+    let session_depth = Arc::new(AtomicUsize::new(0));
+    let mut backend = CountingBackend {
+        uploads: uploads.clone(),
+        uploads_in_session: uploads_in_session.clone(),
+        dispatches: dispatches.clone(),
+        session_entries: session_entries.clone(),
+        session_depth,
+    };
+    let program = ExecProgram {
+        instructions: vec![
+            ExecInstruction {
+                op: ExecOp::ShapeOf { axis: 0 },
+                input_slots: vec![0],
+                output_slots: vec![1],
+                dtype: DType::F64,
+                output_shapes: vec![vec![]].into(),
+                output_extents: vec![vec![]].into(),
+                last_use: vec![false],
+            },
+            ExecInstruction {
+                op: ExecOp::Negate,
+                input_slots: vec![1],
+                output_slots: vec![2],
+                dtype: DType::F64,
+                output_shapes: vec![vec![]].into(),
+                output_extents: vec![vec![]].into(),
+                last_use: vec![false],
+            },
+            ExecInstruction {
+                op: ExecOp::DotGeneral(DotGeneralConfig {
+                    lhs_contracting_dims: vec![],
+                    rhs_contracting_dims: vec![],
+                    lhs_batch_dims: vec![],
+                    rhs_batch_dims: vec![],
+                }),
+                input_slots: vec![2, 1],
+                output_slots: vec![3],
+                dtype: DType::F64,
+                output_shapes: vec![vec![]].into(),
+                output_extents: vec![vec![]].into(),
+                last_use: vec![true, true],
+            },
+        ],
+        input_slots: vec![0],
+        output_slots: vec![3],
+        n_slots: 4,
+        shape_guards: vec![],
+    };
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let mut slots = Vec::new();
+    let mut cache = ();
+
+    let outputs = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+        &mut backend,
+        &program,
+        vec![ExecSlot::Owned(input)],
+        &mut slots,
+        &mut cache,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(uploads.load(Ordering::Relaxed), 1);
+    assert_eq!(uploads_in_session.load(Ordering::Relaxed), 1);
+    assert_eq!(dispatches.load(Ordering::Relaxed), 2);
+    assert_eq!(session_entries.load(Ordering::Relaxed), 1);
 }
 
 fn constant_guard(lhs: usize, rhs: usize, family_id: &'static str) -> ShapeGuard {
