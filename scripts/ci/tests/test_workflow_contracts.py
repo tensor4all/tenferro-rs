@@ -85,7 +85,8 @@ class WorkflowContractTests(unittest.TestCase):
                 "      - name: Wait for org runner to come online"
             )
         ]
-        self.assertIn("python3 scripts/ci/runpod_client.py create", create)
+        self.assertIn("python3 -m scripts.ci.runpod_client create", create)
+        self.assertNotIn("python3 scripts/ci/runpod_client.py", create)
         self.assertNotIn("for attempt in $(seq 1 5)", create)
         self.assertNotIn("curl -sS", create)
 

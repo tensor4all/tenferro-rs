@@ -98,6 +98,12 @@ control plane against schema drift and deterministic request failures.
   marker was emitted, and pod `37vcua0n4ayryn` was deleted successfully. This
   confirms the existing trusted execution path while the new tier behavior
   still awaits a post-merge run from `main`.
+- Pre-merge trusted run 29363682664 recovered on attempt 3 with an NVIDIA
+  GeForce RTX 4090; CUDA and OpenXLA passed and pod `dj8rm3kgcq21xw` was
+  deleted. Post-merge run 29373020352 then exposed that direct file execution
+  of `runpod_client.py` cannot resolve its `scripts.ci` package import. The
+  workflow now invokes the helper as a Python module and a source-contract test
+  prohibits the broken direct invocation.
 - Trusted PR recovery dry run targets only
   `runpod-gpu-test.yml --ref main -f pr_number=1379`.
 
