@@ -22,7 +22,7 @@ name: RunPod tenferro-rs GPU Test
 #     any paid pod is created.
 #   * `RUNPOD_API_KEY` (and the GitHub App credentials used to mint the JIT
 #     runner config) must only ever be read in trusted-base GitHub-hosted jobs
-#     (`start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
+#     (`runpod-contract`, `start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
@@ -36,10 +36,15 @@ name: RunPod tenferro-rs GPU Test
 on:
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: Open same-repository PR number to recover through trusted main
+        required: false
+        default: 0
+        type: number
       tenferro_ref:
         description: tenferro-rs git ref (branch, tag, or SHA)
         required: false
-        default: main
+        default: ""
         type: string
       ci_gpu_gate_head_sha:
         description: Optional PR head SHA to publish the CI GPU gate check to
@@ -84,14 +89,24 @@ jobs:
 
     outputs:
       tenferro_ref: ${{ steps.resolve_ref.outputs.tenferro_ref }}
+      gpu_required: ${{ steps.resolve_ref.outputs.run_gpu }}
+      policy_reason: ${{ steps.resolve_ref.outputs.reason }}
+      target_head_sha: ${{ steps.resolve_ref.outputs.target_head_sha }}
 
     steps:
+      # workflow_run resolves this checkout to trusted default-branch content.
+      # Manual dispatch is rejected below unless the workflow ref is main.
+      - name: Checkout trusted CI policy
+        uses: actions/checkout@v5
+
       - name: Check actor and PR source are allowed
         id: resolve_ref
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || 'main' }}
+          MANUAL_PR_NUMBER: ${{ inputs.pr_number || 0 }}
+          MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || '' }}
+          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
           WORKFLOW_RUN_ACTOR: ${{ github.event.workflow_run.actor.login || '' }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
@@ -114,6 +129,21 @@ jobs:
                 exit 1
               ;;
             esac
+          }
+
+          classify_pr_paths() {
+            local pr_number="$1"
+            local changed_paths=/tmp/runpod-pr-changed-paths.txt
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
+              --jq '.[].filename' > "${changed_paths}"
+            local policy_args=()
+            while IFS= read -r path; do
+              if [ -n "${path}" ]; then
+                policy_args+=(--path "${path}")
+              fi
+            done < "${changed_paths}"
+            python3 scripts/ci/change_policy.py "${policy_args[@]}"
           }
 
           if [ "${EVENT_NAME}" = "workflow_run" ]; then
@@ -176,16 +206,87 @@ jobs:
             fi
 
             echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
-            echo "tenferro_ref=${merge_sha}" >> "${GITHUB_OUTPUT}"
+            {
+              echo "tenferro_ref=${merge_sha}"
+              echo "target_head_sha=${pr_head_sha}"
+            } >> "${GITHUB_OUTPUT}"
+            classify_pr_paths "${pr_number}"
           else
             # Manual dispatch relies on the triggering actor check.
+            if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+              echo "::error::Secret-bearing manual RunPod dispatch must use the trusted main workflow."
+              exit 1
+            fi
             check_permission "${GITHUB_ACTOR}" "Workflow actor"
-            echo "tenferro_ref=${MANUAL_TENFERRO_REF}" >> "${GITHUB_OUTPUT}"
+            if ! [[ "${MANUAL_PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be a non-negative integer."
+              exit 1
+            fi
+            if [ "${MANUAL_PR_NUMBER}" -gt 0 ]; then
+              if [ -n "${MANUAL_TENFERRO_REF}" ] || [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
+                echo "::error::pr_number cannot be combined with tenferro_ref or ci_gpu_gate_head_sha."
+                exit 1
+              fi
+              pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
+              if [ "$(jq -r .state <<<"${pr_json}")" != open ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} is not open; refusing recovery."
+                exit 1
+              fi
+              pr_head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+              if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} is not from this repository; refusing recovery."
+                exit 1
+              fi
+              pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
+              check_permission "${pr_author}" "PR author"
+              pr_head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
+              refreshed_pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
+              refreshed_head_sha="$(jq -r '.head.sha' <<<"${refreshed_pr_json}")"
+              refreshed_state="$(jq -r .state <<<"${refreshed_pr_json}")"
+              refreshed_head_repo="$(jq -r '.head.repo.full_name' <<<"${refreshed_pr_json}")"
+              if [ "${refreshed_head_sha}" != "${pr_head_sha}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} head moved during authorization; refusing recovery."
+                exit 1
+              fi
+              if [ "${refreshed_state}" != open ] || [ "${refreshed_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} trust state changed during authorization; refusing recovery."
+                exit 1
+              fi
+              {
+                echo "tenferro_ref=${pr_head_sha}"
+                echo "target_head_sha=${pr_head_sha}"
+              } >> "${GITHUB_OUTPUT}"
+              classify_pr_paths "${MANUAL_PR_NUMBER}"
+            else
+              manual_ref="${MANUAL_TENFERRO_REF:-main}"
+              {
+                echo "tenferro_ref=${manual_ref}"
+                echo "target_head_sha=${MANUAL_GATE_HEAD_SHA}"
+                echo "run_gpu=true"
+                echo "reason=trusted manual revision validation"
+              } >> "${GITHUB_OUTPUT}"
+            fi
           fi
+
+  runpod-contract:
+    name: Validate RunPod request contract
+    needs: authorize
+    if: needs.authorize.outputs.gpu_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout trusted RunPod helpers
+        uses: actions/checkout@v5
+      - name: Validate configured GPU IDs against live OpenAPI
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python3 scripts/ci/runpod_contract.py
 
   pre-runpod-gate:
     name: Wait for review and non-GPU CI
     needs: authorize
+    if: needs.authorize.outputs.gpu_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -291,7 +392,10 @@ jobs:
 
   cuda-archive:
     name: CUDA test archive
-    needs: authorize
+    needs:
+      - authorize
+      - runpod-contract
+    if: needs.authorize.outputs.gpu_required == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 
@@ -445,7 +549,7 @@ jobs:
         id: archive_key
         run: |
           set -euo pipefail
-          key="cuda-archive-v8-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${TENFERRO_REF}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          key="cuda-archive-v9-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
           echo "CUDA archive cache key: ${key}"
 
@@ -525,8 +629,10 @@ jobs:
     name: Start RunPod org runner
     needs:
       - authorize
+      - runpod-contract
       - pre-runpod-gate
       - cuda-archive
+    if: needs.authorize.outputs.gpu_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -534,8 +640,12 @@ jobs:
       pod_id: ${{ steps.create_pod.outputs.pod_id }}
       runner_label: ${{ steps.vars.outputs.runner_label }}
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
+      gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
 
     steps:
+      - name: Checkout trusted RunPod client
+        uses: actions/checkout@v5
+
       - name: Define runner label
         id: vars
         run: |
@@ -600,7 +710,7 @@ jobs:
           echo "GitHub generate-jitconfig HTTP status: ${status}"
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            cat "$response_file" | jq . || cat "$response_file"
+            jq . "$response_file" || cat "$response_file"
             echo "Failed to generate JIT runner config" >&2
             exit 1
           fi
@@ -608,7 +718,7 @@ jobs:
           jit_config="$(jq -r .encoded_jit_config "$response_file")"
 
           if [ -z "$jit_config" ] || [ "$jit_config" = "null" ]; then
-            cat "$response_file" | jq 'del(.encoded_jit_config)' || cat "$response_file"
+            jq 'del(.encoded_jit_config)' "$response_file" || cat "$response_file"
             echo "Failed to generate JIT runner config: missing encoded_jit_config" >&2
             exit 1
           fi
@@ -626,39 +736,6 @@ jobs:
           set -euo pipefail
 
           echo "::add-mask::${RUNNER_JIT_CONFIG}"
-          redact_secrets() {
-            jq '
-              def redact_item:
-                (if has("env") then
-                   .env.RUNNER_JIT_CONFIG = "***redacted***"
-                   | .env.PUBLIC_KEY = "***redacted***"
-                 else
-                   .
-                 end)
-                | (if has("dockerStartCmd") then
-                     (if (.dockerStartCmd | type) == "array" then
-                       .dockerStartCmd = ["***redacted-startup-script***"]
-                     else
-                       .dockerStartCmd = "***redacted-startup-script***"
-                     end)
-                   else
-                     .
-                   end);
-
-              if type == "array" then
-                map(redact_item)
-              elif has("pods") then
-                .pods |= map(redact_item)
-              elif has("data") then
-                .data |= map(redact_item)
-              elif has("items") then
-                .items |= map(redact_item)
-              else
-                redact_item
-              end
-            ' "$1"
-          }
-
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
 
@@ -712,111 +789,11 @@ jobs:
           ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
-          startup_script="$(cat /tmp/runpod-startup.sh)"
-
-          jq -n \
-            --arg script "$startup_script" \
-            --arg jit_config "$RUNNER_JIT_CONFIG" \
-            --arg image_name "$RUNPOD_IMAGE" \
-            '{
-              cloudType: "SECURE",
-              computeType: "GPU",
-              name: ("tenferro-rs-gpu-ci-" + env.GITHUB_RUN_ID),
-              imageName: $image_name,
-
-              gpuTypeIds: [
-                "NVIDIA RTX A2000",
-                "NVIDIA GeForce RTX 3070",
-                "NVIDIA GeForce RTX 3080",
-                "NVIDIA GeForce RTX 3080 Ti",
-                "Tesla V100-PCIE-16GB",
-                "NVIDIA RTX A4000",
-                "NVIDIA RTX 2000 Ada Generation",
-                "NVIDIA RTX A4500",
-                "NVIDIA RTX A5000",
-                "NVIDIA A40",
-                "NVIDIA GeForce RTX 4090"
-              ],
-              gpuTypePriority: "availability",
-              gpuCount: 1,
-
-              containerDiskInGb: 100,
-              volumeInGb: 20,
-              volumeMountPath: "/workspace",
-
-              interruptible: false,
-              ports: [],
-
-              dockerEntrypoint: ["bash", "-lc"],
-              dockerStartCmd: [$script],
-
-              env: {
-                RUNNER_JIT_CONFIG: $jit_config,
-                RUNNER_ALLOW_RUNASROOT: "1"
-              }
-            }' > /tmp/pod.json
-
-          echo "RunPod request payload, secrets redacted:"
-          redact_secrets /tmp/pod.json
-
-          response_file=/tmp/runpod-response.json
-          status=""
-
-          for attempt in $(seq 1 5); do
-            echo "Creating RunPod pod (attempt ${attempt}/5)"
-            status="$(
-              curl -sS \
-                --request POST \
-                --url https://rest.runpod.io/v1/pods \
-                --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-                --header "Content-Type: application/json" \
-                --data @/tmp/pod.json \
-                --output "$response_file" \
-                --write-out "%{http_code}"
-            )"
-
-            echo "RunPod HTTP status: ${status}"
-            redact_secrets "$response_file" || cat "$response_file"
-
-            if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
-              break
-            fi
-
-            if [ "$attempt" -lt 5 ]; then
-              echo "RunPod pod creation failed; retrying in 20 seconds" >&2
-              sleep 20
-            fi
-          done
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Failed to create RunPod pod after 5 attempts" >&2
-            exit 1
-          fi
-
-          pod_id="$(jq -r .id "$response_file")"
-
-          if [ -z "$pod_id" ] || [ "$pod_id" = "null" ]; then
-            echo "Failed to create RunPod pod: missing pod id" >&2
-            exit 1
-          fi
-
-          gpu_type_id="$(
-            jq -r '
-              .machine.gpuTypeId
-              // .machine.gpuType.id
-              // empty
-            ' "$response_file"
-          )"
-
-          echo "pod_id=${pod_id}" >> "$GITHUB_OUTPUT"
-          echo "Created RunPod pod: ${pod_id}"
-
-          if [ -n "$gpu_type_id" ]; then
-            echo "gpu_type_id=${gpu_type_id}" >> "$GITHUB_OUTPUT"
-            echo "RunPod assigned GPU type: ${gpu_type_id}"
-          else
-            echo "RunPod assigned GPU type: unknown (not present in create response)"
-          fi
+          python3 scripts/ci/runpod_client.py create \
+            --config scripts/ci/runpod_config.json \
+            --startup-script /tmp/runpod-startup.sh \
+            --image-name "${RUNPOD_IMAGE}" \
+            --response-file /tmp/runpod-response.json
 
       - name: Wait for org runner to come online
         env:
@@ -842,7 +819,7 @@ jobs:
 
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
               echo "GitHub runners API HTTP status: ${status}"
-              cat "$response_file" | jq . || cat "$response_file"
+              jq . "$response_file" || cat "$response_file"
               sleep 10
               continue
             fi
@@ -890,7 +867,7 @@ jobs:
           )"
 
           echo "RunPod delete HTTP status: ${status}"
-          cat "$response_file" | jq . || cat "$response_file" || true
+          jq . "$response_file" || cat "$response_file" || true
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "Warning: failed to delete RunPod pod after startup failure" >&2
@@ -903,6 +880,7 @@ jobs:
       - authorize
       - cuda-archive
       - start-runpod
+    if: needs.authorize.outputs.gpu_required == 'true'
 
     env:
       TENFERRO_REF: ${{ needs.authorize.outputs.tenferro_ref }}
@@ -952,10 +930,14 @@ jobs:
           tool: nextest
 
       - name: Check machine
+        env:
+          RUNPOD_GPU_TIER: ${{ needs.start-runpod.outputs.gpu_tier }}
+          RUNPOD_GPU_TYPE_ID: ${{ needs.start-runpod.outputs.gpu_type_id }}
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
-          echo "RunPod gpu_type_id (from pod create): ${{ needs.start-runpod.outputs.gpu_type_id }}"
+          echo "RunPod price tier: ${RUNPOD_GPU_TIER}"
+          echo "RunPod gpu_type_id (from pod create): ${RUNPOD_GPU_TYPE_ID}"
           echo "=== GPU (nvidia-smi) ==="
           nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
           nvidia-smi
@@ -1255,10 +1237,11 @@ jobs:
   cleanup-runpod:
     name: Delete RunPod pod
     needs:
+      - authorize
       - start-runpod
       - run-gpu-tests
 
-    if: always()
+    if: always() && needs.authorize.outputs.gpu_required == 'true'
 
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1289,7 +1272,7 @@ jobs:
           )"
 
           echo "RunPod delete HTTP status: ${status}"
-          cat "$response_file" | jq . || cat "$response_file" || true
+          jq . "$response_file" || cat "$response_file" || true
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "Warning: failed to delete RunPod pod" >&2
@@ -1302,6 +1285,7 @@ jobs:
     name: Publish CI GPU gate
     needs:
       - authorize
+      - runpod-contract
       - pre-runpod-gate
       - cuda-archive
       - start-runpod
@@ -1328,10 +1312,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
-          WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          TARGET_HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
+          GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}
+          POLICY_REASON: ${{ needs.authorize.outputs.policy_reason }}
+          CONTRACT_RESULT: ${{ needs.runpod-contract.result }}
           PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
           START_RUNPOD_RESULT: ${{ needs.start-runpod.result }}
@@ -1352,27 +1338,34 @@ jobs:
           }
 
           record_result "authorize" "${AUTHORIZE_RESULT}"
-          record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
-          record_result "cuda-archive" "${ARCHIVE_RESULT}"
-          record_result "start-runpod" "${START_RUNPOD_RESULT}"
-          record_result "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
-          record_result "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
+          if [ "${GPU_REQUIRED}" = true ]; then
+            record_result "runpod-contract" "${CONTRACT_RESULT}"
+            record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
+            record_result "cuda-archive" "${ARCHIVE_RESULT}"
+            record_result "start-runpod" "${START_RUNPOD_RESULT}"
+            record_result "run-gpu-tests" "${RUN_GPU_TESTS_RESULT}"
+            record_result "cleanup-runpod" "${CLEANUP_RUNPOD_RESULT}"
+          elif [ "${GPU_REQUIRED}" = false ]; then
+            echo "GPU validation not required: ${POLICY_REASON}"
+          else
+            echo "::error::Authorize job did not publish a valid GPU policy."
+            echo "- authorize policy: ${GPU_REQUIRED:-missing}" >> "${failures_file}"
+          fi
 
           conclusion="success"
           title="RunPod CI GPU gate passed"
           summary="RunPod GPU validation completed successfully and owns CI GPU gate."
+          if [ "${GPU_REQUIRED}" = false ]; then
+            title="RunPod CI GPU gate not required"
+            summary="GPU validation not required for this change: ${POLICY_REASON}"
+          fi
           if [ -s "${failures_file}" ]; then
             conclusion="failure"
             title="RunPod CI GPU gate failed"
             summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s' "$(cat "${failures_file}")")"
           fi
 
-          target_sha=""
-          if [ "${EVENT_NAME}" = "workflow_run" ]; then
-            target_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
-          elif [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
-            target_sha="${MANUAL_GATE_HEAD_SHA}"
-          fi
+          target_sha="${TARGET_HEAD_SHA}"
 
           if [ -n "${target_sha}" ]; then
             echo "Publishing CI GPU gate check to PR head SHA ${target_sha}."

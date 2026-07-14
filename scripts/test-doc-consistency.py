@@ -69,13 +69,15 @@ def test_agents_layer_diagram_lists_cpu_crate() -> None:
 
 def test_docs_ci_runs_docs_script_tests() -> None:
     text = read(".github/workflows/ci.yml")
+    profiles = read("scripts/ci/run_profile.py")
     build_docs_site = read("scripts/build_docs_site.sh")
 
-    assert "python3 scripts/test-check-docs-site.py" in text
-    assert "python3 scripts/test-doc-consistency.py" in text
-    assert "python3 scripts/test-repository-rules-review.py" in text
-    assert "python3 scripts/check-guide-dependency-snippets.py" in text
-    assert "python3 scripts/check-operation-categories.py --fail-on-findings" in text
+    assert "python3 scripts/ci/run_profile.py docs" in text
+    assert "python3 scripts/test-check-docs-site.py" in profiles
+    assert "python3 scripts/test-doc-consistency.py" in profiles
+    assert "python3 scripts/test-repository-rules-review.py" in profiles
+    assert "python3 scripts/check-guide-dependency-snippets.py" in profiles
+    assert "python3 scripts/check-operation-categories.py --fail-on-findings" in profiles
     assert (
         "python3 \"$ROOT_DIR/scripts/check-operation-categories.py\" --fail-on-findings --include-rendered"
         in build_docs_site
