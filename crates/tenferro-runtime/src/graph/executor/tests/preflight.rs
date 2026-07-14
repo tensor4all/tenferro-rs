@@ -254,6 +254,134 @@ fn host_native_and_session_ffi_share_one_backend_session() {
     assert_eq!(session_entries.load(Ordering::Relaxed), 1);
 }
 
+fn fused_host_program() -> ExecProgram {
+    let scalar_metadata = || (vec![vec![]].into(), vec![vec![]].into());
+    let vector_metadata = || {
+        (
+            vec![vec![DimExpr::Const(2)]].into(),
+            vec![vec![tenferro_ops::ShapeExtent::exact(DimExpr::Const(2))]].into(),
+        )
+    };
+    let (output_shapes, output_extents) = vector_metadata();
+    let first = ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![0],
+        output_slots: vec![1],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![false],
+    };
+    let (output_shapes, output_extents) = vector_metadata();
+    let second = ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![1],
+        output_slots: vec![2],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![true],
+    };
+    let (output_shapes, output_extents) = vector_metadata();
+    let ffi = ExecInstruction {
+        op: ExecOp::DotGeneral(DotGeneralConfig {
+            lhs_contracting_dims: vec![],
+            rhs_contracting_dims: vec![],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        }),
+        input_slots: vec![2, 0],
+        output_slots: vec![3],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![false, false],
+    };
+    let (output_shapes, output_extents) = scalar_metadata();
+    let host = ExecInstruction {
+        op: ExecOp::ShapeOf { axis: 0 },
+        input_slots: vec![0],
+        output_slots: vec![4],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![false],
+    };
+    let (output_shapes, output_extents) = scalar_metadata();
+    let third = ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![4],
+        output_slots: vec![5],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![false],
+    };
+    let (output_shapes, output_extents) = scalar_metadata();
+    let fourth = ExecInstruction {
+        op: ExecOp::Negate,
+        input_slots: vec![5],
+        output_slots: vec![6],
+        dtype: DType::F64,
+        output_shapes,
+        output_extents,
+        last_use: vec![true],
+    };
+    ExecProgram {
+        instructions: vec![first, second, ffi, host, third, fourth],
+        input_slots: vec![0],
+        output_slots: vec![3, 6],
+        n_slots: 7,
+        shape_guards: vec![],
+    }
+}
+
+#[test]
+fn fused_and_host_segments_share_one_backend_session_for_owned_outputs() {
+    let (mut backend, _, dispatches, sessions) = counting_backend();
+    let mut slots = Vec::new();
+    let mut cache = ();
+
+    let outputs = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+        &mut backend,
+        &fused_host_program(),
+        vec![ExecSlot::Owned(
+            Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        )],
+        &mut slots,
+        &mut cache,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(dispatches.load(Ordering::Relaxed), 5);
+    assert_eq!(sessions.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn fused_and_host_segments_share_one_backend_session_for_value_outputs() {
+    let (mut backend, _, dispatches, sessions) = counting_backend();
+    let mut slots = Vec::new();
+    let mut cache = ();
+
+    let outputs = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+        &mut backend,
+        &fused_host_program(),
+        vec![ExecSlot::Owned(
+            Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        )],
+        &mut slots,
+        &mut cache,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(dispatches.load(Ordering::Relaxed), 5);
+    assert_eq!(sessions.load(Ordering::Relaxed), 1);
+}
+
 fn constant_guard(lhs: usize, rhs: usize, family_id: &'static str) -> ShapeGuard {
     ShapeGuard {
         source: ConstraintSource {

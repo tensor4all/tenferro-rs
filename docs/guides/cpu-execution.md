@@ -35,6 +35,17 @@ println!("{:?}", all.execution_info());
 
 ## Managed Placement Is a faer Contract
 
+The initial capability matrix is deliberately conservative:
+
+| Runtime CPU provider | `Auto` | `NumaNode(id)` | `AllAllowed` |
+| --- | --- | --- | --- |
+| faer and tenferro-native kernels | managed all-allowed engine | managed pinned node engine | managed pinned all-allowed engine |
+| OpenBLAS, MKL, Accelerate, or another external BLAS | provider-default, process-wide exclusive | unsupported | unsupported |
+
+On platforms where tenferro cannot set and verify worker affinity, faer's
+`Auto` mode uses an unpinned compatibility context. Explicit managed placement
+still returns an error instead of silently weakening the request.
+
 `CpuPlacement::NumaNode` and `CpuPlacement::AllAllowed` are supported by
 `CpuBackendKind::Faer`. tenferro creates a fixed Rayon engine for the resolved
 CPU set and pins every worker when the engine is constructed. `CpuBackend`
@@ -66,8 +77,8 @@ that workers stay inside a requested tenferro CPU set. Consequently external
 BLAS backends accept only `CpuPlacement::Auto`; explicit `NumaNode` and
 `AllAllowed` requests return `CpuPlacementError`.
 
-`Auto` for `CpuBackendKind::Blas` uses provider-default execution under an
-exclusive coordinator permit. This prevents tenferro-managed CPU work from
+`Auto` for `CpuBackendKind::Blas` uses provider-default execution under a
+process-wide exclusive permit. This prevents tenferro-managed CPU work from
 overlapping a provider call whose worker CPU set is unknown. Provider variables
 such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and `OMP_NUM_THREADS` still
 control counts where supported, but they do not upgrade the provider to a
@@ -76,6 +87,19 @@ tenferro-managed affinity contract.
 If strict NUMA placement is required, select `CpuBackendKind::Faer`. If an
 application configures and pins a BLAS provider independently, that remains an
 application/provider responsibility outside the tenferro placement guarantee.
+
+## CPU Affinity Is Not NUMA Memory Placement
+
+Pinned workers restrict where computation may run. They do not make tensor
+allocation NUMA-local, choose a first-touch policy, migrate existing pages, or
+configure page interleaving. Input and output pages may therefore remain remote
+from the selected node. Applications that require memory locality must arrange
+allocation/first-touch or OS memory policy separately and measure the result on
+their deployment topology.
+
+The reduced worker budget is spread deterministically over the logical CPU IDs
+in a domain. This is not a promise to prefer physical cores over SMT siblings;
+tenferro does not currently infer core/sibling topology for that selection.
 
 ## Where Elementwise Rayon Runs
 
@@ -105,7 +129,8 @@ string is diagnostic only and may change.
 let backend = tenferro_cpu::CpuBackend::new();
 let info = backend.execution_info();
 println!("kind={:?} provider={}", info.backend_kind(), info.provider_diagnostic());
-println!("requested={:?} resolved={:?}",
+println!("mode={:?} workers={}", info.execution_mode(), info.worker_count());
+println!("topology={:?} requested={:?} resolved={:?}", info.topology(),
     info.requested_placement(), info.resolved_placement());
 ```
 

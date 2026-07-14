@@ -1,4 +1,4 @@
-use super::{CpuContext, CpuContextError};
+use super::{select_worker_cpus, CpuContext, CpuContextError};
 use crate::affinity::{current_cpu, ThreadAffinity};
 use crate::{process_cpu_affinity, CpuId, CpuSet};
 use rayon::prelude::*;
@@ -64,6 +64,17 @@ fn pinned_context_rejects_invalid_worker_counts() {
             cpus: 1
         })
     ));
+}
+
+#[test]
+fn worker_assignment_spreads_a_reduced_budget_across_the_domain() {
+    let cpus = CpuSet::new((0..8).map(CpuId::new)).unwrap();
+
+    assert_eq!(
+        select_worker_cpus(&cpus, 4),
+        vec![CpuId::new(0), CpuId::new(2), CpuId::new(4), CpuId::new(7)]
+    );
+    assert_eq!(select_worker_cpus(&cpus, 1), vec![CpuId::new(4)]);
 }
 
 #[derive(Clone)]

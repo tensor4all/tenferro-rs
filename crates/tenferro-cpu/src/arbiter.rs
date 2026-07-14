@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use thiserror::Error;
 
@@ -56,6 +56,11 @@ pub(crate) struct ResourceArbiter {
 impl ResourceArbiter {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn global() -> Self {
+        static GLOBAL: OnceLock<ResourceArbiter> = OnceLock::new();
+        GLOBAL.get_or_init(Self::new).clone()
     }
 
     #[cfg(test)]

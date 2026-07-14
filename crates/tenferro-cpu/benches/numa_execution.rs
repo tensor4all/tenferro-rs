@@ -1,14 +1,15 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuPlacement};
+use tenferro_cpu::{available_parallelism, CpuBackend, CpuBackendKind, CpuPlacement};
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
 
-const MATRIX_SHAPE: [usize; 2] = [512, 512];
+const MATRIX_SIZES: [usize; 3] = [64, 256, 512];
 
-fn matrix() -> Tensor {
-    let len = MATRIX_SHAPE.iter().product();
-    Tensor::from_vec_col_major(MATRIX_SHAPE.to_vec(), vec![1.0_f64; len])
+fn matrix(size: usize) -> Tensor {
+    let shape = [size, size];
+    let len = shape.iter().product();
+    Tensor::from_vec_col_major(shape.to_vec(), vec![1.0_f64; len])
         .expect("NUMA benchmark matrix should be valid")
 }
 
@@ -30,28 +31,59 @@ fn run_session_workload(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
         .expect("NUMA benchmark session workload should succeed")
 }
 
-fn print_metadata(label: &str, backend: &CpuBackend) {
+fn print_metadata(label: &str, backend: &CpuBackend, size: usize) {
     let info = backend.execution_info();
     eprintln!(
-        "numa_execution case={label} allowed={:?} topology={:?} requested={:?} resolved={:?} kind={:?} provider={} workers={} shape={:?}",
-        backend.topology().allowed_cpus().as_usize_vec(),
-        backend.topology(),
+        "numa_execution case={label} allowed={:?} topology={:?} requested={:?} resolved={:?} mode={:?} kind={:?} provider={} workers={} shape={:?}",
+        info.topology().allowed_cpus().as_usize_vec(),
+        info.topology(),
         info.requested_placement(),
         info.resolved_placement(),
+        info.execution_mode(),
         info.backend_kind(),
         info.provider_diagnostic(),
-        backend.num_threads(),
-        MATRIX_SHAPE,
+        info.worker_count(),
+        [size, size],
     );
 }
 
-fn bench_numa_execution(c: &mut Criterion) {
-    let coordinator = CpuBackend::with_kind(CpuBackendKind::Faer)
+fn bench_configuration(c: &mut Criterion, size: usize, threads: usize) {
+    let coordinator = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer)
         .expect("NUMA benchmark requires the cpu-faer feature");
+    let all_allowed = coordinator
+        .for_placement(CpuPlacement::AllAllowed)
+        .expect("faer AllAllowed placement should resolve");
+    let input = matrix(size);
+    let case = format!("numa_execution/{size}x{size}/threads_{threads}");
+    print_metadata(&format!("{case}/all_allowed"), &all_allowed, size);
+
+    let mut all_backend = all_allowed;
+    c.bench_function(&format!("{case}/all_allowed"), |b| {
+        b.iter(|| black_box(run_session_workload(&mut all_backend, &input)));
+    });
+
+    #[cfg(feature = "cpu-blas")]
+    {
+        let provider = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Blas)
+            .expect("compiled BLAS provider should construct");
+        print_metadata(
+            &format!("{case}/provider_default_exclusive"),
+            &provider,
+            size,
+        );
+        let mut provider_backend = provider;
+        c.bench_function(&format!("{case}/provider_default_exclusive"), |b| {
+            b.iter(|| black_box(run_session_workload(&mut provider_backend, &input)));
+        });
+    }
+
+    #[cfg(not(feature = "cpu-blas"))]
+    eprintln!("{case}/provider_default_exclusive skipped: compile cpu-blas with a linked provider");
+
     let nodes = coordinator.topology().nodes();
     if nodes.len() < 2 {
         eprintln!(
-            "numa_execution skipped: need at least two process-visible NUMA nodes; allowed={:?} topology={:?}",
+            "{case}/disjoint_nodes_concurrent skipped: need at least two process-visible NUMA nodes; allowed={:?} topology={:?}",
             coordinator.topology().allowed_cpus().as_usize_vec(),
             coordinator.topology(),
         );
@@ -64,18 +96,20 @@ fn bench_numa_execution(c: &mut Criterion) {
     let node1 = coordinator
         .for_placement(CpuPlacement::NumaNode(nodes[1].id()))
         .expect("second reported NUMA node should resolve");
-    let all_allowed = coordinator
-        .for_placement(CpuPlacement::AllAllowed)
-        .expect("faer AllAllowed placement should resolve");
-    let input = matrix();
-
-    print_metadata("disjoint_nodes_concurrent/first", &node0);
-    print_metadata("disjoint_nodes_concurrent/second", &node1);
-    print_metadata("all_allowed", &all_allowed);
+    print_metadata(
+        &format!("{case}/disjoint_nodes_concurrent/first"),
+        &node0,
+        size,
+    );
+    print_metadata(
+        &format!("{case}/disjoint_nodes_concurrent/second"),
+        &node1,
+        size,
+    );
 
     let mut node0_backend = node0;
     let mut node1_backend = node1;
-    c.bench_function("numa_execution/disjoint_nodes_concurrent", |b| {
+    c.bench_function(&format!("{case}/disjoint_nodes_concurrent"), |b| {
         b.iter(|| {
             std::thread::scope(|scope| {
                 let first = scope.spawn(|| run_session_workload(&mut node0_backend, &input));
@@ -89,27 +123,19 @@ fn bench_numa_execution(c: &mut Criterion) {
             });
         });
     });
+}
 
-    let mut all_backend = all_allowed;
-    c.bench_function("numa_execution/all_allowed", |b| {
-        b.iter(|| black_box(run_session_workload(&mut all_backend, &input)));
-    });
+fn bench_numa_execution(c: &mut Criterion) {
+    let default_threads = available_parallelism();
+    let mut thread_budgets = vec![1, default_threads];
+    thread_budgets.sort_unstable();
+    thread_budgets.dedup();
 
-    #[cfg(feature = "cpu-blas")]
-    {
-        let provider = CpuBackend::with_kind(CpuBackendKind::Blas)
-            .expect("compiled BLAS provider should construct");
-        print_metadata("provider_default_exclusive", &provider);
-        let mut provider_backend = provider;
-        c.bench_function("numa_execution/provider_default_exclusive", |b| {
-            b.iter(|| black_box(run_session_workload(&mut provider_backend, &input)));
-        });
+    for size in MATRIX_SIZES {
+        for &threads in &thread_budgets {
+            bench_configuration(c, size, threads);
+        }
     }
-
-    #[cfg(not(feature = "cpu-blas"))]
-    eprintln!(
-        "numa_execution provider_default_exclusive skipped: compile cpu-blas with a linked provider"
-    );
 }
 
 criterion_group!(benches, bench_numa_execution);

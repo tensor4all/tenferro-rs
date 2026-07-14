@@ -86,6 +86,25 @@ fn execution_info_exposes_stable_kind_and_placement_contract() {
     assert_eq!(info.backend_kind(), backend.kind());
     assert_eq!(info.requested_placement(), CpuPlacement::Auto);
     assert_eq!(info.resolved_placement(), backend.resolved_placement());
+    assert_eq!(info.topology(), backend.topology());
+    assert_eq!(info.worker_count(), backend.num_threads());
+    #[cfg(feature = "cpu-blas")]
+    assert_eq!(
+        info.execution_mode(),
+        CpuExecutionMode::ProviderDefaultExclusive
+    );
+    #[cfg(all(
+        not(feature = "cpu-blas"),
+        feature = "cpu-faer",
+        any(target_os = "linux", target_os = "android")
+    ))]
+    assert_eq!(info.execution_mode(), CpuExecutionMode::Managed);
+    #[cfg(all(
+        not(feature = "cpu-blas"),
+        feature = "cpu-faer",
+        not(any(target_os = "linux", target_os = "android"))
+    ))]
+    assert_eq!(info.execution_mode(), CpuExecutionMode::Compatibility);
     assert!(!info.provider_diagnostic().is_empty());
 }
 
@@ -108,6 +127,21 @@ fn blas_auto_is_provider_exclusive_and_explicit_placement_is_rejected() {
     assert!(backend.for_placement(CpuPlacement::AllAllowed).is_err());
     assert!(!backend.supports_placement(CpuPlacement::AllAllowed));
     assert!(backend.resolved_placement().is_none());
+}
+
+#[test]
+#[cfg(feature = "cpu-blas")]
+fn independently_constructed_backends_share_global_provider_exclusion() {
+    let first = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let second = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+
+    let _permit = first.shared.arbiter.acquire_provider_exclusive().unwrap();
+    assert!(second
+        .shared
+        .arbiter
+        .try_acquire_provider_exclusive()
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -317,4 +351,22 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
 #[test]
 fn with_threads_rejects_invalid_thread_count() {
     assert!(CpuBackend::with_threads(0).is_err());
+}
+
+#[test]
+fn fallible_backend_construction_preserves_topology_error_category() {
+    let source = CpuTopologyError::InvalidCpuList {
+        list: "not-a-cpu".to_owned(),
+        reason: "component is not a CPU number",
+    };
+
+    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source.clone())).unwrap_err();
+    assert_eq!(
+        error,
+        CpuPlacementError::TopologyDiscovery {
+            requested: CpuPlacement::Auto,
+            backend: CpuBackendKind::Faer,
+            source,
+        }
+    );
 }

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{CpuBackendKind, CpuSet, CpuTopology, NumaNodeId};
+use crate::{CpuBackendKind, CpuSet, CpuTopology, CpuTopologyError, NumaNodeId};
 
 /// Requested CPU execution placement.
 ///
@@ -112,6 +112,27 @@ impl ResolvedCpuPlacement {
 /// ```
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CpuPlacementError {
+    /// Process-visible topology discovery failed before placement resolution.
+    #[error("cannot resolve {requested:?} for {backend:?}: topology discovery failed: {source}")]
+    TopologyDiscovery {
+        /// The placement requested by the caller.
+        requested: CpuPlacement,
+        /// The selected public backend kind.
+        backend: CpuBackendKind,
+        /// The preserved topology failure category.
+        #[source]
+        source: CpuTopologyError,
+    },
+    /// The current platform cannot construct verified pinned worker pools.
+    #[error(
+        "cannot resolve {requested:?} for {backend:?}: managed worker affinity is unavailable"
+    )]
+    ManagedAffinityUnavailable {
+        /// The explicit placement requested by the caller.
+        requested: CpuPlacement,
+        /// The selected public backend kind.
+        backend: CpuBackendKind,
+    },
     /// NUMA-node placement was requested but OS NUMA discovery was unavailable.
     #[error("cannot resolve {requested:?} for {backend:?}: NUMA discovery is unavailable")]
     NumaDiscoveryUnavailable {
@@ -164,11 +185,34 @@ pub(crate) fn resolve_placement(
     requested: CpuPlacement,
     topology: &CpuTopology,
 ) -> Result<ResolvedCpuExecution, CpuPlacementError> {
+    resolve_placement_with_affinity(
+        backend,
+        requested,
+        topology,
+        cfg!(any(target_os = "linux", target_os = "android")),
+    )
+}
+
+fn resolve_placement_with_affinity(
+    backend: CpuBackendKind,
+    requested: CpuPlacement,
+    topology: &CpuTopology,
+    managed_affinity_available: bool,
+) -> Result<ResolvedCpuExecution, CpuPlacementError> {
     if backend == CpuBackendKind::Blas {
         return match requested {
             CpuPlacement::Auto => Ok(ResolvedCpuExecution::ProviderDefaultExclusive),
             CpuPlacement::NumaNode(_) | CpuPlacement::AllAllowed => {
                 Err(CpuPlacementError::ExternalProviderAffinityUnmanaged { requested, backend })
+            }
+        };
+    }
+
+    if !managed_affinity_available {
+        return match requested {
+            CpuPlacement::Auto => Ok(ResolvedCpuExecution::Compatibility),
+            CpuPlacement::NumaNode(_) | CpuPlacement::AllAllowed => {
+                Err(CpuPlacementError::ManagedAffinityUnavailable { requested, backend })
             }
         };
     }

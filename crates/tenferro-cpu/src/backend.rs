@@ -12,8 +12,8 @@ use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::engine::CpuEngine;
 use crate::placement::{resolve_placement, ResolvedCpuExecution};
 use crate::{
-    discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology, NumaNodeId,
-    ResolvedCpuPlacement,
+    discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
+    CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
     Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TensorWrite, TypedTensor,
@@ -217,6 +217,31 @@ impl CpuBackendKind {
     }
 }
 
+/// Stable execution-ownership mode selected for a CPU backend handle.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackend, CpuExecutionMode};
+///
+/// let mode = CpuBackend::new().execution_info().execution_mode();
+/// assert!(matches!(
+///     mode,
+///     CpuExecutionMode::Managed
+///         | CpuExecutionMode::ProviderDefaultExclusive
+///         | CpuExecutionMode::Compatibility
+/// ));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CpuExecutionMode {
+    /// tenferro owns a pinned Rayon engine for the resolved CPU placement.
+    Managed,
+    /// An external provider owns worker placement under a process-wide permit.
+    ProviderDefaultExclusive,
+    /// A legacy unpinned Rayon context is used because managed affinity is unavailable.
+    Compatibility,
+}
+
 /// Snapshot of the stable CPU execution contract and non-contractual provider diagnostics.
 ///
 /// [`CpuBackendKind`] is the stable provider identity. The diagnostic string is
@@ -234,8 +259,11 @@ impl CpuBackendKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpuExecutionInfo {
     backend_kind: CpuBackendKind,
+    execution_mode: CpuExecutionMode,
     requested_placement: CpuPlacement,
     resolved_placement: Option<ResolvedCpuPlacement>,
+    topology: CpuTopology,
+    worker_count: usize,
     provider_diagnostic: &'static str,
 }
 
@@ -250,6 +278,20 @@ impl CpuExecutionInfo {
     /// ```
     pub fn backend_kind(&self) -> CpuBackendKind {
         self.backend_kind
+    }
+
+    /// Return the stable execution-ownership mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mode = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .execution_mode();
+    /// let _ = format!("{mode:?}");
+    /// ```
+    pub fn execution_mode(&self) -> CpuExecutionMode {
+        self.execution_mode
     }
 
     /// Return the placement requested by this backend handle.
@@ -274,6 +316,30 @@ impl CpuExecutionInfo {
     /// ```
     pub fn resolved_placement(&self) -> Option<&ResolvedCpuPlacement> {
         self.resolved_placement.as_ref()
+    }
+
+    /// Return the process-visible topology used for placement resolution.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert!(!info.topology().allowed_cpus().is_empty());
+    /// ```
+    pub fn topology(&self) -> &CpuTopology {
+        &self.topology
+    }
+
+    /// Return the worker count of the selected native execution context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert!(info.worker_count() >= 1);
+    /// ```
+    pub fn worker_count(&self) -> usize {
+        self.worker_count
     }
 
     /// Return a human-readable provider description for logs.
@@ -454,6 +520,17 @@ pub struct CpuBackend {
     engine: Arc<CpuEngine>,
 }
 
+fn resolve_discovered_topology(
+    kind: CpuBackendKind,
+    topology: Result<CpuTopology, CpuTopologyError>,
+) -> Result<CpuTopology, CpuPlacementError> {
+    topology.map_err(|source| CpuPlacementError::TopologyDiscovery {
+        requested: CpuPlacement::Auto,
+        backend: kind,
+        source,
+    })
+}
+
 impl fmt::Debug for CpuBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CpuBackend")
@@ -474,14 +551,24 @@ impl CpuBackend {
         kind: CpuBackendKind,
         max_retained_capacity_bytes: usize,
     ) -> Result<Self, CpuPlacementError> {
-        let topology = discover_cpu_topology().unwrap_or_else(|_| {
-            let allowed = crate::process_cpu_affinity().unwrap_or_else(|| {
-                CpuSet::new((0..crate::available_parallelism()).map(CpuId::new))
-                    .unwrap_or_else(|_| CpuSet::singleton(CpuId::new(0)))
-            });
-            CpuTopology::all_allowed(allowed)
-        });
+        let topology = resolve_discovered_topology(kind, discover_cpu_topology())?;
         let resolved = resolve_placement(kind, CpuPlacement::Auto, &topology)?;
+        if !cfg!(any(target_os = "linux", target_os = "android")) {
+            let context = CpuContext::with_threads(thread_budget).map_err(|error| {
+                CpuPlacementError::EngineConstruction {
+                    requested: CpuPlacement::Auto,
+                    backend: kind,
+                    message: error.to_string(),
+                }
+            })?;
+            return Ok(Self::compatibility_with_topology(
+                Arc::new(context),
+                max_retained_capacity_bytes,
+                kind,
+                topology,
+                resolved,
+            ));
+        }
         let engine_placement = ResolvedCpuPlacement::AllAllowed {
             cpus: topology.allowed_cpus().clone(),
         };
@@ -503,7 +590,7 @@ impl CpuBackend {
                 all_allowed,
                 all_allowed_build: Mutex::new(()),
                 base_engine: Arc::clone(&engine),
-                arbiter: ResourceArbiter::new(),
+                arbiter: ResourceArbiter::global(),
                 kind,
                 thread_budget,
                 buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
@@ -526,6 +613,27 @@ impl CpuBackend {
             });
             CpuTopology::all_allowed(allowed)
         });
+        let resolved = if kind == CpuBackendKind::Blas {
+            ResolvedCpuExecution::ProviderDefaultExclusive
+        } else {
+            ResolvedCpuExecution::Compatibility
+        };
+        Self::compatibility_with_topology(
+            ctx,
+            max_retained_capacity_bytes,
+            kind,
+            topology,
+            resolved,
+        )
+    }
+
+    fn compatibility_with_topology(
+        ctx: Arc<CpuContext>,
+        max_retained_capacity_bytes: usize,
+        kind: CpuBackendKind,
+        topology: CpuTopology,
+        resolved: ResolvedCpuExecution,
+    ) -> Self {
         let placement = ResolvedCpuPlacement::AllAllowed {
             cpus: topology.allowed_cpus().clone(),
         };
@@ -534,11 +642,6 @@ impl CpuBackend {
             ctx,
             max_retained_capacity_bytes,
         ));
-        let resolved = if kind == CpuBackendKind::Blas {
-            ResolvedCpuExecution::ProviderDefaultExclusive
-        } else {
-            ResolvedCpuExecution::Compatibility
-        };
         Self {
             shared: Arc::new(CpuBackendState {
                 topology,
@@ -546,7 +649,7 @@ impl CpuBackend {
                 all_allowed: OnceLock::new(),
                 all_allowed_build: Mutex::new(()),
                 base_engine: Arc::clone(&base_engine),
-                arbiter: ResourceArbiter::new(),
+                arbiter: ResourceArbiter::global(),
                 kind,
                 thread_budget: base_engine.context().num_threads(),
                 buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
@@ -886,8 +989,17 @@ impl CpuBackend {
     pub fn execution_info(&self) -> CpuExecutionInfo {
         CpuExecutionInfo {
             backend_kind: self.kind(),
+            execution_mode: match &self.resolved {
+                ResolvedCpuExecution::Managed(_) => CpuExecutionMode::Managed,
+                ResolvedCpuExecution::ProviderDefaultExclusive => {
+                    CpuExecutionMode::ProviderDefaultExclusive
+                }
+                ResolvedCpuExecution::Compatibility => CpuExecutionMode::Compatibility,
+            },
             requested_placement: self.requested,
             resolved_placement: self.resolved_placement().cloned(),
+            topology: self.shared.topology.clone(),
+            worker_count: self.num_threads(),
             provider_diagnostic: provider_diagnostic(self.kind()),
         }
     }

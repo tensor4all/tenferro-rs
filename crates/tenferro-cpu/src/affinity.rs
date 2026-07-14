@@ -47,22 +47,7 @@ fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
             ) -> i32;
         }
 
-        let highest_cpu = cpus
-            .as_slice()
-            .last()
-            .copied()
-            .ok_or_else(|| "cannot set an empty affinity mask".to_owned())?;
-        let required_bytes = highest_cpu
-            .as_usize()
-            .checked_div(u8::BITS as usize)
-            .and_then(|index| index.checked_add(1))
-            .ok_or_else(|| "affinity mask size overflow".to_owned())?;
-        let mut mask = vec![0u8; required_bytes.max(128)];
-        for cpu in cpus.as_slice() {
-            let byte = cpu.as_usize() / u8::BITS as usize;
-            let bit = cpu.as_usize() % u8::BITS as usize;
-            mask[byte] |= 1 << bit;
-        }
+        let mask = build_affinity_mask(cpus)?;
         // SAFETY: `mask` remains allocated for the call, `cpusetsize` exactly
         // matches its byte length, and pid 0 selects the calling thread.
         let rc =
@@ -76,6 +61,40 @@ fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
         let _ = cpus;
         Err("setting thread affinity is unsupported on this platform".to_owned())
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn build_affinity_mask(cpus: &CpuSet) -> Result<Vec<u8>, String> {
+    const MIN_MASK_BYTES: usize = 128;
+    const MAX_MASK_BYTES: usize = 1 << 20;
+
+    let highest_cpu = cpus
+        .as_slice()
+        .last()
+        .copied()
+        .ok_or_else(|| "cannot set an empty affinity mask".to_owned())?;
+    let required_bytes = highest_cpu
+        .as_usize()
+        .checked_div(u8::BITS as usize)
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| "affinity mask size overflow".to_owned())?
+        .max(MIN_MASK_BYTES);
+    if required_bytes > MAX_MASK_BYTES {
+        return Err(format!(
+            "CPU {highest_cpu} exceeds supported affinity mask size of {MAX_MASK_BYTES} bytes"
+        ));
+    }
+
+    let mut mask = Vec::new();
+    mask.try_reserve_exact(required_bytes)
+        .map_err(|error| format!("failed to allocate affinity mask: {error}"))?;
+    mask.resize(required_bytes, 0u8);
+    for cpu in cpus.as_slice() {
+        let byte = cpu.as_usize() / u8::BITS as usize;
+        let bit = cpu.as_usize() % u8::BITS as usize;
+        mask[byte] |= 1 << bit;
+    }
+    Ok(mask)
 }
 
 /// Return a best-effort CPU count available to the current process.

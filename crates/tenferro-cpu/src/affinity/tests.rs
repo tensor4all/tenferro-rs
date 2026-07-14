@@ -21,6 +21,13 @@ fn affinity_mask_preserves_sparse_logical_cpu_ids() {
     assert_eq!(cpus.as_usize_vec(), vec![1, 7, 8, 10]);
 }
 
+#[test]
+fn affinity_mask_rejects_extreme_cpu_ids_before_allocation() {
+    let cpus = CpuSet::new([CpuId::new(usize::MAX)]).unwrap();
+    let error = build_affinity_mask(&cpus).unwrap_err();
+    assert!(error.contains("exceeds supported affinity mask"));
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn linux_next_affinity_mask_bytes_retries_only_on_einval() {

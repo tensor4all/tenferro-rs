@@ -21,10 +21,11 @@ session, and the BLAS Rayon/provider transition. The online guide is
 
 The opt-in `numa_execution` benchmark reports allowed CPUs, topology,
 requested/resolved placement, stable backend kind, diagnostic provider text,
-worker count, and problem shape. It compares concurrent disjoint-node managed
+worker count, and problem shape. It covers 64, 256, and 512 square matrices at
+one worker and the process-default worker budget. It compares concurrent disjoint-node managed
 sessions, an all-allowed session, and (when compiled and linked)
-provider-default exclusive execution; it exits successfully with an
-explanation on single-node hosts. The CPU crate benchmark uses the same
+provider-default exclusive execution. On single-node hosts it still measures
+the portable cases and skips only the disjoint-node comparison. The CPU crate benchmark uses the same
 multi-op `BackendSession` boundary as compiled graph execution without adding a
 reverse dev-dependency from `tenferro-cpu` to `tenferro-runtime`.
 
@@ -51,3 +52,30 @@ Repository verification evidence:
   including guide dependency snippets and 13 workspace API crates.
 - CI-equivalent workspace and tropical-extension clippy commands passed with
   `-D warnings`.
+
+Pre-PR review found that the fused segmented executor still opened one backend
+session per fused segment. The revised executor keeps elementwise fusion and
+terminal lazy values while running every session-capable fused, Host, and FFI
+segment inside one cached session. Regression tests first failed with two
+session entries, then passed with one for both owned and value outputs; the
+fixture includes native/FFI/Host/native transitions.
+
+The same review tightened the remaining safety contracts:
+
+- arbitration is process-wide, so independently constructed backends cannot
+  overlap an unmanaged external-provider call with any tenferro CPU domain;
+- fallible constructors preserve `CpuTopologyError`, while only infallible
+  construction may use the documented compatibility fallback;
+- unsupported-affinity platforms resolve faer `Auto` to compatibility mode and
+  reject explicit managed placement;
+- affinity-mask allocation rejects extreme public CPU IDs using checked,
+  fallible allocation;
+- reduced worker budgets are spread over the logical CPU domain; and
+- typed diagnostics now report topology, worker count, and managed,
+  provider-exclusive, or compatibility execution mode.
+
+Focused post-review verification passed for 276 CPU unit tests, fused runtime
+owned/value session tests, the provider-inject integration suite, and benchmark
+compilation. A `wasm32-unknown-unknown` portability check stopped in the
+third-party `atomic-wait` crate before compiling tenferro; the unavailable
+affinity branch is covered by an injected capability contract test.

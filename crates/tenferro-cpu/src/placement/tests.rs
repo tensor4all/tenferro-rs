@@ -69,6 +69,31 @@ fn explicit_node_requires_discovered_numa_domains() {
     ));
 }
 
+#[test]
+fn unavailable_managed_affinity_keeps_auto_compatible_and_rejects_explicit_placement() {
+    let topology = two_node_fixture();
+
+    assert_eq!(
+        resolve_placement_with_affinity(
+            CpuBackendKind::Faer,
+            CpuPlacement::Auto,
+            &topology,
+            false,
+        )
+        .unwrap(),
+        ResolvedCpuExecution::Compatibility
+    );
+    assert!(matches!(
+        resolve_placement_with_affinity(
+            CpuBackendKind::Faer,
+            CpuPlacement::AllAllowed,
+            &topology,
+            false,
+        ),
+        Err(CpuPlacementError::ManagedAffinityUnavailable { .. })
+    ));
+}
+
 fn two_node_fixture() -> CpuTopology {
     CpuTopology::from_discovered(
         cpu_set([8, 9, 12, 13]),

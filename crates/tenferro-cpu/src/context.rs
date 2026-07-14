@@ -209,7 +209,7 @@ impl CpuContext {
             });
         }
 
-        let assigned_cpus = Arc::new(cpus.as_slice()[..num_threads].to_vec());
+        let assigned_cpus = Arc::new(select_worker_cpus(&cpus, num_threads));
         let (startup_tx, startup_rx) = std::sync::mpsc::channel();
         let pool_assigned_cpus = Arc::clone(&assigned_cpus);
         let pool = rayon::ThreadPoolBuilder::new()
@@ -338,6 +338,19 @@ impl CpuContext {
     pub fn faer_seq(&self) -> faer::Par {
         faer::Par::Seq
     }
+}
+
+fn select_worker_cpus(cpus: &CpuSet, num_threads: usize) -> Vec<CpuId> {
+    if num_threads == 1 {
+        return vec![cpus.as_slice()[cpus.len() / 2]];
+    }
+    (0..num_threads)
+        .map(|worker| {
+            let index = ((worker as u128) * ((cpus.len() - 1) as u128)
+                / ((num_threads - 1) as u128)) as usize;
+            cpus.as_slice()[index]
+        })
+        .collect()
 }
 
 #[cfg(test)]
