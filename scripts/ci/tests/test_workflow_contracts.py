@@ -52,6 +52,32 @@ class WorkflowContractTests(unittest.TestCase):
             "github.com/rhysd/actionlint/cmd/actionlint@v1.7.7", text
         )
 
+    def test_runpod_schema_preflight_precedes_archive(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("runpod-contract:", text)
+        self.assertIn("python3 scripts/ci/runpod_contract.py", text)
+        archive = text.index("  cuda-archive:")
+        preflight = text.index("  runpod-contract:")
+        self.assertLess(preflight, archive)
+        archive_block = text[archive : text.index("  start-runpod:")]
+        self.assertIn("- runpod-contract", archive_block)
+
+    def test_runpod_gpu_skip_uses_trusted_authorize_output(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("gpu_required: ${{ steps.resolve_ref.outputs.run_gpu }}", text)
+        self.assertIn("gh api --paginate", text)
+        self.assertIn("python3 scripts/ci/change_policy.py", text)
+        self.assertIn("GPU validation not required", text)
+        self.assertIn("GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}", text)
+
+    def test_runpod_secret_stays_on_trusted_hosted_jobs(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        run_gpu = text[
+            text.index("  run-gpu-tests:") : text.index("  cleanup-runpod:")
+        ]
+        self.assertNotIn("RUNPOD_API_KEY", run_gpu)
+        self.assertIn("RUNPOD_API_KEY", text[text.index("  runpod-contract:") :])
+
 
 if __name__ == "__main__":
     unittest.main()
