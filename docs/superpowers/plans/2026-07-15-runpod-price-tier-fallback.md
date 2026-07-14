@@ -400,4 +400,3 @@ gh pr checks 1380 --repo tensor4all/tenferro-rs --watch
 ```
 
 Expected: the live RunPod log and summary name the selected tier/GPU, cleanup passes, and PR #1380 merges. After merge, dispatch the trusted `main` workflow once and record its URL on issue #1379 before closing it.
-
