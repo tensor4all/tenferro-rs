@@ -18,7 +18,8 @@ control plane against schema drift and deterministic request failures.
   `runpod-gpu-test.yml`.
 - `scripts/check-pr-fast.sh` and existing docs-site, coverage, and repository
   review commands.
-- RunPod's live `POST /pods` OpenAPI schema on 2026-07-14.
+- RunPod's live `POST /pods` OpenAPI schema on 2026-07-14 and 2026-07-15.
+- RunPod's published Pod prices on 2026-07-15.
 - The prior RunPod retirement work log, including its now-superseded raw
   workflow-branch recovery path.
 
@@ -31,10 +32,17 @@ control plane against schema drift and deterministic request failures.
 - Force the comprehensive non-GPU matrix on pushes to `main`. Keep paid GPU
   work on code PRs and RunPod control-plane changes, after cheaper gates.
 - Validate repository GPU IDs against the live request schema before archive
-  setup. The checked live fixture accepted all 11 configured IDs.
+  setup. The 2026-07-15 live schema accepted all 19 configured IDs across the
+  cost-preferred, premium, and A100 tiers.
 - Retry only 408, 429, 5xx, and transport failures. Bound retries by count and
   deadline; treat other 4xx responses and malformed success responses as
   permanent.
+- Treat an explicit machine-capacity error separately: move immediately to the
+  next price tier rather than sleeping and resubmitting the same candidates.
+  Allow one same-tier retry for unrelated transient failures, cap all creation
+  work at 60 seconds, and exclude GPUs above the reviewed A100 SXM tier.
+- Publish the selected tier and provider GPU ID to both ordinary logs and the
+  GitHub job summary, then show them next to the machine's `nvidia-smi` output.
 - Exclude ref/SHA identity from the CUDA archive cache key and include all
   content/configuration inputs that affect the archive.
 - Replace raw PR ref/SHA recovery with a PR-number command that dispatches only
@@ -75,7 +83,16 @@ control plane against schema drift and deterministic request failures.
 - The coverage profile passed all 159 included source files at their configured
   thresholds.
 - The committed-head repository-rules review passed with no findings.
-- The saved live RunPod OpenAPI schema accepted all 11 configured GPU IDs.
+- The live RunPod OpenAPI schema accepted all 19 configured GPU IDs.
+- Automatic run 29334073902 failed after five submissions of the same request:
+  RunPod returned HTTP 500 with “This machine does not have the resources to
+  deploy your pod” each time. Archive creation and cleanup behaved correctly;
+  this evidence motivated immediate price-tier failover.
+- Attempt 2 of run 29334073902 then recovered with an NVIDIA GeForce RTX 4090.
+  The CUDA archive tests and OpenXLA PJRT end-to-end tests passed, the success
+  marker was emitted, and pod `37vcua0n4ayryn` was deleted successfully. This
+  confirms the existing trusted execution path while the new tier behavior
+  still awaits a post-merge run from `main`.
 - Trusted PR recovery dry run targets only
   `runpod-gpu-test.yml --ref main -f pr_number=1379`.
 

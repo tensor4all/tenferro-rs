@@ -56,10 +56,18 @@ docs-only or unrelated CI-only skip is successful only when the trusted
 classifier says GPU validation is unnecessary.
 
 Pod creation treats HTTP 408, 429, 5xx responses, and transport failures as
-retryable. Other 4xx responses are permanent. Retries are limited by both an
-attempt count and a wall-clock deadline, honor numeric `Retry-After`, and use
-bounded jittered backoff. Request diagnostics redact the JIT configuration and
-startup command.
+retryable. Other 4xx responses are permanent. An explicit RunPod machine
+capacity error does not retry the same candidate set: the client moves without
+sleeping from the cost-preferred tier to the premium tier and finally the A100
+tier. Automatic selection excludes H100-class GPUs; the reviewed ceiling is
+A100 SXM (listed at USD 1.49/hour when the tiers were reviewed on 2026-07-15).
+
+Unrelated transient failures receive one short retry in the current tier. All
+requests and sleeps share a 60-second deadline, honor numeric `Retry-After`,
+and use bounded jittered backoff. Request diagnostics redact the JIT
+configuration and startup command. The `Start RunPod org runner` job summary
+records the selected price tier and provider GPU ID, and the GPU job prints the
+same values next to `nvidia-smi` so the assigned machine remains auditable.
 
 The CUDA test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,
