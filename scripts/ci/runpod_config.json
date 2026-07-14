@@ -22,6 +22,7 @@
   "volume_gb": 20,
   "volume_mount_path": "/workspace",
   "max_create_attempts": 5,
+  "create_deadline_seconds": 180,
   "retry_base_seconds": 10,
   "retry_max_seconds": 60
 }

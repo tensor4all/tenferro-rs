@@ -78,6 +78,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("RUNPOD_API_KEY", run_gpu)
         self.assertIn("RUNPOD_API_KEY", text[text.index("  runpod-contract:") :])
 
+    def test_runpod_creation_uses_status_aware_helper(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        create = text[
+            text.index("      - name: Create RunPod pod") : text.index(
+                "      - name: Wait for org runner to come online"
+            )
+        ]
+        self.assertIn("python3 scripts/ci/runpod_client.py create", create)
+        self.assertNotIn("for attempt in $(seq 1 5)", create)
+        self.assertNotIn("curl -sS", create)
+
 
 if __name__ == "__main__":
     unittest.main()

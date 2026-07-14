@@ -582,6 +582,9 @@ jobs:
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
 
     steps:
+      - name: Checkout trusted RunPod client
+        uses: actions/checkout@v5
+
       - name: Define runner label
         id: vars
         run: |
@@ -672,39 +675,6 @@ jobs:
           set -euo pipefail
 
           echo "::add-mask::${RUNNER_JIT_CONFIG}"
-          redact_secrets() {
-            jq '
-              def redact_item:
-                (if has("env") then
-                   .env.RUNNER_JIT_CONFIG = "***redacted***"
-                   | .env.PUBLIC_KEY = "***redacted***"
-                 else
-                   .
-                 end)
-                | (if has("dockerStartCmd") then
-                     (if (.dockerStartCmd | type) == "array" then
-                       .dockerStartCmd = ["***redacted-startup-script***"]
-                     else
-                       .dockerStartCmd = "***redacted-startup-script***"
-                     end)
-                   else
-                     .
-                   end);
-
-              if type == "array" then
-                map(redact_item)
-              elif has("pods") then
-                .pods |= map(redact_item)
-              elif has("data") then
-                .data |= map(redact_item)
-              elif has("items") then
-                .items |= map(redact_item)
-              else
-                redact_item
-              end
-            ' "$1"
-          }
-
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
 
@@ -758,111 +728,11 @@ jobs:
           ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
-          startup_script="$(cat /tmp/runpod-startup.sh)"
-
-          jq -n \
-            --arg script "$startup_script" \
-            --arg jit_config "$RUNNER_JIT_CONFIG" \
-            --arg image_name "$RUNPOD_IMAGE" \
-            '{
-              cloudType: "SECURE",
-              computeType: "GPU",
-              name: ("tenferro-rs-gpu-ci-" + env.GITHUB_RUN_ID),
-              imageName: $image_name,
-
-              gpuTypeIds: [
-                "NVIDIA RTX A2000",
-                "NVIDIA GeForce RTX 3070",
-                "NVIDIA GeForce RTX 3080",
-                "NVIDIA GeForce RTX 3080 Ti",
-                "Tesla V100-PCIE-16GB",
-                "NVIDIA RTX A4000",
-                "NVIDIA RTX 2000 Ada Generation",
-                "NVIDIA RTX A4500",
-                "NVIDIA RTX A5000",
-                "NVIDIA A40",
-                "NVIDIA GeForce RTX 4090"
-              ],
-              gpuTypePriority: "availability",
-              gpuCount: 1,
-
-              containerDiskInGb: 100,
-              volumeInGb: 20,
-              volumeMountPath: "/workspace",
-
-              interruptible: false,
-              ports: [],
-
-              dockerEntrypoint: ["bash", "-lc"],
-              dockerStartCmd: [$script],
-
-              env: {
-                RUNNER_JIT_CONFIG: $jit_config,
-                RUNNER_ALLOW_RUNASROOT: "1"
-              }
-            }' > /tmp/pod.json
-
-          echo "RunPod request payload, secrets redacted:"
-          redact_secrets /tmp/pod.json
-
-          response_file=/tmp/runpod-response.json
-          status=""
-
-          for attempt in $(seq 1 5); do
-            echo "Creating RunPod pod (attempt ${attempt}/5)"
-            status="$(
-              curl -sS \
-                --request POST \
-                --url https://rest.runpod.io/v1/pods \
-                --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-                --header "Content-Type: application/json" \
-                --data @/tmp/pod.json \
-                --output "$response_file" \
-                --write-out "%{http_code}"
-            )"
-
-            echo "RunPod HTTP status: ${status}"
-            redact_secrets "$response_file" || cat "$response_file"
-
-            if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
-              break
-            fi
-
-            if [ "$attempt" -lt 5 ]; then
-              echo "RunPod pod creation failed; retrying in 20 seconds" >&2
-              sleep 20
-            fi
-          done
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Failed to create RunPod pod after 5 attempts" >&2
-            exit 1
-          fi
-
-          pod_id="$(jq -r .id "$response_file")"
-
-          if [ -z "$pod_id" ] || [ "$pod_id" = "null" ]; then
-            echo "Failed to create RunPod pod: missing pod id" >&2
-            exit 1
-          fi
-
-          gpu_type_id="$(
-            jq -r '
-              .machine.gpuTypeId
-              // .machine.gpuType.id
-              // empty
-            ' "$response_file"
-          )"
-
-          echo "pod_id=${pod_id}" >> "$GITHUB_OUTPUT"
-          echo "Created RunPod pod: ${pod_id}"
-
-          if [ -n "$gpu_type_id" ]; then
-            echo "gpu_type_id=${gpu_type_id}" >> "$GITHUB_OUTPUT"
-            echo "RunPod assigned GPU type: ${gpu_type_id}"
-          else
-            echo "RunPod assigned GPU type: unknown (not present in create response)"
-          fi
+          python3 scripts/ci/runpod_client.py create \
+            --config scripts/ci/runpod_config.json \
+            --startup-script /tmp/runpod-startup.sh \
+            --image-name "${RUNPOD_IMAGE}" \
+            --response-file /tmp/runpod-response.json
 
       - name: Wait for org runner to come online
         env:
