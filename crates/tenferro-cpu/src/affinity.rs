@@ -2,6 +2,82 @@ use std::num::NonZeroUsize;
 
 use crate::{CpuId, CpuSet};
 
+pub(crate) trait ThreadAffinity: Clone + Send + Sync + 'static {
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SystemThreadAffinity;
+
+impl ThreadAffinity for SystemThreadAffinity {
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String> {
+        set_current_thread_affinity(&CpuSet::new([cpu]).map_err(|err| err.to_string())?)?;
+        process_cpu_affinity().ok_or_else(|| "failed to verify worker affinity".to_owned())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn current_cpu() -> Result<CpuId, String> {
+    #[cfg(target_os = "linux")]
+    {
+        unsafe extern "C" {
+            fn sched_getcpu() -> i32;
+        }
+        // SAFETY: `sched_getcpu` takes no arguments and returns the calling
+        // thread's current logical CPU or a negative error sentinel.
+        let cpu = unsafe { sched_getcpu() };
+        return usize::try_from(cpu)
+            .map(CpuId::new)
+            .map_err(|_| std::io::Error::last_os_error().to_string());
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("current logical CPU discovery is unsupported on this platform".to_owned())
+    }
+}
+
+fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        unsafe extern "C" {
+            fn sched_setaffinity(
+                pid: i32,
+                cpusetsize: usize,
+                mask: *const core::ffi::c_void,
+            ) -> i32;
+        }
+
+        let highest_cpu = cpus
+            .as_slice()
+            .last()
+            .copied()
+            .ok_or_else(|| "cannot set an empty affinity mask".to_owned())?;
+        let required_bytes = highest_cpu
+            .as_usize()
+            .checked_div(u8::BITS as usize)
+            .and_then(|index| index.checked_add(1))
+            .ok_or_else(|| "affinity mask size overflow".to_owned())?;
+        let mut mask = vec![0u8; required_bytes.max(128)];
+        for cpu in cpus.as_slice() {
+            let byte = cpu.as_usize() / u8::BITS as usize;
+            let bit = cpu.as_usize() % u8::BITS as usize;
+            mask[byte] |= 1 << bit;
+        }
+        // SAFETY: `mask` remains allocated for the call, `cpusetsize` exactly
+        // matches its byte length, and pid 0 selects the calling thread.
+        let rc =
+            unsafe { sched_setaffinity(0, mask.len(), mask.as_ptr().cast::<core::ffi::c_void>()) };
+        return (rc == 0)
+            .then_some(())
+            .ok_or_else(|| std::io::Error::last_os_error().to_string());
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = cpus;
+        Err("setting thread affinity is unsupported on this platform".to_owned())
+    }
+}
+
 /// Return a best-effort CPU count available to the current process.
 ///
 /// This first tries an OS-standard process-affinity query when supported, then

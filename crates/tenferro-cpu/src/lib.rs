@@ -48,6 +48,7 @@ mod buffer_pool;
 mod capability;
 pub mod context;
 mod elementwise;
+mod engine;
 mod exec_session;
 mod gemm;
 mod indexing;
@@ -80,7 +81,7 @@ pub use analytic::pow;
 pub use backend::{CpuBackend, CpuBackendKind};
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
-pub use context::CpuContext;
+pub use context::{CpuContext, CpuContextError};
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
 };
