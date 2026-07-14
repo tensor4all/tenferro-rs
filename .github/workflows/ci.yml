@@ -16,104 +16,221 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  policy:
+    name: Classify CI change
+    runs-on: ubuntu-latest
+    outputs:
+      run_rust: ${{ steps.policy.outputs.run_rust }}
+      run_blas: ${{ steps.policy.outputs.run_blas }}
+      run_docs: ${{ steps.policy.outputs.run_docs }}
+      run_ci_config: ${{ steps.policy.outputs.run_ci_config }}
+      classification: ${{ steps.policy.outputs.classification }}
+      reason: ${{ steps.policy.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Classify change
+        id: policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python3 scripts/ci/change_policy.py
+          --event "${EVENT_NAME}"
+          --base "${BASE_SHA}"
+          --head "${HEAD_SHA}"
+
   fmt:
     name: rustfmt
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
+      - name: Run rustfmt
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: cargo fmt --all --check
+      - name: Report rustfmt disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "rustfmt not required: ${REASON}"; fi
 
   clippy:
     name: clippy
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - name: Run workspace clippy
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tropical extension clippy
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings
-
-  # NOTE: The full workspace test suite is NOT skipped — it has been MOVED, not
-  # disabled. `cargo nextest run --workspace` + workspace doc tests run on every
-  # pull request via the dedicated `ci-pr-workspace-tests.yml` workflow (the
-  # `ci-fork` and `ci-maintainer` jobs, across the cpu-faer and cpu-blas
-  # backends), and the `ci-gate` job there is the branch-protection check that
-  # requires them.
-  #
-  # This `ci.yml` workflow runs on both push-to-main and PRs, and intentionally
-  # keeps only the fast, always-cheap checks (fmt, clippy, focused inject tests,
-  # coverage, dependency-boundary, docs). The heavy workspace test matrix lives
-  # in `ci-pr-workspace-tests.yml` so it runs once per PR rather than also on
-  # every push to `main` (where the merged PR already gated it). GPU tests run in
-  # `CI_gpu.yml` only after the repository rules LLM review and cheap non-GPU CI
-  # checks pass. Do not re-add a workspace test job here without removing it from
-  # `ci-pr-workspace-tests.yml` first — otherwise the suite runs twice per PR.
+      - name: Report clippy disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "clippy not required: ${REASON}"; fi
 
   test-inject-blas:
     name: cargo test (blas inject)
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - name: Run inject tests for tenferro-cpu
-        run: cargo test -p tenferro-cpu --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
+        run: python3 scripts/ci/run_profile.py blas-inject
+      - name: Report BLAS inject disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_blas }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "BLAS inject tests not required: ${REASON}"; fi
 
   tensor-core-deps:
     name: tensor core dependency boundary
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - name: Check host-only tensor-core dependencies
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: scripts/check-tensor-core-deps.sh
+      - name: Report dependency-check disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "dependency check not required: ${REASON}"; fi
 
   coverage:
     name: coverage
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Generate coverage JSON
-        run: cargo llvm-cov --workspace --release --json --output-path coverage.json
-      - name: Enforce per-file coverage thresholds
-        run: python3 scripts/check-coverage.py coverage.json
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - name: Generate and enforce coverage
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: python3 scripts/ci/run_profile.py coverage
+      - name: Report coverage disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "coverage not required: ${REASON}"; fi
 
   docs-site:
     name: docs-site
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
       - name: Install Quarto
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         uses: quarto-dev/quarto-actions/setup@v2
       - name: Ensure graphviz
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         run: |
-          set -euo pipefail
           if ! command -v dot >/dev/null 2>&1; then
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends graphviz
           fi
-      - name: Run docs script tests
+      - name: Validate and build docs site
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
+        run: python3 scripts/ci/run_profile.py docs
+      - name: Report docs disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_docs }}
+          REASON: ${{ needs.policy.outputs.reason }}
         run: |
-          python3 scripts/test-check-docs-site.py
-          python3 scripts/test-doc-consistency.py
-          python3 scripts/test-repository-rules-review.py
-          python3 scripts/check-guide-dependency-snippets.py
-          python3 scripts/check-operation-categories.py --fail-on-findings
-      - name: Build docs site
-        run: bash scripts/build_docs_site.sh
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "docs-site not required: ${REASON}"; fi
+
+  ci-config:
+    name: CI configuration checks
+    needs: policy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+      - uses: actions/setup-go@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        with:
+          go-version: stable
+      - name: Install pinned actionlint
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Validate CI configuration
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        run: python3 scripts/ci/run_profile.py ci-config
+      - name: Report CI configuration disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_ci_config }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "CI configuration checks not required: ${REASON}"; fi
