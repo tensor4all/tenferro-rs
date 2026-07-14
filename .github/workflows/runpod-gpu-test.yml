@@ -789,7 +789,7 @@ jobs:
           ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
-          python3 scripts/ci/runpod_client.py create \
+          python3 -m scripts.ci.runpod_client create \
             --config scripts/ci/runpod_config.json \
             --startup-script /tmp/runpod-startup.sh \
             --image-name "${RUNPOD_IMAGE}" \
