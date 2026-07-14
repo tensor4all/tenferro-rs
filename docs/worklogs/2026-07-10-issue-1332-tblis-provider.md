@@ -132,6 +132,10 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
   compiled but unused on macOS under `-D warnings`. Narrow target/test `cfg`s
   now omit those helpers only from non-test, non-Linux builds; no lint
   suppression was added, and the portable topology tests remain enabled.
+- Managed-affinity integration tests now run only on Linux/Android, matching the
+  public placement contract. Platform-independent placement resolver tests pass
+  `managed_affinity_available = true` explicitly, while the portable capability
+  test checks that explicit placement is rejected on unsupported hosts.
 
 ## Provider-source integration review
 

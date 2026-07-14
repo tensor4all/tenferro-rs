@@ -1158,7 +1158,11 @@ impl CpuBackend {
         }
     }
 
-    #[cfg(all(test, feature = "cpu-faer"))]
+    #[cfg(all(
+        test,
+        feature = "cpu-faer",
+        any(target_os = "linux", target_os = "android")
+    ))]
     fn coordinator_id_for_test(&self) -> usize {
         Arc::as_ptr(&self.shared) as usize
     }

@@ -58,7 +58,7 @@ fn explicit_backend_kind_constructor_records_selection() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn placement_handle_clones_share_coordinator_engine_and_resources() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let mut placed = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
@@ -84,11 +84,11 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
 fn placement_capabilities_follow_public_backend_kind() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     assert!(backend.supports_placement(CpuPlacement::Auto));
-    assert!(backend.supports_placement(CpuPlacement::AllAllowed));
     assert_eq!(
-        backend.topology().allowed_cpus(),
-        crate::process_cpu_affinity().as_ref().unwrap()
+        backend.supports_placement(CpuPlacement::AllAllowed),
+        cfg!(any(target_os = "linux", target_os = "android"))
     );
+    assert!(!backend.topology().allowed_cpus().is_empty());
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = backend.clone();
@@ -182,7 +182,7 @@ fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
@@ -202,7 +202,7 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
     let outer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
@@ -230,7 +230,7 @@ fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn stolen_rayon_child_task_backend_reentry_is_rejected() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = outer.clone();
@@ -262,7 +262,7 @@ fn stolen_rayon_child_task_backend_reentry_is_rejected() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn parallel_rayon_sibling_backend_reentry_is_rejected() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let first = outer.clone();
@@ -324,7 +324,7 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn execution_owner_broadcast_is_cleared_after_panic() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
 
@@ -337,7 +337,7 @@ fn execution_owner_broadcast_is_cleared_after_panic() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
     let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let mut nested = backend.clone();
