@@ -34,11 +34,11 @@ impl CpuEngine {
     ) -> Result<Self, CpuContextError> {
         let worker_count = thread_budget.min(placement.cpus().len());
         let context = CpuContext::with_pinned_cpus(placement.cpus().clone(), worker_count)?;
-        Ok(Self {
+        Ok(Self::from_context(
             placement,
-            context: Arc::new(context),
-            resources: Mutex::new(EngineResources::new(buffer_limit)),
-        })
+            Arc::new(context),
+            buffer_limit,
+        ))
     }
 
     pub(crate) fn from_context(
@@ -66,5 +66,5 @@ impl CpuEngine {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;

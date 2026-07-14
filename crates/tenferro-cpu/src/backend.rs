@@ -685,7 +685,8 @@ impl CpuBackend {
     ) -> Result<Self, CpuPlacementError> {
         let topology = resolve_discovered_topology(kind, discover_cpu_topology())?;
         let resolved = resolve_placement(kind, CpuPlacement::Auto, &topology)?;
-        if !cfg!(any(target_os = "linux", target_os = "android")) {
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
             let context = CpuContext::with_threads(thread_budget).map_err(|error| {
                 CpuPlacementError::EngineConstruction {
                     requested: CpuPlacement::Auto,
@@ -693,45 +694,47 @@ impl CpuBackend {
                     message: error.to_string(),
                 }
             })?;
-            return Ok(Self::compatibility_with_topology(
+            Ok(Self::compatibility_with_topology(
                 Arc::new(context),
                 max_retained_capacity_bytes,
                 kind,
                 topology,
                 resolved,
-            ));
+            ))
         }
-        let engine_placement = ResolvedCpuPlacement::AllAllowed {
-            cpus: topology.allowed_cpus().clone(),
-        };
-        let engine = Arc::new(
-            CpuEngine::new(engine_placement, thread_budget, max_retained_capacity_bytes).map_err(
-                |error| CpuPlacementError::EngineConstruction {
-                    requested: CpuPlacement::Auto,
-                    backend: kind,
-                    message: error.to_string(),
-                },
-            )?,
-        );
-        let all_allowed = OnceLock::new();
-        let _ = all_allowed.set(Arc::clone(&engine));
-        Ok(Self {
-            shared: Arc::new(CpuBackendState {
-                topology,
-                node_engines: Mutex::new(BTreeMap::new()),
-                all_allowed,
-                all_allowed_build: Mutex::new(()),
-                base_engine: Arc::clone(&engine),
-                arbiter: ResourceArbiter::global(),
-                kind,
-                thread_budget,
-                buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
-            }),
-            requested: CpuPlacement::Auto,
-            resolved,
-            engine,
-            dot_general_provider: DotGeneralProvider::Base,
-        })
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let engine_placement = ResolvedCpuPlacement::AllAllowed {
+                cpus: topology.allowed_cpus().clone(),
+            };
+            let engine = Arc::new(
+                CpuEngine::new(engine_placement, thread_budget, max_retained_capacity_bytes)
+                    .map_err(|error| CpuPlacementError::EngineConstruction {
+                        requested: CpuPlacement::Auto,
+                        backend: kind,
+                        message: error.to_string(),
+                    })?,
+            );
+            let all_allowed = OnceLock::new();
+            let _ = all_allowed.set(Arc::clone(&engine));
+            Ok(Self {
+                shared: Arc::new(CpuBackendState {
+                    topology,
+                    node_engines: Mutex::new(BTreeMap::new()),
+                    all_allowed,
+                    all_allowed_build: Mutex::new(()),
+                    base_engine: Arc::clone(&engine),
+                    arbiter: ResourceArbiter::global(),
+                    kind,
+                    thread_budget,
+                    buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
+                }),
+                requested: CpuPlacement::Auto,
+                resolved,
+                engine,
+                dot_general_provider: DotGeneralProvider::Base,
+            })
+        }
     }
 
     fn compatibility(

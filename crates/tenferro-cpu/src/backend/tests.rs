@@ -927,3 +927,26 @@ fn unavailable_affinity_auto_placement_reuses_compatibility_engine() {
     );
     assert_eq!(placed.context_id_for_test(), backend.context_id_for_test());
 }
+
+#[cfg(all(
+    feature = "cpu-faer",
+    not(any(target_os = "linux", target_os = "android"))
+))]
+#[test]
+fn explicit_managed_affinity_reports_engine_construction_error_when_unsupported() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+
+    let error = backend
+        .for_placement_with_affinity(CpuPlacement::AllAllowed, true)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CpuPlacementError::EngineConstruction {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Faer,
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("unsupported on this platform"));
+}
