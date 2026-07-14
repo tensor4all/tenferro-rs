@@ -65,9 +65,9 @@ The same review tightened the remaining safety contracts:
 - arbitration is process-wide, so independently constructed backends cannot
   overlap an unmanaged external-provider call with any tenferro CPU domain;
 - process-wide arbitration propagates a logical execution owner across Rayon
-  pools and broadcasts it to every worker, preventing synchronous nested clone,
-  independent-backend, and stolen-child-task calls from waiting on their own
-  permit while preserving exclusion across executions;
+  pools for direct synchronous nesting, while backend calls from parallel
+  Rayon child tasks or unrelated work on the active context are rejected so
+  siblings cannot bypass engine or provider exclusion;
 - reentrant operations use transient engine resources so a nested tensor or
   provider session does not re-lock the outer session's scratch/cache mutex;
 - fallible constructors expose `CpuBackendError` and preserve typed placement
@@ -81,7 +81,7 @@ The same review tightened the remaining safety contracts:
 - typed diagnostics now report topology, worker count, and managed,
   provider-exclusive, or compatibility execution mode.
 
-Focused post-review verification passed for 285 CPU unit tests, fused runtime
+Focused post-review verification passed for 287 CPU unit tests, fused runtime
 owned/value session tests, the provider-inject integration suite, and benchmark
 compilation. A `wasm32-unknown-unknown` portability check stopped in the
 third-party `atomic-wait` crate before compiling tenferro; the unavailable

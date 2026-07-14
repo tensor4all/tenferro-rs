@@ -1293,6 +1293,13 @@ impl CpuBackend {
     /// let value = backend.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when called from a parallel Rayon child task while another CPU
+    /// backend execution owns that task's pool. Direct synchronous nesting is
+    /// supported, but parallel backend re-entry would violate CPU and provider
+    /// exclusivity.
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
         let owner = inherited_or_new_execution_owner();
         let _permit = self.acquire_execution_permit(owner);
