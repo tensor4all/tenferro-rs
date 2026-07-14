@@ -149,6 +149,73 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
 }
 
 #[test]
+#[cfg(feature = "cpu-faer")]
+fn nested_clone_install_crosses_the_rayon_boundary_without_waiting() {
+    let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let nested = backend.clone();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let value = backend.install(|| nested.install(|| 7_u32));
+        completed_tx.send(value).unwrap();
+    });
+
+    assert_eq!(completed_rx.recv_timeout(Duration::from_secs(2)), Ok(7));
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn nested_independent_engines_propagate_reentrancy_across_rayon_pools() {
+    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let inner = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let value = outer.install(|| middle.install(|| inner.install(|| 11_u32)));
+        completed_tx.send(value).unwrap();
+    });
+
+    assert_eq!(completed_rx.recv_timeout(Duration::from_secs(2)), Ok(11));
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn nested_clone_tensor_operation_does_not_relock_engine_resources() {
+    let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let mut nested = backend.clone();
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = backend.with_backend_session(|_| nested.add(&lhs, &rhs));
+        completed_tx.send(result).unwrap();
+    });
+
+    let result = completed_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("nested tensor operation should not deadlock")
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0]);
+}
+
+#[test]
+#[cfg(feature = "cpu-blas")]
+fn nested_provider_session_uses_reentrant_transient_resources() {
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+    let mut nested = backend.clone();
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+
+    let result = backend
+        .with_backend_session(|_| nested.add(&lhs, &rhs))
+        .unwrap();
+
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0]);
+}
+
+#[test]
 #[cfg(feature = "cpu-blas")]
 fn explicit_blas_backend_kind_constructor_records_selection() {
     let backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();

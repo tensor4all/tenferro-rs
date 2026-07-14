@@ -7,9 +7,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::arbiter::{ResourceArbiter, ResourcePermit};
+use crate::arbiter::{
+    inherited_or_new_execution_owner, with_execution_owner, ResourceArbiter, ResourcePermit,
+};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
-use crate::engine::CpuEngine;
+use crate::engine::{CpuEngine, EngineResources};
 use crate::placement::{resolve_placement, resolve_placement_with_affinity, ResolvedCpuExecution};
 use crate::{
     discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
@@ -1291,34 +1293,41 @@ impl CpuBackend {
     /// assert_eq!(value, 2);
     /// ```
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        let _permit = self.acquire_execution_permit();
-        self.engine.context().install(op)
+        let owner = inherited_or_new_execution_owner();
+        self.engine.context().install(|| {
+            with_execution_owner(owner, || {
+                let _permit = self.acquire_execution_permit();
+                op()
+            })
+        })
     }
 
     fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        let _permit = self.acquire_execution_permit();
         let ctx = self.engine.context_arc();
-        let mut resources = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-        ctx.install(|| op(buffers.get_mut()))
+        let owner = inherited_or_new_execution_owner();
+        ctx.install(|| {
+            with_execution_owner(owner, || {
+                let permit = self.acquire_execution_permit();
+                self.with_execution_resources(&permit, |resources| {
+                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                    op(buffers.get_mut())
+                })
+            })
+        })
     }
 
     // Selected when the BLAS provider is active; default Faer-only builds keep
     // it dormant.
     #[allow(dead_code)]
     fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        let _permit = self.acquire_execution_permit();
-        let mut resources = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-        op(buffers.get_mut())
+        let owner = inherited_or_new_execution_owner();
+        with_execution_owner(owner, || {
+            let permit = self.acquire_execution_permit();
+            self.with_execution_resources(&permit, |resources| {
+                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                op(buffers.get_mut())
+            })
+        })
     }
 
     fn linalg_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
@@ -1352,15 +1361,17 @@ impl CpuBackend {
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
         op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
     ) -> R {
-        let _permit = self.acquire_execution_permit();
-        let mut resources = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
         let ctx = self.engine.context_arc();
-        ctx.install(|| op(buffers.get_mut(), gemm_analysis_cache))
+        let owner = inherited_or_new_execution_owner();
+        ctx.install(|| {
+            with_execution_owner(owner, || {
+                let permit = self.acquire_execution_permit();
+                self.with_execution_resources(&permit, |resources| {
+                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                    op(buffers.get_mut(), gemm_analysis_cache)
+                })
+            })
+        })
     }
 
     // Selected when the BLAS provider handles cached GEMM execution; default
@@ -1371,14 +1382,32 @@ impl CpuBackend {
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
         op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
     ) -> R {
-        let _permit = self.acquire_execution_permit();
+        let owner = inherited_or_new_execution_owner();
+        with_execution_owner(owner, || {
+            let permit = self.acquire_execution_permit();
+            self.with_execution_resources(&permit, |resources| {
+                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                op(buffers.get_mut(), gemm_analysis_cache)
+            })
+        })
+    }
+
+    fn with_execution_resources<R>(
+        &self,
+        permit: &ResourcePermit,
+        op: impl FnOnce(&mut EngineResources) -> R,
+    ) -> R {
+        if permit.is_reentrant() {
+            let mut resources =
+                EngineResources::new(self.shared.buffer_limit.load(Ordering::Relaxed));
+            return op(&mut resources);
+        }
         let mut resources = self
             .engine
             .resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-        op(buffers.get_mut(), gemm_analysis_cache)
+        op(&mut resources)
     }
 
     fn acquire_execution_permit(&self) -> ResourcePermit {
@@ -2279,36 +2308,35 @@ impl CpuBackend {
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        let _permit = self.acquire_execution_permit();
         let ctx = self.engine.context_arc();
         let kind = self.kind();
-        let mut resources = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let resources = &mut *resources;
-        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-        let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
+        let owner = inherited_or_new_execution_owner();
         let run = || {
-            let session_started = Instant::now();
-            let mut session = CpuExecSession {
-                ctx: ctx.as_ref(),
-                buffers: buffers.get_mut(),
-                gemm_analysis_cache: cache,
-                kind,
-            };
-            record_cpu_session_profile(
-                "with_backend_session_cached.session_construct",
-                session_started.elapsed(),
-            );
-            let exec_started = Instant::now();
-            let result = f(&mut session);
-            record_cpu_session_profile(
-                "with_backend_session_cached.exec_body",
-                exec_started.elapsed(),
-            );
-            result
+            with_execution_owner(owner, || {
+                let permit = self.acquire_execution_permit();
+                self.with_execution_resources(&permit, |resources| {
+                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                    let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
+                    let session_started = Instant::now();
+                    let mut session = CpuExecSession {
+                        ctx: ctx.as_ref(),
+                        buffers: buffers.get_mut(),
+                        gemm_analysis_cache: cache,
+                        kind,
+                    };
+                    record_cpu_session_profile(
+                        "with_backend_session_cached.session_construct",
+                        session_started.elapsed(),
+                    );
+                    let exec_started = Instant::now();
+                    let result = f(&mut session);
+                    record_cpu_session_profile(
+                        "with_backend_session_cached.exec_body",
+                        exec_started.elapsed(),
+                    );
+                    result
+                })
+            })
         };
         match kind {
             CpuBackendKind::Faer => ctx.install(run),
@@ -2346,22 +2374,22 @@ impl BackendSessionHost for CpuBackend {
 
 impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        let _permit = self.acquire_execution_permit();
-        let mut resources = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let buffers = &mut resources.buffers;
-        match tensor {
-            Tensor::F32(t) => reclaim_typed(buffers, t),
-            Tensor::F64(t) => reclaim_typed(buffers, t),
-            Tensor::I32(t) => reclaim_typed(buffers, t),
-            Tensor::I64(t) => reclaim_typed(buffers, t),
-            Tensor::Bool(t) => reclaim_typed(buffers, t),
-            Tensor::C32(t) => reclaim_typed(buffers, t),
-            Tensor::C64(t) => reclaim_typed(buffers, t),
-        }
+        let owner = inherited_or_new_execution_owner();
+        with_execution_owner(owner, || {
+            let permit = self.acquire_execution_permit();
+            self.with_execution_resources(&permit, |resources| {
+                let buffers = &mut resources.buffers;
+                match tensor {
+                    Tensor::F32(t) => reclaim_typed(buffers, t),
+                    Tensor::F64(t) => reclaim_typed(buffers, t),
+                    Tensor::I32(t) => reclaim_typed(buffers, t),
+                    Tensor::I64(t) => reclaim_typed(buffers, t),
+                    Tensor::Bool(t) => reclaim_typed(buffers, t),
+                    Tensor::C32(t) => reclaim_typed(buffers, t),
+                    Tensor::C64(t) => reclaim_typed(buffers, t),
+                }
+            })
+        })
     }
 }
 

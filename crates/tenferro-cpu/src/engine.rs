@@ -10,6 +10,15 @@ pub(crate) struct EngineResources {
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
 }
 
+impl EngineResources {
+    pub(crate) fn new(buffer_limit: usize) -> Self {
+        Self {
+            buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
+            gemm_analysis_cache: GemmAnalysisCache::default(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CpuEngine {
     placement: ResolvedCpuPlacement,
@@ -28,10 +37,7 @@ impl CpuEngine {
         Ok(Self {
             placement,
             context: Arc::new(context),
-            resources: Mutex::new(EngineResources {
-                buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
-                gemm_analysis_cache: GemmAnalysisCache::default(),
-            }),
+            resources: Mutex::new(EngineResources::new(buffer_limit)),
         })
     }
 
@@ -43,10 +49,7 @@ impl CpuEngine {
         Self {
             placement,
             context,
-            resources: Mutex::new(EngineResources {
-                buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
-                gemm_analysis_cache: GemmAnalysisCache::default(),
-            }),
+            resources: Mutex::new(EngineResources::new(buffer_limit)),
         }
     }
 

@@ -1,10 +1,53 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use thiserror::Error;
 
 use crate::CpuSet;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResourceOwner(u64);
+
+impl ResourceOwner {
+    fn fresh() -> Self {
+        static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_OWNER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+thread_local! {
+    static THREAD_OWNER: ResourceOwner = ResourceOwner::fresh();
+    static EXECUTION_OWNER: Cell<Option<ResourceOwner>> = const { Cell::new(None) };
+}
+
+pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
+    EXECUTION_OWNER
+        .with(Cell::get)
+        .unwrap_or_else(ResourceOwner::fresh)
+}
+
+pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
+    struct RestoreOwner(Option<ResourceOwner>);
+
+    impl Drop for RestoreOwner {
+        fn drop(&mut self) {
+            EXECUTION_OWNER.set(self.0);
+        }
+    }
+
+    let previous = EXECUTION_OWNER.replace(Some(owner));
+    let _restore = RestoreOwner(previous);
+    op()
+}
+
+fn request_owner() -> ResourceOwner {
+    EXECUTION_OWNER
+        .with(Cell::get)
+        .unwrap_or_else(|| THREAD_OWNER.with(|owner| *owner))
+}
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub(crate) enum ResourceArbiterError {
@@ -33,13 +76,13 @@ impl ResourceRequest {
 struct Waiter {
     id: u64,
     request: ResourceRequest,
-    owner: std::thread::ThreadId,
+    owner: ResourceOwner,
 }
 
 #[derive(Debug)]
 struct ActiveRequest {
     request: ResourceRequest,
-    owner: std::thread::ThreadId,
+    owner: ResourceOwner,
 }
 
 #[derive(Debug, Default)]
@@ -141,7 +184,7 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let id = state.next_request_id;
-        let owner = std::thread::current().id();
+        let owner = request_owner();
         state.next_request_id = state
             .next_request_id
             .checked_add(1)
@@ -179,6 +222,7 @@ impl ResourceArbiter {
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
+                    reentrant,
                 });
             }
 
@@ -204,7 +248,7 @@ impl ResourceArbiter {
             .state
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
-        let owner = std::thread::current().id();
+        let owner = request_owner();
         let reentrant = state.active.values().any(|active| active.owner == owner);
         let conflicts_with_active = state
             .active
@@ -227,6 +271,7 @@ impl ResourceArbiter {
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
+            reentrant,
         }))
     }
 
@@ -268,6 +313,13 @@ impl ResourceArbiter {
 pub(crate) struct ResourcePermit {
     inner: Arc<ArbiterInner>,
     id: u64,
+    reentrant: bool,
+}
+
+impl ResourcePermit {
+    pub(crate) fn is_reentrant(&self) -> bool {
+        self.reentrant
+    }
 }
 
 impl fmt::Debug for ResourcePermit {

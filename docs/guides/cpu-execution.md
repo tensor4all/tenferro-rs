@@ -69,8 +69,11 @@ granted to the process, so splitting work by NUMA node does not prevent a
 separate all-node computation. Overlapping placements are serialized by the
 process-wide arbiter, including placements created by independently constructed
 backends; disjoint node placements may execute concurrently. Synchronous nested
-work on the same thread is treated as reentrant so a backend call cannot wait on
-its own permit. Other threads remain subject to the overlap rules.
+execution carries one logical owner across Rayon pools, so nested clone or
+independent-backend work cannot wait on its own permit. Reentrant operations use
+transient scratch buffers and analysis caches instead of re-locking an outer
+engine session's resources. Other logical executions remain subject to the
+overlap rules.
 
 ## External BLAS Providers
 
