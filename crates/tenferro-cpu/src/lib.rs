@@ -75,7 +75,7 @@ extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 
-pub use affinity::{available_parallelism, process_cpu_affinity_count};
+pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
 pub use analytic::pow;
 pub use backend::{CpuBackend, CpuBackendKind};
 pub use buffer_pool::BufferPoolStats;
@@ -91,7 +91,8 @@ pub use structural::{
     broadcast_in_dim, convert, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
 };
 pub use topology::{
-    CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError, NumaNodeId,
+    discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
+    NumaNodeId,
 };
 
 /// Owner-scoped CPU scratch-pool API for operation-family crates.

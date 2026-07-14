@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 use thiserror::Error;
 
@@ -322,6 +322,17 @@ pub enum CpuTopologyError {
     /// The process affinity mask contained no logical CPU.
     #[error("the process-allowed CPU set is empty")]
     EmptyAllowedCpuSet,
+    /// The process CPU affinity mask could not be obtained.
+    #[error("the process CPU affinity mask is unavailable")]
+    AffinityUnavailable,
+    /// A Linux sysfs CPU-list value was malformed or unreasonably large.
+    #[error("invalid Linux CPU list {list:?}: {reason}")]
+    InvalidCpuList {
+        /// The original sysfs CPU-list text.
+        list: String,
+        /// A stable human-readable parsing reason.
+        reason: &'static str,
+    },
     /// Discovery reported the same OS NUMA node more than once.
     #[error("NUMA node {node} was discovered more than once")]
     DuplicateNode {
@@ -338,6 +349,148 @@ pub enum CpuTopologyError {
         /// Logical CPUs present in both usable node sets.
         cpus: CpuSet,
     },
+}
+
+pub(crate) trait TopologySource {
+    fn allowed_cpus(&self) -> Result<CpuSet, CpuTopologyError>;
+
+    fn numa_node_cpu_lists(&self) -> Result<Option<Vec<(NumaNodeId, String)>>, CpuTopologyError>;
+}
+
+pub(crate) fn discover_from(source: &impl TopologySource) -> Result<CpuTopology, CpuTopologyError> {
+    let allowed_cpus = source.allowed_cpus()?;
+    let Some(node_cpu_lists) = source.numa_node_cpu_lists()? else {
+        return Ok(CpuTopology::all_allowed(allowed_cpus));
+    };
+    let nodes = node_cpu_lists
+        .into_iter()
+        .map(|(id, cpus)| parse_linux_cpu_list(&cpus).map(|cpus| (id, cpus)))
+        .collect::<Result<Vec<_>, _>>()?;
+    CpuTopology::from_discovered(allowed_cpus, nodes)
+}
+
+pub(crate) fn parse_linux_cpu_list(input: &str) -> Result<CpuSet, CpuTopologyError> {
+    const MAX_PARSED_CPUS: usize = 1 << 20;
+
+    let invalid = |reason| CpuTopologyError::InvalidCpuList {
+        list: input.to_owned(),
+        reason,
+    };
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(invalid("list is empty"));
+    }
+    let mut cpus = Vec::new();
+    for component in input.split(',') {
+        let component = component.trim();
+        if component.is_empty() {
+            return Err(invalid("empty list component"));
+        }
+        if let Some((start, end)) = component.split_once('-') {
+            if end.contains('-') {
+                return Err(invalid("range contains more than one separator"));
+            }
+            let start = start
+                .parse::<usize>()
+                .map_err(|_| invalid("range start is not a CPU number"))?;
+            let end = end
+                .parse::<usize>()
+                .map_err(|_| invalid("range end is not a CPU number"))?;
+            let span = end
+                .checked_sub(start)
+                .and_then(|distance| distance.checked_add(1))
+                .ok_or_else(|| invalid("range is reversed or overflows"))?;
+            if span > MAX_PARSED_CPUS || cpus.len().saturating_add(span) > MAX_PARSED_CPUS {
+                return Err(invalid("list contains too many CPUs"));
+            }
+            cpus.extend((start..=end).map(CpuId::new));
+        } else {
+            let cpu = component
+                .parse::<usize>()
+                .map_err(|_| invalid("component is not a CPU number"))?;
+            cpus.push(CpuId::new(cpu));
+            if cpus.len() > MAX_PARSED_CPUS {
+                return Err(invalid("list contains too many CPUs"));
+            }
+        }
+    }
+    CpuSet::new(cpus).map_err(|_| invalid("list is empty"))
+}
+
+/// Discover the process-visible CPU and NUMA topology.
+///
+/// Linux uses `/sys/devices/system/node` intersected with the process affinity
+/// mask. Other platforms, and Linux systems without readable NUMA node files,
+/// expose only the all-allowed execution domain.
+///
+/// # Examples
+///
+/// ```
+/// let topology = tenferro_cpu::discover_cpu_topology()?;
+/// assert!(!topology.allowed_cpus().is_empty());
+/// # Ok::<(), tenferro_cpu::CpuTopologyError>(())
+/// ```
+pub fn discover_cpu_topology() -> Result<CpuTopology, CpuTopologyError> {
+    #[cfg(target_os = "linux")]
+    {
+        return discover_from(&LinuxTopologySource);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let allowed = crate::process_cpu_affinity().unwrap_or_else(|| {
+            CpuSet::new((0..crate::available_parallelism()).map(CpuId::new))
+                .expect("available_parallelism always returns at least one CPU")
+        });
+        Ok(CpuTopology::all_allowed(allowed))
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxTopologySource;
+
+#[cfg(target_os = "linux")]
+impl TopologySource for LinuxTopologySource {
+    fn allowed_cpus(&self) -> Result<CpuSet, CpuTopologyError> {
+        crate::process_cpu_affinity().ok_or(CpuTopologyError::AffinityUnavailable)
+    }
+
+    fn numa_node_cpu_lists(&self) -> Result<Option<Vec<(NumaNodeId, String)>>, CpuTopologyError> {
+        let entries = match std::fs::read_dir("/sys/devices/system/node") {
+            Ok(entries) => entries,
+            Err(_) => return Ok(None),
+        };
+        let mut nodes = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => return Ok(None),
+            };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(id) = name.strip_prefix("node") else {
+                continue;
+            };
+            if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(id) = id.parse::<usize>() else {
+                continue;
+            };
+            let cpus = match std::fs::read_to_string(entry.path().join("cpulist")) {
+                Ok(cpus) => cpus,
+                Err(_) => return Ok(None),
+            };
+            nodes.push((NumaNodeId::new(id), cpus));
+        }
+        if nodes.is_empty() {
+            Ok(None)
+        } else {
+            nodes.sort_unstable_by_key(|(id, _)| *id);
+            Ok(Some(nodes))
+        }
+    }
 }
 
 /// Process-visible CPU topology used for execution placement.
@@ -390,8 +543,9 @@ impl CpuTopology {
             return Err(CpuTopologyError::EmptyAllowedCpuSet);
         }
         let mut usable = Vec::new();
+        let mut seen_node_ids = BTreeSet::new();
         for (id, discovered_cpus) in nodes {
-            if usable.iter().any(|node: &CpuNode| node.id == id) {
+            if !seen_node_ids.insert(id) {
                 return Err(CpuTopologyError::DuplicateNode { node: id });
             }
             if let Some(cpus) = discovered_cpus.intersection(&allowed_cpus) {
