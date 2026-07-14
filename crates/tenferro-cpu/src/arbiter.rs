@@ -1,0 +1,231 @@
+use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
+use std::sync::{Arc, Condvar, Mutex};
+
+use thiserror::Error;
+
+use crate::CpuSet;
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub(crate) enum ResourceArbiterError {
+    #[error("CPU resource arbiter state is poisoned")]
+    StatePoisoned,
+    #[error("CPU resource arbiter request IDs are exhausted")]
+    RequestIdExhausted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ResourceRequest {
+    CpuSet(CpuSet),
+    ProviderExclusive,
+}
+
+impl ResourceRequest {
+    fn conflicts_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ProviderExclusive, _) | (_, Self::ProviderExclusive) => true,
+            (Self::CpuSet(left), Self::CpuSet(right)) => left.overlaps(right),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Waiter {
+    id: u64,
+    request: ResourceRequest,
+}
+
+#[derive(Debug, Default)]
+struct ArbiterState {
+    next_request_id: u64,
+    waiters: VecDeque<Waiter>,
+    active: BTreeMap<u64, ResourceRequest>,
+}
+
+#[derive(Debug, Default)]
+struct ArbiterInner {
+    state: Mutex<ArbiterState>,
+    changed: Condvar,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ResourceArbiter {
+    inner: Arc<ArbiterInner>,
+}
+
+impl ResourceArbiter {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn acquire(&self, cpus: CpuSet) -> Result<ResourcePermit, ResourceArbiterError> {
+        self.acquire_request(ResourceRequest::CpuSet(cpus))
+    }
+
+    pub(crate) fn try_acquire(
+        &self,
+        cpus: CpuSet,
+    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
+        self.try_acquire_request(ResourceRequest::CpuSet(cpus))
+    }
+
+    pub(crate) fn acquire_provider_exclusive(
+        &self,
+    ) -> Result<ResourcePermit, ResourceArbiterError> {
+        self.acquire_request(ResourceRequest::ProviderExclusive)
+    }
+
+    pub(crate) fn try_acquire_provider_exclusive(
+        &self,
+    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
+        self.try_acquire_request(ResourceRequest::ProviderExclusive)
+    }
+
+    fn acquire_request(
+        &self,
+        request: ResourceRequest,
+    ) -> Result<ResourcePermit, ResourceArbiterError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| ResourceArbiterError::StatePoisoned)?;
+        let id = state.next_request_id;
+        state.next_request_id = state
+            .next_request_id
+            .checked_add(1)
+            .ok_or(ResourceArbiterError::RequestIdExhausted)?;
+        state.waiters.push_back(Waiter { id, request });
+        self.inner.changed.notify_all();
+
+        loop {
+            let Some(position) = state.waiters.iter().position(|waiter| waiter.id == id) else {
+                return Err(ResourceArbiterError::StatePoisoned);
+            };
+            let request = &state.waiters[position].request;
+            let active_compatible = state
+                .active
+                .values()
+                .all(|active| !active.conflicts_with(request));
+            let older_compatible = state
+                .waiters
+                .iter()
+                .take(position)
+                .all(|older| !older.request.conflicts_with(request));
+            if active_compatible && older_compatible {
+                let Some(waiter) = state.waiters.remove(position) else {
+                    return Err(ResourceArbiterError::StatePoisoned);
+                };
+                state.active.insert(id, waiter.request);
+                return Ok(ResourcePermit {
+                    inner: Arc::clone(&self.inner),
+                    id,
+                });
+            }
+
+            state = match self.inner.changed.wait(state) {
+                Ok(state) => state,
+                Err(poisoned) => {
+                    let mut state = poisoned.into_inner();
+                    state.waiters.retain(|waiter| waiter.id != id);
+                    self.inner.changed.notify_all();
+                    return Err(ResourceArbiterError::StatePoisoned);
+                }
+            };
+        }
+    }
+
+    fn try_acquire_request(
+        &self,
+        request: ResourceRequest,
+    ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| ResourceArbiterError::StatePoisoned)?;
+        let conflicts_with_active = state
+            .active
+            .values()
+            .any(|active| active.conflicts_with(&request));
+        let bypasses_waiter = state
+            .waiters
+            .iter()
+            .any(|waiter| waiter.request.conflicts_with(&request));
+        if conflicts_with_active || bypasses_waiter {
+            return Ok(None);
+        }
+        let id = state.next_request_id;
+        state.next_request_id = state
+            .next_request_id
+            .checked_add(1)
+            .ok_or(ResourceArbiterError::RequestIdExhausted)?;
+        state.active.insert(id, request);
+        Ok(Some(ResourcePermit {
+            inner: Arc::clone(&self.inner),
+            id,
+        }))
+    }
+
+    #[cfg(test)]
+    fn wait_for_waiter_count_for_test(
+        &self,
+        expected: usize,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let Ok(mut state) = self.inner.state.lock() else {
+            return false;
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        while state.waiters.len() < expected {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            let Ok((next, wait)) = self.inner.changed.wait_timeout(state, remaining) else {
+                return false;
+            };
+            state = next;
+            if wait.timed_out() && state.waiters.len() < expected {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn poison_for_test(&self) {
+        let inner = Arc::clone(&self.inner);
+        let _ = std::panic::catch_unwind(move || {
+            let _state = inner.state.lock().unwrap();
+            panic!("forced arbiter poisoning");
+        });
+    }
+}
+
+pub(crate) struct ResourcePermit {
+    inner: Arc<ArbiterInner>,
+    id: u64,
+}
+
+impl fmt::Debug for ResourcePermit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResourcePermit")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ResourcePermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.active.remove(&self.id);
+        self.inner.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests;

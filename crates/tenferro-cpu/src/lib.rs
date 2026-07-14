@@ -43,6 +43,7 @@ compile_error!("provider-inject cannot be combined with explicit BLAS provider f
 
 pub mod affinity;
 mod analytic;
+mod arbiter;
 pub mod backend;
 mod buffer_pool;
 mod capability;

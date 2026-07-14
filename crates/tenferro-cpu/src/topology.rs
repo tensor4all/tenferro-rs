@@ -225,6 +225,18 @@ impl CpuSet {
         self.cpus.binary_search(&cpu).is_ok()
     }
 
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let (mut left, mut right) = (0, 0);
+        while left < self.len() && right < other.len() {
+            match self.cpus[left].cmp(&other.cpus[right]) {
+                std::cmp::Ordering::Less => left += 1,
+                std::cmp::Ordering::Greater => right += 1,
+                std::cmp::Ordering::Equal => return true,
+            }
+        }
+        false
+    }
+
     fn intersection(&self, other: &Self) -> Option<Self> {
         let mut intersection = Vec::with_capacity(self.len().min(other.len()));
         let (mut left, mut right) = (0, 0);
