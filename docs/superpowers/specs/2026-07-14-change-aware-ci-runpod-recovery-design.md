@@ -187,9 +187,33 @@ The policy is:
 - transient transport failures: retryable;
 - malformed success responses or missing pod IDs: permanent protocol errors.
 
-Retryable failures use bounded exponential backoff with jitter and a total
-deadline. Logs state the attempt, status class, next delay, and redacted
-provider error. Deterministic failures do not sleep or consume all attempts.
+Capacity exhaustion uses price-tier failover instead of repeatedly submitting
+the same candidate set. The reviewed SECURE Cloud GPU allowlist is split into
+three tiers:
+
+1. the existing cost-preferred GPUs;
+2. premium GPUs whose published Pod price is at most USD 0.99/hour;
+3. A100 PCIe and A100 SXM, capped at a published USD 1.49/hour.
+
+H100 and more expensive models are outside the automatic CI allowlist. Prices
+are reference values checked against RunPod's public Pod pricing on 2026-07-15;
+the durable control is the explicit reviewed GPU IDs in each tier, not an
+assumption that a provider price will remain unchanged.
+
+An error response that explicitly reports unavailable machine resources moves
+immediately to the next tier without backoff. Each tier receives one capacity
+attempt. HTTP 408, 429, an unrelated 5xx response, and transient transport
+failures receive at most one short retry in the current tier. A global
+60-second creation deadline bounds all requests and sleeps. This typically
+checks all capacity tiers in about ten seconds while preserving one recovery
+attempt for service or network instability.
+
+Every request log states the attempt, tier, candidate GPU IDs, status class,
+next action, and redacted provider error. On success, the helper records the
+RunPod-assigned GPU ID in ordinary workflow logs and appends the selected tier
+and GPU ID to the GitHub Actions job summary. The GPU test job also prints the
+reported ID next to `nvidia-smi` output so a provider response mismatch is
+visible. Deterministic failures do not sleep or consume all tiers.
 
 The request remains `cloudType: SECURE`, non-interruptible, and limited to the
 reviewed allowlist. Cleanup remains unconditional and idempotent whenever a pod
@@ -278,6 +302,11 @@ Use Python standard-library tests for:
 - profile listing, composition, and dry-run command parity;
 - OpenAPI enum extraction and invalid-ID reporting;
 - HTTP/transport retry classification and bounded delay calculation;
+- immediate capacity failover from the cost-preferred tier through the premium
+  and A100 tiers;
+- same-tier short retry for transport, rate-limit, and non-capacity service
+  failures;
+- selected GPU logging and job-summary output without request secrets;
 - PR-number recovery validation and conflicting input rejection;
 - required workflow names and their classifier-backed no-op contracts.
 
@@ -338,9 +367,11 @@ requires a corrective follow-up before issue #1379 is closed.
   stable job names and test aggregate-gate behavior for every class.
 - **Live OpenAPI changes could block GPU CI.** This is intentional when the
   configured request is invalid; the error must be early and actionable.
-- **Broader retries could increase queue time or cost.** Retries end before pod
-  creation when capacity is absent, use a bounded deadline, and retain the
-  reviewed allowlist and SECURE Cloud.
+- **Broader retries could increase queue time or cost.** Capacity errors switch
+  tiers immediately, all requests share a 60-second deadline, and automatic
+  selection is capped at the reviewed A100 tier (published USD 1.49/hour on
+  2026-07-15). The workflow logs the assigned GPU so actual selections remain
+  auditable.
 - **Cache reuse could restore an incompatible archive.** Include every CUDA,
   runner, archive-format, manifest, and source input in the content key and
   bump the format version when packaging changes.
