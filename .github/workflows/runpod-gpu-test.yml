@@ -206,8 +206,10 @@ jobs:
             fi
 
             echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
-            echo "tenferro_ref=${merge_sha}" >> "${GITHUB_OUTPUT}"
-            echo "target_head_sha=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
+            {
+              echo "tenferro_ref=${merge_sha}"
+              echo "target_head_sha=${pr_head_sha}"
+            } >> "${GITHUB_OUTPUT}"
             classify_pr_paths "${pr_number}"
           else
             # Manual dispatch relies on the triggering actor check.
@@ -250,15 +252,19 @@ jobs:
                 echo "::error::PR #${MANUAL_PR_NUMBER} trust state changed during authorization; refusing recovery."
                 exit 1
               fi
-              echo "tenferro_ref=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
-              echo "target_head_sha=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
+              {
+                echo "tenferro_ref=${pr_head_sha}"
+                echo "target_head_sha=${pr_head_sha}"
+              } >> "${GITHUB_OUTPUT}"
               classify_pr_paths "${MANUAL_PR_NUMBER}"
             else
               manual_ref="${MANUAL_TENFERRO_REF:-main}"
-              echo "tenferro_ref=${manual_ref}" >> "${GITHUB_OUTPUT}"
-              echo "target_head_sha=${MANUAL_GATE_HEAD_SHA}" >> "${GITHUB_OUTPUT}"
-              echo "run_gpu=true" >> "${GITHUB_OUTPUT}"
-              echo "reason=trusted manual revision validation" >> "${GITHUB_OUTPUT}"
+              {
+                echo "tenferro_ref=${manual_ref}"
+                echo "target_head_sha=${MANUAL_GATE_HEAD_SHA}"
+                echo "run_gpu=true"
+                echo "reason=trusted manual revision validation"
+              } >> "${GITHUB_OUTPUT}"
             fi
           fi
 
@@ -703,7 +709,7 @@ jobs:
           echo "GitHub generate-jitconfig HTTP status: ${status}"
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            cat "$response_file" | jq . || cat "$response_file"
+            jq . "$response_file" || cat "$response_file"
             echo "Failed to generate JIT runner config" >&2
             exit 1
           fi
@@ -711,7 +717,7 @@ jobs:
           jit_config="$(jq -r .encoded_jit_config "$response_file")"
 
           if [ -z "$jit_config" ] || [ "$jit_config" = "null" ]; then
-            cat "$response_file" | jq 'del(.encoded_jit_config)' || cat "$response_file"
+            jq 'del(.encoded_jit_config)' "$response_file" || cat "$response_file"
             echo "Failed to generate JIT runner config: missing encoded_jit_config" >&2
             exit 1
           fi
@@ -812,7 +818,7 @@ jobs:
 
             if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
               echo "GitHub runners API HTTP status: ${status}"
-              cat "$response_file" | jq . || cat "$response_file"
+              jq . "$response_file" || cat "$response_file"
               sleep 10
               continue
             fi
@@ -860,7 +866,7 @@ jobs:
           )"
 
           echo "RunPod delete HTTP status: ${status}"
-          cat "$response_file" | jq . || cat "$response_file" || true
+          jq . "$response_file" || cat "$response_file" || true
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "Warning: failed to delete RunPod pod after startup failure" >&2
@@ -1261,7 +1267,7 @@ jobs:
           )"
 
           echo "RunPod delete HTTP status: ${status}"
-          cat "$response_file" | jq . || cat "$response_file" || true
+          jq . "$response_file" || cat "$response_file" || true
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "Warning: failed to delete RunPod pod" >&2
