@@ -72,6 +72,43 @@ Implementation PRs for new features or substantial changes that are opened
 before an accepted issue may be closed with a request to continue the
 discussion in an issue first.
 
+## Local and hosted CI profiles
+
+The exact command groups used by hosted CI are available locally:
+
+```bash
+python3 scripts/ci/run_profile.py --list
+python3 scripts/ci/run_profile.py workspace-faer
+python3 scripts/ci/run_profile.py workspace-blas
+python3 scripts/ci/run_profile.py docs
+```
+
+`full` expands every profile once. Use `--dry-run` to inspect commands without
+executing them. `scripts/check-pr-fast.sh` also accepts repeatable
+`--ci-profile NAME` options; prefer these profiles over copying hosted-CI
+commands into local scripts.
+
+Pull-request CI classifies a diff conservatively as code, docs-only, or
+CI-only. Docs-only changes run documentation validation. CI-only changes run
+CI helper tests and actionlint; changes to the RunPod control plane also keep
+the GPU gate. Mixed docs and CI changes run both lightweight suites. Empty
+diffs, unknown paths, and compiled-code changes use full validation. Pushes to
+`main` always run the comprehensive non-GPU matrix. Required check names remain
+present and succeed with an explicit “not required” result when a lane is
+irrelevant.
+
+Maintainers can recover a same-repository PR GPU gate from its PR number:
+
+```bash
+python3 scripts/ci/recover_runpod_pr.py 1379 --wait
+```
+
+The command always dispatches the secret-bearing workflow from trusted
+`main`. The workflow resolves and rechecks the open PR head itself; do not run
+a PR-branch copy of that workflow with repository secrets. See
+[Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md)
+for the durable design and trust boundaries.
+
 ## Prototype code and provenance
 
 By submitting code directly to this repository, you represent that you have the
