@@ -108,6 +108,7 @@ website:
               - design/capi-error-handling.md
               - design/testing.md
               - design/review-decision-records.md
+              - design/change-aware-ci.md
           - section: "Specification"
             contents:
               - spec/index.md

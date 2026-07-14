@@ -1,30 +1,5 @@
-# Workspace test suite (two-tier).
-#
-# This is the home of `cargo nextest run --workspace` + workspace doc tests.
-# `ci.yml` deliberately does NOT contain a workspace test job; it only runs the
-# fast checks (fmt, clippy, inject tests, coverage, docs) on push and PRs.
-#
-# Two tiers:
-#   * Pull requests (fast tier): cpu-faer always; cpu-blas ONLY when
-#     backend-relevant paths change (see the `changes` job). Most PRs skip the
-#     cpu-blas lane entirely, so they run one backend instead of two.
-#   * Push to main (comprehensive tier): the full cpu-faer + cpu-blas matrix
-#     always runs, so every backend is exercised on the merged result even when
-#     the PR that produced it skipped cpu-blas.
-#
-# The extension/sample tutorial tests (tropical, sparse, KdV) live in their own
-# `ext-samples` job. They are standalone workspaces that recompile tenferro from
-# scratch, so running them once here (instead of inside every backend leg) keeps
-# them off the per-backend critical path and avoids duplicate compilation.
-#
-# The `ci-gate` job below is the branch-protection check that proves the
-# workspace + extension tests passed. Its job name is the required check, so
-# renaming the workflow is safe. GPU tests are in `CI_gpu.yml`, gated behind
-# repository rules LLM review plus these non-GPU checks.
-#
-# Named for its PURPOSE, not its runner. The `ci-maintainer` job is intended to
-# run on a self-hosted pool but currently uses GitHub-hosted runners while that
-# pool is down — so a runner-derived name would be misleading.
+# Change-aware workspace and extension tests. Required gate names remain stable;
+# intentionally unnecessary lanes execute explicit successful no-ops.
 name: CI PR workspace tests
 
 on:
@@ -37,77 +12,77 @@ permissions:
   contents: read
 
 concurrency:
-  # Per-PR for pull_request events (new pushes cancel stale runs); per-commit for
-  # push-to-main so distinct main commits are each verified without cancelling.
   group: ci-pr-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  # Decide which backends the same-repo matrix runs. cpu-blas is expensive, and
-  # only the CPU linalg backend selection distinguishes it from cpu-faer, so we
-  # run it only when backend-relevant paths change on a PR. On push to main we
-  # always run both (comprehensive tier).
   changes:
-    name: Select backend matrix
+    name: Select validation matrix
     runs-on: ubuntu-latest
     outputs:
       backends: ${{ steps.select.outputs.backends }}
+      run_workspace: ${{ steps.policy.outputs.run_rust }}
+      run_extensions: ${{ steps.policy.outputs.run_extensions }}
+      reason: ${{ steps.policy.outputs.reason }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Select backends
-        id: select
+      - name: Classify change
+        id: policy
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python3 scripts/ci/change_policy.py
+          --event "${EVENT_NAME}"
+          --base "${BASE_SHA}"
+          --head "${HEAD_SHA}"
+      - name: Select backend profiles
+        id: select
+        env:
+          RUN_WORKSPACE: ${{ steps.policy.outputs.run_rust }}
+          RUN_BLAS: ${{ steps.policy.outputs.run_blas }}
         run: |
-          set -euo pipefail
-          faer='{"backend":"cpu-faer","feature_args":"","rustflags":""}'
-          blas='{"backend":"cpu-blas","feature_args":"--no-default-features --features cpu-blas","rustflags":"-l dylib=openblas -l dylib=lapack"}'
-          run_blas=false
-          if [ "${EVENT_NAME}" = "push" ]; then
-            # Comprehensive tier: always exercise both backends on main.
-            run_blas=true
-          else
-            changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
-            if printf '%s\n' "${changed}" | grep -qE '^(crates/tenferro-cpu/|crates/tenferro-linalg/|crates/tenferro-tensor/|crates/tenferro-tensor-core/|Cargo\.lock|Cargo\.toml|\.github/workflows/ci-pr-workspace-tests\.yml)'; then
-              run_blas=true
-            fi
-          fi
-          if [ "${run_blas}" = "true" ]; then
+          faer='{"backend":"cpu-faer","profile":"workspace-faer","rustflags":""}'
+          blas='{"backend":"cpu-blas","profile":"workspace-blas","rustflags":"-l dylib=openblas -l dylib=lapack"}'
+          noop='{"backend":"not-required","profile":"","rustflags":""}'
+          if [ "${RUN_WORKSPACE}" != true ]; then
+            echo "backends=[${noop}]" >> "${GITHUB_OUTPUT}"
+          elif [ "${RUN_BLAS}" = true ]; then
             echo "backends=[${faer},${blas}]" >> "${GITHUB_OUTPUT}"
           else
             echo "backends=[${faer}]" >> "${GITHUB_OUTPUT}"
           fi
-          echo "Selected backends (run_blas=${run_blas}, event=${EVENT_NAME})."
 
-  # fork からの PR: GitHub-hosted runner で cpu-faer のみ。
   ci-fork:
     name: CI (fork PR / github-hosted)
+    needs: changes
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.run_workspace == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.run_workspace == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.run_workspace == 'true'
       - uses: taiki-e/install-action@nextest
-      - name: Run unit and integration tests
-        # `tenferro-tutorial-code` is a workspace test package, so the workspace
-        # nextest run already covers the runnable tutorials.
-        run: cargo nextest run --workspace --release --no-fail-fast
-      - name: Run doc tests
-        run: cargo test --doc --workspace --release
+        if: needs.changes.outputs.run_workspace == 'true'
+      - name: Run workspace faer profile
+        if: needs.changes.outputs.run_workspace == 'true'
+        run: python3 scripts/ci/run_profile.py workspace-faer
+      - name: Report workspace no-op
+        if: needs.changes.outputs.run_workspace != 'true'
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "Workspace tests not required - ${REASON}"
 
-  # 同一リポジトリの PR と main への push: cpu-faer と（条件付きで）cpu-blas。
-  # Normally intended for a self-hosted runner; temporarily GitHub-hosted while
-  # that pool is down.
   ci-maintainer:
     name: CI (same-repo / heavy / ${{ matrix.cfg.backend }})
     needs: changes
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    # runs-on: [self-hosted, linux, x64]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -118,78 +93,82 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: 0
       RUSTFLAGS: ${{ matrix.cfg.rustflags }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        if: matrix.cfg.profile != ''
       - uses: dtolnay/rust-toolchain@stable
+        if: matrix.cfg.profile != ''
       - uses: Swatinem/rust-cache@v2
-      # Note: Disable this step when runs-on is self-hosted.
+        if: matrix.cfg.profile != ''
       - name: Install BLAS/LAPACK runtime libraries
         if: matrix.cfg.backend == 'cpu-blas'
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev liblapack-dev
       - uses: taiki-e/install-action@nextest
+        if: matrix.cfg.profile != ''
       - name: Verify BLAS/LAPACK runtime libraries
         if: matrix.cfg.backend == 'cpu-blas'
         run: |
-          set -euo pipefail
           ldconfig -p | grep -E 'libopenblas\.so' >/dev/null
           ldconfig -p | grep -E 'liblapack\.so' >/dev/null
-      - name: Run unit and integration tests
-        # `tenferro-tutorial-code` is a workspace test package, so the workspace
-        # nextest run already covers the runnable tutorials.
-        run: cargo nextest run --workspace --release ${{ matrix.cfg.feature_args }} --no-fail-fast
-      - name: Run doc tests
-        run: cargo test --doc --workspace --release ${{ matrix.cfg.feature_args }}
+      - name: Run workspace profile
+        if: matrix.cfg.profile != ''
+        run: python3 scripts/ci/run_profile.py "${{ matrix.cfg.profile }}"
+      - name: Report workspace no-op
+        if: matrix.cfg.profile == ''
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "Workspace tests not required - ${REASON}"
 
-  # Extension and sample tutorials. These are standalone workspaces (each has its
-  # own `[workspace]`) that depend on tenferro via path, so they recompile the
-  # tenferro graph from scratch. They are backend-agnostic (they use the default
-  # cpu-faer backend), so we run them once here rather than inside every backend
-  # leg of ci-maintainer. `rust-cache` is pointed at each standalone workspace so
-  # their target dirs are cached across runs.
   ext-samples:
     name: Extension and sample tests
+    needs: changes
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.run_extensions == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.run_extensions == 'true'
       - name: Cache extension/sample target dirs
+        if: needs.changes.outputs.run_extensions == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             ext/tropical
             ext/sparse
             samples/kdv-pinn
-      - name: Run tropical extension tutorial tests
-        run: cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
-      - name: Run sparse extension tutorial tests
-        run: cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
-      - name: Compile-check KdV PINN sample
-        run: cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
+      - name: Run extension profile
+        if: needs.changes.outputs.run_extensions == 'true'
+        run: python3 scripts/ci/run_profile.py extensions
+      - name: Report extension no-op
+        if: needs.changes.outputs.run_extensions != 'true'
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "Extension tests not required - ${REASON}"
 
-  # Single check for branch protection. Requires the extension/sample tests plus
-  # the one runnable workspace path (fork = ci-fork, same-repo/push = ci-maintainer);
-  # the other is skipped. A cpu-blas leg that was intentionally not scheduled does
-  # not appear as a failure because ci-maintainer's matrix only contains the
-  # selected backends.
   ci-gate:
     name: CI gate (PR workspace tests)
-    needs: [ci-fork, ci-maintainer, ext-samples]
+    needs: [changes, ci-fork, ci-maintainer, ext-samples]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Require workspace and extension tests
+      - name: Require selected workspace and extension tests
         env:
+          CHANGE_RESULT: ${{ needs.changes.result }}
           FORK_RESULT: ${{ needs.ci-fork.result }}
           MAINTAINER_RESULT: ${{ needs.ci-maintainer.result }}
           EXT_RESULT: ${{ needs.ext-samples.result }}
+          RUN_WORKSPACE: ${{ needs.changes.outputs.run_workspace }}
+          RUN_EXTENSIONS: ${{ needs.changes.outputs.run_extensions }}
         run: |
-          set -euo pipefail
-          if [ "${EXT_RESULT}" != "success" ]; then
-            echo "Expected ext-samples to succeed; got ext-samples=${EXT_RESULT}"
+          if [ "${CHANGE_RESULT}" != success ]; then
+            echo "Change classification failed: ${CHANGE_RESULT}"
             exit 1
           fi
-          if [ "${FORK_RESULT}" = "success" ] || [ "${MAINTAINER_RESULT}" = "success" ]; then
-            exit 0
+          if [ "${EXT_RESULT}" != success ]; then
+            echo "Expected ext-samples to succeed or no-op; got ${EXT_RESULT}"
+            exit 1
           fi
-          echo "Expected ci-fork or ci-maintainer to succeed; got ci-fork=${FORK_RESULT} ci-maintainer=${MAINTAINER_RESULT}"
-          exit 1
+          if [ "${FORK_RESULT}" != success ] && [ "${MAINTAINER_RESULT}" != success ]; then
+            echo "Expected a workspace job to succeed or no-op; fork=${FORK_RESULT} maintainer=${MAINTAINER_RESULT}"
+            exit 1
+          fi
+          echo "Selected policy satisfied: workspace=${RUN_WORKSPACE} extensions=${RUN_EXTENSIONS}"

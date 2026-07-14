@@ -6,6 +6,8 @@ FETCH=1
 DOC_SNIPPETS="auto"
 COVERAGE_REVIEWED=0
 FOCUSED_TESTS=()
+CI_PROFILES=()
+CI_PROFILE_DRY_RUN=0
 
 usage() {
   cat <<'EOF'
@@ -19,6 +21,8 @@ Options:
   --no-fetch                 Do not fetch origin before checking BASE_REF
   --coverage-reviewed        Confirm changed code was manually/agent reviewed for test coverage
   --test COMMAND             Run one focused verification command; repeatable
+  --ci-profile NAME          Run one shared CI profile; repeatable
+  --ci-profile-dry-run       Print selected CI profile commands without running them
   --doc-snippets             Always run docs snippet sync checks
   --skip-doc-snippets        Never run docs snippet sync checks
   --help                     Show this help text
@@ -63,6 +67,15 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "--test requires a command"
       FOCUSED_TESTS+=("$2")
       shift 2
+      ;;
+    --ci-profile)
+      [[ $# -ge 2 ]] || die "--ci-profile requires a name"
+      CI_PROFILES+=("$2")
+      shift 2
+      ;;
+    --ci-profile-dry-run)
+      CI_PROFILE_DRY_RUN=1
+      shift
       ;;
     --doc-snippets)
       DOC_SNIPPETS="always"
@@ -168,6 +181,16 @@ for command in "${FOCUSED_TESTS[@]}"; do
   log "+ ${command}"
   bash -lc "$command"
 done
+
+if [[ "${#CI_PROFILES[@]}" -gt 0 ]]; then
+  profile_args=("${CI_PROFILES[@]}")
+  if [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
+    profile_args=(--dry-run "${profile_args[@]}")
+  fi
+  python3 scripts/ci/run_profile.py "${profile_args[@]}"
+elif [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
+  die "--ci-profile-dry-run requires at least one --ci-profile"
+fi
 
 if [[ "$COVERAGE_REVIEWED" -ne 1 ]]; then
   cat >&2 <<'EOF'
