@@ -1,3 +1,6 @@
+# Tensor4All addition to the RESTGroup/tblis-rs `tblis-src` build glue.
+# See LICENSE and NOTICE.md.
+
 set(TBLIS_CMAKE "${TBLIS_SOURCE_DIR}/CMakeLists.txt")
 file(READ "${TBLIS_CMAKE}" TBLIS_CMAKE_CONTENTS)
 

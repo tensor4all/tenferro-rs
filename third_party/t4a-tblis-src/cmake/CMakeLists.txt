@@ -1,5 +1,8 @@
+# Derived from RESTGroup/tblis-rs `tblis-src` and modified by Tensor4All.
+# See LICENSE and NOTICE.md.
+
 cmake_minimum_required(VERSION 3.15)
-project(tenferro-dep-tblis)
+project(t4a-dep-tblis)
 
 include(ExternalProject)
 include(GNUInstallDirs)

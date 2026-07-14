@@ -2719,6 +2719,12 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
                 (accumulation.alpha, accumulation.beta)
             {
+                let execution = tblis_gemm::TblisExecution::new(
+                    alpha,
+                    beta,
+                    accumulation.lhs_conj,
+                    accumulation.rhs_conj,
+                );
                 match (&lhs, &rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
@@ -2726,16 +2732,7 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
@@ -2743,16 +2740,7 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -2760,16 +2748,7 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -2777,80 +2756,35 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
                     ) => {
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
                     ) => {
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
                     ) => {
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
                     ) => {
-                        return dot_general_tblis_accum_typed(
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                            accumulation.lhs_conj,
-                            accumulation.rhs_conj,
-                        );
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
                     }
                     _ => {}
                 }
@@ -2870,11 +2804,8 @@ fn dot_general_tblis_accum_typed<L, R, T>(
     lhs: &L,
     rhs: &R,
     config: &DotGeneralConfig,
-    alpha: T,
-    beta: T,
     out: &mut TypedTensorViewMut<'_, T>,
-    lhs_conj: bool,
-    rhs_conj: bool,
+    execution: tblis_gemm::TblisExecution<T>,
 ) -> crate::Result<bool>
 where
     L: TypedTensorRead<T>,
@@ -2891,7 +2822,7 @@ where
 
     let out_n = tblis_gemm::output_element_count(out.shape())?;
     if out_n == 0 {
-        scale_empty_contract_output(out, beta)?;
+        scale_empty_contract_output(out, execution.beta())?;
         return Ok(true);
     }
 
@@ -2912,7 +2843,7 @@ where
     let a_ptr = unsafe { a_data.offset(a_base) };
     // SAFETY: same proof as `a_ptr` for the rhs input.
     let b_ptr = unsafe { b_data.offset(b_base) };
-    tblis_gemm::execute(plan, alpha, a_ptr, b_ptr, beta, out, lhs_conj, rhs_conj)?;
+    tblis_gemm::execute(plan, a_ptr, b_ptr, out, execution)?;
     Ok(true)
 }
 
@@ -2968,13 +2899,10 @@ where
     let b_ptr = unsafe { b_data.offset(b_base) };
     tblis_gemm::execute(
         plan,
-        T::one(),
         a_ptr,
         b_ptr,
-        T::zero(),
         &mut out_view,
-        lhs_conj,
-        rhs_conj,
+        tblis_gemm::TblisExecution::new(T::one(), T::zero(), lhs_conj, rhs_conj),
     )?;
 
     Ok(Some(tensor))

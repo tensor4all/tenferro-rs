@@ -84,7 +84,7 @@ extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 #[cfg(feature = "cpu-tblis-linked")]
-extern crate tenferro_tblis_src as _;
+extern crate tblis_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use analytic::pow;

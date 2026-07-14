@@ -20,6 +20,25 @@ const SIZES: &[usize] = &[32, 64, 128];
 const HIGHER_RANK_NS: &[usize] = &[4, 8];
 
 #[cfg(feature = "cpu-tblis-provider")]
+#[derive(Clone, Copy)]
+struct BenchProvider {
+    name: &'static str,
+    kind: CpuBackendKind,
+    dot_general: DotGeneralProvider,
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+impl BenchProvider {
+    fn new(name: &'static str, kind: CpuBackendKind, dot_general: DotGeneralProvider) -> Self {
+        Self {
+            name,
+            kind,
+            dot_general,
+        }
+    }
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
 fn matmul_config() -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
@@ -127,9 +146,7 @@ fn tblis_runtime_available(config: &DotGeneralConfig) -> bool {
 #[cfg(feature = "cpu-tblis-provider")]
 fn bench_owned_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
-    provider: &str,
-    kind: CpuBackendKind,
-    dot_general_provider: DotGeneralProvider,
+    provider: BenchProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: &Tensor,
@@ -137,11 +154,11 @@ fn bench_owned_dot(
     config: &DotGeneralConfig,
 ) {
     group.bench_function(
-        BenchmarkId::new(format!("{provider}_{case}"), params),
+        BenchmarkId::new(format!("{}_{case}", provider.name), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind)
+            let mut backend = CpuBackend::with_kind(provider.kind)
                 .unwrap()
-                .with_dot_general_provider(dot_general_provider);
+                .with_dot_general_provider(provider.dot_general);
             b.iter(|| {
                 let out = backend
                     .dot_general(black_box(lhs), black_box(rhs), black_box(config))
@@ -155,9 +172,7 @@ fn bench_owned_dot(
 #[cfg(feature = "cpu-tblis-provider")]
 fn bench_owned_conj_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
-    provider: &str,
-    kind: CpuBackendKind,
-    dot_general_provider: DotGeneralProvider,
+    provider: BenchProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: &Tensor,
@@ -165,11 +180,11 @@ fn bench_owned_conj_dot(
     config: &DotGeneralConfig,
 ) {
     group.bench_function(
-        BenchmarkId::new(format!("{provider}_{case}"), params),
+        BenchmarkId::new(format!("{}_{case}", provider.name), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind)
+            let mut backend = CpuBackend::with_kind(provider.kind)
                 .unwrap()
-                .with_dot_general_provider(dot_general_provider);
+                .with_dot_general_provider(provider.dot_general);
             b.iter(|| {
                 let out = backend
                     .dot_general_with_conj(
@@ -189,9 +204,7 @@ fn bench_owned_conj_dot(
 #[cfg(feature = "cpu-tblis-provider")]
 fn bench_read_view_dot(
     group: &mut BenchmarkGroup<'_, WallTime>,
-    provider: &str,
-    kind: CpuBackendKind,
-    dot_general_provider: DotGeneralProvider,
+    provider: BenchProvider,
     case: &str,
     params: impl std::fmt::Display,
     lhs: StridedData<'_>,
@@ -199,11 +212,11 @@ fn bench_read_view_dot(
     config: &DotGeneralConfig,
 ) {
     group.bench_function(
-        BenchmarkId::new(format!("{provider}_{case}"), params),
+        BenchmarkId::new(format!("{}_{case}", provider.name), params),
         |b| {
-            let mut backend = CpuBackend::with_kind(kind)
+            let mut backend = CpuBackend::with_kind(provider.kind)
                 .unwrap()
-                .with_dot_general_provider(dot_general_provider);
+                .with_dot_general_provider(provider.dot_general);
             b.iter(|| {
                 let lhs_view =
                     TypedTensorView::from_slice(lhs.shape, lhs.strides, 0, black_box(lhs.data))
@@ -244,9 +257,7 @@ fn bench_owned_all_providers(
     #[cfg(feature = "cpu-faer")]
     bench_owned_dot(
         group,
-        "faer",
-        CpuBackendKind::Faer,
-        DotGeneralProvider::Base,
+        BenchProvider::new("faer", CpuBackendKind::Faer, DotGeneralProvider::Base),
         case,
         params.clone(),
         lhs,
@@ -256,9 +267,7 @@ fn bench_owned_all_providers(
     #[cfg(feature = "cpu-blas")]
     bench_owned_dot(
         group,
-        "blas",
-        CpuBackendKind::Blas,
-        DotGeneralProvider::Base,
+        BenchProvider::new("blas", CpuBackendKind::Blas, DotGeneralProvider::Base),
         case,
         params.clone(),
         lhs,
@@ -267,9 +276,11 @@ fn bench_owned_all_providers(
     );
     bench_owned_dot(
         group,
-        "tblis",
-        CpuBackendKind::default_compiled(),
-        DotGeneralProvider::TblisIfAvailable,
+        BenchProvider::new(
+            "tblis",
+            CpuBackendKind::default_compiled(),
+            DotGeneralProvider::TblisIfAvailable,
+        ),
         case,
         params,
         lhs,
@@ -290,9 +301,7 @@ fn bench_read_view_all_providers(
     #[cfg(feature = "cpu-faer")]
     bench_read_view_dot(
         group,
-        "faer",
-        CpuBackendKind::Faer,
-        DotGeneralProvider::Base,
+        BenchProvider::new("faer", CpuBackendKind::Faer, DotGeneralProvider::Base),
         case,
         params.clone(),
         lhs,
@@ -302,9 +311,7 @@ fn bench_read_view_all_providers(
     #[cfg(feature = "cpu-blas")]
     bench_read_view_dot(
         group,
-        "blas",
-        CpuBackendKind::Blas,
-        DotGeneralProvider::Base,
+        BenchProvider::new("blas", CpuBackendKind::Blas, DotGeneralProvider::Base),
         case,
         params.clone(),
         lhs,
@@ -313,9 +320,11 @@ fn bench_read_view_all_providers(
     );
     bench_read_view_dot(
         group,
-        "tblis",
-        CpuBackendKind::default_compiled(),
-        DotGeneralProvider::TblisIfAvailable,
+        BenchProvider::new(
+            "tblis",
+            CpuBackendKind::default_compiled(),
+            DotGeneralProvider::TblisIfAvailable,
+        ),
         case,
         params,
         lhs,
@@ -353,9 +362,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         #[cfg(feature = "cpu-faer")]
         bench_owned_conj_dot(
             &mut group,
-            "faer",
-            CpuBackendKind::Faer,
-            DotGeneralProvider::Base,
+            BenchProvider::new("faer", CpuBackendKind::Faer, DotGeneralProvider::Base),
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
@@ -365,9 +372,7 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         #[cfg(feature = "cpu-blas")]
         bench_owned_conj_dot(
             &mut group,
-            "blas",
-            CpuBackendKind::Blas,
-            DotGeneralProvider::Base,
+            BenchProvider::new("blas", CpuBackendKind::Blas, DotGeneralProvider::Base),
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,
@@ -376,9 +381,11 @@ fn bench_tblis_dot_general_provider(c: &mut Criterion) {
         );
         bench_owned_conj_dot(
             &mut group,
-            "tblis",
-            CpuBackendKind::default_compiled(),
-            DotGeneralProvider::TblisIfAvailable,
+            BenchProvider::new(
+                "tblis",
+                CpuBackendKind::default_compiled(),
+                DotGeneralProvider::TblisIfAvailable,
+            ),
             "c64_matrix_square_gemm_lhs_conj",
             n,
             &complex_lhs,

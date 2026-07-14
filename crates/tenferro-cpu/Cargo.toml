@@ -27,9 +27,9 @@ cpu-tblis-runtime = [
 cpu-tblis-linked = [
     "cpu-tblis-provider",
     "dep:tblis-ffi",
-    "dep:tenferro-tblis-src",
-    "tenferro-tblis-src/build_from_source",
-    "tenferro-tblis-src/static",
+    "dep:tblis-src",
+    "tblis-src/build_from_source",
+    "tblis-src/static",
 ]
 provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
 provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
@@ -77,7 +77,7 @@ blas-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }
 lapack-src = { workspace = true, optional = true }
 tblis-ffi = { workspace = true, optional = true }
-tenferro-tblis-src = { workspace = true, optional = true }
+tblis-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

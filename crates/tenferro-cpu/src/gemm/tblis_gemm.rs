@@ -75,6 +75,32 @@ pub(crate) struct TblisPlan {
     out_labels: SmallVec<[label_type; 8]>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct TblisExecution<T> {
+    alpha: T,
+    beta: T,
+    lhs_conj: bool,
+    rhs_conj: bool,
+}
+
+impl<T> TblisExecution<T> {
+    pub(crate) fn new(alpha: T, beta: T, lhs_conj: bool, rhs_conj: bool) -> Self {
+        Self {
+            alpha,
+            beta,
+            lhs_conj,
+            rhs_conj,
+        }
+    }
+
+    pub(crate) fn beta(&self) -> T
+    where
+        T: Copy,
+    {
+        self.beta
+    }
+}
+
 pub(crate) fn output_shape<L, R, T>(
     lhs: &L,
     rhs: &R,
@@ -218,7 +244,7 @@ where
         rhs_labels[rhs_axis] = label;
     }
 
-    if lhs_labels.iter().any(|&label| label == 0) || rhs_labels.iter().any(|&label| label == 0) {
+    if lhs_labels.contains(&0) || rhs_labels.contains(&0) {
         return Ok(None);
     }
 
@@ -241,13 +267,10 @@ where
 
 pub(crate) fn execute<T>(
     mut plan: TblisPlan,
-    alpha: T,
     lhs_ptr: *const T,
     rhs_ptr: *const T,
-    beta: T,
     out: &mut TypedTensorViewMut<'_, T>,
-    lhs_conj: bool,
-    rhs_conj: bool,
+    execution: TblisExecution<T>,
 ) -> Result<()>
 where
     T: TblisGemm,
@@ -274,8 +297,8 @@ where
 
     let mut lhs_tensor = tblis_tensor {
         type_: T::TYPE,
-        conj: c_int::from(lhs_conj),
-        scalar: T::scalar(alpha),
+        conj: c_int::from(execution.lhs_conj),
+        scalar: T::scalar(execution.alpha),
         data: lhs_ptr.cast_mut() as *mut c_void,
         ndim: c_int::try_from(plan.lhs_len.len()).map_err(|_| Error::InvalidConfig {
             op: OP,
@@ -286,7 +309,7 @@ where
     };
     let mut rhs_tensor = tblis_tensor {
         type_: T::TYPE,
-        conj: c_int::from(rhs_conj),
+        conj: c_int::from(execution.rhs_conj),
         scalar: T::scalar(T::one()),
         data: rhs_ptr.cast_mut() as *mut c_void,
         ndim: c_int::try_from(plan.rhs_len.len()).map_err(|_| Error::InvalidConfig {
@@ -299,7 +322,7 @@ where
     let mut out_tensor = tblis_tensor {
         type_: T::TYPE,
         conj: 0,
-        scalar: T::scalar(beta),
+        scalar: T::scalar(execution.beta),
         data: out_ptr.wrapping_add(out_offset) as *mut c_void,
         ndim: c_int::try_from(plan.out_len.len()).map_err(|_| Error::InvalidConfig {
             op: OP,
@@ -344,18 +367,18 @@ pub(crate) fn runtime_available() -> Result<bool> {
     #[cfg(feature = "cpu-tblis-runtime")]
     {
         static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        static PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
         Ok(*AVAILABLE.get_or_init(|| {
-            let _guard = PROBE_LOCK.lock().ok();
-            let previous_hook = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {}));
-            let available = std::panic::catch_unwind(|| unsafe {
+            // INVARIANT: `tblis-ffi` 0.2.6 exposes only panic-based dynamic
+            // loading. This one-time, pre-FFI availability probe is a temporary
+            // exception to the no-panic-catching audit: it caches the result and
+            // never catches a panic from a native TBLIS call. It is effective only
+            // with `panic = "unwind"`; remove it after adopting a `tblis-ffi`
+            // release containing https://github.com/RESTGroup/tblis-rs/pull/4.
+            std::panic::catch_unwind(|| unsafe {
                 tblis_ffi::tblis::dyload_lib();
             })
-            .is_ok();
-            std::panic::set_hook(previous_hook);
-            available
+            .is_ok()
         }))
     }
     #[cfg(feature = "cpu-tblis-linked")]

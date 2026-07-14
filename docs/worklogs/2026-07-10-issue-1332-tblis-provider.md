@@ -16,16 +16,18 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
 - `crates/tenferro-cpu/src/gemm/mod.rs`
 - `crates/tenferro-cpu/src/gemm/{faer_gemm.rs,blas_gemm.rs}`
 - `crates/tenferro-cpu/tests/provider_feature_contract.rs`
+- `docs/architecture/tenferro-crates.md`
 - shared `tensor4all-agent-rules` common/Rust rules from the upstream repository
 - local cargo registry sources for `tblis-ffi 0.2.6`
 
 ## Decisions
 
-- Kept `tblis-ffi = 0.2.6` optional behind `cpu-tblis`; default features are
-  unchanged.
-- Added tenferro-owned `tenferro-tblis-src` source-build link glue behind
-  `cpu-tblis`, so the user-facing feature is source-backed rather than
-  requiring a manual `libtblis` install or caller environment workaround.
+- Kept `tblis-ffi = 0.2.6` optional behind the TBLIS provider routes; default
+  features are unchanged.
+- Added Tensor4All-maintained `t4a-tblis-src` source-build link glue behind
+  `cpu-tblis-linked`. The independently versioned package is stored under
+  `third_party/`, excluded from the tenferro workspace, and consumed through
+  the neutral Cargo dependency alias `tblis-src`.
 - Kept `cpu-tblis` additive to an existing CPU provider: `tenferro-cpu` still
   requires `cpu-faer` or `cpu-blas`, and `CpuBackendKind::default_compiled()`
   remains unchanged. This preserves current defaults and guarantees unsupported
@@ -54,19 +56,82 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
 - Broader TBLIS benchmark coverage beyond the quick local release-mode run with
   pinned provider thread counts.
 
+## Runtime-loader compatibility exception
+
+- `cpu-tblis-runtime` uses `tblis-ffi 0.2.6` with its `dynamic_loading`
+  feature. That release reports ordinary shared-library discovery failure only
+  through `panic!`, so tenferro temporarily catches the first `dyload_lib()`
+  probe and caches whether runtime TBLIS is available.
+- The catch is confined to the Rust loader probe before any native TBLIS call.
+  The source carries the repository-standard `// INVARIANT:` marker so audits
+  treat it as this explicit upstream-compatibility exception rather than a
+  general panic-based backend error boundary.
+- Tenferro does not replace or suppress the process-global panic hook. Until a
+  fallible upstream release is adopted, a missing runtime TBLIS library may
+  therefore emit the upstream panic message before tenferro falls back to the
+  configured base CPU provider.
+- `catch_unwind` works only with `panic = "unwind"`; a downstream application
+  using `panic = "abort"` cannot recover from the upstream loader panic. The
+  runtime-loaded route remains opt-in, while `cpu-tblis-linked` does not use
+  this compatibility path.
+- <https://github.com/RESTGroup/tblis-rs/pull/4> adds a fallible
+  `try_dyload_lib()` while preserving `dyload_lib()` compatibility. Remove the
+  catch and this audit exception after tenferro adopts a released version that
+  contains that API.
+
+## Independent source-provider package
+
+- `t4a-tblis-src 0.1.0` has a self-contained manifest and an empty
+  `[workspace]` table. The tenferro root also lists it under `workspace.exclude`
+  and consumes it through a path-plus-exact-version dependency, so local
+  development and the future registry package use the same source without
+  coupling its release version to tenferro.
+- The package metadata includes its MSRV, docs.rs URL, keywords, categories,
+  README, and an explicit package file list. `cargo package --list`,
+  `cargo package`, and standalone unit/doc tests validate the package without
+  publishing it.
+- The Rust build glue retains the upstream RESTGroup/tblis-rs Apache-2.0
+  license and attribution. License files and pinned revisions for TBLIS,
+  TCI, MArray, stl_ext, and BLIS ship with the package for downstream binary
+  redistribution notices.
+- No crates.io publication is part of this PR update. Publishing this new
+  package requires a separate, explicit user approval for `t4a-tblis-src`.
+
+## Final PR update verification
+
+- Feature-specific Clippy exposed argument-count warnings in the TBLIS FFI
+  leaf and benchmark harness. `TblisExecution` now groups one native execution
+  request, and `BenchProvider` groups one benchmark provider, without adding
+  lint suppressions or changing the public API.
+- `cargo test --workspace --release` passed.
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json`
+  passed, and `python3 scripts/check-coverage.py coverage.json` reported all
+  150 checked files above their thresholds.
+- `cargo doc --workspace --no-deps` passed. The system `python3` is 3.9, so
+  `python3.11 scripts/check-docs-site.py` was used;
+  it verified 13 workspace library crates and four guide dependency snippets.
+- `cargo clippy --workspace --all-targets -- -D warnings` and the equivalent
+  `ext/tropical` command passed. Feature-specific Clippy also passed for both
+  `cpu-tblis-runtime` and `cpu-tblis-linked`.
+- Standalone metadata inspection confirms the package name, version, MSRV,
+  description, license, repository/homepage/docs URLs, README, keywords,
+  categories, targets, and features. `cargo package --list --allow-dirty`
+  listed 17 intended files, and `cargo package --allow-dirty` packaged and
+  verified `t4a-tblis-src 0.1.0` without publishing it.
+
 ## Provider-source integration review
 
-- Current feature shape is the right user-facing direction:
-  `tenferro-cpu/cpu-tblis` enables `dep:tblis-ffi`,
-  `dep:tenferro-tblis-src`, and
-  `tenferro-tblis-src/build_from_source` plus
-  `tenferro-tblis-src/static`. Public passthrough crates forward `cpu-tblis`,
-  and the provider feature contract covers this.
+- Current feature shape separates deployment routes:
+  `tenferro-cpu/cpu-tblis` aliases the runtime-loaded route, while
+  `cpu-tblis-linked` enables `dep:tblis-ffi`, `dep:tblis-src`, and
+  `tblis-src/build_from_source` plus `tblis-src/static`. The provider feature
+  contract covers both routes.
 - `tblis-ffi` has no source-build feature of its own. Tenferro must keep both
-  dependencies directly: `tenferro-tblis-src` supplies Cargo link directives,
-  and `tblis-ffi` supplies extern declarations.
+  dependencies directly: the `tblis-src` dependency alias resolves to
+  `t4a-tblis-src` and supplies Cargo link directives, while `tblis-ffi`
+  supplies extern declarations.
 - Do not enable `tblis-ffi/dynamic_loading` for the source-backed feature. With
-  `tenferro-tblis-src`, the FFI should use the non-dynamic extern path, and
+  `t4a-tblis-src`, the FFI should use the non-dynamic extern path, and
   runtime availability should be treated as compile/link availability.
 - The source-backed TBLIS path treats runtime availability as compile/link
   availability. The FFI leaf keeps `ensure_runtime_available()` as a no-op and
@@ -109,9 +174,10 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
 - Fixed the link retention in the initial `tblis-src` experiment by adding an
   explicit provider-source crate anchor in `tenferro-cpu`, matching the
   existing provider-source pattern for BLAS/LAPACK crates. The final patch uses
-  `#[cfg(feature = "cpu-tblis")] extern crate tenferro_tblis_src as _;`, so
-  Cargo keeps the tenferro-owned source/link crate in the Rust crate graph and
-  propagates its native `cargo:rustc-link-lib=static=tblis` directive.
+  `#[cfg(feature = "cpu-tblis-linked")] extern crate tblis_src as _;`, so
+  Cargo keeps the independently versioned source/link crate in the Rust crate
+  graph and propagates its native `cargo:rustc-link-lib=static=tblis`
+  directive.
 - Verified the cached source-build target after the fix with:
   `CARGO_TARGET_DIR=/private/tmp/tenferro-tblis-envcheck PKG_CONFIG_LIBDIR=/private/tmp/empty-pkgconfig PKG_CONFIG_PATH=/private/tmp/empty-pkgconfig CMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE TBLIS_SRC=https://github.com/MatthewsResearchGroup/tblis.git cargo test -p tenferro-cpu --no-default-features --features cpu-faer,cpu-tblis`.
   This passed: 218 unit tests, 7 backend capability contract tests, 3 provider
@@ -175,8 +241,9 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
 - Rejected a local `[patch.crates-io]` as the main fix: it would make this
   workspace pass, but downstream users would still resolve crates.io
   `tblis-src` unless an upstream release happened first.
-- Added `crates/tenferro-tblis-src`, a small tenferro-owned link crate. It does
-  not vendor a TBLIS source tree. By default it clones
+- Added `third_party/t4a-tblis-src`, a small Tensor4All-maintained link crate
+  that is independently versioned and explicitly excluded from the tenferro
+  workspace. It does not vendor a TBLIS source tree. By default it clones
   `https://github.com/MatthewsResearchGroup/tblis.git` at
   `eb719e718976572e0ab53975f4e0c799faeb35f2`, still honors
   `TBLIS_SRC`/`TBLIS_VER`, uses `SOURCE_DIR` for local `TBLIS_SRC` directories,
@@ -185,9 +252,10 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
   `CMakeLists.txt` BLIS discovery block so bundled BLIS is used. This avoids the
   Homebrew/pkg-config header mismatch without requiring users to empty
   `PKG_CONFIG_PATH` or CMake package registries.
-- Updated `cpu-tblis` feature wiring to:
-  `["dep:tblis-ffi", "dep:tenferro-tblis-src", "tenferro-tblis-src/build_from_source", "tenferro-tblis-src/static"]`,
-  so the source-backed provider links `libtblis.a` by default.
+- Updated `cpu-tblis-linked` feature wiring to:
+  `["dep:tblis-ffi", "dep:tblis-src", "tblis-src/build_from_source", "tblis-src/static"]`,
+  where the neutral dependency alias resolves to `t4a-tblis-src`, so the
+  source-backed provider links `libtblis.a` by default.
 - Static source-provider linking also emits link directives for bundled
   `libtci.a`, `libblis_tblis.a`, and `libblis_core.a`; `otool -L` on the
   resulting test binary shows no `libtblis.dylib` dependency.

@@ -1,3 +1,6 @@
+// Derived from RESTGroup/tblis-rs `tblis-src` and modified by Tensor4All.
+// See LICENSE and NOTICE.md.
+
 use std::path::{Path, PathBuf};
 
 const DEFAULT_TBLIS_VER: &str = "eb719e718976572e0ab53975f4e0c799faeb35f2";
