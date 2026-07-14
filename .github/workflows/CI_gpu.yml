@@ -8,6 +8,8 @@ name: CI_gpu
 # attach `CI GPU gate` to fork commits. It also remains a manual legacy fallback
 # for comparing the org larger GPU runner with RunPod while the migration
 # settles.
+# Maintainers should recover a same-repository PR through the trusted RunPod
+# workflow with `python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --wait`.
 
 on:
   pull_request:
@@ -187,7 +189,6 @@ jobs:
           prefix-key: v0-rust-cuda
           shared-key: cuda-release
           cache-all-crates: true
-          cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
       - name: Build CUDA test archive

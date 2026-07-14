@@ -36,10 +36,15 @@ name: RunPod tenferro-rs GPU Test
 on:
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: Open same-repository PR number to recover through trusted main
+        required: false
+        default: 0
+        type: number
       tenferro_ref:
         description: tenferro-rs git ref (branch, tag, or SHA)
         required: false
-        default: main
+        default: ""
         type: string
       ci_gpu_gate_head_sha:
         description: Optional PR head SHA to publish the CI GPU gate check to
@@ -86,6 +91,7 @@ jobs:
       tenferro_ref: ${{ steps.resolve_ref.outputs.tenferro_ref }}
       gpu_required: ${{ steps.resolve_ref.outputs.run_gpu }}
       policy_reason: ${{ steps.resolve_ref.outputs.reason }}
+      target_head_sha: ${{ steps.resolve_ref.outputs.target_head_sha }}
 
     steps:
       # workflow_run resolves this checkout to trusted default-branch content.
@@ -98,7 +104,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || 'main' }}
+          MANUAL_PR_NUMBER: ${{ inputs.pr_number || 0 }}
+          MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || '' }}
+          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
           WORKFLOW_RUN_ACTOR: ${{ github.event.workflow_run.actor.login || '' }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
@@ -121,6 +129,21 @@ jobs:
                 exit 1
               ;;
             esac
+          }
+
+          classify_pr_paths() {
+            local pr_number="$1"
+            local changed_paths=/tmp/runpod-pr-changed-paths.txt
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
+              --jq '.[].filename' > "${changed_paths}"
+            local policy_args=()
+            while IFS= read -r path; do
+              if [ -n "${path}" ]; then
+                policy_args+=(--path "${path}")
+              fi
+            done < "${changed_paths}"
+            python3 scripts/ci/change_policy.py "${policy_args[@]}"
           }
 
           if [ "${EVENT_NAME}" = "workflow_run" ]; then
@@ -184,18 +207,8 @@ jobs:
 
             echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
             echo "tenferro_ref=${merge_sha}" >> "${GITHUB_OUTPUT}"
-
-            changed_paths=/tmp/runpod-pr-changed-paths.txt
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
-              --jq '.[].filename' > "${changed_paths}"
-            policy_args=()
-            while IFS= read -r path; do
-              if [ -n "${path}" ]; then
-                policy_args+=(--path "${path}")
-              fi
-            done < "${changed_paths}"
-            python3 scripts/ci/change_policy.py "${policy_args[@]}"
+            echo "target_head_sha=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
+            classify_pr_paths "${pr_number}"
           else
             # Manual dispatch relies on the triggering actor check.
             if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
@@ -203,9 +216,50 @@ jobs:
               exit 1
             fi
             check_permission "${GITHUB_ACTOR}" "Workflow actor"
-            echo "tenferro_ref=${MANUAL_TENFERRO_REF}" >> "${GITHUB_OUTPUT}"
-            echo "run_gpu=true" >> "${GITHUB_OUTPUT}"
-            echo "reason=trusted manual revision validation" >> "${GITHUB_OUTPUT}"
+            if ! [[ "${MANUAL_PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be a non-negative integer."
+              exit 1
+            fi
+            if [ "${MANUAL_PR_NUMBER}" -gt 0 ]; then
+              if [ -n "${MANUAL_TENFERRO_REF}" ] || [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
+                echo "::error::pr_number cannot be combined with tenferro_ref or ci_gpu_gate_head_sha."
+                exit 1
+              fi
+              pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
+              if [ "$(jq -r .state <<<"${pr_json}")" != open ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} is not open; refusing recovery."
+                exit 1
+              fi
+              pr_head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+              if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} is not from this repository; refusing recovery."
+                exit 1
+              fi
+              pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
+              check_permission "${pr_author}" "PR author"
+              pr_head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
+              refreshed_pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
+              refreshed_head_sha="$(jq -r '.head.sha' <<<"${refreshed_pr_json}")"
+              refreshed_state="$(jq -r .state <<<"${refreshed_pr_json}")"
+              refreshed_head_repo="$(jq -r '.head.repo.full_name' <<<"${refreshed_pr_json}")"
+              if [ "${refreshed_head_sha}" != "${pr_head_sha}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} head moved during authorization; refusing recovery."
+                exit 1
+              fi
+              if [ "${refreshed_state}" != open ] || [ "${refreshed_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+                echo "::error::PR #${MANUAL_PR_NUMBER} trust state changed during authorization; refusing recovery."
+                exit 1
+              fi
+              echo "tenferro_ref=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
+              echo "target_head_sha=${pr_head_sha}" >> "${GITHUB_OUTPUT}"
+              classify_pr_paths "${MANUAL_PR_NUMBER}"
+            else
+              manual_ref="${MANUAL_TENFERRO_REF:-main}"
+              echo "tenferro_ref=${manual_ref}" >> "${GITHUB_OUTPUT}"
+              echo "target_head_sha=${MANUAL_GATE_HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+              echo "run_gpu=true" >> "${GITHUB_OUTPUT}"
+              echo "reason=trusted manual revision validation" >> "${GITHUB_OUTPUT}"
+            fi
           fi
 
   runpod-contract:
@@ -489,7 +543,7 @@ jobs:
         id: archive_key
         run: |
           set -euo pipefail
-          key="cuda-archive-v8-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${TENFERRO_REF}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          key="cuda-archive-v9-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
           echo "CUDA archive cache key: ${key}"
 
@@ -1247,8 +1301,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
-          WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          TARGET_HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
           GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}
@@ -1301,12 +1354,7 @@ jobs:
             summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s' "$(cat "${failures_file}")")"
           fi
 
-          target_sha=""
-          if [ "${EVENT_NAME}" = "workflow_run" ]; then
-            target_sha="$(jq -r '.[0].head.sha // empty' <<<"${WORKFLOW_RUN_PULL_REQUESTS}")"
-          elif [ -n "${MANUAL_GATE_HEAD_SHA}" ]; then
-            target_sha="${MANUAL_GATE_HEAD_SHA}"
-          fi
+          target_sha="${TARGET_HEAD_SHA}"
 
           if [ -n "${target_sha}" ]; then
             echo "Publishing CI GPU gate check to PR head SHA ${target_sha}."

@@ -89,6 +89,41 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("for attempt in $(seq 1 5)", create)
         self.assertNotIn("curl -sS", create)
 
+    def test_runpod_cache_key_uses_content_not_ref_identity(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        key_line = next(
+            line for line in text.splitlines() if 'key="cuda-archive-' in line
+        )
+        self.assertNotIn("TENFERRO_REF", key_line)
+        self.assertIn("hashFiles(", key_line)
+        self.assertIn("runpod_config.json", key_line)
+
+    def test_manual_pr_recovery_is_authorized_and_head_stable(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("pr_number:", text)
+        self.assertIn("MANUAL_PR_NUMBER", text)
+        self.assertIn(".state", text)
+        self.assertIn(".head.repo.full_name", text)
+        self.assertIn("refusing recovery", text)
+        self.assertIn(
+            "target_head_sha: ${{ steps.resolve_ref.outputs.target_head_sha }}",
+            text,
+        )
+        gate = text[text.index("  ci-gpu-gate:") :]
+        self.assertIn(
+            "TARGET_HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}",
+            gate,
+        )
+        self.assertNotIn("WORKFLOW_RUN_PULL_REQUESTS", gate)
+
+    def test_actionlint_knows_the_organization_gpu_runner(self) -> None:
+        config = read(".github/actionlint.yaml")
+        self.assertIn("self-hosted-runner:", config)
+        self.assertIn("- ubuntu-gpu", config)
+        self.assertNotIn(
+            "cache-workspace-crates", read(".github/workflows/CI_gpu.yml")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
