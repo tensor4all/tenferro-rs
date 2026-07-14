@@ -1,10 +1,17 @@
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use thiserror::Error as ThisError;
 
 use crate::affinity::{SystemThreadAffinity, ThreadAffinity};
+use crate::arbiter::{set_execution_owner, with_execution_owner, ResourceOwner};
 use crate::{CpuId, CpuSet, Error, Result};
+
+#[derive(Debug, Default)]
+struct ExecutionOwnerState {
+    owner: Option<ResourceOwner>,
+    depth: usize,
+}
 
 /// Failure to construct a CPU context with pinned Rayon workers.
 ///
@@ -70,6 +77,7 @@ pub struct CpuContext {
     num_threads: usize,
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
+    execution_owner: Arc<Mutex<ExecutionOwnerState>>,
 }
 
 impl CpuContext {
@@ -167,6 +175,7 @@ impl CpuContext {
             num_threads,
             pool,
             pinned_cpus: None,
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
         })
     }
 
@@ -258,6 +267,7 @@ impl CpuContext {
             num_threads,
             pool: Some(pool),
             pinned_cpus: Some(cpus),
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
         })
     }
 
@@ -266,6 +276,7 @@ impl CpuContext {
             num_threads: 1,
             pool: None,
             pinned_cpus: None,
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
         }
     }
 
@@ -315,6 +326,76 @@ impl CpuContext {
         match &self.pool {
             Some(pool) => pool.install(op),
             None => op(),
+        }
+    }
+
+    pub(crate) fn install_with_execution_owner<R: Send>(
+        &self,
+        owner: ResourceOwner,
+        op: impl FnOnce() -> R + Send,
+    ) -> R {
+        let should_broadcast = {
+            let mut state = self
+                .execution_owner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match state.owner {
+                None => {
+                    state.owner = Some(owner);
+                    state.depth = 1;
+                    true
+                }
+                Some(active) if active == owner => {
+                    state.depth += 1;
+                    false
+                }
+                Some(active) => panic!(
+                    "CPU execution owner invariant violated: active {active:?}, requested {owner:?}"
+                ),
+            }
+        };
+        if should_broadcast {
+            self.broadcast_execution_owner(Some(owner));
+        }
+
+        struct OwnerGuard<'a> {
+            context: &'a CpuContext,
+            owner: ResourceOwner,
+        }
+
+        impl Drop for OwnerGuard<'_> {
+            fn drop(&mut self) {
+                let should_clear = {
+                    let mut state = self
+                        .context
+                        .execution_owner
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    debug_assert_eq!(state.owner, Some(self.owner));
+                    state.depth -= 1;
+                    if state.depth == 0 {
+                        state.owner = None;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if should_clear {
+                    self.context.broadcast_execution_owner(None);
+                }
+            }
+        }
+
+        let _guard = OwnerGuard {
+            context: self,
+            owner,
+        };
+        self.install(|| with_execution_owner(owner, op))
+    }
+
+    fn broadcast_execution_owner(&self, owner: Option<ResourceOwner>) {
+        if let Some(pool) = &self.pool {
+            pool.broadcast(|_| set_execution_owner(owner));
         }
     }
 

@@ -181,6 +181,42 @@ fn nested_independent_engines_propagate_reentrancy_across_rayon_pools() {
 
 #[test]
 #[cfg(feature = "cpu-faer")]
+fn stolen_rayon_child_task_inherits_the_outer_execution_owner() {
+    let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let nested = outer.clone();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        outer.install(|| {
+            rayon::scope(|scope| {
+                let completed_tx = completed_tx.clone();
+                scope.spawn(move |_| {
+                    let value = nested.install(|| 13_u32);
+                    completed_tx.send(value).unwrap();
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            });
+        });
+    });
+
+    assert_eq!(completed_rx.recv_timeout(Duration::from_secs(2)), Ok(13));
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn execution_owner_broadcast_is_cleared_after_panic() {
+    let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.install(|| panic!("forced nested execution panic"));
+    }));
+
+    assert!(panic.is_err());
+    assert_eq!(backend.install(|| 17_u32), 17);
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
 fn nested_clone_tensor_operation_does_not_relock_engine_resources() {
     let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let mut nested = backend.clone();
@@ -207,11 +243,17 @@ fn nested_provider_session_uses_reentrant_transient_resources() {
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    let result = backend
-        .with_backend_session(|_| nested.add(&lhs, &rhs))
+    std::thread::spawn(move || {
+        let result = backend.with_backend_session(|_| nested.add(&lhs, &rhs));
+        completed_tx.send(result).unwrap();
+    });
+
+    let result = completed_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("nested provider operation should not deadlock")
         .unwrap();
-
     assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0]);
 }
 

@@ -70,10 +70,10 @@ separate all-node computation. Overlapping placements are serialized by the
 process-wide arbiter, including placements created by independently constructed
 backends; disjoint node placements may execute concurrently. Synchronous nested
 execution carries one logical owner across Rayon pools, so nested clone or
-independent-backend work cannot wait on its own permit. Reentrant operations use
-transient scratch buffers and analysis caches instead of re-locking an outer
-engine session's resources. Other logical executions remain subject to the
-overlap rules.
+independent-backend work, including a backend call from a stolen Rayon child
+task, cannot wait on its own permit. Reentrant operations use transient scratch
+buffers and analysis caches instead of re-locking an outer engine session's
+resources. Other logical executions remain subject to the overlap rules.
 
 ## External BLAS Providers
 

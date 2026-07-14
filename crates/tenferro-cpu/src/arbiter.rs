@@ -43,6 +43,11 @@ pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() ->
     op()
 }
 
+pub(crate) fn set_execution_owner(owner: Option<ResourceOwner>) {
+    EXECUTION_OWNER.set(owner);
+}
+
+#[cfg(test)]
 fn request_owner() -> ResourceOwner {
     EXECUTION_OWNER
         .with(Cell::get)
@@ -115,7 +120,7 @@ impl ResourceArbiter {
 
     #[cfg(test)]
     pub(crate) fn acquire(&self, cpus: CpuSet) -> Result<ResourcePermit, ResourceArbiterError> {
-        self.acquire_request(ResourceRequest::CpuSet(cpus))
+        self.acquire_request(ResourceRequest::CpuSet(cpus), request_owner())
     }
 
     #[cfg(test)]
@@ -130,7 +135,7 @@ impl ResourceArbiter {
     pub(crate) fn acquire_provider_exclusive(
         &self,
     ) -> Result<ResourcePermit, ResourceArbiterError> {
-        self.acquire_request(ResourceRequest::ProviderExclusive)
+        self.acquire_request(ResourceRequest::ProviderExclusive, request_owner())
     }
 
     #[cfg(test)]
@@ -140,17 +145,24 @@ impl ResourceArbiter {
         self.try_acquire_request(ResourceRequest::ProviderExclusive)
     }
 
-    pub(crate) fn acquire_recovering(&self, cpus: CpuSet) -> ResourcePermit {
-        self.acquire_request_recovering(ResourceRequest::CpuSet(cpus))
+    pub(crate) fn acquire_recovering(&self, cpus: CpuSet, owner: ResourceOwner) -> ResourcePermit {
+        self.acquire_request_recovering(ResourceRequest::CpuSet(cpus), owner)
     }
 
-    pub(crate) fn acquire_provider_exclusive_recovering(&self) -> ResourcePermit {
-        self.acquire_request_recovering(ResourceRequest::ProviderExclusive)
+    pub(crate) fn acquire_provider_exclusive_recovering(
+        &self,
+        owner: ResourceOwner,
+    ) -> ResourcePermit {
+        self.acquire_request_recovering(ResourceRequest::ProviderExclusive, owner)
     }
 
-    fn acquire_request_recovering(&self, request: ResourceRequest) -> ResourcePermit {
+    fn acquire_request_recovering(
+        &self,
+        request: ResourceRequest,
+        owner: ResourceOwner,
+    ) -> ResourcePermit {
         loop {
-            match self.acquire_request(request.clone()) {
+            match self.acquire_request(request.clone(), owner) {
                 Ok(permit) => return permit,
                 Err(ResourceArbiterError::StatePoisoned) => {
                     self.inner.state.clear_poison();
@@ -177,6 +189,7 @@ impl ResourceArbiter {
     fn acquire_request(
         &self,
         request: ResourceRequest,
+        owner: ResourceOwner,
     ) -> Result<ResourcePermit, ResourceArbiterError> {
         let mut state = self
             .inner
@@ -184,7 +197,6 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let id = state.next_request_id;
-        let owner = request_owner();
         state.next_request_id = state
             .next_request_id
             .checked_add(1)

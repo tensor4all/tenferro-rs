@@ -8,7 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::arbiter::{
-    inherited_or_new_execution_owner, with_execution_owner, ResourceArbiter, ResourcePermit,
+    inherited_or_new_execution_owner, with_execution_owner, ResourceArbiter, ResourceOwner,
+    ResourcePermit,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::engine::{CpuEngine, EngineResources};
@@ -1294,24 +1295,20 @@ impl CpuBackend {
     /// ```
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
         let owner = inherited_or_new_execution_owner();
-        self.engine.context().install(|| {
-            with_execution_owner(owner, || {
-                let _permit = self.acquire_execution_permit();
-                op()
-            })
-        })
+        let _permit = self.acquire_execution_permit(owner);
+        self.engine
+            .context()
+            .install_with_execution_owner(owner, op)
     }
 
     fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
         let ctx = self.engine.context_arc();
         let owner = inherited_or_new_execution_owner();
-        ctx.install(|| {
-            with_execution_owner(owner, || {
-                let permit = self.acquire_execution_permit();
-                self.with_execution_resources(&permit, |resources| {
-                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                    op(buffers.get_mut())
-                })
+        let permit = self.acquire_execution_permit(owner);
+        ctx.install_with_execution_owner(owner, || {
+            self.with_execution_resources(&permit, |resources| {
+                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                op(buffers.get_mut())
             })
         })
     }
@@ -1322,7 +1319,7 @@ impl CpuBackend {
     fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         let owner = inherited_or_new_execution_owner();
         with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit();
+            let permit = self.acquire_execution_permit(owner);
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                 op(buffers.get_mut())
@@ -1363,13 +1360,11 @@ impl CpuBackend {
     ) -> R {
         let ctx = self.engine.context_arc();
         let owner = inherited_or_new_execution_owner();
-        ctx.install(|| {
-            with_execution_owner(owner, || {
-                let permit = self.acquire_execution_permit();
-                self.with_execution_resources(&permit, |resources| {
-                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                    op(buffers.get_mut(), gemm_analysis_cache)
-                })
+        let permit = self.acquire_execution_permit(owner);
+        ctx.install_with_execution_owner(owner, || {
+            self.with_execution_resources(&permit, |resources| {
+                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                op(buffers.get_mut(), gemm_analysis_cache)
             })
         })
     }
@@ -1384,7 +1379,7 @@ impl CpuBackend {
     ) -> R {
         let owner = inherited_or_new_execution_owner();
         with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit();
+            let permit = self.acquire_execution_permit(owner);
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                 op(buffers.get_mut(), gemm_analysis_cache)
@@ -1410,19 +1405,20 @@ impl CpuBackend {
         op(&mut resources)
     }
 
-    fn acquire_execution_permit(&self) -> ResourcePermit {
+    fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
         match &self.resolved {
             ResolvedCpuExecution::Managed(placement) => self
                 .shared
                 .arbiter
-                .acquire_recovering(placement.cpus().clone()),
+                .acquire_recovering(placement.cpus().clone(), owner),
             ResolvedCpuExecution::Compatibility => self
                 .shared
                 .arbiter
-                .acquire_recovering(self.shared.topology.allowed_cpus().clone()),
-            ResolvedCpuExecution::ProviderDefaultExclusive => {
-                self.shared.arbiter.acquire_provider_exclusive_recovering()
-            }
+                .acquire_recovering(self.shared.topology.allowed_cpus().clone(), owner),
+            ResolvedCpuExecution::ProviderDefaultExclusive => self
+                .shared
+                .arbiter
+                .acquire_provider_exclusive_recovering(owner),
         }
     }
 }
@@ -2311,36 +2307,34 @@ impl CpuBackend {
         let ctx = self.engine.context_arc();
         let kind = self.kind();
         let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
         let run = || {
-            with_execution_owner(owner, || {
-                let permit = self.acquire_execution_permit();
-                self.with_execution_resources(&permit, |resources| {
-                    let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                    let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
-                    let session_started = Instant::now();
-                    let mut session = CpuExecSession {
-                        ctx: ctx.as_ref(),
-                        buffers: buffers.get_mut(),
-                        gemm_analysis_cache: cache,
-                        kind,
-                    };
-                    record_cpu_session_profile(
-                        "with_backend_session_cached.session_construct",
-                        session_started.elapsed(),
-                    );
-                    let exec_started = Instant::now();
-                    let result = f(&mut session);
-                    record_cpu_session_profile(
-                        "with_backend_session_cached.exec_body",
-                        exec_started.elapsed(),
-                    );
-                    result
-                })
+            self.with_execution_resources(&permit, |resources| {
+                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
+                let session_started = Instant::now();
+                let mut session = CpuExecSession {
+                    ctx: ctx.as_ref(),
+                    buffers: buffers.get_mut(),
+                    gemm_analysis_cache: cache,
+                    kind,
+                };
+                record_cpu_session_profile(
+                    "with_backend_session_cached.session_construct",
+                    session_started.elapsed(),
+                );
+                let exec_started = Instant::now();
+                let result = f(&mut session);
+                record_cpu_session_profile(
+                    "with_backend_session_cached.exec_body",
+                    exec_started.elapsed(),
+                );
+                result
             })
         };
         match kind {
-            CpuBackendKind::Faer => ctx.install(run),
-            CpuBackendKind::Blas => run(),
+            CpuBackendKind::Faer => ctx.install_with_execution_owner(owner, run),
+            CpuBackendKind::Blas => with_execution_owner(owner, run),
         }
     }
 }
@@ -2376,7 +2370,7 @@ impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
         let owner = inherited_or_new_execution_owner();
         with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit();
+            let permit = self.acquire_execution_permit(owner);
             self.with_execution_resources(&permit, |resources| {
                 let buffers = &mut resources.buffers;
                 match tensor {
