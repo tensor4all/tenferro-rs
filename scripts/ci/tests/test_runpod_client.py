@@ -1,10 +1,12 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
 from scripts.ci.runpod_client import (
     CreateRequest,
+    CreateResult,
     PermanentRunPodError,
     RetryClass,
     RetryableRunPodError,
@@ -14,6 +16,7 @@ from scripts.ci.runpod_client import (
     create_pod,
     is_capacity_failure,
     parse_create_response,
+    publish_github_result,
     redacted_error_message,
 )
 
@@ -25,6 +28,52 @@ CONFIG = json.loads(
 
 
 class RunPodClientTests(unittest.TestCase):
+    def test_publish_github_result_records_tier_and_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            summary = Path(directory) / "summary"
+            result = CreateResult(
+                pod_id="pod-1",
+                gpu_type_id="NVIDIA L40S",
+                gpu_tier="premium",
+                body=b"{}",
+            )
+
+            publish_github_result(
+                result,
+                output_path=output,
+                summary_path=summary,
+            )
+
+            self.assertEqual(
+                output.read_text(),
+                "pod_id=pod-1\n"
+                "gpu_type_id=NVIDIA L40S\n"
+                "gpu_tier=premium\n",
+            )
+            self.assertIn(
+                "Selected GPU: `NVIDIA L40S`", summary.read_text()
+            )
+            self.assertIn("Price tier: `premium`", summary.read_text())
+
+    def test_publish_github_result_rejects_multiline_provider_values(
+        self,
+    ) -> None:
+        result = CreateResult(
+            pod_id="pod-1",
+            gpu_type_id="NVIDIA L40S\ngpu_tier=forged",
+            gpu_tier="premium",
+            body=b"{}",
+        )
+        with self.assertRaisesRegex(
+            PermanentRunPodError, "unsafe GitHub output"
+        ):
+            publish_github_result(
+                result,
+                output_path=Path("unused-output"),
+                summary_path=None,
+            )
+
     def test_capacity_failure_requires_server_error_and_known_message(
         self,
     ) -> None:

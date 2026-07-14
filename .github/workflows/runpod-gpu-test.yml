@@ -640,6 +640,7 @@ jobs:
       pod_id: ${{ steps.create_pod.outputs.pod_id }}
       runner_label: ${{ steps.vars.outputs.runner_label }}
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
+      gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
 
     steps:
       - name: Checkout trusted RunPod client
@@ -932,6 +933,7 @@ jobs:
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
+          echo "RunPod price tier: ${{ needs.start-runpod.outputs.gpu_tier }}"
           echo "RunPod gpu_type_id (from pod create): ${{ needs.start-runpod.outputs.gpu_type_id }}"
           echo "=== GPU (nvidia-smi) ==="
           nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv

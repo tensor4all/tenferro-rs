@@ -89,6 +89,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("for attempt in $(seq 1 5)", create)
         self.assertNotIn("curl -sS", create)
 
+    def test_runpod_selected_gpu_is_forwarded_and_logged(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn(
+            "gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}", text
+        )
+        self.assertIn("needs.start-runpod.outputs.gpu_type_id", text)
+        self.assertIn("needs.start-runpod.outputs.gpu_tier", text)
+        self.assertIn("nvidia-smi --query-gpu=index,name", text)
+
     def test_runpod_cache_key_uses_content_not_ref_identity(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         key_line = next(

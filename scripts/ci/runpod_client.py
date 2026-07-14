@@ -276,6 +276,37 @@ def create_pod(
     raise AssertionError("unreachable retry loop")
 
 
+def publish_github_result(
+    result: CreateResult,
+    *,
+    output_path: Path | None,
+    summary_path: Path | None,
+) -> None:
+    """Publish the selected pod, GPU, and tier to GitHub Actions."""
+
+    for name, value in (
+        ("pod_id", result.pod_id),
+        ("gpu_type_id", result.gpu_type_id),
+        ("gpu_tier", result.gpu_tier),
+    ):
+        if "\n" in value or "\r" in value:
+            raise PermanentRunPodError(
+                f"unsafe GitHub output value for {name}"
+            )
+    if output_path is not None:
+        with output_path.open("a", encoding="utf-8") as output:
+            output.write(f"pod_id={result.pod_id}\n")
+            output.write(f"gpu_type_id={result.gpu_type_id}\n")
+            output.write(f"gpu_tier={result.gpu_tier}\n")
+    if summary_path is not None:
+        with summary_path.open("a", encoding="utf-8") as summary:
+            summary.write("### RunPod GPU selection\n\n")
+            summary.write(f"- Price tier: `{result.gpu_tier}`\n")
+            summary.write(
+                f"- Selected GPU: `{result.gpu_type_id or 'unknown'}`\n"
+            )
+
+
 def _http_transport(url: str, api_key: str) -> Transport:
     def send(payload: bytes) -> tuple[int, Mapping[str, str], bytes]:
         request = urllib.request.Request(
@@ -350,11 +381,15 @@ def main() -> int:
             secrets=(api_key, jit_config),
         )
         args.response_file.write_bytes(result.body)
-        if output_path := os.environ.get("GITHUB_OUTPUT"):
-            with Path(output_path).open("a", encoding="utf-8") as output:
-                output.write(f"pod_id={result.pod_id}\n")
-                output.write(f"gpu_type_id={result.gpu_type_id}\n")
+        output_path = os.environ.get("GITHUB_OUTPUT")
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        publish_github_result(
+            result,
+            output_path=Path(output_path) if output_path else None,
+            summary_path=Path(summary_path) if summary_path else None,
+        )
         print(f"Created RunPod pod: {result.pod_id}")
+        print(f"RunPod selected price tier: {result.gpu_tier}")
         print(f"RunPod assigned GPU type: {result.gpu_type_id or 'unknown'}")
     except (
         OSError,
