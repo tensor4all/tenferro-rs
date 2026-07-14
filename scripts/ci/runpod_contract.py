@@ -29,11 +29,11 @@ def resolve_local_ref(
     if not ref.startswith("#/"):
         raise ContractError(f"unsupported non-local OpenAPI reference: {ref}")
     value: object = document
-    for token in ref[2:].split("/"):
-        token = token.replace("~1", "/").replace("~0", "~")
-        if not isinstance(value, Mapping) or token not in value:
+    for segment in ref[2:].split("/"):
+        segment = segment.replace("~1", "/").replace("~0", "~")
+        if not isinstance(value, Mapping) or segment not in value:
             raise ContractError(f"unresolved OpenAPI reference: {ref}")
-        value = value[token]
+        value = value[segment]
     if not isinstance(value, Mapping):
         raise ContractError(f"OpenAPI reference is not an object schema: {ref}")
     return value
