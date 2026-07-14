@@ -38,15 +38,29 @@ class PermanentRunPodError(RunPodError):
 
 
 @dataclasses.dataclass(frozen=True)
+class CreateRequest:
+    """One reviewed GPU tier and its encoded RunPod request."""
+
+    tier_name: str
+    payload: bytes
+
+
+@dataclasses.dataclass(frozen=True)
 class CreateResult:
     """Validated result of a successful pod creation request."""
 
     pod_id: str
     gpu_type_id: str
+    gpu_tier: str
     body: bytes
 
 
 Transport = Callable[[bytes], tuple[int, Mapping[str, str], bytes]]
+
+_CAPACITY_MESSAGES = (
+    "does not have the resources to deploy your pod",
+    "no available machine",
+)
 
 
 def classify_http_status(status: int) -> RetryClass:
@@ -55,6 +69,15 @@ def classify_http_status(status: int) -> RetryClass:
     if status in (408, 429) or 500 <= status < 600:
         return RetryClass.RETRYABLE
     return RetryClass.PERMANENT
+
+
+def is_capacity_failure(status: int, body: bytes) -> bool:
+    """Return whether RunPod reported exhausted machine capacity."""
+
+    if not 500 <= status < 600:
+        return False
+    message = body.decode("utf-8", errors="replace").lower()
+    return any(marker in message for marker in _CAPACITY_MESSAGES)
 
 
 def backoff_seconds(
@@ -129,7 +152,9 @@ def redacted_error_message(
     return message[:4000]
 
 
-def parse_create_response(status: int, body: bytes) -> CreateResult:
+def parse_create_response(
+    status: int, body: bytes, *, gpu_tier: str = ""
+) -> CreateResult:
     """Validate a successful create response and extract stable fields."""
 
     try:
@@ -159,7 +184,12 @@ def parse_create_response(status: int, body: bytes) -> CreateResult:
                 gpu_type.get("id"), str
             ):
                 gpu_type_id = gpu_type["id"]
-    return CreateResult(pod_id=pod_id, gpu_type_id=gpu_type_id, body=body)
+    return CreateResult(
+        pod_id=pod_id,
+        gpu_type_id=gpu_type_id,
+        gpu_tier=gpu_tier,
+        body=body,
+    )
 
 
 def _retry_after(headers: Mapping[str, str]) -> float | None:
@@ -178,7 +208,7 @@ def _retry_after(headers: Mapping[str, str]) -> float | None:
 
 def create_pod(
     config: Mapping[str, object],
-    payload: bytes,
+    requests: Sequence[CreateRequest],
     *,
     transport: Transport,
     sleep: Callable[[float], None] = time.sleep,
@@ -188,33 +218,58 @@ def create_pod(
 ) -> CreateResult:
     """Create a pod within both an attempt budget and a wall-clock deadline."""
 
-    max_attempts = int(config["max_create_attempts"])
+    attempts_per_tier = int(config.get("same_tier_retries", 1)) + 1
     base = float(config["retry_base_seconds"])
     cap = float(config["retry_max_seconds"])
     deadline = monotonic() + float(config["create_deadline_seconds"])
-    for attempt in range(1, max_attempts + 1):
-        headers: Mapping[str, str] = {}
-        try:
-            status, headers, body = transport(payload)
-        except OSError as error:
-            failure: RunPodError = RetryableRunPodError(
-                f"transport failure: {error}"
+    for tier_index, request in enumerate(requests):
+        for attempt in range(1, attempts_per_tier + 1):
+            print(
+                f"RunPod create tier={request.tier_name} "
+                f"tier_attempt={attempt}/{attempts_per_tier}"
             )
-        else:
-            if 200 <= status < 300:
-                return parse_create_response(status, body)
-            message = redacted_error_message(body, secrets=secrets)
-            if classify_http_status(status) is RetryClass.PERMANENT:
-                raise PermanentRunPodError(f"RunPod HTTP {status}: {message}")
-            failure = RetryableRunPodError(f"RunPod HTTP {status}: {message}")
+            headers: Mapping[str, str] = {}
+            try:
+                status, headers, body = transport(request.payload)
+            except OSError as error:
+                failure: RunPodError = RetryableRunPodError(
+                    f"transport failure: {error}"
+                )
+            else:
+                if 200 <= status < 300:
+                    return parse_create_response(
+                        status, body, gpu_tier=request.tier_name
+                    )
+                message = redacted_error_message(body, secrets=secrets)
+                if is_capacity_failure(status, body):
+                    failure = RetryableRunPodError(
+                        f"RunPod capacity unavailable: {message}"
+                    )
+                    if tier_index + 1 < len(requests):
+                        print(
+                            "RunPod capacity unavailable in tier "
+                            f"{request.tier_name}; trying "
+                            f"{requests[tier_index + 1].tier_name}"
+                        )
+                        break
+                    raise failure
+                if classify_http_status(status) is RetryClass.PERMANENT:
+                    raise PermanentRunPodError(
+                        f"RunPod HTTP {status}: {message}"
+                    )
+                failure = RetryableRunPodError(
+                    f"RunPod HTTP {status}: {message}"
+                )
 
-        now = monotonic()
-        if attempt == max_attempts or now >= deadline:
-            raise failure
-        delay = _retry_after(headers)
-        if delay is None:
-            delay = backoff_seconds(attempt, base=base, cap=cap, jitter=jitter)
-        sleep(min(delay, max(0.0, deadline - now)))
+            now = monotonic()
+            if attempt == attempts_per_tier or now >= deadline:
+                raise failure
+            delay = _retry_after(headers)
+            if delay is None:
+                delay = backoff_seconds(
+                    attempt, base=base, cap=cap, jitter=jitter
+                )
+            sleep(min(delay, max(0.0, deadline - now)))
     raise AssertionError("unreachable retry loop")
 
 
@@ -281,7 +336,7 @@ def main() -> int:
         encoded = json.dumps(payload).encode()
         result = create_pod(
             config,
-            encoded,
+            [CreateRequest("cost-preferred", encoded)],
             transport=_http_transport(str(config["api_url"]), api_key),
             secrets=(api_key, jit_config),
         )

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.ci.runpod_client import (
+    CreateRequest,
     PermanentRunPodError,
     RetryClass,
     RetryableRunPodError,
@@ -11,6 +12,7 @@ from scripts.ci.runpod_client import (
     build_pod_payload,
     classify_http_status,
     create_pod,
+    is_capacity_failure,
     parse_create_response,
     redacted_error_message,
 )
@@ -23,6 +25,59 @@ CONFIG = json.loads(
 
 
 class RunPodClientTests(unittest.TestCase):
+    def test_capacity_failure_requires_server_error_and_known_message(
+        self,
+    ) -> None:
+        body = (
+            b'{"error":"This machine does not have the resources to deploy '
+            b'your pod"}'
+        )
+        self.assertTrue(is_capacity_failure(500, body))
+        self.assertFalse(is_capacity_failure(400, body))
+        self.assertFalse(
+            is_capacity_failure(500, b'{"error":"internal failure"}')
+        )
+
+    def test_capacity_failure_moves_tier_without_sleep(self) -> None:
+        requests = [
+            CreateRequest("cost-preferred", b"cheap"),
+            CreateRequest("premium", b"premium"),
+        ]
+        responses = iter(
+            [
+                (
+                    500,
+                    {},
+                    b'{"error":"This machine does not have the resources '
+                    b'to deploy your pod"}',
+                ),
+                (
+                    201,
+                    {},
+                    b'{"id":"pod-1","machine":'
+                    b'{"gpuTypeId":"NVIDIA L40S"}}',
+                ),
+            ]
+        )
+        seen: list[bytes] = []
+
+        def transport(payload: bytes) -> tuple[int, dict[str, str], bytes]:
+            seen.append(payload)
+            return next(responses)
+
+        result = create_pod(
+            CONFIG,
+            requests,
+            transport=transport,
+            sleep=lambda _delay: self.fail(
+                "capacity failover must not sleep"
+            ),
+        )
+
+        self.assertEqual(seen, [b"cheap", b"premium"])
+        self.assertEqual(result.gpu_tier, "premium")
+        self.assertEqual(result.gpu_type_id, "NVIDIA L40S")
+
     def test_retry_classification(self) -> None:
         for status in (408, 429, 500, 502, 503):
             with self.subTest(status=status):
@@ -65,7 +120,7 @@ class RunPodClientTests(unittest.TestCase):
         with self.assertRaisesRegex(PermanentRunPodError, "HTTP 400"):
             create_pod(
                 CONFIG,
-                b"{}",
+                [CreateRequest("cost-preferred", b"{}")],
                 transport=transport,
                 sleep=lambda _delay: self.fail("must not sleep"),
             )
@@ -75,7 +130,6 @@ class RunPodClientTests(unittest.TestCase):
         responses = iter(
             [
                 (500, {}, b'{"error":"busy"}'),
-                (503, {"Retry-After": "7"}, b'{"error":"busy"}'),
                 (201, {}, b'{"id":"pod-1","machine":{"gpuTypeId":"NVIDIA A40"}}'),
             ]
         )
@@ -83,7 +137,7 @@ class RunPodClientTests(unittest.TestCase):
 
         result = create_pod(
             CONFIG,
-            b"{}",
+            [CreateRequest("cost-preferred", b"{}")],
             transport=lambda _payload: next(responses),
             sleep=sleeps.append,
             jitter=lambda: 0.5,
@@ -91,7 +145,78 @@ class RunPodClientTests(unittest.TestCase):
 
         self.assertEqual(result.pod_id, "pod-1")
         self.assertEqual(result.gpu_type_id, "NVIDIA A40")
-        self.assertEqual(sleeps, [5.0, 7.0])
+        self.assertEqual(sleeps, [5.0])
+
+    def test_generic_service_failure_retries_same_tier_once(self) -> None:
+        responses = iter(
+            [
+                (503, {"Retry-After": "2"}, b'{"error":"busy"}'),
+                (
+                    201,
+                    {},
+                    b'{"id":"pod-1","machine":'
+                    b'{"gpuTypeId":"NVIDIA L40S"}}',
+                ),
+            ]
+        )
+        seen: list[bytes] = []
+        sleeps: list[float] = []
+
+        def transport(payload: bytes) -> tuple[int, dict[str, str], bytes]:
+            seen.append(payload)
+            return next(responses)
+
+        result = create_pod(
+            CONFIG | {"same_tier_retries": 1},
+            [CreateRequest("premium", b"premium")],
+            transport=transport,
+            sleep=sleeps.append,
+        )
+
+        self.assertEqual(seen, [b"premium", b"premium"])
+        self.assertEqual(sleeps, [2.0])
+        self.assertEqual(result.gpu_tier, "premium")
+
+    def test_generic_service_failure_stops_after_one_retry(self) -> None:
+        calls = 0
+
+        def transport(_payload: bytes) -> tuple[int, dict[str, str], bytes]:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                return 201, {}, b'{"id":"too-late"}'
+            return 503, {}, b'{"error":"busy"}'
+
+        with self.assertRaises(RetryableRunPodError):
+            create_pod(
+                CONFIG | {"same_tier_retries": 1},
+                [CreateRequest("premium", b"premium")],
+                transport=transport,
+                sleep=lambda _delay: None,
+                monotonic=lambda: 0.0,
+            )
+        self.assertEqual(calls, 2)
+
+    def test_creation_deadline_caps_retry_sleep(self) -> None:
+        ticks = iter([0.0, 59.0, 60.0])
+        sleeps: list[float] = []
+        with self.assertRaises(RetryableRunPodError):
+            create_pod(
+                CONFIG
+                | {
+                    "same_tier_retries": 1,
+                    "create_deadline_seconds": 60,
+                },
+                [CreateRequest("cost-preferred", b"cheap")],
+                transport=lambda _payload: (
+                    503,
+                    {"Retry-After": "30"},
+                    b"{}",
+                ),
+                sleep=sleeps.append,
+                monotonic=lambda: next(ticks),
+            )
+        self.assertEqual(sleeps, [1.0])
 
     def test_transport_failure_is_retryable_but_bounded(self) -> None:
         calls = 0
@@ -105,7 +230,7 @@ class RunPodClientTests(unittest.TestCase):
         with self.assertRaisesRegex(RetryableRunPodError, "transport failure"):
             create_pod(
                 config,
-                b"{}",
+                [CreateRequest("cost-preferred", b"{}")],
                 transport=transport,
                 sleep=lambda _delay: None,
                 jitter=lambda: 0.5,
